@@ -346,11 +346,40 @@ pub fn truncate_to_width(text: &str, max_width: usize) -> String {
     result
 }
 
+/// Returns `Some(width)` if text is pure ASCII, `None` otherwise.
+///
+/// This is a fast-path optimization. For ASCII text, display width equals byte length,
+/// so we can avoid the full Unicode width calculation.
+///
+/// # Example
+/// ```
+/// use ftui_text::wrap::ascii_width;
+///
+/// assert_eq!(ascii_width("hello"), Some(5));
+/// assert_eq!(ascii_width("你好"), None);  // Contains CJK
+/// assert_eq!(ascii_width(""), Some(0));
+/// ```
+#[inline]
+#[must_use]
+pub fn ascii_width(text: &str) -> Option<usize> {
+    if text.is_ascii() {
+        Some(text.len())
+    } else {
+        None
+    }
+}
+
 /// Calculate the display width of text in cells.
+///
+/// Uses ASCII fast-path when possible, falling back to Unicode width calculation.
+///
+/// # Performance
+/// - ASCII text: O(n) byte scan, no allocations
+/// - Non-ASCII: Full Unicode width calculation via `unicode-width`
 #[inline]
 #[must_use]
 pub fn display_width(text: &str) -> usize {
-    text.width()
+    ascii_width(text).unwrap_or_else(|| text.width())
 }
 
 /// Check if a string contains any wide characters (width > 1).
@@ -551,6 +580,42 @@ mod tests {
     #[test]
     fn display_width_empty() {
         assert_eq!(display_width(""), 0);
+    }
+
+    // ==========================================================================
+    // ASCII width fast-path tests
+    // ==========================================================================
+
+    #[test]
+    fn ascii_width_pure_ascii() {
+        assert_eq!(ascii_width("hello"), Some(5));
+        assert_eq!(ascii_width("hello world 123"), Some(15));
+    }
+
+    #[test]
+    fn ascii_width_empty() {
+        assert_eq!(ascii_width(""), Some(0));
+    }
+
+    #[test]
+    fn ascii_width_non_ascii_returns_none() {
+        assert_eq!(ascii_width("你好"), None);
+        assert_eq!(ascii_width("héllo"), None);
+        assert_eq!(ascii_width("hello😀"), None);
+    }
+
+    #[test]
+    fn ascii_width_mixed_returns_none() {
+        assert_eq!(ascii_width("hi你好"), None);
+        assert_eq!(ascii_width("caf\u{00e9}"), None); // café
+    }
+
+    #[test]
+    fn display_width_uses_ascii_fast_path() {
+        // ASCII should work (implicitly tests fast path)
+        assert_eq!(display_width("test"), 4);
+        // Non-ASCII should also work (tests fallback)
+        assert_eq!(display_width("你"), 2);
     }
 
     #[test]

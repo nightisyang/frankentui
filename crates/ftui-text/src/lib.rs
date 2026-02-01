@@ -49,6 +49,6 @@ pub use segment::{ControlCode, Segment, SegmentLine, SegmentLines, join_lines, s
 pub use text::{Line, Span, Text};
 pub use width_cache::{CacheStats, DEFAULT_CACHE_CAPACITY, WidthCache};
 pub use wrap::{
-    WrapMode, WrapOptions, display_width, has_wide_chars, is_ascii_only, truncate_to_width,
-    truncate_with_ellipsis, wrap_text, wrap_with_options,
+    WrapMode, WrapOptions, ascii_width, display_width, has_wide_chars, is_ascii_only,
+    truncate_to_width, truncate_with_ellipsis, wrap_text, wrap_with_options,
 };
