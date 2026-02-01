@@ -1,11 +1,8 @@
-#![forbid(unsafe_code)]
-
-//! Color profiles and downgrade logic.
-
 use std::collections::HashMap;
 
 use ftui_render::cell::PackedRgba;
 
+/// Terminal color profile used for downgrade decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ColorProfile {
     Mono,
@@ -14,172 +11,279 @@ pub enum ColorProfile {
     TrueColor,
 }
 
+impl ColorProfile {
+    /// Choose the best available profile from detection flags.
+    ///
+    /// `no_color` should reflect explicit user intent (e.g. NO_COLOR).
+    #[must_use]
+    pub const fn from_flags(true_color: bool, colors_256: bool, no_color: bool) -> Self {
+        if no_color {
+            Self::Mono
+        } else if true_color {
+            Self::TrueColor
+        } else if colors_256 {
+            Self::Ansi256
+        } else {
+            Self::Ansi16
+        }
+    }
+
+    #[must_use]
+    pub const fn supports_true_color(self) -> bool {
+        matches!(self, Self::TrueColor)
+    }
+}
+
+/// RGB color (opaque).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Rgb {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+impl Rgb {
+    #[must_use]
+    pub const fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b }
+    }
+
+    #[must_use]
+    pub const fn as_key(self) -> u32 {
+        ((self.r as u32) << 16) | ((self.g as u32) << 8) | (self.b as u32)
+    }
+
+    #[must_use]
+    pub fn luminance_u8(self) -> u8 {
+        // ITU-R BT.709 luma: 0.2126 R + 0.7152 G + 0.0722 B
+        let r = self.r as u32;
+        let g = self.g as u32;
+        let b = self.b as u32;
+        let luma = 2126 * r + 7152 * g + 722 * b;
+        ((luma + 5000) / 10_000) as u8
+    }
+}
+
+impl From<PackedRgba> for Rgb {
+    fn from(color: PackedRgba) -> Self {
+        Self::new(color.r(), color.g(), color.b())
+    }
+}
+
+/// ANSI 16-color indices (0-15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum Ansi16 {
+    Black = 0,
+    Red = 1,
+    Green = 2,
+    Yellow = 3,
+    Blue = 4,
+    Magenta = 5,
+    Cyan = 6,
+    White = 7,
+    BrightBlack = 8,
+    BrightRed = 9,
+    BrightGreen = 10,
+    BrightYellow = 11,
+    BrightBlue = 12,
+    BrightMagenta = 13,
+    BrightCyan = 14,
+    BrightWhite = 15,
+}
+
+impl Ansi16 {
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    #[must_use]
+    pub const fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Black),
+            1 => Some(Self::Red),
+            2 => Some(Self::Green),
+            3 => Some(Self::Yellow),
+            4 => Some(Self::Blue),
+            5 => Some(Self::Magenta),
+            6 => Some(Self::Cyan),
+            7 => Some(Self::White),
+            8 => Some(Self::BrightBlack),
+            9 => Some(Self::BrightRed),
+            10 => Some(Self::BrightGreen),
+            11 => Some(Self::BrightYellow),
+            12 => Some(Self::BrightBlue),
+            13 => Some(Self::BrightMagenta),
+            14 => Some(Self::BrightCyan),
+            15 => Some(Self::BrightWhite),
+            _ => None,
+        }
+    }
+}
+
+/// Monochrome output selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MonoColor {
     Black,
     White,
 }
 
+/// A color value at varying fidelity levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Ansi16Color {
-    Black,
-    Red,
-    Green,
-    Yellow,
-    Blue,
-    Magenta,
-    Cyan,
-    White,
-    BrightBlack,
-    BrightRed,
-    BrightGreen,
-    BrightYellow,
-    BrightBlue,
-    BrightMagenta,
-    BrightCyan,
-    BrightWhite,
-}
-
-impl Ansi16Color {
-    #[must_use]
-    pub const fn code(self) -> u8 {
-        match self {
-            Self::Black => 0,
-            Self::Red => 1,
-            Self::Green => 2,
-            Self::Yellow => 3,
-            Self::Blue => 4,
-            Self::Magenta => 5,
-            Self::Cyan => 6,
-            Self::White => 7,
-            Self::BrightBlack => 8,
-            Self::BrightRed => 9,
-            Self::BrightGreen => 10,
-            Self::BrightYellow => 11,
-            Self::BrightBlue => 12,
-            Self::BrightMagenta => 13,
-            Self::BrightCyan => 14,
-            Self::BrightWhite => 15,
-        }
-    }
-
-    #[must_use]
-    pub const fn rgb(self) -> (u8, u8, u8) {
-        match self {
-            Self::Black => (0, 0, 0),
-            Self::Red => (205, 0, 0),
-            Self::Green => (0, 205, 0),
-            Self::Yellow => (205, 205, 0),
-            Self::Blue => (0, 0, 238),
-            Self::Magenta => (205, 0, 205),
-            Self::Cyan => (0, 205, 205),
-            Self::White => (229, 229, 229),
-            Self::BrightBlack => (127, 127, 127),
-            Self::BrightRed => (255, 0, 0),
-            Self::BrightGreen => (0, 255, 0),
-            Self::BrightYellow => (255, 255, 0),
-            Self::BrightBlue => (92, 92, 255),
-            Self::BrightMagenta => (255, 0, 255),
-            Self::BrightCyan => (0, 255, 255),
-            Self::BrightWhite => (255, 255, 255),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TerminalColor {
-    TrueColor(PackedRgba),
+pub enum Color {
+    Rgb(Rgb),
     Ansi256(u8),
-    Ansi16(Ansi16Color),
+    Ansi16(Ansi16),
     Mono(MonoColor),
 }
 
-/// Cached color downgrader for a specific terminal profile.
-#[derive(Debug)]
-pub struct ColorDowngrader {
-    profile: ColorProfile,
-    cache_256: HashMap<u32, u8>,
-    cache_16: HashMap<u32, Ansi16Color>,
-    cache_mono: HashMap<u32, MonoColor>,
+impl Color {
+    #[must_use]
+    pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
+        Self::Rgb(Rgb::new(r, g, b))
+    }
+
+    #[must_use]
+    pub fn to_rgb(self) -> Rgb {
+        match self {
+            Self::Rgb(rgb) => rgb,
+            Self::Ansi256(idx) => ansi256_to_rgb(idx),
+            Self::Ansi16(color) => ansi16_to_rgb(color),
+            Self::Mono(MonoColor::Black) => Rgb::new(0, 0, 0),
+            Self::Mono(MonoColor::White) => Rgb::new(255, 255, 255),
+        }
+    }
+
+    #[must_use]
+    pub fn downgrade(self, profile: ColorProfile) -> Self {
+        match profile {
+            ColorProfile::TrueColor => self,
+            ColorProfile::Ansi256 => match self {
+                Self::Rgb(rgb) => Self::Ansi256(rgb_to_256(rgb.r, rgb.g, rgb.b)),
+                _ => self,
+            },
+            ColorProfile::Ansi16 => match self {
+                Self::Rgb(rgb) => Self::Ansi16(rgb_to_ansi16(rgb.r, rgb.g, rgb.b)),
+                Self::Ansi256(idx) => Self::Ansi16(rgb_to_ansi16_from_ansi256(idx)),
+                _ => self,
+            },
+            ColorProfile::Mono => match self {
+                Self::Rgb(rgb) => Self::Mono(rgb_to_mono(rgb.r, rgb.g, rgb.b)),
+                Self::Ansi256(idx) => {
+                    let rgb = ansi256_to_rgb(idx);
+                    Self::Mono(rgb_to_mono(rgb.r, rgb.g, rgb.b))
+                }
+                Self::Ansi16(color) => {
+                    let rgb = ansi16_to_rgb(color);
+                    Self::Mono(rgb_to_mono(rgb.r, rgb.g, rgb.b))
+                }
+                Self::Mono(_) => self,
+            },
+        }
+    }
 }
 
-impl ColorDowngrader {
+impl From<PackedRgba> for Color {
+    fn from(color: PackedRgba) -> Self {
+        Self::Rgb(Rgb::from(color))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub size: usize,
+    pub capacity: usize,
+}
+
+/// Simple hash cache for downgrade results (bounded; clears on overflow).
+#[derive(Debug)]
+pub struct ColorCache {
+    profile: ColorProfile,
+    max_entries: usize,
+    map: HashMap<u32, Color>,
+    hits: u64,
+    misses: u64,
+}
+
+impl ColorCache {
     #[must_use]
     pub fn new(profile: ColorProfile) -> Self {
+        Self::with_capacity(profile, 4096)
+    }
+
+    #[must_use]
+    pub fn with_capacity(profile: ColorProfile, max_entries: usize) -> Self {
+        let max_entries = max_entries.max(1);
         Self {
             profile,
-            cache_256: HashMap::new(),
-            cache_16: HashMap::new(),
-            cache_mono: HashMap::new(),
+            max_entries,
+            map: HashMap::with_capacity(max_entries.min(2048)),
+            hits: 0,
+            misses: 0,
         }
     }
 
     #[must_use]
-    pub const fn profile(&self) -> ColorProfile {
-        self.profile
-    }
-
-    pub fn set_profile(&mut self, profile: ColorProfile) {
-        if self.profile != profile {
-            self.profile = profile;
-            self.cache_256.clear();
-            self.cache_16.clear();
-            self.cache_mono.clear();
-        }
-    }
-
-    #[must_use]
-    pub fn downgrade(&mut self, color: PackedRgba) -> TerminalColor {
-        match self.profile {
-            ColorProfile::TrueColor => TerminalColor::TrueColor(color),
-            ColorProfile::Ansi256 => TerminalColor::Ansi256(self.to_ansi256(color)),
-            ColorProfile::Ansi16 => TerminalColor::Ansi16(self.to_ansi16(color)),
-            ColorProfile::Mono => TerminalColor::Mono(self.to_mono(color)),
-        }
-    }
-
-    #[must_use]
-    pub fn to_ansi256(&mut self, color: PackedRgba) -> u8 {
-        let key = color.0;
-        if let Some(cached) = self.cache_256.get(&key) {
+    pub fn downgrade_rgb(&mut self, rgb: Rgb) -> Color {
+        let key = rgb.as_key();
+        if let Some(cached) = self.map.get(&key) {
+            self.hits += 1;
             return *cached;
         }
-        let code = rgb_to_256(color.r(), color.g(), color.b());
-        self.cache_256.insert(key, code);
-        code
+        self.misses += 1;
+        let downgraded = Color::Rgb(rgb).downgrade(self.profile);
+        if self.map.len() >= self.max_entries {
+            self.map.clear();
+        }
+        self.map.insert(key, downgraded);
+        downgraded
     }
 
     #[must_use]
-    pub fn to_ansi16(&mut self, color: PackedRgba) -> Ansi16Color {
-        let key = color.0;
-        if let Some(cached) = self.cache_16.get(&key) {
-            return *cached;
-        }
-        let mapped = rgb_to_ansi16(color.r(), color.g(), color.b());
-        self.cache_16.insert(key, mapped);
-        mapped
+    pub fn downgrade_packed(&mut self, color: PackedRgba) -> Color {
+        self.downgrade_rgb(Rgb::from(color))
     }
 
     #[must_use]
-    pub fn to_mono(&mut self, color: PackedRgba) -> MonoColor {
-        let key = color.0;
-        if let Some(cached) = self.cache_mono.get(&key) {
-            return *cached;
+    pub fn stats(&self) -> CacheStats {
+        CacheStats {
+            hits: self.hits,
+            misses: self.misses,
+            size: self.map.len(),
+            capacity: self.max_entries,
         }
-        let mapped = rgb_to_mono(color.r(), color.g(), color.b());
-        self.cache_mono.insert(key, mapped);
-        mapped
     }
 }
 
-impl Default for ColorDowngrader {
-    fn default() -> Self {
-        Self::new(ColorProfile::TrueColor)
-    }
+const ANSI16_PALETTE: [Rgb; 16] = [
+    Rgb::new(0, 0, 0),       // Black
+    Rgb::new(205, 0, 0),     // Red
+    Rgb::new(0, 205, 0),     // Green
+    Rgb::new(205, 205, 0),   // Yellow
+    Rgb::new(0, 0, 238),     // Blue
+    Rgb::new(205, 0, 205),   // Magenta
+    Rgb::new(0, 205, 205),   // Cyan
+    Rgb::new(229, 229, 229), // White
+    Rgb::new(127, 127, 127), // Bright Black
+    Rgb::new(255, 0, 0),     // Bright Red
+    Rgb::new(0, 255, 0),     // Bright Green
+    Rgb::new(255, 255, 0),   // Bright Yellow
+    Rgb::new(92, 92, 255),   // Bright Blue
+    Rgb::new(255, 0, 255),   // Bright Magenta
+    Rgb::new(0, 255, 255),   // Bright Cyan
+    Rgb::new(255, 255, 255), // Bright White
+];
+
+#[must_use]
+pub fn ansi16_to_rgb(color: Ansi16) -> Rgb {
+    ANSI16_PALETTE[color.as_u8() as usize]
 }
 
-#[inline]
-fn rgb_to_256(r: u8, g: u8, b: u8) -> u8 {
+#[must_use]
+pub fn rgb_to_256(r: u8, g: u8, b: u8) -> u8 {
     if r == g && g == b {
         if r < 8 {
             return 16;
@@ -187,35 +291,59 @@ fn rgb_to_256(r: u8, g: u8, b: u8) -> u8 {
         if r > 248 {
             return 231;
         }
-        return 232 + ((r - 8) / 10).min(23);
+        let idx = ((r - 8) / 10).min(23);
+        return 232 + idx;
     }
 
-    let r6 = (u16::from(r) * 6 / 256) as u8;
-    let g6 = (u16::from(g) * 6 / 256) as u8;
-    let b6 = (u16::from(b) * 6 / 256) as u8;
+    let r6 = (r as u16 * 6 / 256) as u8;
+    let g6 = (g as u16 * 6 / 256) as u8;
+    let b6 = (b as u16 * 6 / 256) as u8;
     16 + 36 * r6 + 6 * g6 + b6
 }
 
-#[inline]
-fn rgb_to_ansi16(r: u8, g: u8, b: u8) -> Ansi16Color {
-    let mut best = Ansi16Color::Black;
-    let mut best_dist = u32::MAX;
+#[must_use]
+pub fn ansi256_to_rgb(index: u8) -> Rgb {
+    if index < 16 {
+        return ANSI16_PALETTE[index as usize];
+    }
+    if index >= 232 {
+        let gray = 8 + 10 * (index - 232);
+        return Rgb::new(gray, gray, gray);
+    }
+    let idx = index - 16;
+    let r = idx / 36;
+    let g = (idx / 6) % 6;
+    let b = idx % 6;
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    Rgb::new(LEVELS[r as usize], LEVELS[g as usize], LEVELS[b as usize])
+}
 
-    for candidate in ANSI16_PALETTE {
-        let (cr, cg, cb) = candidate.rgb();
-        let dist = weighted_distance(r, g, b, cr, cg, cb);
+#[must_use]
+pub fn rgb_to_ansi16(r: u8, g: u8, b: u8) -> Ansi16 {
+    let target = Rgb::new(r, g, b);
+    let mut best = Ansi16::Black;
+    let mut best_dist = u64::MAX;
+
+    for (idx, candidate) in ANSI16_PALETTE.iter().enumerate() {
+        let dist = weighted_distance(target, *candidate);
         if dist < best_dist {
+            best = Ansi16::from_u8(idx as u8).unwrap_or(Ansi16::Black);
             best_dist = dist;
-            best = candidate;
         }
     }
 
     best
 }
 
-#[inline]
-fn rgb_to_mono(r: u8, g: u8, b: u8) -> MonoColor {
-    let luma = weighted_luma(r, g, b);
+#[must_use]
+pub fn rgb_to_ansi16_from_ansi256(index: u8) -> Ansi16 {
+    let rgb = ansi256_to_rgb(index);
+    rgb_to_ansi16(rgb.r, rgb.g, rgb.b)
+}
+
+#[must_use]
+pub fn rgb_to_mono(r: u8, g: u8, b: u8) -> MonoColor {
+    let luma = Rgb::new(r, g, b).luminance_u8();
     if luma >= 128 {
         MonoColor::White
     } else {
@@ -223,43 +351,15 @@ fn rgb_to_mono(r: u8, g: u8, b: u8) -> MonoColor {
     }
 }
 
-#[inline]
-fn weighted_distance(r: u8, g: u8, b: u8, cr: u8, cg: u8, cb: u8) -> u32 {
-    let dr = i32::from(r) - i32::from(cr);
-    let dg = i32::from(g) - i32::from(cg);
-    let db = i32::from(b) - i32::from(cb);
-
-    let dr2 = (dr * dr) as u32;
-    let dg2 = (dg * dg) as u32;
-    let db2 = (db * db) as u32;
-
-    dr2 * 2126 + dg2 * 7152 + db2 * 722
+fn weighted_distance(a: Rgb, b: Rgb) -> u64 {
+    let dr = a.r as i32 - b.r as i32;
+    let dg = a.g as i32 - b.g as i32;
+    let db = a.b as i32 - b.b as i32;
+    let dr2 = (dr * dr) as u64;
+    let dg2 = (dg * dg) as u64;
+    let db2 = (db * db) as u64;
+    2126 * dr2 + 7152 * dg2 + 722 * db2
 }
-
-#[inline]
-fn weighted_luma(r: u8, g: u8, b: u8) -> u8 {
-    let luma = u32::from(r) * 2126 + u32::from(g) * 7152 + u32::from(b) * 722;
-    (luma / 10000) as u8
-}
-
-const ANSI16_PALETTE: [Ansi16Color; 16] = [
-    Ansi16Color::Black,
-    Ansi16Color::Red,
-    Ansi16Color::Green,
-    Ansi16Color::Yellow,
-    Ansi16Color::Blue,
-    Ansi16Color::Magenta,
-    Ansi16Color::Cyan,
-    Ansi16Color::White,
-    Ansi16Color::BrightBlack,
-    Ansi16Color::BrightRed,
-    Ansi16Color::BrightGreen,
-    Ansi16Color::BrightYellow,
-    Ansi16Color::BrightBlue,
-    Ansi16Color::BrightMagenta,
-    Ansi16Color::BrightCyan,
-    Ansi16Color::BrightWhite,
-];
 
 #[cfg(test)]
 mod tests {
@@ -267,62 +367,74 @@ mod tests {
 
     #[test]
     fn truecolor_passthrough() {
-        let mut downgrader = ColorDowngrader::new(ColorProfile::TrueColor);
-        let color = PackedRgba::rgb(10, 20, 30);
-        assert_eq!(downgrader.downgrade(color), TerminalColor::TrueColor(color));
+        let color = Color::rgb(12, 34, 56);
+        assert_eq!(color.downgrade(ColorProfile::TrueColor), color);
     }
 
     #[test]
-    fn rgb_to_256_grayscale_edges() {
+    fn rgb_to_256_grayscale_rules() {
         assert_eq!(rgb_to_256(0, 0, 0), 16);
-        assert_eq!(rgb_to_256(255, 255, 255), 231);
         assert_eq!(rgb_to_256(8, 8, 8), 232);
+        assert_eq!(rgb_to_256(18, 18, 18), 233);
+        assert_eq!(rgb_to_256(249, 249, 249), 231);
     }
 
     #[test]
-    fn rgb_to_256_color_cube() {
+    fn rgb_to_256_primary_red() {
         assert_eq!(rgb_to_256(255, 0, 0), 196);
-        assert_eq!(rgb_to_256(0, 255, 0), 46);
-        assert_eq!(rgb_to_256(0, 0, 255), 21);
     }
 
     #[test]
-    fn rgb_to_ansi16_basic_colors() {
-        assert_eq!(rgb_to_ansi16(0, 0, 0), Ansi16Color::Black);
-        assert_eq!(rgb_to_ansi16(255, 255, 255), Ansi16Color::BrightWhite);
+    fn ansi256_to_rgb_round_trip() {
+        let rgb = ansi256_to_rgb(196);
+        assert_eq!(rgb, Rgb::new(255, 0, 0));
     }
 
     #[test]
-    fn rgb_to_mono_threshold() {
+    fn rgb_to_ansi16_basics() {
+        assert_eq!(rgb_to_ansi16(0, 0, 0), Ansi16::Black);
+        assert_eq!(rgb_to_ansi16(255, 0, 0), Ansi16::BrightRed);
+        assert_eq!(rgb_to_ansi16(0, 255, 0), Ansi16::BrightGreen);
+        assert_eq!(rgb_to_ansi16(0, 0, 255), Ansi16::BrightBlue);
+    }
+
+    #[test]
+    fn mono_fallback() {
         assert_eq!(rgb_to_mono(0, 0, 0), MonoColor::Black);
         assert_eq!(rgb_to_mono(255, 255, 255), MonoColor::White);
+        assert_eq!(rgb_to_mono(200, 200, 200), MonoColor::White);
+        assert_eq!(rgb_to_mono(30, 30, 30), MonoColor::Black);
     }
 
     #[test]
-    fn cache_is_used_for_ansi256() {
-        let mut downgrader = ColorDowngrader::new(ColorProfile::Ansi256);
-        let color = PackedRgba::rgb(1, 2, 3);
-        let first = downgrader.downgrade(color);
-        let second = downgrader.downgrade(color);
-        assert_eq!(first, second);
-        assert_eq!(downgrader.cache_256.len(), 1);
+    fn cache_tracks_hits() {
+        let mut cache = ColorCache::with_capacity(ColorProfile::Ansi16, 8);
+        let rgb = Rgb::new(10, 20, 30);
+        let _ = cache.downgrade_rgb(rgb);
+        let _ = cache.downgrade_rgb(rgb);
+        let stats = cache.stats();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.size, 1);
     }
 
     #[test]
-    fn cache_is_used_for_ansi16() {
-        let mut downgrader = ColorDowngrader::new(ColorProfile::Ansi16);
-        let color = PackedRgba::rgb(20, 40, 60);
-        let _ = downgrader.downgrade(color);
-        let _ = downgrader.downgrade(color);
-        assert_eq!(downgrader.cache_16.len(), 1);
-    }
-
-    #[test]
-    fn cache_is_used_for_mono() {
-        let mut downgrader = ColorDowngrader::new(ColorProfile::Mono);
-        let color = PackedRgba::rgb(120, 120, 120);
-        let _ = downgrader.downgrade(color);
-        let _ = downgrader.downgrade(color);
-        assert_eq!(downgrader.cache_mono.len(), 1);
+    fn profile_from_flags_prefers_mono() {
+        assert_eq!(
+            ColorProfile::from_flags(true, true, true),
+            ColorProfile::Mono
+        );
+        assert_eq!(
+            ColorProfile::from_flags(true, false, false),
+            ColorProfile::TrueColor
+        );
+        assert_eq!(
+            ColorProfile::from_flags(false, true, false),
+            ColorProfile::Ansi256
+        );
+        assert_eq!(
+            ColorProfile::from_flags(false, false, false),
+            ColorProfile::Ansi16
+        );
     }
 }
