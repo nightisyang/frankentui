@@ -16,7 +16,7 @@ use nix::poll::{PollFd, PollFlags, poll};
 #[cfg(unix)]
 use nix::pty::{ForkptyResult, Winsize, forkpty};
 #[cfg(unix)]
-use nix::sys::signal::{Signal, kill};
+use nix::sys::signal::{kill, Signal};
 #[cfg(unix)]
 use nix::sys::wait::{WaitStatus, waitpid};
 #[cfg(unix)]
@@ -335,6 +335,27 @@ impl PtySession {
         );
 
         Ok(())
+    }
+
+    /// Send a signal to the child process.
+    pub fn send_signal(&self, signal: Signal) -> io::Result<()> {
+        kill(self.child_pid, signal).map_err(nix_error)?;
+        log_event(
+            self.config.log_events,
+            "PTY_SIGNAL",
+            format!("signal={:?}", signal),
+        );
+        Ok(())
+    }
+
+    /// Request a graceful shutdown (SIGTERM).
+    pub fn terminate(&self) -> io::Result<()> {
+        self.send_signal(Signal::SIGTERM)
+    }
+
+    /// Force-kill the child (SIGKILL).
+    pub fn force_kill(&self) -> io::Result<()> {
+        self.send_signal(Signal::SIGKILL)
     }
 
     /// Wait for the child to exit and return its status.
