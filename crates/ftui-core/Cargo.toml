@@ -5,3 +5,9 @@ edition = "2024"
 publish = false
 
 [dependencies]
+bitflags = "2.10.0"
+crossterm = "0.28"
+
+[dev-dependencies]
+# For spike PTY tests
+portable-pty = "0.8"

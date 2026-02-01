@@ -5,3 +5,10 @@ edition = "2024"
 publish = false
 
 [dependencies]
+ftui-render = { path = "../ftui-render" }
+ftui-render = { path = "../ftui-render" }
+tracing = "0.1"
+
+[dev-dependencies]
+tracing-test = "0.2"
+proptest = "1"

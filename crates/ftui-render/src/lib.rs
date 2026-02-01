@@ -9,3 +9,4 @@ pub mod frame;
 pub mod grapheme_pool;
 pub mod link_registry;
 pub mod presenter;
+pub mod terminal_model;

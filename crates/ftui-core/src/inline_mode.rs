@@ -1,0 +1,497 @@
+#![forbid(unsafe_code)]
+
+//! Inline Mode Spike: Validates correctness-first inline mode strategies.
+//!
+//! This module implements the Phase -1 spike (bd-10i.1.1) to validate inline mode
+//! strategies for FrankenTUI. Inline mode preserves terminal scrollback while
+//! rendering a stable UI region + streaming logs.
+//!
+//! # Strategies Implemented
+//!
+//! - **Strategy A (Scroll-Region)**: Uses DECSTBM to constrain scrolling to a region.
+//! - **Strategy B (Overlay-Redraw)**: Save cursor, clear UI, write logs, redraw UI, restore.
+//! - **Strategy C (Hybrid)**: Overlay-redraw baseline with scroll-region optimization where safe.
+//!
+//! # Key Invariants
+//!
+//! 1. Cursor is restored after each frame present.
+//! 2. Terminal modes are restored on normal exit AND panic.
+//! 3. No full-screen clears in inline mode (preserves scrollback).
+//! 4. One writer owns terminal output (enforced by ownership).
+
+use std::io::{self, Write};
+
+use crate::terminal_capabilities::TerminalCapabilities;
+
+// ============================================================================
+// ANSI Escape Sequences
+// ============================================================================
+
+/// DEC cursor save (ESC 7) - more portable than CSI s.
+const CURSOR_SAVE: &[u8] = b"\x1b7";
+
+/// DEC cursor restore (ESC 8) - more portable than CSI u.
+const CURSOR_RESTORE: &[u8] = b"\x1b8";
+
+/// CSI sequence to move cursor to position (1-indexed).
+fn cursor_position(row: u16, col: u16) -> Vec<u8> {
+    format!("\x1b[{};{}H", row, col).into_bytes()
+}
+
+/// Set scroll region (DECSTBM): CSI top ; bottom r (1-indexed).
+fn set_scroll_region(top: u16, bottom: u16) -> Vec<u8> {
+    format!("\x1b[{};{}r", top, bottom).into_bytes()
+}
+
+/// Reset scroll region to full screen: CSI r.
+const RESET_SCROLL_REGION: &[u8] = b"\x1b[r";
+
+/// Erase line from cursor to end: CSI 0 K.
+#[allow(dead_code)] // Kept for future use in inline mode optimization
+const ERASE_TO_EOL: &[u8] = b"\x1b[0K";
+
+/// Erase entire line: CSI 2 K.
+const ERASE_LINE: &[u8] = b"\x1b[2K";
+
+/// Synchronized output begin (DEC 2026): CSI ? 2026 h.
+const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
+
+/// Synchronized output end (DEC 2026): CSI ? 2026 l.
+const SYNC_END: &[u8] = b"\x1b[?2026l";
+
+// ============================================================================
+// Inline Mode Strategy
+// ============================================================================
+
+/// Inline mode rendering strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InlineStrategy {
+    /// Use scroll regions (DECSTBM) to anchor UI while logs scroll.
+    /// More efficient but less portable (muxes may misbehave).
+    ScrollRegion,
+
+    /// Overlay redraw: save cursor, write logs, redraw UI, restore cursor.
+    /// More portable but more redraw work.
+    OverlayRedraw,
+
+    /// Hybrid: overlay-redraw baseline with scroll-region optimization
+    /// where safe (detected modern terminals without mux).
+    #[default]
+    Hybrid,
+}
+
+impl InlineStrategy {
+    /// Select strategy based on terminal capabilities.
+    ///
+    /// Hybrid mode uses scroll-region only when:
+    /// - Not in a terminal multiplexer (tmux/screen/zellij)
+    /// - Scroll region capability is detected
+    /// - Synchronized output is available (reduces flicker)
+    #[must_use]
+    pub fn select(caps: &TerminalCapabilities) -> Self {
+        if caps.in_any_mux() {
+            // Muxes may not handle scroll regions correctly
+            InlineStrategy::OverlayRedraw
+        } else if caps.scroll_region && caps.sync_output {
+            // Modern terminal with full support
+            InlineStrategy::ScrollRegion
+        } else if caps.scroll_region {
+            // Scroll region available but no sync output - use hybrid
+            InlineStrategy::Hybrid
+        } else {
+            // Fallback to most portable option
+            InlineStrategy::OverlayRedraw
+        }
+    }
+}
+
+// ============================================================================
+// Inline Mode Session
+// ============================================================================
+
+/// Configuration for inline mode rendering.
+#[derive(Debug, Clone, Copy)]
+pub struct InlineConfig {
+    /// Height of the UI region (bottom N rows).
+    pub ui_height: u16,
+
+    /// Total terminal height.
+    pub term_height: u16,
+
+    /// Total terminal width.
+    pub term_width: u16,
+
+    /// Rendering strategy to use.
+    pub strategy: InlineStrategy,
+
+    /// Use synchronized output (DEC 2026) if available.
+    pub use_sync_output: bool,
+}
+
+impl InlineConfig {
+    /// Create config for a UI region of given height.
+    #[must_use]
+    pub fn new(ui_height: u16, term_height: u16, term_width: u16) -> Self {
+        Self {
+            ui_height,
+            term_height,
+            term_width,
+            strategy: InlineStrategy::default(),
+            use_sync_output: false,
+        }
+    }
+
+    /// Set the rendering strategy.
+    #[must_use]
+    pub const fn with_strategy(mut self, strategy: InlineStrategy) -> Self {
+        self.strategy = strategy;
+        self
+    }
+
+    /// Enable synchronized output.
+    #[must_use]
+    pub const fn with_sync_output(mut self, enabled: bool) -> Self {
+        self.use_sync_output = enabled;
+        self
+    }
+
+    /// Row where the UI region starts (1-indexed for ANSI).
+    #[must_use]
+    pub const fn ui_top_row(&self) -> u16 {
+        self.term_height.saturating_sub(self.ui_height) + 1
+    }
+
+    /// Row where the log region ends (1-indexed for ANSI).
+    #[must_use]
+    pub const fn log_bottom_row(&self) -> u16 {
+        self.ui_top_row().saturating_sub(1)
+    }
+}
+
+// ============================================================================
+// Inline Mode Renderer
+// ============================================================================
+
+/// Inline mode renderer implementing the one-writer rule.
+///
+/// This struct owns terminal output and enforces that all writes go through it.
+/// Cleanup is guaranteed via `Drop`.
+pub struct InlineRenderer<W: Write> {
+    writer: W,
+    config: InlineConfig,
+    scroll_region_set: bool,
+    in_sync_block: bool,
+}
+
+impl<W: Write> InlineRenderer<W> {
+    /// Create a new inline renderer.
+    ///
+    /// # Arguments
+    /// * `writer` - The terminal output (takes ownership to enforce one-writer rule).
+    /// * `config` - Inline mode configuration.
+    pub fn new(writer: W, config: InlineConfig) -> Self {
+        Self {
+            writer,
+            config,
+            scroll_region_set: false,
+            in_sync_block: false,
+        }
+    }
+
+    /// Initialize inline mode on the terminal.
+    ///
+    /// For scroll-region strategy, this sets up DECSTBM.
+    /// For overlay strategy, this just prepares state.
+    pub fn enter(&mut self) -> io::Result<()> {
+        match self.config.strategy {
+            InlineStrategy::ScrollRegion | InlineStrategy::Hybrid => {
+                // Set scroll region to log area (top of screen to just above UI)
+                let log_bottom = self.config.log_bottom_row();
+                if log_bottom > 0 {
+                    self.writer.write_all(&set_scroll_region(1, log_bottom))?;
+                    self.scroll_region_set = true;
+                }
+            }
+            InlineStrategy::OverlayRedraw => {
+                // No setup needed for overlay mode
+            }
+        }
+        self.writer.flush()
+    }
+
+    /// Exit inline mode, restoring terminal state.
+    pub fn exit(&mut self) -> io::Result<()> {
+        self.cleanup_internal()
+    }
+
+    /// Write log output (goes to scrollback region).
+    ///
+    /// In scroll-region mode: writes to current cursor position in scroll region.
+    /// In overlay mode: saves cursor, writes, then marks UI as needing redraw.
+    pub fn write_log(&mut self, text: &str) -> io::Result<()> {
+        match self.config.strategy {
+            InlineStrategy::ScrollRegion => {
+                // Cursor should be in scroll region; just write
+                self.writer.write_all(text.as_bytes())?;
+            }
+            InlineStrategy::OverlayRedraw | InlineStrategy::Hybrid => {
+                // Save cursor, move to log area, write, restore
+                self.writer.write_all(CURSOR_SAVE)?;
+
+                // Move to bottom of log region
+                let log_row = self.config.log_bottom_row();
+                self.writer.write_all(&cursor_position(log_row, 1))?;
+
+                // Write the log line
+                self.writer.write_all(text.as_bytes())?;
+
+                // Restore cursor
+                self.writer.write_all(CURSOR_RESTORE)?;
+            }
+        }
+        self.writer.flush()
+    }
+
+    /// Present a UI frame.
+    ///
+    /// # Invariants
+    /// - Cursor position is saved before and restored after.
+    /// - UI region is redrawn without affecting scrollback.
+    /// - Synchronized output wraps the operation if enabled.
+    pub fn present_ui<F>(&mut self, render_fn: F) -> io::Result<()>
+    where
+        F: FnOnce(&mut W, &InlineConfig) -> io::Result<()>,
+    {
+        // Begin sync output to prevent flicker
+        if self.config.use_sync_output && !self.in_sync_block {
+            self.writer.write_all(SYNC_BEGIN)?;
+            self.in_sync_block = true;
+        }
+
+        // Save cursor position
+        self.writer.write_all(CURSOR_SAVE)?;
+
+        // Move to UI region
+        let ui_row = self.config.ui_top_row();
+        self.writer.write_all(&cursor_position(ui_row, 1))?;
+
+        // Clear and render each UI line
+        for row in 0..self.config.ui_height {
+            self.writer.write_all(&cursor_position(ui_row + row, 1))?;
+            self.writer.write_all(ERASE_LINE)?;
+        }
+
+        // Move back to start of UI and let caller render
+        self.writer.write_all(&cursor_position(ui_row, 1))?;
+        render_fn(&mut self.writer, &self.config)?;
+
+        // Restore cursor position
+        self.writer.write_all(CURSOR_RESTORE)?;
+
+        // End sync output
+        if self.in_sync_block {
+            self.writer.write_all(SYNC_END)?;
+            self.in_sync_block = false;
+        }
+
+        self.writer.flush()
+    }
+
+    /// Internal cleanup - guaranteed to run on drop.
+    fn cleanup_internal(&mut self) -> io::Result<()> {
+        // End any pending sync block
+        if self.in_sync_block {
+            let _ = self.writer.write_all(SYNC_END);
+            self.in_sync_block = false;
+        }
+
+        // Reset scroll region if we set one
+        if self.scroll_region_set {
+            let _ = self.writer.write_all(RESET_SCROLL_REGION);
+            self.scroll_region_set = false;
+        }
+
+        // Restore cursor (in case we're mid-render)
+        let _ = self.writer.write_all(CURSOR_RESTORE);
+
+        self.writer.flush()
+    }
+}
+
+impl<W: Write> Drop for InlineRenderer<W> {
+    fn drop(&mut self) {
+        // Best-effort cleanup on drop (including panic)
+        let _ = self.cleanup_internal();
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Mock writer that captures all output.
+    #[derive(Default)]
+    struct MockWriter {
+        output: Vec<u8>,
+    }
+
+    impl Write for MockWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.output.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl MockWriter {
+        #[allow(dead_code)] // Useful for debugging tests
+        fn output_str(&self) -> String {
+            // Escape for visibility
+            self.output
+                .iter()
+                .map(|&b| {
+                    if b == 0x1b {
+                        "ESC".to_string()
+                    } else if b.is_ascii_graphic() || b == b' ' {
+                        (b as char).to_string()
+                    } else {
+                        format!("<{:02x}>", b)
+                    }
+                })
+                .collect()
+        }
+
+        fn contains_sequence(&self, seq: &[u8]) -> bool {
+            self.output.windows(seq.len()).any(|window| window == seq)
+        }
+    }
+
+    #[test]
+    fn config_calculates_regions_correctly() {
+        // 24 row terminal, 6 row UI
+        let config = InlineConfig::new(6, 24, 80);
+        assert_eq!(config.ui_top_row(), 19); // rows 19-24 are UI
+        assert_eq!(config.log_bottom_row(), 18); // rows 1-18 are logs
+    }
+
+    #[test]
+    fn strategy_selection_prefers_overlay_in_mux() {
+        let mut caps = TerminalCapabilities::basic();
+        caps.in_tmux = true;
+        caps.scroll_region = true;
+        caps.sync_output = true;
+
+        assert_eq!(InlineStrategy::select(&caps), InlineStrategy::OverlayRedraw);
+    }
+
+    #[test]
+    fn strategy_selection_uses_scroll_region_in_modern_terminal() {
+        let mut caps = TerminalCapabilities::basic();
+        caps.scroll_region = true;
+        caps.sync_output = true;
+
+        assert_eq!(InlineStrategy::select(&caps), InlineStrategy::ScrollRegion);
+    }
+
+    #[test]
+    fn strategy_selection_uses_hybrid_without_sync() {
+        let mut caps = TerminalCapabilities::basic();
+        caps.scroll_region = true;
+        caps.sync_output = false;
+
+        assert_eq!(InlineStrategy::select(&caps), InlineStrategy::Hybrid);
+    }
+
+    #[test]
+    fn enter_sets_scroll_region_for_scroll_strategy() {
+        let writer = MockWriter::default();
+        let config = InlineConfig::new(6, 24, 80).with_strategy(InlineStrategy::ScrollRegion);
+        let mut renderer = InlineRenderer::new(writer, config);
+
+        renderer.enter().unwrap();
+
+        // Should set scroll region: ESC [ 1 ; 18 r
+        assert!(renderer.writer.contains_sequence(b"\x1b[1;18r"));
+    }
+
+    #[test]
+    fn exit_resets_scroll_region() {
+        let writer = MockWriter::default();
+        let config = InlineConfig::new(6, 24, 80).with_strategy(InlineStrategy::ScrollRegion);
+        let mut renderer = InlineRenderer::new(writer, config);
+
+        renderer.enter().unwrap();
+        renderer.exit().unwrap();
+
+        // Should reset scroll region: ESC [ r
+        assert!(renderer.writer.contains_sequence(RESET_SCROLL_REGION));
+    }
+
+    #[test]
+    fn present_ui_saves_and_restores_cursor() {
+        let writer = MockWriter::default();
+        let config = InlineConfig::new(6, 24, 80).with_strategy(InlineStrategy::OverlayRedraw);
+        let mut renderer = InlineRenderer::new(writer, config);
+
+        renderer
+            .present_ui(|w, _| {
+                w.write_all(b"UI Content")?;
+                Ok(())
+            })
+            .unwrap();
+
+        // Should save cursor (ESC 7)
+        assert!(renderer.writer.contains_sequence(CURSOR_SAVE));
+        // Should restore cursor (ESC 8)
+        assert!(renderer.writer.contains_sequence(CURSOR_RESTORE));
+    }
+
+    #[test]
+    fn present_ui_uses_sync_output_when_enabled() {
+        let writer = MockWriter::default();
+        let config = InlineConfig::new(6, 24, 80)
+            .with_strategy(InlineStrategy::OverlayRedraw)
+            .with_sync_output(true);
+        let mut renderer = InlineRenderer::new(writer, config);
+
+        renderer.present_ui(|_, _| Ok(())).unwrap();
+
+        // Should have sync begin and end
+        assert!(renderer.writer.contains_sequence(SYNC_BEGIN));
+        assert!(renderer.writer.contains_sequence(SYNC_END));
+    }
+
+    #[test]
+    fn drop_cleans_up_scroll_region() {
+        let writer = MockWriter::default();
+        let config = InlineConfig::new(6, 24, 80).with_strategy(InlineStrategy::ScrollRegion);
+
+        {
+            let mut renderer = InlineRenderer::new(writer, config);
+            renderer.enter().unwrap();
+            // Renderer dropped here
+        }
+
+        // Can't easily test drop output, but this verifies no panic
+    }
+
+    #[test]
+    fn write_log_preserves_cursor_in_overlay_mode() {
+        let writer = MockWriter::default();
+        let config = InlineConfig::new(6, 24, 80).with_strategy(InlineStrategy::OverlayRedraw);
+        let mut renderer = InlineRenderer::new(writer, config);
+
+        renderer.write_log("test log\n").unwrap();
+
+        // Should save and restore cursor
+        assert!(renderer.writer.contains_sequence(CURSOR_SAVE));
+        assert!(renderer.writer.contains_sequence(CURSOR_RESTORE));
+    }
+}
