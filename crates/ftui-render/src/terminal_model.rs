@@ -1096,3 +1096,160 @@ mod tests {
         }
     }
 }
+
+/// Property tests for terminal model correctness.
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Generate a valid CSI sequence for cursor positioning.
+    fn cup_sequence(row: u8, col: u8) -> Vec<u8> {
+        format!("\x1b[{};{}H", row.max(1), col.max(1)).into_bytes()
+    }
+
+    /// Generate a valid SGR sequence.
+    fn sgr_sequence(codes: &[u8]) -> Vec<u8> {
+        let codes_str: Vec<String> = codes.iter().map(|c| c.to_string()).collect();
+        format!("\x1b[{}m", codes_str.join(";")).into_bytes()
+    }
+
+    proptest! {
+        /// Any sequence of printable ASCII doesn't crash.
+        #[test]
+        fn printable_ascii_no_crash(s in "[A-Za-z0-9 ]{0,100}") {
+            let mut model = TerminalModel::new(80, 24);
+            model.process(s.as_bytes());
+            // Model should be in a valid state
+            let (x, y) = model.cursor();
+            prop_assert!(x < model.width());
+            prop_assert!(y < model.height());
+        }
+
+        /// CUP sequences always leave cursor in bounds.
+        #[test]
+        fn cup_cursor_in_bounds(row in 0u8..100, col in 0u8..200) {
+            let mut model = TerminalModel::new(80, 24);
+            let seq = cup_sequence(row, col);
+            model.process(&seq);
+
+            let (x, y) = model.cursor();
+            prop_assert!(x < model.width(), "cursor_x {} >= width {}", x, model.width());
+            prop_assert!(y < model.height(), "cursor_y {} >= height {}", y, model.height());
+        }
+
+        /// Relative cursor moves never go out of bounds.
+        #[test]
+        fn relative_moves_in_bounds(
+            start_row in 1u8..24,
+            start_col in 1u8..80,
+            up in 0u8..50,
+            down in 0u8..50,
+            left in 0u8..100,
+            right in 0u8..100,
+        ) {
+            let mut model = TerminalModel::new(80, 24);
+
+            // Position cursor
+            model.process(&cup_sequence(start_row, start_col));
+
+            // Apply relative moves
+            model.process(format!("\x1b[{}A", up).as_bytes());
+            model.process(format!("\x1b[{}B", down).as_bytes());
+            model.process(format!("\x1b[{}D", left).as_bytes());
+            model.process(format!("\x1b[{}C", right).as_bytes());
+
+            let (x, y) = model.cursor();
+            prop_assert!(x < model.width());
+            prop_assert!(y < model.height());
+        }
+
+        /// SGR reset always clears all flags.
+        #[test]
+        fn sgr_reset_clears_flags(attrs in proptest::collection::vec(1u8..9, 0..5)) {
+            let mut model = TerminalModel::new(80, 24);
+
+            // Set some attributes
+            if !attrs.is_empty() {
+                model.process(&sgr_sequence(&attrs));
+            }
+
+            // Reset
+            model.process(b"\x1b[0m");
+
+            prop_assert!(model.sgr_state().flags.is_empty());
+        }
+
+        /// Hyperlinks always balance (no dangling after close).
+        #[test]
+        fn hyperlinks_balance(text in "[a-z]{1,20}") {
+            let mut model = TerminalModel::new(80, 24);
+
+            // Start link
+            model.process(b"\x1b]8;;https://example.com\x07");
+            prop_assert!(model.has_dangling_link());
+
+            // Write some text
+            model.process(text.as_bytes());
+
+            // End link
+            model.process(b"\x1b]8;;\x07");
+            prop_assert!(!model.has_dangling_link());
+        }
+
+        /// Sync output always balances with nested begin/end.
+        #[test]
+        fn sync_output_balances(nesting in 1usize..5) {
+            let mut model = TerminalModel::new(80, 24);
+
+            // Begin sync N times
+            for _ in 0..nesting {
+                model.process(b"\x1b[?2026h");
+            }
+            prop_assert_eq!(model.modes().sync_output_level, nesting as u32);
+
+            // End sync N times
+            for _ in 0..nesting {
+                model.process(b"\x1b[?2026l");
+            }
+            prop_assert!(model.sync_output_balanced());
+        }
+
+        /// Erase operations don't crash and leave cursor in bounds.
+        #[test]
+        fn erase_operations_safe(
+            row in 1u8..24,
+            col in 1u8..80,
+            ed_mode in 0u8..4,
+            el_mode in 0u8..3,
+        ) {
+            let mut model = TerminalModel::new(80, 24);
+
+            // Position cursor
+            model.process(&cup_sequence(row, col));
+
+            // Erase display
+            model.process(format!("\x1b[{}J", ed_mode).as_bytes());
+
+            // Position again and erase line
+            model.process(&cup_sequence(row, col));
+            model.process(format!("\x1b[{}K", el_mode).as_bytes());
+
+            let (x, y) = model.cursor();
+            prop_assert!(x < model.width());
+            prop_assert!(y < model.height());
+        }
+
+        /// Random bytes never cause a panic (fuzz-like test).
+        #[test]
+        fn random_bytes_no_panic(bytes in proptest::collection::vec(any::<u8>(), 0..200)) {
+            let mut model = TerminalModel::new(80, 24);
+            model.process(&bytes);
+
+            // Just check it didn't panic and cursor is valid
+            let (x, y) = model.cursor();
+            prop_assert!(x < model.width());
+            prop_assert!(y < model.height());
+        }
+    }
+}
