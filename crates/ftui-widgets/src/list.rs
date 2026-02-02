@@ -167,6 +167,9 @@ impl<'a> StatefulWidget for List<'a> {
             return;
         }
 
+        // Clamp offset to valid range
+        state.offset = state.offset.min(self.items.len().saturating_sub(1));
+
         let list_height = list_area.height as usize;
 
         // Ensure selection is within bounds

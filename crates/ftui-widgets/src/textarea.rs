@@ -12,6 +12,7 @@
 //! assert_eq!(ta.line_count(), 2);
 //! ```
 
+use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
@@ -85,6 +86,135 @@ impl TextArea {
             max_height: 0,
             scroll_top: usize::MAX, // sentinel: will be set on first render
             scroll_left: 0,
+        }
+    }
+
+    // ── Event Handling ─────────────────────────────────────────────
+
+    /// Handle a terminal event.
+    ///
+    /// Returns `true` if the state changed.
+    pub fn handle_event(&mut self, event: &Event) -> bool {
+        match event {
+            Event::Key(key)
+                if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat =>
+            {
+                self.handle_key(key)
+            }
+            Event::Paste(paste) => {
+                self.insert_text(&paste.text);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn handle_key(&mut self, key: &KeyEvent) -> bool {
+        let ctrl = key.modifiers.contains(Modifiers::CTRL);
+        let shift = key.modifiers.contains(Modifiers::SHIFT);
+        let _alt = key.modifiers.contains(Modifiers::ALT);
+
+        match key.code {
+            KeyCode::Char(c) if !ctrl => {
+                self.insert_char(c);
+                true
+            }
+            KeyCode::Enter => {
+                self.insert_newline();
+                true
+            }
+            KeyCode::Backspace => {
+                if ctrl {
+                    self.delete_word_backward();
+                } else {
+                    self.delete_backward();
+                }
+                true
+            }
+            KeyCode::Delete => {
+                self.delete_forward();
+                true
+            }
+            KeyCode::Left => {
+                if ctrl {
+                    self.move_word_left();
+                } else if shift {
+                    self.select_left();
+                } else {
+                    self.move_left();
+                }
+                true
+            }
+            KeyCode::Right => {
+                if ctrl {
+                    self.move_word_right();
+                } else if shift {
+                    self.select_right();
+                } else {
+                    self.move_right();
+                }
+                true
+            }
+            KeyCode::Up => {
+                if shift {
+                    self.select_up();
+                } else {
+                    self.move_up();
+                }
+                true
+            }
+            KeyCode::Down => {
+                if shift {
+                    self.select_down();
+                } else {
+                    self.move_down();
+                }
+                true
+            }
+            KeyCode::Home => {
+                self.move_to_line_start();
+                true
+            }
+            KeyCode::End => {
+                self.move_to_line_end();
+                true
+            }
+            KeyCode::PageUp => {
+                // Requires state for viewport height, but we can approximate or ignore
+                // To support PageUp properly, handle_event might need state?
+                // Or we move logical cursor up by a fixed amount?
+                // For now, simple approximation: move 20 lines
+                for _ in 0..20 {
+                    self.move_up();
+                }
+                true
+            }
+            KeyCode::PageDown => {
+                for _ in 0..20 {
+                    self.move_down();
+                }
+                true
+            }
+            KeyCode::Char('a') if ctrl => {
+                self.select_all();
+                true
+            }
+            // Ctrl+K: Delete to end of line (common emacs/shell binding)
+            KeyCode::Char('k') if ctrl => {
+                self.delete_to_end_of_line();
+                true
+            }
+            // Ctrl+Z: Undo
+            KeyCode::Char('z') if ctrl => {
+                self.undo();
+                true
+            }
+            // Ctrl+Y: Redo
+            KeyCode::Char('y') if ctrl => {
+                self.redo();
+                true
+            }
+            _ => false,
         }
     }
 
@@ -575,6 +705,13 @@ impl Widget for TextArea {
 
                 // Skip graphemes before horizontal scroll
                 if visual_x + g_width <= scroll_left {
+                    visual_x += g_width;
+                    grapheme_byte_offset += g_byte_len;
+                    continue;
+                }
+
+                // Handle partial overlap at left edge
+                if visual_x < scroll_left {
                     visual_x += g_width;
                     grapheme_byte_offset += g_byte_len;
                     continue;

@@ -278,10 +278,18 @@ mod tests {
 
         let mut capture = PtyCapture::spawn(PtyCaptureConfig::default(), cmd).unwrap();
         let mut writer = create_writer();
-        let mut sink = LogSink::new(&mut writer);
-
-        let _ = capture.drain_to_log_sink(&mut sink).expect("drain to sink");
-        sink.flush().expect("flush sink");
+        {
+            let mut sink = LogSink::new(&mut writer);
+            let start = std::time::Instant::now();
+            let mut drained = 0usize;
+            while drained == 0 && start.elapsed() < Duration::from_secs(2) {
+                drained = capture.drain_to_log_sink(&mut sink).expect("drain to sink");
+                if drained == 0 && !capture.is_eof() {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            sink.flush().expect("flush sink");
+        }
 
         let output = writer.into_inner().unwrap();
         let output_str = String::from_utf8_lossy(&output);

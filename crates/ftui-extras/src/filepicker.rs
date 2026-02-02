@@ -505,9 +505,9 @@ mod tests {
         });
         // Should show directories + .md files
         let names: Vec<&str> = (0..picker.filtered_count())
-            .filter_map(|i| {
+            .map(|i| {
                 let idx = picker.filtered_indices[i];
-                Some(picker.entries[idx].name.as_str())
+                picker.entries[idx].name.as_str()
             })
             .collect();
         assert!(names.contains(&"README.md"));
@@ -524,9 +524,9 @@ mod tests {
             show_hidden: false,
         });
         let names: Vec<&str> = (0..picker.filtered_count())
-            .filter_map(|i| {
+            .map(|i| {
                 let idx = picker.filtered_indices[i];
-                Some(picker.entries[idx].name.as_str())
+                picker.entries[idx].name.as_str()
             })
             .collect();
         assert!(!names.contains(&".gitignore"));

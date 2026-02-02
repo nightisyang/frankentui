@@ -14,6 +14,7 @@ members = [
   "crates/ftui-harness",
   "crates/ftui-pty",
   "crates/ftui-simd",
+  "crates/ftui-demo-showcase",
 ]
 
 [profile.release]

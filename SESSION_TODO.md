@@ -46,7 +46,9 @@
 - [x] **PTY Safety**: Added backpressure to `PtyCapture` to prevent OOM.
 - [x] **Link Support**: Added infrastructure for hyperlinks in `Span` and `Frame`.
 - [x] **Paragraph Scrolling**: Fixed horizontal scrolling implementation.
-- [x] **Link Rendering**: Updated `draw_text_span` signature and logic (call sites pending).
+- [x] **Link Rendering**: Updated `draw_text_span` signature and logic.
 - [x] **Call Site Updates**: Propagated `link_url` argument to all widget renderers.
 - [x] **Console Wrapping**: Fixed grapheme splitting bug in `Console` wrapping logic.
 - [x] **Table Scroll**: Fixed scroll-to-bottom logic for variable-height rows.
+- [x] **Markdown Links**: Fixed missing URL propagation in Markdown renderer.
+- [x] **Final Cleanup**: Removed unused variables and synchronized all trait impls.

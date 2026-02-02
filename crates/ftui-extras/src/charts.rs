@@ -321,6 +321,8 @@ impl BarChart<'_> {
 
             match self.mode {
                 BarMode::Grouped => {
+                    // Baseline y: bottom row of the chart area (above label row).
+                    let base_y = (area.y + area.height).saturating_sub(2);
                     for (si, &val) in group.values.iter().enumerate() {
                         if si > 0 {
                             x_cursor += self.bar_gap;
@@ -332,7 +334,10 @@ impl BarChart<'_> {
 
                         // Full rows from bottom up.
                         for row in 0..full {
-                            let y = area.y + area.height - 2 - row;
+                            let y = base_y.saturating_sub(row);
+                            if y < area.y {
+                                break;
+                            }
                             for dx in 0..self.bar_width {
                                 let x = x_cursor + dx;
                                 if x < area.right() {
@@ -344,15 +349,17 @@ impl BarChart<'_> {
                         }
 
                         // Fractional top row.
-                        if frac_idx > 0 && full < area.height.saturating_sub(1) {
-                            let y = area.y + area.height - 2 - full;
-                            let ch = BAR_CHARS[frac_idx];
-                            for dx in 0..self.bar_width {
-                                let x = x_cursor + dx;
-                                if x < area.right() {
-                                    let mut cell = Cell::from_char(ch);
-                                    cell.fg = color;
-                                    buf.set(x, y, cell);
+                        if frac_idx > 0 {
+                            let y = base_y.saturating_sub(full);
+                            if y >= area.y {
+                                let ch = BAR_CHARS[frac_idx];
+                                for dx in 0..self.bar_width {
+                                    let x = x_cursor + dx;
+                                    if x < area.right() {
+                                        let mut cell = Cell::from_char(ch);
+                                        cell.fg = color;
+                                        buf.set(x, y, cell);
+                                    }
                                 }
                             }
                         }
@@ -361,6 +368,8 @@ impl BarChart<'_> {
                     }
                 }
                 BarMode::Stacked => {
+                    // Baseline y: bottom row of the chart area (above label row).
+                    let base_y = (area.y + area.height).saturating_sub(2);
                     // Use cumulative heights to avoid fractional gaps.
                     let mut cumulative = 0.0_f64;
                     for (si, &val) in group.values.iter().enumerate() {
@@ -371,7 +380,10 @@ impl BarChart<'_> {
                         let color = self.get_color(si);
 
                         for row in 0..segment {
-                            let y = area.y + area.height - 2 - prev_rows - row;
+                            let y = base_y.saturating_sub(prev_rows).saturating_sub(row);
+                            if y < area.y {
+                                break;
+                            }
                             for dx in 0..self.bar_width {
                                 let x = x_cursor + dx;
                                 if x < area.right() {

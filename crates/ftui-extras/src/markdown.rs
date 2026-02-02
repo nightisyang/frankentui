@@ -112,7 +112,7 @@ impl Default for MarkdownRenderer {
 // ---------------------------------------------------------------------------
 
 /// Style stack entry tracking what Markdown context is active.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum StyleContext {
     Heading(HeadingLevel),
     Emphasis,
@@ -120,7 +120,7 @@ enum StyleContext {
     Strikethrough,
     CodeBlock,
     Blockquote,
-    Link,
+    Link(String),
 }
 
 /// Tracks list nesting and numbering.
@@ -208,9 +208,8 @@ impl<'t> RenderState<'t> {
                 self.style_stack.push(StyleContext::Blockquote);
             }
             Tag::Link { dest_url, .. } => {
-                self.style_stack.push(StyleContext::Link);
-                // Store URL - we'll use it in end_tag if needed
-                let _ = dest_url;
+                self.style_stack
+                    .push(StyleContext::Link(dest_url.to_string()));
             }
             Tag::List(start) => match start {
                 Some(n) => self.list_stack.push(ListState {
@@ -300,6 +299,7 @@ impl<'t> RenderState<'t> {
         }
 
         let style = self.current_style();
+        let link = self.current_link();
         let content = if self.blockquote_depth > 0 {
             let prefix = "│ ".repeat(self.blockquote_depth as usize);
             format!("{prefix}{text}")
@@ -307,15 +307,24 @@ impl<'t> RenderState<'t> {
             text.to_string()
         };
 
-        match style {
-            Some(s) => self.current_spans.push(Span::styled(content, s)),
-            None => self.current_spans.push(Span::raw(content)),
+        let mut span = match style {
+            Some(s) => Span::styled(content, s),
+            None => Span::raw(content),
+        };
+
+        if let Some(url) = link {
+            span = span.link(url);
         }
+
+        self.current_spans.push(span);
     }
 
     fn inline_code(&mut self, code: &str) {
-        self.current_spans
-            .push(Span::styled(format!("`{code}`"), self.theme.code_inline));
+        let mut span = Span::styled(format!("`{code}`"), self.theme.code_inline);
+        if let Some(url) = self.current_link() {
+            span = span.link(url);
+        }
+        self.current_spans.push(span);
     }
 
     fn soft_break(&mut self) {
@@ -351,7 +360,7 @@ impl<'t> RenderState<'t> {
                 StyleContext::Strikethrough => self.theme.strikethrough,
                 StyleContext::CodeBlock => self.theme.code_block,
                 StyleContext::Blockquote => self.theme.blockquote,
-                StyleContext::Link => self.theme.link,
+                StyleContext::Link(_) => self.theme.link,
             };
             result = Some(match result {
                 Some(existing) => s.merge(&existing),
@@ -359,6 +368,16 @@ impl<'t> RenderState<'t> {
             });
         }
         result
+    }
+
+    fn current_link(&self) -> Option<String> {
+        // Return the most recently pushed link URL
+        for ctx in self.style_stack.iter().rev() {
+            if let StyleContext::Link(url) = ctx {
+                return Some(url.clone());
+            }
+        }
+        None
     }
 
     fn list_prefix(&mut self) -> String {

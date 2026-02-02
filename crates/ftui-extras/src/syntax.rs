@@ -710,11 +710,13 @@ impl GenericTokenizer {
             }
 
             // Punctuation (everything else: commas, semicolons, dots, etc.)
+            // Advance by full UTF-8 character width, not just one byte.
+            let char_len = line[pos..].chars().next().map_or(1, |c| c.len_utf8());
             tokens.push(Token::new(
                 TokenKind::Punctuation,
-                base_offset + pos..base_offset + pos + 1,
+                base_offset + pos..base_offset + pos + char_len,
             ));
-            pos += 1;
+            pos += char_len;
         }
 
         (tokens, LineState::Normal)

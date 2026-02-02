@@ -77,6 +77,14 @@ impl<W: Write> Write for LogSink<'_, W> {
     }
 }
 
+impl<W: Write> Drop for LogSink<'_, W> {
+    fn drop(&mut self) {
+        // Best-effort flush on drop.
+        // We ignore errors here because we can't propagate them and panicking in drop is bad.
+        let _ = self.flush();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,13 +107,16 @@ mod tests {
         {
             let mut sink = LogSink::new(&mut writer);
             write!(sink, "Hello").unwrap();
+            // Not dropped yet, so buffer holds "Hello"
         }
+        // Dropped now, should flush
 
         let output = writer.into_inner().unwrap();
         let output_str = String::from_utf8_lossy(&output);
+        // With Drop flush implemented, partial lines ARE written.
         assert!(
-            !output_str.contains("Hello"),
-            "expected no buffered content to be written without newline or explicit flush"
+            output_str.contains("Hello"),
+            "partial content should be flushed on drop"
         );
     }
 
@@ -236,7 +247,7 @@ mod tests {
     }
 
     #[test]
-    fn log_sink_drop_without_flush_does_not_write_partial() {
+    fn log_sink_drop_without_flush_writes_partial() {
         let mut writer = create_writer();
         {
             let mut sink = LogSink::new(&mut writer);
@@ -246,10 +257,10 @@ mod tests {
 
         let output = writer.into_inner().unwrap();
         let output_str = String::from_utf8_lossy(&output);
-        // Without explicit flush, partial line should not appear
+        // With Drop flush, partial line should appear
         assert!(
-            !output_str.contains("NoNewline"),
-            "partial line should not be written without flush"
+            output_str.contains("NoNewline"),
+            "partial line should be written on drop"
         );
     }
 

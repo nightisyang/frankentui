@@ -116,17 +116,28 @@ pub fn search_case_insensitive(haystack: &str, needle: &str) -> Vec<SearchResult
     use unicode_segmentation::UnicodeSegmentation;
 
     // Build mapping using grapheme clusters for correct normalization boundaries.
-    let mut norm_to_orig: Vec<usize> = Vec::new();
+    // Track both start and end byte offsets for each normalized byte so
+    // matches that land inside a grapheme expansion still map to a full
+    // grapheme range in the original string.
+    let mut norm_start_map: Vec<usize> = Vec::new();
+    let mut norm_end_map: Vec<usize> = Vec::new();
     let mut normalized = String::new();
 
     for (orig_byte, grapheme) in haystack.grapheme_indices(true) {
         let chunk = crate::normalization::normalize_for_search(grapheme);
+        if chunk.is_empty() {
+            continue;
+        }
+        let orig_end = orig_byte + grapheme.len();
         for _ in chunk.bytes() {
-            norm_to_orig.push(orig_byte);
+            norm_start_map.push(orig_byte);
+            norm_end_map.push(orig_end);
         }
         normalized.push_str(&chunk);
     }
-    norm_to_orig.push(haystack.len());
+    if normalized.is_empty() {
+        return Vec::new();
+    }
 
     let mut results = Vec::new();
     let mut start = 0;
@@ -134,14 +145,28 @@ pub fn search_case_insensitive(haystack: &str, needle: &str) -> Vec<SearchResult
         let norm_start = start + pos;
         let norm_end = norm_start + needle_norm.len();
 
-        let orig_start = norm_to_orig
+        let orig_start = norm_start_map
             .get(norm_start)
             .copied()
             .unwrap_or(haystack.len());
-        let orig_end = norm_to_orig
-            .get(norm_end)
-            .copied()
-            .unwrap_or(haystack.len());
+        let orig_end = if norm_end == 0 {
+            orig_start
+        } else {
+            norm_end_map
+                .get(norm_end - 1)
+                .copied()
+                .unwrap_or(haystack.len())
+        };
+
+        // Avoid duplicate ranges when a single grapheme expands into multiple
+        // normalized bytes (e.g., "ß" -> "ss").
+        if results
+            .last()
+            .is_some_and(|r: &SearchResult| r.range.start == orig_start && r.range.end == orig_end)
+        {
+            start = norm_end;
+            continue;
+        }
 
         results.push(SearchResult::new(orig_start, orig_end));
         start = norm_end;
@@ -174,17 +199,25 @@ pub fn search_normalized(
     // Normalize per grapheme cluster to maintain position tracking.
     // Grapheme clusters are the correct unit because normalization
     // operates within grapheme boundaries.
-    let mut norm_to_orig: Vec<usize> = Vec::new();
+    let mut norm_start_map: Vec<usize> = Vec::new();
+    let mut norm_end_map: Vec<usize> = Vec::new();
     let mut normalized = String::new();
 
     for (orig_byte, grapheme) in haystack.grapheme_indices(true) {
         let chunk = normalize(grapheme, form);
+        if chunk.is_empty() {
+            continue;
+        }
+        let orig_end = orig_byte + grapheme.len();
         for _ in chunk.bytes() {
-            norm_to_orig.push(orig_byte);
+            norm_start_map.push(orig_byte);
+            norm_end_map.push(orig_end);
         }
         normalized.push_str(&chunk);
     }
-    norm_to_orig.push(haystack.len());
+    if normalized.is_empty() {
+        return Vec::new();
+    }
 
     let mut results = Vec::new();
     let mut start = 0;
@@ -192,14 +225,26 @@ pub fn search_normalized(
         let norm_start = start + pos;
         let norm_end = norm_start + needle_norm.len();
 
-        let orig_start = norm_to_orig
+        let orig_start = norm_start_map
             .get(norm_start)
             .copied()
             .unwrap_or(haystack.len());
-        let orig_end = norm_to_orig
-            .get(norm_end)
-            .copied()
-            .unwrap_or(haystack.len());
+        let orig_end = if norm_end == 0 {
+            orig_start
+        } else {
+            norm_end_map
+                .get(norm_end - 1)
+                .copied()
+                .unwrap_or(haystack.len())
+        };
+
+        if results
+            .last()
+            .is_some_and(|r: &SearchResult| r.range.start == orig_start && r.range.end == orig_end)
+        {
+            start = norm_end;
+            continue;
+        }
 
         results.push(SearchResult::new(orig_start, orig_end));
         start = norm_end;
@@ -381,6 +426,17 @@ mod normalization_tests {
         // German sharp-s: ß should match ss in case-folded search
         let results = search_case_insensitive("Straße Strasse", "strasse");
         assert!(!results.is_empty(), "Should find case-folded match");
+    }
+
+    #[test]
+    fn case_insensitive_expansion_range_maps_to_grapheme() {
+        let haystack = "Straße";
+        let results = search_case_insensitive(haystack, "strasse");
+        assert_eq!(results.len(), 1);
+        let result = &results[0];
+        assert_eq!(result.text(haystack), "Straße");
+        assert!(haystack.is_char_boundary(result.range.start));
+        assert!(haystack.is_char_boundary(result.range.end));
     }
 
     #[test]

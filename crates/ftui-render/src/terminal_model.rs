@@ -161,7 +161,12 @@ pub struct TerminalModel {
 
 impl TerminalModel {
     /// Create a new terminal model with the given dimensions.
+    ///
+    /// Dimensions are clamped to a minimum of 1×1 to prevent arithmetic
+    /// underflows in cursor-positioning and diff helpers.
     pub fn new(width: usize, height: usize) -> Self {
+        let width = width.max(1);
+        let height = height.max(1);
         let cells = vec![ModelCell::default(); width * height];
         Self {
             width,

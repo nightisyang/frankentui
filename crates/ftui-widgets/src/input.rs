@@ -186,15 +186,16 @@ impl TextInput {
             Event::Paste(paste) => {
                 self.delete_selection();
                 for c in paste.text.chars() {
-                    // Stop if we hit max length (insert_char checks this, but we can optimize)
+                    // Stop if we hit max length
                     if let Some(max) = self.max_length
                         && self.grapheme_count() >= max
                     {
                         break;
                     }
-                    // Filter control chars if needed?
-                    // Usually we want to allow standard text.
-                    if !c.is_control() {
+
+                    if c == '\n' || c == '\r' || c == '\t' {
+                        self.insert_char(' ');
+                    } else if !c.is_control() {
                         self.insert_char(c);
                     }
                 }
@@ -285,6 +286,11 @@ impl TextInput {
     // --- Editing operations ---
 
     fn insert_char(&mut self, c: char) {
+        // Strict control character filtering to prevent terminal corruption
+        if c.is_control() {
+            return;
+        }
+
         // Optimization: calculate count once
         let old_count = self.grapheme_count();
 

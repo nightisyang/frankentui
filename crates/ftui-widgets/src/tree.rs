@@ -298,7 +298,7 @@ impl Widget for Tree {
         let max_x = area.right();
 
         for (row_idx, node) in flat.iter().enumerate() {
-            if row_idx as u16 >= area.height {
+            if row_idx >= area.height as usize {
                 break;
             }
 

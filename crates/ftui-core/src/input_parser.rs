@@ -91,8 +91,6 @@ pub struct InputParser {
     utf8_buffer: [u8; 4],
     /// Whether we're in bracketed paste mode.
     in_paste: bool,
-    /// Bytes matched so far for paste end sequence.
-    paste_match_len: usize,
 }
 
 impl Default for InputParser {
@@ -111,7 +109,6 @@ impl InputParser {
             paste_buffer: Vec::new(),
             utf8_buffer: [0; 4],
             in_paste: false,
-            paste_match_len: 0,
         }
     }
 
@@ -356,7 +353,6 @@ impl InputParser {
             (b"200", b'~') => {
                 self.in_paste = true;
                 self.paste_buffer.clear();
-                self.paste_match_len = 0;
                 return None;
             }
             (b"201", b'~') => {

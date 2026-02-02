@@ -1,0 +1,10 @@
+Hello ASCII world
+Héllo àccénted chàracters
+日本語テスト (Japanese test)
+中文测试 (Chinese test)
+한국어 테스트 (Korean test)
+🎉 Party time! 🚀 Rocket launch 🌍 Earth
+Mixed: café ☕ naïve résumé
+Box drawing: ┌──────┐│ cell │└──────┘
+Math: ∑ ∫ √ π ∞ ≤ ≥ ≠
+Arrows: → ← ↑ ↓ ⇒ ⇐

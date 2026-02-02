@@ -125,6 +125,9 @@ impl<'a> StatefulWidget for Spinner<'a> {
         }
 
         // At NoStyling, use static ASCII frame instead of animated Unicode
+        if self.frames.is_empty() {
+            return;
+        }
         let frame_char = if deg.use_unicode_borders() {
             let frame_idx = state.current_frame % self.frames.len();
             self.frames[frame_idx]

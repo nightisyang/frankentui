@@ -1,7 +1,7 @@
 # Unit Test Coverage Matrix
 
-This document encodes the project’s expectations for unit test coverage by crate and module.
-It prevents “test later” drift, keeps kernel invariants continuously verified, and makes CI
+This document encodes the project's expectations for unit test coverage by crate and module.
+It prevents "test later" drift, keeps kernel invariants continuously verified, and makes CI
 decisions explicit.
 
 See Bead: bd-3hy.
@@ -12,100 +12,192 @@ See Bead: bd-3hy.
 - CI should enforce these thresholds (see bd-xn2).
 
 ## Coverage Targets (v1)
-- ftui-render: ≥ 85% (kernel)
-- ftui-core: ≥ 80% (terminal/session + input)
-- ftui-style: ≥ 80%
-- ftui-text: ≥ 80%
-- ftui-layout: ≥ 75%
-- ftui-runtime: ≥ 75%
-- ftui-widgets: ≥ 70%
-- ftui-extras: ≥ 60% (feature-gated)
+- ftui-render: >= 85% (kernel)
+- ftui-core: >= 80% (terminal/session + input)
+- ftui-style: >= 80%
+- ftui-text: >= 80%
+- ftui-layout: >= 75%
+- ftui-runtime: >= 75%
+- ftui-widgets: >= 70%
+- ftui-extras: >= 60% (feature-gated)
 
-Note: Integration-heavy PTY tests are enforced separately; do not “unit test” around reality.
+Note: Integration-heavy PTY tests are enforced separately; do not "unit test" around reality.
 
-## ftui-render (≥ 85%)
+## Last Measured: 2026-02-02 (cargo llvm-cov, 2630 tests)
+
+| Crate | Target | Actual | Status |
+|-------|--------|--------|--------|
+| ftui-render | >= 85% | ~96% | PASS |
+| ftui-core | >= 80% | ~96% | PASS |
+| ftui-style | >= 80% | ~98% | PASS |
+| ftui-text | >= 80% | ~95% | PASS |
+| ftui-layout | >= 75% | ~97% | PASS |
+| ftui-runtime | >= 75% | ~83% | PASS (program.rs at 34% drags average) |
+| ftui-widgets | >= 70% | ~92% | PASS |
+| ftui-extras | >= 60% | N/A | Not measured (feature-gated) |
+
+## ftui-render (>= 85%) — Actual: ~96%
 Kernel correctness lives here.
 
-### Cell / CellContent / CellAttrs
-- [ ] CellContent creation from char vs grapheme-id
-- [ ] Width semantics (ASCII, wide, combining, emoji)
-- [ ] Continuation-cell sentinel semantics for wide glyphs
-- [ ] PackedRgba: construction + Porter-Duff alpha blending
-- [ ] CellAttrs: bitflags operations + merge/override
-- [ ] 16-byte Cell layout invariants (size/alignment) + bits_eq correctness
+### Cell / CellContent / CellAttrs — 93% lines
+- [x] CellContent creation from char vs grapheme-id
+- [x] Width semantics (ASCII, wide, combining, emoji)
+- [x] Continuation-cell sentinel semantics for wide glyphs
+- [x] PackedRgba: construction + Porter-Duff alpha blending
+- [x] CellAttrs: bitflags operations + merge/override
+- [x] 16-byte Cell layout invariants (size/alignment) + bits_eq correctness
 
-### Buffer
-- [ ] Create/resize buffer with dimensions
-- [ ] get/set bounds checking + deterministic defaults
-- [ ] Clear semantics (full vs region)
-- [ ] Scissor stack push/pop semantics (intersection monotonicity)
-- [ ] Opacity stack push/pop semantics (product in [0,1])
-- [ ] Wide glyph placement + continuation cells
-- [ ] Iteration order and row-major storage assumptions
+### Buffer — 96% lines
+- [x] Create/resize buffer with dimensions
+- [x] get/set bounds checking + deterministic defaults
+- [x] Clear semantics (full vs region)
+- [x] Scissor stack push/pop semantics (intersection monotonicity)
+- [x] Opacity stack push/pop semantics (product in [0,1])
+- [x] Wide glyph placement + continuation cells
+- [x] Iteration order and row-major storage assumptions
 
-### Diff
-- [ ] Empty diff (no changes)
-- [ ] Single cell change
-- [ ] Row changes
-- [ ] Run grouping behavior
-- [ ] Scratch buffer reuse (no unbounded allocations)
+### Diff — 100% lines
+- [x] Empty diff (no changes)
+- [x] Single cell change
+- [x] Row changes
+- [x] Run grouping behavior
+- [x] Scratch buffer reuse (no unbounded allocations)
 
-### Presenter
-- [ ] Cursor tracking correctness
-- [ ] Style tracking correctness
-- [ ] Link tracking correctness (OSC 8 open/close)
-- [ ] Single-write-per-frame behavior
-- [ ] Synchronized output behavior where supported (fallback correctness)
+### Presenter — 93% lines
+- [x] Cursor tracking correctness
+- [x] Style tracking correctness
+- [x] Link tracking correctness (OSC 8 open/close)
+- [x] Single-write-per-frame behavior
+- [x] Synchronized output behavior where supported (fallback correctness)
 
-## ftui-core (≥ 80%)
+### Other Modules
+- ansi.rs: 97% lines
+- budget.rs: 98% lines
+- counting_writer.rs: 98% lines
+- drawing.rs: 99% lines
+- frame.rs: 88% lines
+- grapheme_pool.rs: 99% lines
+- headless.rs: 99% lines (test infrastructure)
+- link_registry.rs: 99% lines
+- sanitize.rs: 98% lines
+- terminal_model.rs: 88% lines (test infrastructure)
 
-### Event types
-- [ ] Canonical key/mouse/resize/paste/focus event types are stable
+## ftui-core (>= 80%) — Actual: ~96%
 
-### InputParser
-- [ ] Bounded CSI/OSC/DCS parsing (DoS limits)
-- [ ] Bracketed paste decoding + max size
-- [ ] Mouse SGR decoding
-- [ ] Focus/resize event decoding
+### Event types — 93% lines
+- [x] Canonical key/mouse/resize/paste/focus event types are stable
 
-### TerminalCapabilities
-- [ ] Env heuristic detection (TERM/COLORTERM)
-- [ ] Mux flags (tmux/screen/zellij) correctness
+### InputParser — 94% lines
+- [x] Bounded CSI/OSC/DCS parsing (DoS limits)
+- [x] Bracketed paste decoding + max size
+- [x] Mouse SGR decoding
+- [x] Focus/resize event decoding
 
-### TerminalSession lifecycle
-- [ ] RAII enter/exit discipline
-- [ ] Panic cleanup paths are idempotent
+### TerminalCapabilities — 100% lines
+- [x] Env heuristic detection (TERM/COLORTERM)
+- [x] Mux flags (tmux/screen/zellij) correctness
 
-## ftui-style (≥ 80%)
-- [ ] Style defaults + builder ergonomics
-- [ ] Deterministic style merge (explicit masks)
-- [ ] Color downgrade (truecolor → 256 → 16 → mono)
-- [ ] Theme presets + semantic slots
-- [ ] StyleSheet registry + named style composition
+### TerminalSession lifecycle — 93% lines
+- [x] RAII enter/exit discipline
+- [ ] Panic cleanup paths are idempotent — partial coverage via PTY tests; needs dedicated unit test
 
-## ftui-text (≥ 80%)
-- [ ] Segment system correctness (Cow<str>)
-- [ ] Width measurement correctness + LRU cache behavior
-- [ ] Grapheme segmentation helpers for wrap/truncate correctness
-- [ ] Wrap/truncate semantics for ZWJ/emoji/combining
-- [ ] Markup parser correctness (feature-gated)
+### Other Modules
+- animation.rs: 96% lines
+- cursor.rs: 98% lines
+- event_coalescer.rs: 96% lines
+- geometry.rs: 100% lines
+- inline_mode.rs: 92% lines
+- logging.rs: 100% lines
+- mux_passthrough.rs: 100% lines
 
-## ftui-layout (≥ 75%)
-- [ ] Rect operations (intersection/contains)
-- [ ] Flex constraint solving + gaps
-- [ ] Grid placement + spanning + named areas
-- [ ] Min/max sizing invariants
+## ftui-style (>= 80%) — Actual: ~98%
+- [x] Style defaults + builder ergonomics — 96% (style.rs)
+- [x] Deterministic style merge (explicit masks) — 96% (style.rs)
+- [x] Color downgrade (truecolor -> 256 -> 16 -> mono) — 100% (color.rs)
+- [x] Theme presets + semantic slots — 99% (theme.rs)
+- [x] StyleSheet registry + named style composition — 99% (stylesheet.rs)
 
-## ftui-runtime (≥ 75%)
-- [ ] Deterministic scheduling (update/view loop)
-- [ ] Cmd sequencing + cancellation
-- [ ] Subscription polling correctness
-- [ ] Simulator determinism (headless)
+## ftui-text (>= 80%) — Actual: ~95%
+- [x] Segment system correctness (Cow<str>) — 90% (segment.rs)
+- [x] Width measurement correctness + LRU cache behavior — 99% (width_cache.rs)
+- [x] Grapheme segmentation helpers for wrap/truncate correctness — 99% (wrap.rs)
+- [x] Wrap/truncate semantics for ZWJ/emoji/combining — 99% (wrap.rs + unicode corpus)
+- [x] Markup parser correctness (feature-gated) — 89% (markup.rs)
 
-## ftui-widgets (≥ 70%)
-- [ ] Harness-essential widgets have snapshot tests
-- [ ] Widgets: key unit tests (render + layout invariants)
+### Other Modules
+- cursor.rs: 100% lines
+- editor.rs: 96% lines
+- lib.rs: 100% lines
+- rope.rs: 98% lines
+- search.rs: 98% lines
+- text.rs: 83% lines (gap: Display impls, From conversions)
+- view.rs: 97% lines
 
-## ftui-extras (≥ 60%)
-- [ ] Feature-gated modules include correctness tests
-- [ ] Protocol detection tested (where applicable)
+## ftui-layout (>= 75%) — Actual: ~97%
+- [x] Rect operations (intersection/contains) — 100% (geometry.rs in ftui-core)
+- [x] Flex constraint solving + gaps — 99% (lib.rs)
+- [x] Grid placement + spanning + named areas — 99% (grid.rs)
+- [x] Min/max sizing invariants — 99% (lib.rs)
+
+## ftui-runtime (>= 75%) — Actual: ~83%
+- [x] Deterministic scheduling (update/view loop) — 95% (simulator.rs)
+- [ ] Cmd sequencing + cancellation — **34% (program.rs) CRITICAL GAP**
+- [x] Subscription polling correctness — 99% (subscription.rs)
+- [x] Simulator determinism (headless) — 95% (simulator.rs)
+
+### Other Modules
+- asciicast.rs: 93% lines
+- input_macro.rs: 96% lines
+- log_sink.rs: 99% lines
+- string_model.rs: 84% lines
+- terminal_writer.rs: 89% lines
+
+### Critical Gap: program.rs (34% coverage)
+The core `Program` runtime loop has only 34% line coverage. The `run()` method requires
+a real terminal for event polling. Coverage should be improved via `ProgramSimulator` tests
+for Cmd handling, AppBuilder, and model lifecycle. Terminal I/O paths belong in PTY tests.
+
+## ftui-widgets (>= 70%) — Actual: ~92%
+- [x] Harness-essential widgets have snapshot tests (renderable_snapshots.rs: 59+ tests)
+- [x] Widgets: key unit tests (render + layout invariants) (frame_integration.rs + per-module)
+
+### Per-Widget Coverage
+| Widget | Coverage | Notes |
+|--------|----------|-------|
+| borders.rs | 100% | |
+| rule.rs | 100% | |
+| padding.rs | 99% | |
+| cached.rs | 98% | |
+| log_ring.rs | 98% | |
+| group.rs | 98% | |
+| spinner.rs | 98% | |
+| paginator.rs | 98% | |
+| progress.rs | 97% | |
+| table.rs | 97% | |
+| status_line.rs | 96% | |
+| panel.rs | 96% | |
+| pretty.rs | 96% | |
+| columns.rs | 94% | |
+| timer.rs | 95% | |
+| error_boundary.rs | 94% | |
+| paragraph.rs | 93% | |
+| stopwatch.rs | 93% | |
+| layout.rs | 93% | |
+| textarea.rs | 93% | |
+| list.rs | 93% | |
+| tree.rs | 92% | |
+| help.rs | 92% | |
+| align.rs | 91% | |
+| emoji.rs | 90% | |
+| json_view.rs | 86% | |
+| input.rs | 85% | Gap: multi-codepoint, clipboard, cursor boundaries |
+| log_viewer.rs | 83% | Gap: large scrollback, markup in logs |
+| virtualized.rs | 81% | Gap: scroll acceleration, dynamic height |
+| file_picker.rs | 81% | Gap: filesystem edge cases |
+| block.rs | 79% | Gap: complex borders, multi-title, degraded mode |
+
+## ftui-extras (>= 60%)
+- [ ] Feature-gated modules include correctness tests — not measured this run
+- [ ] Protocol detection tested (where applicable) — not measured this run
+
+Requires `cargo llvm-cov --all-features` for accurate measurement.

@@ -521,15 +521,15 @@ mod tests {
     #[test]
     fn line_count_empty() {
         let tb = Traceback::new(Vec::new(), "E", "m");
-        // title + exception + bottom border = 3
-        assert_eq!(tb.line_count(), 3);
+        // title + exception = 2
+        assert_eq!(tb.line_count(), 2);
     }
 
     #[test]
     fn line_count_with_frame() {
         let tb = Traceback::new(vec![TracebackFrame::new("f", 1)], "E", "m");
-        // title(1) + location(1) + exception(1) + border(1) = 4
-        assert_eq!(tb.line_count(), 4);
+        // title(1) + location(1) + exception(1) = 3
+        assert_eq!(tb.line_count(), 3);
     }
 
     #[test]
@@ -539,8 +539,8 @@ mod tests {
             "E",
             "m",
         );
-        // title(1) + location(1) + 3 source lines + exception(1) + border(1) = 7
-        assert_eq!(tb.line_count(), 7);
+        // title(1) + location(1) + 3 source lines + exception(1) = 6
+        assert_eq!(tb.line_count(), 6);
     }
 
     #[test]

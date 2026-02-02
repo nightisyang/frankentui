@@ -1139,6 +1139,18 @@ mod tests {
         assert!(!config.probe_background);
     }
 
+    #[test]
+    fn probe_config_all_disabled_is_noop() {
+        let config = ProbeConfig {
+            timeout: Duration::from_millis(1),
+            probe_da1: false,
+            probe_da2: false,
+            probe_background: false,
+        };
+        let result = probe_capabilities(&config);
+        assert_eq!(result, ProbeResult::default());
+    }
+
     // --- ProbeResult defaults ---
 
     #[test]
@@ -1470,5 +1482,19 @@ mod tests {
         prober.confirm(ProbeableCapability::TrueColor);
 
         assert_eq!(prober.confirmed_capabilities().len(), 1);
+    }
+
+    #[test]
+    fn prober_timeouts_clear_pending() {
+        let mut prober = CapabilityProber::new(Duration::from_millis(1));
+        let caps = TerminalCapabilities::basic();
+        let mut buf = Vec::new();
+        let sent = prober.send_all_probes(&caps, &mut buf).unwrap();
+        assert!(sent > 0);
+        assert!(prober.pending_count() > 0);
+
+        std::thread::sleep(Duration::from_millis(2));
+        prober.check_timeouts();
+        assert_eq!(prober.pending_count(), 0);
     }
 }

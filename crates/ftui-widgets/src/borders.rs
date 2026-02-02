@@ -118,7 +118,8 @@ pub enum BorderType {
     Double,
     /// Heavy line border.
     Heavy,
-    // TODO: Custom(BorderSet)
+    /// Custom border character set.
+    Custom(BorderSet),
 }
 
 impl BorderType {
@@ -130,6 +131,7 @@ impl BorderType {
             BorderType::Rounded => BorderSet::ROUNDED,
             BorderType::Double => BorderSet::DOUBLE,
             BorderType::Heavy => BorderSet::HEAVY,
+            BorderType::Custom(set) => *set,
         }
     }
 }
@@ -280,6 +282,25 @@ mod tests {
     #[test]
     fn border_type_default_is_square() {
         assert_eq!(BorderType::default(), BorderType::Square);
+    }
+
+    #[test]
+    fn border_type_custom_uses_provided_set() {
+        let custom = BorderSet {
+            vertical: '!',
+            horizontal: '-',
+            top_left: '/',
+            top_right: '\\',
+            bottom_left: '\\',
+            bottom_right: '/',
+            tee_up: '+',
+            tee_down: '+',
+            tee_left: '+',
+            tee_right: '+',
+            cross: '*',
+        };
+
+        assert_eq!(BorderType::Custom(custom).to_border_set(), custom);
     }
 
     #[test]

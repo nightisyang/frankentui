@@ -408,6 +408,8 @@ pub struct Program<M: Model, W: Write + Send = Stdout> {
     task_sender: std::sync::mpsc::Sender<M::Message>,
     /// Channel for receiving messages from background tasks.
     task_receiver: std::sync::mpsc::Receiver<M::Message>,
+    /// Join handles for background tasks; reaped opportunistically.
+    task_handles: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl<M: Model> Program<M, Stdout> {
@@ -461,6 +463,7 @@ impl<M: Model> Program<M, Stdout> {
             subscriptions,
             task_sender,
             task_receiver,
+            task_handles: Vec::new(),
         })
     }
 }
@@ -513,6 +516,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
 
             // Process background task results
             self.process_task_results()?;
+            self.reap_finished_tasks();
 
             self.process_resize_debounce()?;
 
@@ -529,6 +533,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
 
         // Stop all subscriptions on exit
         self.subscriptions.stop_all();
+        self.reap_finished_tasks();
 
         Ok(())
     }
@@ -635,13 +640,30 @@ impl<M: Model, W: Write + Send> Program<M, W> {
             }
             Cmd::Task(f) => {
                 let sender = self.task_sender.clone();
-                std::thread::spawn(move || {
+                let handle = std::thread::spawn(move || {
                     let msg = f();
                     let _ = sender.send(msg);
                 });
+                self.task_handles.push(handle);
             }
         }
         Ok(())
+    }
+
+    fn reap_finished_tasks(&mut self) {
+        if self.task_handles.is_empty() {
+            return;
+        }
+
+        let mut remaining = Vec::with_capacity(self.task_handles.len());
+        for handle in self.task_handles.drain(..) {
+            if handle.is_finished() {
+                let _ = handle.join();
+            } else {
+                remaining.push(handle);
+            }
+        }
+        self.task_handles = remaining;
     }
 
     /// Render a frame with budget tracking.

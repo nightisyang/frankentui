@@ -14,6 +14,7 @@
 //! 3. New subscriptions are started, removed ones are stopped
 //! 4. Subscription messages are routed through `Model::update()`
 
+use std::collections::HashSet;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -149,7 +150,7 @@ impl<M: Send + 'static> SubscriptionManager<M> {
     /// - Stops subscriptions that are no longer declared (ID not in new set)
     /// - Leaves unchanged subscriptions running
     pub(crate) fn reconcile(&mut self, subscriptions: Vec<Box<dyn Subscription<M>>>) {
-        let new_ids: Vec<SubId> = subscriptions.iter().map(|s| s.id()).collect();
+        let new_ids: HashSet<SubId> = subscriptions.iter().map(|s| s.id()).collect();
 
         // Stop subscriptions that are no longer active
         let mut remaining = Vec::new();
@@ -164,10 +165,10 @@ impl<M: Send + 'static> SubscriptionManager<M> {
         self.active = remaining;
 
         // Start new subscriptions
-        let active_ids: Vec<SubId> = self.active.iter().map(|r| r.id).collect();
+        let mut active_ids: HashSet<SubId> = self.active.iter().map(|r| r.id).collect();
         for sub in subscriptions {
             let id = sub.id();
-            if active_ids.contains(&id) {
+            if !active_ids.insert(id) {
                 continue;
             }
 
@@ -395,6 +396,21 @@ mod tests {
 
         let msgs = mgr.drain_messages();
         assert_eq!(msgs, vec![TestMsg::Value(42)]);
+    }
+
+    #[test]
+    fn subscription_manager_dedupes_duplicate_ids() {
+        let mut mgr = SubscriptionManager::<TestMsg>::new();
+        let subs: Vec<Box<dyn Subscription<TestMsg>>> = vec![
+            Box::new(MockSubscription::new(7, vec![TestMsg::Value(1)])),
+            Box::new(MockSubscription::new(7, vec![TestMsg::Value(2)])),
+        ];
+
+        mgr.reconcile(subs);
+
+        thread::sleep(Duration::from_millis(20));
+        let msgs = mgr.drain_messages();
+        assert_eq!(msgs, vec![TestMsg::Value(1)]);
     }
 
     #[test]

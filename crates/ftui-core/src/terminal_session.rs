@@ -400,6 +400,14 @@ fn install_panic_hook() {
     });
 }
 
+/// Best-effort cleanup for termination paths that skip `Drop`.
+///
+/// Call this before `std::process::exit` to restore terminal state when
+/// unwinding won't run destructors.
+pub fn best_effort_cleanup_for_exit() {
+    best_effort_cleanup();
+}
+
 fn best_effort_cleanup() {
     let mut stdout = io::stdout();
 

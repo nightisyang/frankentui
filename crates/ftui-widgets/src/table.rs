@@ -198,6 +198,13 @@ impl<'a> StatefulWidget for Table<'a> {
         let rows_max_y = table_area.bottom();
         let rows_height = rows_max_y.saturating_sub(rows_top);
 
+        // Clamp offset to valid range
+        if self.rows.is_empty() {
+            state.offset = 0;
+        } else {
+            state.offset = state.offset.min(self.rows.len().saturating_sub(1));
+        }
+
         if let Some(selected) = state.selected {
             if self.rows.is_empty() {
                 state.selected = None;

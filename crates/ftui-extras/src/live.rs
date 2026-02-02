@@ -273,9 +273,17 @@ impl Live {
     where
         F: Fn() + Send + 'static,
     {
+        // Stop any existing refresh thread before starting a new one.
+        self.stop_refresh_thread();
+
+        let rate = self.config.refresh_per_second;
+        if !rate.is_finite() || rate <= 0.0 {
+            return;
+        }
+
         self.refresh_stop.store(false, Ordering::SeqCst);
         let stop = Arc::clone(&self.refresh_stop);
-        let interval = Duration::from_secs_f64(1.0 / self.config.refresh_per_second);
+        let interval = Duration::from_secs_f64(1.0 / rate);
 
         let handle = std::thread::spawn(move || {
             while !stop.load(Ordering::Relaxed) {
@@ -296,6 +304,7 @@ impl Live {
         self.refresh_stop.store(true, Ordering::SeqCst);
         if let Ok(mut handle) = self.refresh_handle.lock()
             && let Some(h) = handle.take()
+            && h.thread().id() != std::thread::current().id()
         {
             let _ = h.join();
         }
@@ -485,6 +494,21 @@ mod tests {
             w.output().is_empty(),
             "Second stop should not write anything"
         );
+    }
+
+    #[test]
+    fn start_auto_refresh_ignores_non_positive_rate() {
+        let w = TestWriter::new();
+        let cfg = LiveConfig {
+            refresh_per_second: 0.0,
+            ..Default::default()
+        };
+        let live = Live::with_config(Box::new(w), 80, cfg);
+
+        live.start_auto_refresh(|| {});
+
+        let handle = live.refresh_handle.lock().unwrap();
+        assert!(handle.is_none(), "no refresh thread should be spawned");
     }
 
     #[test]

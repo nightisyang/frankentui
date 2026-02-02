@@ -233,18 +233,43 @@ impl<W: Write> TerminalWriter<W> {
 
     /// Activate the scroll region for inline mode.
     ///
-    /// Sets DECSTBM to constrain scrolling to the log region (above UI).
+    /// Sets DECSTBM to constrain scrolling to the log region:
+    /// - Bottom-anchored UI: log region is above the UI.
+    /// - Top-anchored UI: log region is below the UI.
+    ///
     /// Only called when the strategy permits scroll-region usage.
     fn activate_scroll_region(&mut self, ui_height: u16) -> io::Result<()> {
         if self.scroll_region_active {
             return Ok(());
         }
 
-        let log_bottom = self.term_height.saturating_sub(ui_height);
-        if log_bottom > 0 {
-            // DECSTBM: set scroll region to rows 1..log_bottom (1-indexed)
-            write!(self.writer(), "\x1b[1;{}r", log_bottom)?;
-            self.scroll_region_active = true;
+        let ui_height = ui_height.min(self.term_height);
+        if ui_height >= self.term_height {
+            return Ok(());
+        }
+
+        match self.ui_anchor {
+            UiAnchor::Bottom => {
+                let term_height = self.term_height;
+                let log_bottom = term_height.saturating_sub(ui_height);
+                if log_bottom > 0 {
+                    // DECSTBM: set scroll region to rows 1..log_bottom (1-indexed)
+                    write!(self.writer(), "\x1b[1;{}r", log_bottom)?;
+                    self.scroll_region_active = true;
+                }
+            }
+            UiAnchor::Top => {
+                let term_height = self.term_height;
+                let log_top = ui_height.saturating_add(1);
+                if log_top <= term_height {
+                    // DECSTBM: set scroll region to rows log_top..term_height (1-indexed)
+                    write!(self.writer(), "\x1b[{};{}r", log_top, term_height)?;
+                    self.scroll_region_active = true;
+                    // DECSTBM moves cursor to home; for top-anchored UI we must
+                    // move it into the log region so restored cursor stays below UI.
+                    write!(self.writer(), "\x1b[{};1H", log_top)?;
+                }
+            }
         }
         Ok(())
     }
@@ -356,6 +381,9 @@ impl<W: Write> TerminalWriter<W> {
             let _span = debug_span!("emit").entered();
             self.emit_diff(buffer, &diff, Some(visible_height), ui_y_start)?;
         }
+
+        // Reset style so subsequent log output doesn't inherit UI styling.
+        self.writer().write_all(b"\x1b[0m")?;
 
         // Restore cursor
         self.writer().write_all(CURSOR_RESTORE)?;
@@ -719,7 +747,7 @@ impl<W: Write> Drop for TerminalWriter<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ftui_render::cell::Cell;
+    use ftui_render::cell::{Cell, PackedRgba};
 
     fn max_cursor_row(output: &[u8]) -> u16 {
         let mut max_row = 0u16;
@@ -1198,6 +1226,78 @@ mod tests {
         caps.sync_output = true;
         caps.in_tmux = true;
         caps
+    }
+
+    #[test]
+    fn scroll_region_bounds_bottom_anchor() {
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                scroll_region_caps(),
+            );
+            writer.set_size(10, 10);
+            let buffer = Buffer::new(10, 5);
+            writer.present_ui(&buffer).unwrap();
+        }
+
+        let seq = b"\x1b[1;5r";
+        assert!(
+            output.windows(seq.len()).any(|w| w == seq),
+            "expected scroll region for bottom anchor"
+        );
+    }
+
+    #[test]
+    fn scroll_region_bounds_top_anchor() {
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Top,
+                scroll_region_caps(),
+            );
+            writer.set_size(10, 10);
+            let buffer = Buffer::new(10, 5);
+            writer.present_ui(&buffer).unwrap();
+        }
+
+        let seq = b"\x1b[6;10r";
+        assert!(
+            output.windows(seq.len()).any(|w| w == seq),
+            "expected scroll region for top anchor"
+        );
+        let cursor_seq = b"\x1b[6;1H";
+        assert!(
+            output.windows(cursor_seq.len()).any(|w| w == cursor_seq),
+            "expected cursor move into log region for top anchor"
+        );
+    }
+
+    #[test]
+    fn present_ui_inline_resets_style_before_cursor_restore() {
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::Inline { ui_height: 2 },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            writer.set_size(5, 5);
+            let mut buffer = Buffer::new(5, 2);
+            buffer.set_raw(0, 0, Cell::from_char('X').with_fg(PackedRgba::RED));
+            writer.present_ui(&buffer).unwrap();
+        }
+
+        let seq = b"\x1b[0m\x1b8";
+        assert!(
+            output.windows(seq.len()).any(|w| w == seq),
+            "expected SGR reset before cursor restore in inline mode"
+        );
     }
 
     #[test]

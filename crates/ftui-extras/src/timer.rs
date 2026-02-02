@@ -124,8 +124,12 @@ impl Timer {
     }
 
     /// Toggle between running and stopped.
+    ///
+    /// Has no effect if the timer has already finished.
     pub fn toggle(&mut self) {
-        self.running = !self.running;
+        if !self.finished() {
+            self.running = !self.running;
+        }
     }
 
     /// Reset the timer to its initial duration. Does not change running state.

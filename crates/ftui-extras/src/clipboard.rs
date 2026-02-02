@@ -2,6 +2,7 @@
 
 use std::env;
 use std::io::Write;
+#[cfg(feature = "clipboard-fallback")]
 use std::path::Path;
 use std::time::Duration;
 
@@ -574,6 +575,7 @@ fn external_backend_available(backend: ExternalBackend) -> bool {
     }
 }
 
+#[cfg(feature = "clipboard-fallback")]
 fn command_exists(command: &str) -> bool {
     if command.contains(std::path::MAIN_SEPARATOR) {
         return Path::new(command).is_file();

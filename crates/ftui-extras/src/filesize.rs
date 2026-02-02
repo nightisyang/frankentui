@@ -167,29 +167,29 @@ pub fn format_size(size: i64, format: SizeFormat) -> String {
 /// Format bytes using decimal (1000-based) units with 1 decimal place.
 #[must_use]
 pub fn decimal(size: u64) -> String {
-    #[allow(clippy::cast_possible_wrap)]
-    format_size(size as i64, SizeFormat::decimal())
+    let clamped = size.min(i64::MAX as u64) as i64;
+    format_size(clamped, SizeFormat::decimal())
 }
 
 /// Format bytes using decimal (1000-based) units with custom precision.
 #[must_use]
 pub fn decimal_with_precision(size: u64, precision: usize) -> String {
-    #[allow(clippy::cast_possible_wrap)]
-    format_size(size as i64, SizeFormat::decimal().with_precision(precision))
+    let clamped = size.min(i64::MAX as u64) as i64;
+    format_size(clamped, SizeFormat::decimal().with_precision(precision))
 }
 
 /// Format bytes using binary (1024-based) units with 1 decimal place.
 #[must_use]
 pub fn binary(size: u64) -> String {
-    #[allow(clippy::cast_possible_wrap)]
-    format_size(size as i64, SizeFormat::binary())
+    let clamped = size.min(i64::MAX as u64) as i64;
+    format_size(clamped, SizeFormat::binary())
 }
 
 /// Format bytes using binary (1024-based) units with custom precision.
 #[must_use]
 pub fn binary_with_precision(size: u64, precision: usize) -> String {
-    #[allow(clippy::cast_possible_wrap)]
-    format_size(size as i64, SizeFormat::binary().with_precision(precision))
+    let clamped = size.min(i64::MAX as u64) as i64;
+    format_size(clamped, SizeFormat::binary().with_precision(precision))
 }
 
 #[cfg(test)]

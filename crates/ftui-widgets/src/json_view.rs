@@ -329,7 +329,7 @@ impl Widget for JsonView {
         let max_x = area.right();
 
         for (row_idx, tokens) in lines.iter().enumerate() {
-            if row_idx as u16 >= area.height {
+            if row_idx >= area.height as usize {
                 break;
             }
 

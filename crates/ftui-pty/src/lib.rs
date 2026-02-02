@@ -517,6 +517,8 @@ const KITTY_DISABLE_SEQS: &[&[u8]] = &[b"\x1b[<u"];
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use ftui_core::terminal_session::{TerminalSession, best_effort_cleanup_for_exit};
 
     #[test]
     fn cleanup_expectations_match_sequences() {
@@ -555,6 +557,168 @@ mod tests {
                 .any(|w| w == b"hello-pty"),
             "expected PTY output to contain test string"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_terminal_session_cleanup() {
+        let mut cmd = CommandBuilder::new(std::env::current_exe().expect("current exe"));
+        cmd.args([
+            "--exact",
+            "tests::pty_terminal_session_cleanup_child",
+            "--nocapture",
+        ]);
+        cmd.env("FTUI_PTY_CHILD", "1");
+
+        let config = PtyConfig::default()
+            .with_test_name("terminal_session_cleanup")
+            .logging(false);
+        let mut session = spawn_command(config, cmd).expect("spawn PTY child");
+
+        let status = session.wait().expect("wait for child");
+        assert!(status.success(), "child test failed: {:?}", status);
+
+        let output = session
+            .read_until(b"\x1b[?25h", Duration::from_secs(5))
+            .expect("expected cursor show sequence");
+
+        let options = SessionOptions {
+            alternate_screen: true,
+            mouse_capture: true,
+            bracketed_paste: true,
+            focus_events: true,
+            kitty_keyboard: true,
+        };
+        let expectations = CleanupExpectations::for_session(&options);
+        assert_terminal_restored(&output, &expectations);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_terminal_session_cleanup_child() {
+        if std::env::var("FTUI_PTY_CHILD").as_deref() != Ok("1") {
+            return;
+        }
+
+        let options = SessionOptions {
+            alternate_screen: true,
+            mouse_capture: true,
+            bracketed_paste: true,
+            focus_events: true,
+            kitty_keyboard: true,
+        };
+
+        let _session = TerminalSession::new(options).expect("TerminalSession::new");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_terminal_session_cleanup_on_panic() {
+        let mut cmd = CommandBuilder::new(std::env::current_exe().expect("current exe"));
+        cmd.args([
+            "--exact",
+            "tests::pty_terminal_session_cleanup_panic_child",
+            "--nocapture",
+        ]);
+        cmd.env("FTUI_PTY_PANIC_CHILD", "1");
+
+        let config = PtyConfig::default()
+            .with_test_name("terminal_session_cleanup_panic")
+            .logging(false);
+        let mut session = spawn_command(config, cmd).expect("spawn PTY child");
+
+        let status = session.wait().expect("wait for child");
+        assert!(
+            !status.success(),
+            "panic child should exit with failure status"
+        );
+
+        let output = session
+            .read_until(b"\x1b[?25h", Duration::from_secs(5))
+            .expect("expected cursor show sequence");
+
+        let options = SessionOptions {
+            alternate_screen: true,
+            mouse_capture: true,
+            bracketed_paste: true,
+            focus_events: true,
+            kitty_keyboard: true,
+        };
+        let expectations = CleanupExpectations::for_session(&options);
+        assert_terminal_restored(&output, &expectations);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_terminal_session_cleanup_panic_child() {
+        if std::env::var("FTUI_PTY_PANIC_CHILD").as_deref() != Ok("1") {
+            return;
+        }
+
+        let options = SessionOptions {
+            alternate_screen: true,
+            mouse_capture: true,
+            bracketed_paste: true,
+            focus_events: true,
+            kitty_keyboard: true,
+        };
+
+        let _session = TerminalSession::new(options).expect("TerminalSession::new");
+        panic!("intentional panic to verify cleanup on unwind");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_terminal_session_cleanup_on_exit() {
+        let mut cmd = CommandBuilder::new(std::env::current_exe().expect("current exe"));
+        cmd.args([
+            "--exact",
+            "tests::pty_terminal_session_cleanup_exit_child",
+            "--nocapture",
+        ]);
+        cmd.env("FTUI_PTY_EXIT_CHILD", "1");
+
+        let config = PtyConfig::default()
+            .with_test_name("terminal_session_cleanup_exit")
+            .logging(false);
+        let mut session = spawn_command(config, cmd).expect("spawn PTY child");
+
+        let status = session.wait().expect("wait for child");
+        assert!(status.success(), "exit child should succeed: {:?}", status);
+
+        let output = session
+            .read_until(b"\x1b[?25h", Duration::from_secs(5))
+            .expect("expected cursor show sequence");
+
+        let options = SessionOptions {
+            alternate_screen: true,
+            mouse_capture: true,
+            bracketed_paste: true,
+            focus_events: true,
+            kitty_keyboard: true,
+        };
+        let expectations = CleanupExpectations::for_session(&options);
+        assert_terminal_restored(&output, &expectations);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_terminal_session_cleanup_exit_child() {
+        if std::env::var("FTUI_PTY_EXIT_CHILD").as_deref() != Ok("1") {
+            return;
+        }
+
+        let options = SessionOptions {
+            alternate_screen: true,
+            mouse_capture: true,
+            bracketed_paste: true,
+            focus_events: true,
+            kitty_keyboard: true,
+        };
+
+        let _session = TerminalSession::new(options).expect("TerminalSession::new");
+        best_effort_cleanup_for_exit();
+        std::process::exit(0);
     }
 
     // --- find_subsequence tests ---

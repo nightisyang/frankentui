@@ -105,6 +105,8 @@ pub struct LogViewer {
     filter: Option<String>,
     /// Indices of lines matching the filter (None = show all).
     filtered_indices: Option<Vec<usize>>,
+    /// Scroll offset within the filtered set (top index of filtered list).
+    filtered_scroll_offset: usize,
     /// Active search state.
     search: Option<SearchState>,
 }
@@ -136,6 +138,7 @@ impl LogViewer {
             highlight_style: None,
             filter: None,
             filtered_indices: None,
+            filtered_scroll_offset: 0,
             search: None,
         }
     }
@@ -170,49 +173,73 @@ impl LogViewer {
     /// # Auto-scroll Behavior
     /// If follow mode is enabled, view stays at bottom after push.
     pub fn push(&mut self, line: impl Into<Text>) {
+        let follow_filtered = self.filtered_indices.as_ref().is_some_and(|indices| {
+            self.is_filtered_at_bottom(indices.len(), self.virt.visible_count())
+        });
         let text: Text = line.into();
 
-        // Update filter index if active
-        if let Some(filter) = self.filter.as_ref()
-            && text.to_plain_text().contains(filter.as_str())
-            && let Some(indices) = self.filtered_indices.as_mut()
-        {
-            let idx = self.virt.len();
-            indices.push(idx);
-        }
+        // Split multi-line text into individual items for smooth scrolling
+        for line in text.into_iter() {
+            let item = Text::from_line(line);
 
-        self.virt.push(text);
-
-        // Enforce capacity
-        if self.virt.len() > self.max_lines {
-            let removed = self.virt.trim_front(self.max_lines);
-
-            // Adjust filtered indices
-            if let Some(ref mut indices) = self.filtered_indices {
-                indices.retain_mut(|idx| {
-                    if *idx < removed {
-                        false
-                    } else {
-                        *idx -= removed;
-                        true
-                    }
-                });
+            // Update filter index if active
+            if let Some(filter) = self.filter.as_ref()
+                && item.to_plain_text().contains(filter.as_str())
+                && let Some(indices) = self.filtered_indices.as_mut()
+            {
+                let idx = self.virt.len();
+                indices.push(idx);
             }
 
-            // Adjust search match indices
-            if let Some(ref mut search) = self.search {
-                search.matches.retain_mut(|idx| {
-                    if *idx < removed {
-                        false
-                    } else {
-                        *idx -= removed;
-                        true
+            self.virt.push(item);
+
+            // Enforce capacity
+            if self.virt.len() > self.max_lines {
+                let removed = self.virt.trim_front(self.max_lines);
+
+                // Adjust filtered indices
+                if let Some(ref mut indices) = self.filtered_indices {
+                    let mut filtered_removed = 0usize;
+                    indices.retain_mut(|idx| {
+                        if *idx < removed {
+                            filtered_removed += 1;
+                            false
+                        } else {
+                            *idx -= removed;
+                            true
+                        }
+                    });
+                    if filtered_removed > 0 {
+                        self.filtered_scroll_offset =
+                            self.filtered_scroll_offset.saturating_sub(filtered_removed);
                     }
-                });
-                // Clamp current to valid range
-                if !search.matches.is_empty() {
-                    search.current = search.current.min(search.matches.len() - 1);
+                    if indices.is_empty() {
+                        self.filtered_scroll_offset = 0;
+                    }
                 }
+
+                // Adjust search match indices
+                if let Some(ref mut search) = self.search {
+                    search.matches.retain_mut(|idx| {
+                        if *idx < removed {
+                            false
+                        } else {
+                            *idx -= removed;
+                            true
+                        }
+                    });
+                    // Clamp current to valid range
+                    if !search.matches.is_empty() {
+                        search.current = search.current.min(search.matches.len() - 1);
+                    }
+                }
+            }
+
+            if follow_filtered
+                && let Some(indices) = self.filtered_indices.as_ref()
+                && !indices.is_empty()
+            {
+                self.filtered_scroll_offset = indices.len().saturating_sub(1);
             }
         }
     }
@@ -226,25 +253,56 @@ impl LogViewer {
 
     /// Scroll up by N lines. Disables follow mode.
     pub fn scroll_up(&mut self, lines: usize) {
-        self.virt.scroll(-(lines as i32));
+        if self.filtered_indices.is_some() {
+            self.filtered_scroll_offset = self.filtered_scroll_offset.saturating_sub(lines);
+        } else {
+            self.virt.scroll(-(lines as i32));
+        }
     }
 
     /// Scroll down by N lines. Re-enables follow mode if at bottom.
     pub fn scroll_down(&mut self, lines: usize) {
-        self.virt.scroll(lines as i32);
-        if self.virt.is_at_bottom() {
-            self.virt.set_follow(true);
+        if let Some(filtered_total) = self.filtered_indices.as_ref().map(Vec::len) {
+            if filtered_total == 0 {
+                self.filtered_scroll_offset = 0;
+            } else {
+                self.filtered_scroll_offset = self.filtered_scroll_offset.saturating_add(lines);
+                let max_offset = filtered_total.saturating_sub(1);
+                if self.filtered_scroll_offset > max_offset {
+                    self.filtered_scroll_offset = max_offset;
+                }
+            }
+        } else {
+            self.virt.scroll(lines as i32);
+            if self.virt.is_at_bottom() {
+                self.virt.set_follow(true);
+            }
         }
     }
 
     /// Jump to top of log history.
     pub fn scroll_to_top(&mut self) {
-        self.virt.scroll_to_top();
+        if self.filtered_indices.is_some() {
+            self.filtered_scroll_offset = 0;
+        } else {
+            self.virt.scroll_to_top();
+        }
     }
 
     /// Jump to bottom and re-enable follow mode.
     pub fn scroll_to_bottom(&mut self) {
-        self.virt.scroll_to_end();
+        if let Some(filtered_total) = self.filtered_indices.as_ref().map(Vec::len) {
+            if filtered_total == 0 {
+                self.filtered_scroll_offset = 0;
+            } else if self.virt.visible_count() > 0 {
+                self.filtered_scroll_offset =
+                    filtered_total.saturating_sub(self.virt.visible_count());
+            } else {
+                self.filtered_scroll_offset = filtered_total.saturating_sub(1);
+            }
+        } else {
+            self.virt.scroll_to_end();
+        }
     }
 
     /// Page up (scroll by viewport height).
@@ -252,7 +310,14 @@ impl LogViewer {
     /// Uses the visible count tracked by the Virtualized container.
     /// The `state` parameter is accepted for API compatibility.
     pub fn page_up(&mut self, _state: &LogViewerState) {
-        self.virt.page_up();
+        if self.filtered_indices.is_some() {
+            let lines = _state.last_viewport_height as usize;
+            if lines > 0 {
+                self.scroll_up(lines);
+            }
+        } else {
+            self.virt.page_up();
+        }
     }
 
     /// Page down (scroll by viewport height).
@@ -260,9 +325,16 @@ impl LogViewer {
     /// Uses the visible count tracked by the Virtualized container.
     /// The `state` parameter is accepted for API compatibility.
     pub fn page_down(&mut self, _state: &LogViewerState) {
-        self.virt.page_down();
-        if self.virt.is_at_bottom() {
-            self.virt.set_follow(true);
+        if self.filtered_indices.is_some() {
+            let lines = _state.last_viewport_height as usize;
+            if lines > 0 {
+                self.scroll_down(lines);
+            }
+        } else {
+            self.virt.page_down();
+            if self.virt.is_at_bottom() {
+                self.virt.set_follow(true);
+            }
         }
     }
 
@@ -272,7 +344,11 @@ impl LogViewer {
     /// when the viewport size is unknown).
     #[must_use]
     pub fn is_at_bottom(&self) -> bool {
-        self.virt.follow_mode() || self.virt.is_at_bottom()
+        if let Some(indices) = self.filtered_indices.as_ref() {
+            self.is_filtered_at_bottom(indices.len(), self.virt.visible_count())
+        } else {
+            self.virt.follow_mode() || self.virt.is_at_bottom()
+        }
     }
 
     /// Total line count in buffer.
@@ -302,6 +378,7 @@ impl LogViewer {
     pub fn clear(&mut self) {
         self.virt.clear();
         self.filtered_indices = self.filter.as_ref().map(|_| Vec::new());
+        self.filtered_scroll_offset = 0;
         self.search = None;
     }
 
@@ -322,10 +399,26 @@ impl LogViewer {
                 }
                 self.filter = Some(pat.to_string());
                 self.filtered_indices = Some(indices);
+                self.filtered_scroll_offset = if let Some(indices) = self.filtered_indices.as_ref()
+                {
+                    if indices.is_empty() {
+                        0
+                    } else if self.virt.follow_mode() || self.virt.is_at_bottom() {
+                        indices.len().saturating_sub(1)
+                    } else {
+                        let scroll_offset = self.virt.scroll_offset();
+                        indices.partition_point(|&idx| idx < scroll_offset)
+                    }
+                } else {
+                    0
+                };
+                self.search = None;
             }
             _ => {
                 self.filter = None;
                 self.filtered_indices = None;
+                self.filtered_scroll_offset = 0;
+                self.search = None;
             }
         }
     }
@@ -340,11 +433,21 @@ impl LogViewer {
         }
 
         let mut matches = Vec::new();
-        for idx in 0..self.virt.len() {
-            if let Some(item) = self.virt.get(idx)
-                && item.to_plain_text().contains(query)
-            {
-                matches.push(idx);
+        if let Some(indices) = self.filtered_indices.as_ref() {
+            for &idx in indices {
+                if let Some(item) = self.virt.get(idx)
+                    && item.to_plain_text().contains(query)
+                {
+                    matches.push(idx);
+                }
+            }
+        } else {
+            for idx in 0..self.virt.len() {
+                if let Some(item) = self.virt.get(idx)
+                    && item.to_plain_text().contains(query)
+                {
+                    matches.push(idx);
+                }
             }
         }
 
@@ -359,7 +462,7 @@ impl LogViewer {
         if let Some(ref search) = self.search
             && let Some(&idx) = search.matches.first()
         {
-            self.virt.scroll_to(idx);
+            self.scroll_to_match(idx);
         }
 
         count
@@ -372,7 +475,7 @@ impl LogViewer {
         {
             search.current = (search.current + 1) % search.matches.len();
             let idx = search.matches[search.current];
-            self.virt.scroll_to(idx);
+            self.scroll_to_match(idx);
         }
     }
 
@@ -387,7 +490,7 @@ impl LogViewer {
                 search.current - 1
             };
             let idx = search.matches[search.current];
-            self.virt.scroll_to(idx);
+            self.scroll_to_match(idx);
         }
     }
 
@@ -426,6 +529,7 @@ impl LogViewer {
             self.style
         };
 
+        let line = text.lines().first();
         let content = text.to_plain_text();
         let content_width = display_width(&content);
 
@@ -434,7 +538,7 @@ impl LogViewer {
             LogWrapMode::NoWrap => {
                 // Truncate if needed
                 if y < max_y {
-                    draw_text_span(frame, x, y, &content, effective_style, x + width);
+                    self.draw_text_line(line, &content, x, y, x + width, frame, effective_style);
                 }
                 1
             }
@@ -442,7 +546,15 @@ impl LogViewer {
                 if content_width <= width as usize {
                     // No wrap needed
                     if y < max_y {
-                        draw_text_span(frame, x, y, &content, effective_style, x + width);
+                        self.draw_text_line(
+                            line,
+                            &content,
+                            x,
+                            y,
+                            x + width,
+                            frame,
+                            effective_style,
+                        );
                     }
                     1
                 } else {
@@ -464,6 +576,49 @@ impl LogViewer {
                 }
             }
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text_line(
+        &self,
+        line: Option<&ftui_text::Line>,
+        fallback: &str,
+        x: u16,
+        y: u16,
+        max_x: u16,
+        frame: &mut Frame,
+        base_style: Style,
+    ) {
+        if let Some(line) = line {
+            let mut cursor_x = x;
+            for span in line.spans() {
+                if cursor_x >= max_x {
+                    break;
+                }
+                let span_style = span
+                    .style
+                    .map_or(base_style, |style| style.merge(&base_style));
+                cursor_x = draw_text_span(frame, cursor_x, y, span.as_str(), span_style, max_x);
+            }
+        } else {
+            draw_text_span(frame, x, y, fallback, base_style, max_x);
+        }
+    }
+
+    fn scroll_to_match(&mut self, idx: usize) {
+        if let Some(indices) = self.filtered_indices.as_ref() {
+            let position = indices.partition_point(|&v| v < idx);
+            self.filtered_scroll_offset = position.min(indices.len().saturating_sub(1));
+        } else {
+            self.virt.scroll_to(idx);
+        }
+    }
+
+    fn is_filtered_at_bottom(&self, total: usize, visible_count: usize) -> bool {
+        if total == 0 || visible_count == 0 {
+            return true;
+        }
+        self.filtered_scroll_offset >= total.saturating_sub(visible_count)
     }
 }
 
@@ -491,23 +646,24 @@ impl StatefulWidget for LogViewer {
         let visible_count = area.height as usize;
 
         // Determine which lines to show
-        let (start_idx, end_idx) = if let Some(indices) = render_indices {
+        let (start_idx, end_idx, at_bottom) = if let Some(indices) = render_indices {
             // Filtered mode: show lines matching the filter
             let filtered_total = indices.len();
             if filtered_total == 0 {
                 state.last_visible_lines = 0;
                 return;
             }
-            let scroll_offset = self.virt.scroll_offset();
             // Clamp scroll to filtered set
-            let offset = scroll_offset.min(filtered_total.saturating_sub(visible_count));
+            let max_offset = filtered_total.saturating_sub(visible_count);
+            let offset = self.filtered_scroll_offset.min(max_offset);
             let start = offset;
             let end = (offset + visible_count).min(filtered_total);
-            (start, end)
+            let is_bottom = offset >= max_offset;
+            (start, end, is_bottom)
         } else {
             // Unfiltered mode: use Virtualized's range directly
             let range = self.virt.visible_range(area.height);
-            (range.start, range.end)
+            (range.start, range.end, self.virt.is_at_bottom())
         };
 
         let mut y = area.y;
@@ -548,8 +704,12 @@ impl StatefulWidget for LogViewer {
         state.last_visible_lines = lines_rendered;
 
         // Render scroll indicator if not at bottom
-        if !self.virt.is_at_bottom() && area.width >= 4 {
-            let lines_below = total_lines.saturating_sub(end_idx);
+        if !at_bottom && area.width >= 4 {
+            let lines_below = if let Some(indices) = render_indices {
+                indices.len().saturating_sub(end_idx)
+            } else {
+                total_lines.saturating_sub(end_idx)
+            };
             let indicator = format!(" {} ", lines_below);
             let indicator_len = indicator.len() as u16;
             if indicator_len < area.width {
@@ -779,6 +939,46 @@ mod tests {
     }
 
     #[test]
+    fn test_search_respects_filter() {
+        let mut log = LogViewer::new(100);
+        log.push("INFO: ok");
+        log.push("ERROR: first");
+        log.push("WARN: mid");
+        log.push("ERROR: second");
+
+        log.set_filter(Some("ERROR"));
+        assert_eq!(log.search("WARN"), 0);
+        assert_eq!(log.search("ERROR"), 2);
+    }
+
+    #[test]
+    fn test_filter_clears_search() {
+        let mut log = LogViewer::new(100);
+        log.push("alpha");
+        log.search("alpha");
+        assert!(log.search_info().is_some());
+
+        log.set_filter(Some("alpha"));
+        assert!(log.search_info().is_none());
+    }
+
+    #[test]
+    fn test_search_sets_filtered_scroll_offset() {
+        let mut log = LogViewer::new(100);
+        log.push("match one");
+        log.push("line two");
+        log.push("match three");
+        log.push("match four");
+
+        log.set_filter(Some("match"));
+        log.search("match");
+
+        assert_eq!(log.filtered_scroll_offset, 0);
+        log.next_match();
+        assert_eq!(log.filtered_scroll_offset, 1);
+    }
+
+    #[test]
     fn test_search_next_prev() {
         let mut log = LogViewer::new(100);
         log.push("match A");
@@ -838,5 +1038,39 @@ mod tests {
         log.push("y4"); // evicts "x1", indices should adjust
         // After eviction of 1 item: "x3" was at 2, now at 1
         assert_eq!(log.filtered_indices.as_ref().unwrap(), &[1]);
+    }
+
+    #[test]
+    fn test_filter_scroll_offset_tracks_unfiltered_position() {
+        let mut log = LogViewer::new(100);
+        for i in 0..20 {
+            if i == 2 || i == 10 || i == 15 {
+                log.push(format!("match {}", i));
+            } else {
+                log.push(format!("line {}", i));
+            }
+        }
+
+        log.virt.scroll_to(12);
+        log.set_filter(Some("match"));
+
+        // Matches before index 12 are at 2 and 10 -> offset should be 2.
+        assert_eq!(log.filtered_scroll_offset, 2);
+    }
+
+    #[test]
+    fn test_filtered_scroll_down_moves_within_filtered_list() {
+        let mut log = LogViewer::new(100);
+        log.push("match one");
+        log.push("line two");
+        log.push("match three");
+        log.push("line four");
+        log.push("match five");
+
+        log.set_filter(Some("match"));
+        log.scroll_to_top();
+        log.scroll_down(1);
+
+        assert_eq!(log.filtered_scroll_offset, 1);
     }
 }

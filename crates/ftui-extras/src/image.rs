@@ -311,6 +311,9 @@ fn scale_to_fit(
     max_height: u32,
     cover: bool,
 ) -> (u32, u32) {
+    if width == 0 || height == 0 {
+        return (max_width.max(1), max_height.max(1));
+    }
     let width_f = width as f32;
     let height_f = height as f32;
     let max_w = max_width as f32;
