@@ -175,8 +175,10 @@ PY
         if [[ "$retries" -le 1 ]]; then
             return "$exit_code"
         fi
-        local size
-        size=$(wc -c < "$output_file" | tr -d ' ')
+        local size=0
+        if [[ -f "$output_file" ]]; then
+            size=$(wc -c < "$output_file" | tr -d ' ')
+        fi
         if [[ "$exit_code" -eq 0 ]] && [[ "$size" -ge "$min_bytes" ]]; then
             return 0
         fi
@@ -184,7 +186,10 @@ PY
             return "$exit_code"
         fi
         local retry_delay_s
-        retry_delay_s="$(awk -v ms="$retry_delay_ms" 'BEGIN {printf "%.3f", ms/1000}')"
+        retry_delay_s="$(awk -v ms="$retry_delay_ms" 'BEGIN {printf "%.3f", ms/1000}' || true)"
+        if [[ -z "$retry_delay_s" ]]; then
+            retry_delay_s="0.1"
+        fi
         sleep "$retry_delay_s"
         attempt=$((attempt + 1))
     done
