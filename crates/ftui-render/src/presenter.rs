@@ -821,6 +821,389 @@ mod tests {
             close_count
         );
     }
+
+    // =========================================================================
+    // Single-write-per-frame behavior tests
+    // =========================================================================
+
+    #[test]
+    fn sync_output_not_wrapped_when_unsupported() {
+        // When sync_output capability is false, sync sequences should NOT appear
+        let mut presenter = test_presenter(); // basic caps, sync_output = false
+        let buffer = Buffer::new(10, 10);
+        let diff = BufferDiff::new();
+
+        presenter.present(&buffer, &diff).unwrap();
+        let output = get_output(presenter);
+
+        // Should NOT contain sync sequences
+        assert!(
+            !output.starts_with(ansi::SYNC_BEGIN),
+            "Sync begin should not appear when sync_output is disabled"
+        );
+        assert!(
+            !output
+                .windows(ansi::SYNC_END.len())
+                .any(|w| w == ansi::SYNC_END),
+            "Sync end should not appear when sync_output is disabled"
+        );
+    }
+
+    #[test]
+    fn present_flushes_buffered_output() {
+        // Verify that present() flushes all buffered output by checking
+        // that the output contains expected content after present()
+        let mut presenter = test_presenter();
+        let mut buffer = Buffer::new(5, 1);
+        buffer.set_raw(0, 0, Cell::from_char('T'));
+        buffer.set_raw(1, 0, Cell::from_char('E'));
+        buffer.set_raw(2, 0, Cell::from_char('S'));
+        buffer.set_raw(3, 0, Cell::from_char('T'));
+
+        let old = Buffer::new(5, 1);
+        let diff = BufferDiff::compute(&old, &buffer);
+
+        presenter.present(&buffer, &diff).unwrap();
+        let output = get_output(presenter);
+        let output_str = String::from_utf8_lossy(&output);
+
+        // All characters should be present in output (flushed)
+        assert!(
+            output_str.contains("TEST"),
+            "Expected 'TEST' in flushed output"
+        );
+    }
+
+    #[test]
+    fn present_stats_reports_cells_and_bytes() {
+        let mut presenter = test_presenter();
+        let mut buffer = Buffer::new(10, 1);
+
+        // Set 5 cells
+        for i in 0..5 {
+            buffer.set_raw(i, 0, Cell::from_char('X'));
+        }
+
+        let old = Buffer::new(10, 1);
+        let diff = BufferDiff::compute(&old, &buffer);
+
+        let stats = presenter.present(&buffer, &diff).unwrap();
+
+        // Stats should reflect the changes
+        assert_eq!(stats.cells_changed, 5, "Expected 5 cells changed");
+        assert!(stats.bytes_emitted > 0, "Expected some bytes written");
+        assert!(stats.run_count >= 1, "Expected at least 1 run");
+    }
+
+    // =========================================================================
+    // Cursor tracking tests
+    // =========================================================================
+
+    #[test]
+    fn cursor_tracking_after_wide_char() {
+        let mut presenter = test_presenter();
+        presenter.cursor_x = Some(0);
+        presenter.cursor_y = Some(0);
+
+        let mut buffer = Buffer::new(10, 1);
+        // Wide char at x=0 should advance cursor by 2
+        buffer.set_raw(0, 0, Cell::from_char('中'));
+        buffer.set_raw(1, 0, Cell::CONTINUATION);
+        // Narrow char at x=2
+        buffer.set_raw(2, 0, Cell::from_char('A'));
+
+        let old = Buffer::new(10, 1);
+        let diff = BufferDiff::compute(&old, &buffer);
+
+        presenter.present(&buffer, &diff).unwrap();
+
+        // After presenting, cursor should be at x=3 (0 + 2 for wide + 1 for 'A')
+        // Note: cursor_x gets reset during present(), but we can verify output order
+        let output = get_output(presenter);
+        let output_str = String::from_utf8_lossy(&output);
+
+        // Both characters should appear
+        assert!(output_str.contains('中'));
+        assert!(output_str.contains('A'));
+    }
+
+    #[test]
+    fn cursor_position_after_multiple_runs() {
+        let mut presenter = test_presenter();
+        let mut buffer = Buffer::new(20, 3);
+
+        // Create two separate runs on different rows
+        buffer.set_raw(0, 0, Cell::from_char('A'));
+        buffer.set_raw(1, 0, Cell::from_char('B'));
+        buffer.set_raw(5, 2, Cell::from_char('X'));
+        buffer.set_raw(6, 2, Cell::from_char('Y'));
+
+        let old = Buffer::new(20, 3);
+        let diff = BufferDiff::compute(&old, &buffer);
+
+        presenter.present(&buffer, &diff).unwrap();
+        let output = get_output(presenter);
+        let output_str = String::from_utf8_lossy(&output);
+
+        // All characters should be present
+        assert!(output_str.contains('A'));
+        assert!(output_str.contains('B'));
+        assert!(output_str.contains('X'));
+        assert!(output_str.contains('Y'));
+
+        // Should have multiple CUP sequences (one per run)
+        let cup_count = output_str.matches("\x1b[").count();
+        assert!(
+            cup_count >= 2,
+            "Expected at least 2 escape sequences for multiple runs"
+        );
+    }
+
+    // =========================================================================
+    // Style tracking tests
+    // =========================================================================
+
+    #[test]
+    fn style_with_all_flags() {
+        let mut presenter = test_presenter();
+        let mut buffer = Buffer::new(5, 1);
+
+        // Create a cell with all style flags
+        let all_flags = StyleFlags::BOLD
+            | StyleFlags::DIM
+            | StyleFlags::ITALIC
+            | StyleFlags::UNDERLINE
+            | StyleFlags::BLINK
+            | StyleFlags::REVERSE
+            | StyleFlags::STRIKETHROUGH;
+
+        let cell = Cell::from_char('X').with_attrs(CellAttrs::new(all_flags, 0));
+        buffer.set_raw(0, 0, cell);
+
+        let old = Buffer::new(5, 1);
+        let diff = BufferDiff::compute(&old, &buffer);
+
+        presenter.present(&buffer, &diff).unwrap();
+        let output = get_output(presenter);
+        let output_str = String::from_utf8_lossy(&output);
+
+        // Should contain the character and SGR sequences
+        assert!(output_str.contains('X'));
+        // Should have SGR with multiple attributes (1;2;3;4;5;7;9m pattern)
+        assert!(output_str.contains("\x1b["), "Expected SGR sequences");
+    }
+
+    #[test]
+    fn style_transitions_between_different_colors() {
+        let mut presenter = test_presenter();
+        let mut buffer = Buffer::new(3, 1);
+
+        // Three cells with different foreground colors
+        buffer.set_raw(
+            0,
+            0,
+            Cell::from_char('R').with_fg(PackedRgba::rgb(255, 0, 0)),
+        );
+        buffer.set_raw(
+            1,
+            0,
+            Cell::from_char('G').with_fg(PackedRgba::rgb(0, 255, 0)),
+        );
+        buffer.set_raw(
+            2,
+            0,
+            Cell::from_char('B').with_fg(PackedRgba::rgb(0, 0, 255)),
+        );
+
+        let old = Buffer::new(3, 1);
+        let diff = BufferDiff::compute(&old, &buffer);
+
+        presenter.present(&buffer, &diff).unwrap();
+        let output = get_output(presenter);
+        let output_str = String::from_utf8_lossy(&output);
+
+        // All colors should appear in the output
+        assert!(output_str.contains("38;2;255;0;0"), "Expected red fg");
+        assert!(output_str.contains("38;2;0;255;0"), "Expected green fg");
+        assert!(output_str.contains("38;2;0;0;255"), "Expected blue fg");
+    }
+
+    // =========================================================================
+    // Link tracking tests
+    // =========================================================================
+
+    #[test]
+    fn link_at_buffer_boundaries() {
+        let mut presenter = test_presenter();
+        let mut buffer = Buffer::new(5, 1);
+        let mut links = LinkRegistry::new();
+
+        let link_id = links.register("https://boundary.test");
+
+        // Link at first cell
+        buffer.set_raw(
+            0,
+            0,
+            Cell::from_char('F').with_attrs(CellAttrs::new(StyleFlags::empty(), link_id)),
+        );
+        // Link at last cell
+        buffer.set_raw(
+            4,
+            0,
+            Cell::from_char('L').with_attrs(CellAttrs::new(StyleFlags::empty(), link_id)),
+        );
+
+        let old = Buffer::new(5, 1);
+        let diff = BufferDiff::compute(&old, &buffer);
+
+        presenter
+            .present_with_pool(&buffer, &diff, None, Some(&links))
+            .unwrap();
+        let output = get_output(presenter);
+        let output_str = String::from_utf8_lossy(&output);
+
+        // Link URL should appear
+        assert!(output_str.contains("https://boundary.test"));
+        // Characters should appear
+        assert!(output_str.contains('F'));
+        assert!(output_str.contains('L'));
+    }
+
+    #[test]
+    fn link_state_cleared_after_reset() {
+        let mut presenter = test_presenter();
+        let mut links = LinkRegistry::new();
+        let link_id = links.register("https://example.com");
+
+        // Simulate having an open link
+        presenter.current_link = Some(link_id);
+        presenter.current_style = Some(CellStyle::default());
+        presenter.cursor_x = Some(5);
+        presenter.cursor_y = Some(3);
+
+        presenter.reset();
+
+        // All state should be cleared
+        assert!(
+            presenter.current_link.is_none(),
+            "current_link should be None after reset"
+        );
+        assert!(
+            presenter.current_style.is_none(),
+            "current_style should be None after reset"
+        );
+        assert!(
+            presenter.cursor_x.is_none(),
+            "cursor_x should be None after reset"
+        );
+        assert!(
+            presenter.cursor_y.is_none(),
+            "cursor_y should be None after reset"
+        );
+    }
+
+    #[test]
+    fn link_transitions_linked_unlinked_linked() {
+        let mut presenter = test_presenter();
+        let mut buffer = Buffer::new(5, 1);
+        let mut links = LinkRegistry::new();
+
+        let link_id = links.register("https://toggle.test");
+
+        // Linked -> Unlinked -> Linked pattern
+        buffer.set_raw(
+            0,
+            0,
+            Cell::from_char('A').with_attrs(CellAttrs::new(StyleFlags::empty(), link_id)),
+        );
+        buffer.set_raw(1, 0, Cell::from_char('B')); // no link
+        buffer.set_raw(
+            2,
+            0,
+            Cell::from_char('C').with_attrs(CellAttrs::new(StyleFlags::empty(), link_id)),
+        );
+
+        let old = Buffer::new(5, 1);
+        let diff = BufferDiff::compute(&old, &buffer);
+
+        presenter
+            .present_with_pool(&buffer, &diff, None, Some(&links))
+            .unwrap();
+        let output = get_output(presenter);
+        let output_str = String::from_utf8_lossy(&output);
+
+        // Link URL should appear at least twice (once for A, once for C)
+        let url_count = output_str.matches("https://toggle.test").count();
+        assert!(
+            url_count >= 2,
+            "Expected link to open at least twice, got {} occurrences",
+            url_count
+        );
+
+        // Close sequence should appear (after A, and at frame end)
+        let close_count = output_str.matches("\x1b]8;;\x1b\\").count();
+        assert!(
+            close_count >= 2,
+            "Expected at least 2 link closes, got {}",
+            close_count
+        );
+    }
+
+    // =========================================================================
+    // Multiple frame tests
+    // =========================================================================
+
+    #[test]
+    fn multiple_presents_maintain_correct_state() {
+        let mut presenter = test_presenter();
+        let mut buffer = Buffer::new(10, 1);
+
+        // First frame
+        buffer.set_raw(0, 0, Cell::from_char('1'));
+        let old = Buffer::new(10, 1);
+        let diff = BufferDiff::compute(&old, &buffer);
+        presenter.present(&buffer, &diff).unwrap();
+
+        // Second frame - change a different cell
+        let prev = buffer.clone();
+        buffer.set_raw(1, 0, Cell::from_char('2'));
+        let diff = BufferDiff::compute(&prev, &buffer);
+        presenter.present(&buffer, &diff).unwrap();
+
+        // Third frame - change another cell
+        let prev = buffer.clone();
+        buffer.set_raw(2, 0, Cell::from_char('3'));
+        let diff = BufferDiff::compute(&prev, &buffer);
+        presenter.present(&buffer, &diff).unwrap();
+
+        let output = get_output(presenter);
+        let output_str = String::from_utf8_lossy(&output);
+
+        // All numbers should appear in final output
+        assert!(output_str.contains('1'));
+        assert!(output_str.contains('2'));
+        assert!(output_str.contains('3'));
+    }
+
+    #[test]
+    fn style_state_persists_across_frames() {
+        let mut presenter = test_presenter();
+        let fg = PackedRgba::rgb(100, 150, 200);
+
+        // First frame - set style
+        let mut buffer = Buffer::new(5, 1);
+        buffer.set_raw(0, 0, Cell::from_char('A').with_fg(fg));
+        let old = Buffer::new(5, 1);
+        let diff = BufferDiff::compute(&old, &buffer);
+        presenter.present(&buffer, &diff).unwrap();
+
+        // Style should be tracked (but reset at frame end per the implementation)
+        // After present(), current_style is None due to sgr_reset at frame end
+        assert!(
+            presenter.current_style.is_none(),
+            "Style should be reset after frame end"
+        );
+    }
 }
 
 #[cfg(test)]

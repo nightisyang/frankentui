@@ -667,6 +667,199 @@ mod property_tests {
 }
 
 #[cfg(test)]
+mod merge_semantic_tests {
+    //! Tests for merge behavior and determinism.
+    //!
+    //! These tests verify the cascading semantics: child overrides parent
+    //! for colors, and flags combine for attributes.
+
+    use super::*;
+
+    #[test]
+    fn merge_chain_three_styles() {
+        // Test merging a chain: grandchild -> child -> parent
+        let red = PackedRgba::rgb(255, 0, 0);
+        let green = PackedRgba::rgb(0, 255, 0);
+        let blue = PackedRgba::rgb(0, 0, 255);
+        let white = PackedRgba::rgb(255, 255, 255);
+
+        let grandparent = Style::new().fg(red).bg(white).bold();
+        let parent = Style::new().fg(green).italic();
+        let child = Style::new().fg(blue);
+
+        // First merge: parent <- grandparent
+        let parent_merged = parent.merge(&grandparent);
+        assert_eq!(parent_merged.fg, Some(green)); // parent wins
+        assert_eq!(parent_merged.bg, Some(white)); // inherited from grandparent
+        assert!(parent_merged.has_attr(StyleFlags::BOLD)); // inherited
+        assert!(parent_merged.has_attr(StyleFlags::ITALIC)); // parent's
+
+        // Second merge: child <- parent_merged
+        let child_merged = child.merge(&parent_merged);
+        assert_eq!(child_merged.fg, Some(blue)); // child wins
+        assert_eq!(child_merged.bg, Some(white)); // inherited from grandparent
+        assert!(child_merged.has_attr(StyleFlags::BOLD)); // inherited
+        assert!(child_merged.has_attr(StyleFlags::ITALIC)); // inherited
+    }
+
+    #[test]
+    fn merge_chain_attrs_accumulate() {
+        // Attributes from all ancestors should accumulate
+        let s1 = Style::new().bold();
+        let s2 = Style::new().italic();
+        let s3 = Style::new().underline();
+
+        let merged = s3.merge(&s2.merge(&s1));
+
+        assert!(merged.has_attr(StyleFlags::BOLD));
+        assert!(merged.has_attr(StyleFlags::ITALIC));
+        assert!(merged.has_attr(StyleFlags::UNDERLINE));
+    }
+
+    #[test]
+    fn has_attr_returns_false_for_none() {
+        let style = Style::new(); // attrs is None
+        assert!(!style.has_attr(StyleFlags::BOLD));
+        assert!(!style.has_attr(StyleFlags::ITALIC));
+        assert!(!style.has_attr(StyleFlags::NONE));
+    }
+
+    #[test]
+    fn has_attr_returns_true_for_set_flags() {
+        let style = Style::new().bold().italic();
+        assert!(style.has_attr(StyleFlags::BOLD));
+        assert!(style.has_attr(StyleFlags::ITALIC));
+        assert!(!style.has_attr(StyleFlags::UNDERLINE));
+    }
+
+    #[test]
+    fn attrs_method_sets_directly() {
+        let flags = StyleFlags::BOLD | StyleFlags::DIM | StyleFlags::ITALIC;
+        let style = Style::new().attrs(flags);
+
+        assert_eq!(style.attrs, Some(flags));
+        assert!(style.has_attr(StyleFlags::BOLD));
+        assert!(style.has_attr(StyleFlags::DIM));
+        assert!(style.has_attr(StyleFlags::ITALIC));
+    }
+
+    #[test]
+    fn attrs_method_overwrites_previous() {
+        let style = Style::new().bold().italic().attrs(StyleFlags::UNDERLINE); // overwrites, doesn't combine
+
+        assert!(style.has_attr(StyleFlags::UNDERLINE));
+        // Bold and italic are NOT preserved when using attrs() directly
+        assert!(!style.has_attr(StyleFlags::BOLD));
+        assert!(!style.has_attr(StyleFlags::ITALIC));
+    }
+
+    #[test]
+    fn merge_preserves_explicit_transparent_color() {
+        // TRANSPARENT is a valid explicit color, should not be treated as "unset"
+        let transparent = PackedRgba::TRANSPARENT;
+        let red = PackedRgba::rgb(255, 0, 0);
+
+        let parent = Style::new().fg(red);
+        let child = Style::new().fg(transparent);
+
+        let merged = child.merge(&parent);
+        // Child explicitly sets transparent, should win over parent's red
+        assert_eq!(merged.fg, Some(transparent));
+    }
+
+    #[test]
+    fn merge_all_fields_independently() {
+        let parent = Style::new()
+            .fg(PackedRgba::rgb(1, 1, 1))
+            .bg(PackedRgba::rgb(2, 2, 2))
+            .underline_color(PackedRgba::rgb(3, 3, 3))
+            .bold();
+
+        let child = Style::new()
+            .fg(PackedRgba::rgb(10, 10, 10))
+            // no bg - should inherit
+            .underline_color(PackedRgba::rgb(30, 30, 30))
+            .italic();
+
+        let merged = child.merge(&parent);
+
+        // Child overrides fg
+        assert_eq!(merged.fg, Some(PackedRgba::rgb(10, 10, 10)));
+        // Parent fills bg
+        assert_eq!(merged.bg, Some(PackedRgba::rgb(2, 2, 2)));
+        // Child overrides underline_color
+        assert_eq!(merged.underline_color, Some(PackedRgba::rgb(30, 30, 30)));
+        // Both attrs combined
+        assert!(merged.has_attr(StyleFlags::BOLD));
+        assert!(merged.has_attr(StyleFlags::ITALIC));
+    }
+
+    #[test]
+    fn style_is_copy() {
+        let style = Style::new().fg(PackedRgba::rgb(255, 0, 0)).bold();
+        let copy = style; // Copy, not move
+        assert_eq!(style, copy);
+    }
+
+    #[test]
+    fn style_is_eq() {
+        let a = Style::new().fg(PackedRgba::rgb(255, 0, 0)).bold();
+        let b = Style::new().fg(PackedRgba::rgb(255, 0, 0)).bold();
+        let c = Style::new().fg(PackedRgba::rgb(0, 255, 0)).bold();
+
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn style_is_hashable() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+
+        let a = Style::new().fg(PackedRgba::rgb(255, 0, 0)).bold();
+        let b = Style::new().fg(PackedRgba::rgb(0, 255, 0)).italic();
+
+        set.insert(a);
+        set.insert(b);
+        set.insert(a); // duplicate
+
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn style_flags_contains_combined() {
+        let combined = StyleFlags::BOLD | StyleFlags::ITALIC | StyleFlags::UNDERLINE;
+
+        // contains should return true for individual flags
+        assert!(combined.contains(StyleFlags::BOLD));
+        assert!(combined.contains(StyleFlags::ITALIC));
+        assert!(combined.contains(StyleFlags::UNDERLINE));
+
+        // contains should return true for subsets
+        assert!(combined.contains(StyleFlags::BOLD | StyleFlags::ITALIC));
+
+        // contains should return false for non-subset
+        assert!(!combined.contains(StyleFlags::DIM));
+        assert!(!combined.contains(StyleFlags::BOLD | StyleFlags::DIM));
+    }
+
+    #[test]
+    fn style_flags_none_is_identity_for_union() {
+        let flags = StyleFlags::BOLD | StyleFlags::ITALIC;
+        assert_eq!(flags.union(StyleFlags::NONE), flags);
+        assert_eq!(StyleFlags::NONE.union(flags), flags);
+    }
+
+    #[test]
+    fn style_flags_remove_nonexistent_is_noop() {
+        let mut flags = StyleFlags::BOLD;
+        flags.remove(StyleFlags::ITALIC); // Not set, should be no-op
+        assert!(flags.contains(StyleFlags::BOLD));
+        assert!(!flags.contains(StyleFlags::ITALIC));
+    }
+}
+
+#[cfg(test)]
 mod performance_tests {
     use super::*;
 
