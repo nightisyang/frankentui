@@ -188,7 +188,7 @@ impl Rope {
     #[must_use]
     pub fn line_col_to_byte(&self, line_idx: usize, col: usize) -> usize {
         let line_start = self.line_to_char(line_idx);
-        let char_idx = (line_start + col).min(self.len_chars());
+        let char_idx = line_start.saturating_add(col).min(self.len_chars());
         self.char_to_byte(char_idx)
     }
 

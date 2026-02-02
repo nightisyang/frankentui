@@ -160,7 +160,7 @@ impl InlineConfig {
     /// Returns at least 1 (valid ANSI row).
     #[must_use]
     pub const fn ui_top_row(&self) -> u16 {
-        let row = self.term_height.saturating_sub(self.ui_height) + 1;
+        let row = self.term_height.saturating_sub(self.ui_height).saturating_add(1);
         // Ensure we return at least row 1 (valid ANSI row)
         if row == 0 { 1 } else { row }
     }
@@ -308,7 +308,7 @@ impl<W: Write> InlineRenderer<W> {
 
         // Clear and render each UI line
         for row in 0..self.config.ui_height {
-            self.writer.write_all(&cursor_position(ui_row + row, 1))?;
+            self.writer.write_all(&cursor_position(ui_row.saturating_add(row), 1))?;
             self.writer.write_all(ERASE_LINE)?;
         }
 
