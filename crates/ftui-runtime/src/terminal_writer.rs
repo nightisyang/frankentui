@@ -1631,7 +1631,9 @@ mod tests {
         // Cursor should be positioned at row 19 (bottom of log region)
         let expected_pos = b"\x1b[19;1H";
         assert!(
-            output.windows(expected_pos.len()).any(|w| w == expected_pos),
+            output
+                .windows(expected_pos.len())
+                .any(|w| w == expected_pos),
             "Log write should position cursor at row 19 for bottom anchor"
         );
     }
@@ -1657,7 +1659,9 @@ mod tests {
         // Cursor should be positioned at row 24 (bottom of log region)
         let expected_pos = b"\x1b[24;1H";
         assert!(
-            output.windows(expected_pos.len()).any(|w| w == expected_pos),
+            output
+                .windows(expected_pos.len())
+                .any(|w| w == expected_pos),
             "Log write should position cursor at row 24 for top anchor"
         );
     }
@@ -1734,7 +1738,9 @@ mod tests {
         let expected_pos = b"\x1b[19;1H";
         // Find position after cursor restore (log write happens after present_ui)
         assert!(
-            output.windows(expected_pos.len()).any(|w| w == expected_pos),
+            output
+                .windows(expected_pos.len())
+                .any(|w| w == expected_pos),
             "Log write after present_ui should position cursor"
         );
     }

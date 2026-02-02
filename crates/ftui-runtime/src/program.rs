@@ -523,9 +523,13 @@ impl<M: Model, W: Write + Send> Program<M, W> {
 
             self.process_resize_debounce()?;
 
-            // Check for tick
+            // Check for tick - deliver to model so periodic logic can run
             if self.should_tick() {
+                let msg = M::Message::from(Event::Tick);
+                let cmd = self.model.update(msg);
                 self.dirty = true;
+                self.execute_cmd(cmd)?;
+                self.reconcile_subscriptions();
             }
 
             // Render if dirty
@@ -1982,5 +1986,302 @@ mod tests {
         // Note: This documents current behavior. A stricter fix might
         // have ui_height() return min(ui_height, term_height).
         assert_eq!(writer.ui_height(), 100);
+    }
+
+    // =========================================================================
+    // TICK DELIVERY TESTS (bd-3ufh)
+    // =========================================================================
+
+    #[test]
+    fn tick_event_delivered_to_model_update() {
+        // Verify that Event::Tick is delivered to model.update()
+        // This is the core fix: ticks now flow through the update pipeline.
+        use crate::simulator::ProgramSimulator;
+
+        struct TickTracker {
+            tick_count: usize,
+        }
+
+        #[derive(Debug)]
+        enum TickMsg {
+            Tick,
+            Other,
+        }
+
+        impl From<Event> for TickMsg {
+            fn from(event: Event) -> Self {
+                match event {
+                    Event::Tick => TickMsg::Tick,
+                    _ => TickMsg::Other,
+                }
+            }
+        }
+
+        impl Model for TickTracker {
+            type Message = TickMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    TickMsg::Tick => {
+                        self.tick_count += 1;
+                        Cmd::none()
+                    }
+                    TickMsg::Other => Cmd::none(),
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut sim = ProgramSimulator::new(TickTracker { tick_count: 0 });
+        sim.init();
+
+        // Manually inject tick event to simulate what the runtime does
+        sim.inject_event(Event::Tick);
+        assert_eq!(sim.model().tick_count, 1);
+
+        sim.inject_event(Event::Tick);
+        sim.inject_event(Event::Tick);
+        assert_eq!(sim.model().tick_count, 3);
+    }
+
+    #[test]
+    fn tick_command_sets_tick_rate() {
+        // Verify Cmd::tick() sets the tick rate in the simulator
+        use crate::simulator::{CmdRecord, ProgramSimulator};
+
+        struct TickModel;
+
+        #[derive(Debug)]
+        enum Msg {
+            SetTick,
+            Noop,
+        }
+
+        impl From<Event> for Msg {
+            fn from(_: Event) -> Self {
+                Msg::Noop
+            }
+        }
+
+        impl Model for TickModel {
+            type Message = Msg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    Msg::SetTick => Cmd::tick(Duration::from_millis(100)),
+                    Msg::Noop => Cmd::none(),
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut sim = ProgramSimulator::new(TickModel);
+        sim.init();
+        sim.send(Msg::SetTick);
+
+        // Check that tick was recorded
+        let commands = sim.command_log();
+        assert!(
+            commands
+                .iter()
+                .any(|c| matches!(c, CmdRecord::Tick(d) if *d == Duration::from_millis(100)))
+        );
+    }
+
+    #[test]
+    fn tick_can_trigger_further_commands() {
+        // Verify that tick handling can return commands that are executed
+        use crate::simulator::ProgramSimulator;
+
+        struct ChainModel {
+            stage: usize,
+        }
+
+        #[derive(Debug)]
+        enum ChainMsg {
+            Tick,
+            Advance,
+            Noop,
+        }
+
+        impl From<Event> for ChainMsg {
+            fn from(event: Event) -> Self {
+                match event {
+                    Event::Tick => ChainMsg::Tick,
+                    _ => ChainMsg::Noop,
+                }
+            }
+        }
+
+        impl Model for ChainModel {
+            type Message = ChainMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    ChainMsg::Tick => {
+                        self.stage += 1;
+                        // Return another message to be processed
+                        Cmd::msg(ChainMsg::Advance)
+                    }
+                    ChainMsg::Advance => {
+                        self.stage += 10;
+                        Cmd::none()
+                    }
+                    ChainMsg::Noop => Cmd::none(),
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut sim = ProgramSimulator::new(ChainModel { stage: 0 });
+        sim.init();
+        sim.inject_event(Event::Tick);
+
+        // Tick increments by 1, then Advance increments by 10
+        assert_eq!(sim.model().stage, 11);
+    }
+
+    #[test]
+    fn tick_disabled_with_zero_duration() {
+        // Verify that Duration::ZERO disables ticks (no busy loop)
+        use crate::simulator::ProgramSimulator;
+
+        struct ZeroTickModel {
+            disabled: bool,
+        }
+
+        #[derive(Debug)]
+        enum ZeroMsg {
+            DisableTick,
+            Noop,
+        }
+
+        impl From<Event> for ZeroMsg {
+            fn from(_: Event) -> Self {
+                ZeroMsg::Noop
+            }
+        }
+
+        impl Model for ZeroTickModel {
+            type Message = ZeroMsg;
+
+            fn init(&mut self) -> Cmd<Self::Message> {
+                // Start with a tick enabled
+                Cmd::tick(Duration::from_millis(100))
+            }
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    ZeroMsg::DisableTick => {
+                        self.disabled = true;
+                        // Setting tick to ZERO should effectively disable
+                        Cmd::tick(Duration::ZERO)
+                    }
+                    ZeroMsg::Noop => Cmd::none(),
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut sim = ProgramSimulator::new(ZeroTickModel { disabled: false });
+        sim.init();
+
+        // Verify initial tick rate is set
+        assert!(sim.tick_rate().is_some());
+        assert_eq!(sim.tick_rate(), Some(Duration::from_millis(100)));
+
+        // Disable ticks
+        sim.send(ZeroMsg::DisableTick);
+        assert!(sim.model().disabled);
+
+        // Note: The simulator still records the ZERO tick, but the runtime's
+        // should_tick() handles ZERO duration appropriately
+        assert_eq!(sim.tick_rate(), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn tick_event_distinguishable_from_other_events() {
+        // Verify Event::Tick can be distinguished in pattern matching
+        let tick = Event::Tick;
+        let key = Event::Key(ftui_core::event::KeyEvent::new(
+            ftui_core::event::KeyCode::Char('a'),
+        ));
+
+        assert!(matches!(tick, Event::Tick));
+        assert!(!matches!(key, Event::Tick));
+    }
+
+    #[test]
+    fn tick_event_clone_and_eq() {
+        // Verify Event::Tick implements Clone and Eq correctly
+        let tick1 = Event::Tick;
+        let tick2 = tick1.clone();
+        assert_eq!(tick1, tick2);
+    }
+
+    #[test]
+    fn model_receives_tick_and_input_events() {
+        // Verify model can handle both tick and input events correctly
+        use crate::simulator::ProgramSimulator;
+
+        struct MixedModel {
+            ticks: usize,
+            keys: usize,
+        }
+
+        #[derive(Debug)]
+        enum MixedMsg {
+            Tick,
+            Key,
+        }
+
+        impl From<Event> for MixedMsg {
+            fn from(event: Event) -> Self {
+                match event {
+                    Event::Tick => MixedMsg::Tick,
+                    _ => MixedMsg::Key,
+                }
+            }
+        }
+
+        impl Model for MixedModel {
+            type Message = MixedMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    MixedMsg::Tick => {
+                        self.ticks += 1;
+                        Cmd::none()
+                    }
+                    MixedMsg::Key => {
+                        self.keys += 1;
+                        Cmd::none()
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut sim = ProgramSimulator::new(MixedModel { ticks: 0, keys: 0 });
+        sim.init();
+
+        // Interleave tick and input events
+        sim.inject_event(Event::Tick);
+        sim.inject_event(Event::Key(ftui_core::event::KeyEvent::new(
+            ftui_core::event::KeyCode::Char('a'),
+        )));
+        sim.inject_event(Event::Tick);
+        sim.inject_event(Event::Key(ftui_core::event::KeyEvent::new(
+            ftui_core::event::KeyCode::Char('b'),
+        )));
+        sim.inject_event(Event::Tick);
+
+        assert_eq!(sim.model().ticks, 3);
+        assert_eq!(sim.model().keys, 2);
     }
 }

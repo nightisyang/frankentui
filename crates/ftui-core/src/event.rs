@@ -46,6 +46,13 @@ pub enum Event {
 
     /// Clipboard content received (optional, from OSC 52 response).
     Clipboard(ClipboardEvent),
+
+    /// A tick event from the runtime.
+    ///
+    /// Fired when a scheduled tick interval elapses. Applications use this
+    /// for periodic updates (animations, polling, timers). The model's `update`
+    /// method receives the tick and can respond with state changes.
+    Tick,
 }
 
 impl Event {
@@ -573,6 +580,7 @@ mod tests {
         let _paste = Event::Paste(PasteEvent::bracketed("test"));
         let _focus = Event::Focus(true);
         let _clipboard = Event::Clipboard(ClipboardEvent::new("test", ClipboardSource::Unknown));
+        let _tick = Event::Tick;
     }
 
     #[test]

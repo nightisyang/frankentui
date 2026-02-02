@@ -435,10 +435,15 @@ struct RenderState<'t> {
     needs_blank: bool,
     /// Pending task list marker (checked state).
     pending_task_marker: Option<bool>,
+    /// Whether we're waiting to emit a list item prefix.
+    /// Deferred so task markers can replace the bullet.
+    pending_list_prefix: bool,
     /// Footnote definitions collected during parsing.
     footnotes: Vec<(String, Vec<Line>)>,
     /// Current footnote being collected.
     current_footnote: Option<String>,
+    /// Lines being collected for the current footnote definition.
+    current_footnote_lines: Vec<Line>,
 }
 
 impl<'t> RenderState<'t> {
@@ -456,8 +461,10 @@ impl<'t> RenderState<'t> {
             current_admonition: None,
             needs_blank: false,
             pending_task_marker: None,
+            pending_list_prefix: false,
             footnotes: Vec::new(),
             current_footnote: None,
+            current_footnote_lines: Vec::new(),
         }
     }
 
@@ -509,7 +516,7 @@ impl<'t> RenderState<'t> {
             }
             Tag::BlockQuote(kind) => {
                 self.flush_blank();
-                self.blockquote_depth += 1;
+                self.blockquote_depth = self.blockquote_depth.saturating_add(1);
 
                 // Check for GFM admonitions
                 if let Some(adm) = AdmonitionKind::from_blockquote_kind(kind) {
@@ -538,15 +545,9 @@ impl<'t> RenderState<'t> {
             },
             Tag::Item => {
                 self.flush_line();
-                // Don't emit prefix yet if we have a pending task marker
-                if self.pending_task_marker.is_none() {
-                    let prefix = self.list_prefix();
-                    let indent = "  ".repeat(self.list_stack.len().saturating_sub(1));
-                    self.current_spans.push(Span::styled(
-                        format!("{indent}{prefix}"),
-                        self.theme.list_bullet,
-                    ));
-                }
+                // Defer prefix emission - TaskListMarker may come next and replace
+                // the bullet with a checkbox
+                self.pending_list_prefix = true;
             }
             Tag::FootnoteDefinition(label) => {
                 self.flush_line();
@@ -610,13 +611,11 @@ impl<'t> RenderState<'t> {
             }
             TagEnd::FootnoteDefinition => {
                 self.style_stack.pop();
-                self.flush_line();
+                self.flush_footnote_line();
                 if let Some(label) = self.current_footnote.take() {
-                    // Collect the footnote content
-                    // For simplicity, we store a marker line
-                    let content_line =
-                        Line::styled(format!("[^{label}]: (footnote)"), self.theme.footnote_def);
-                    self.footnotes.push((label, vec![content_line]));
+                    // Move collected footnote lines to the footnotes list
+                    let content_lines = std::mem::take(&mut self.current_footnote_lines);
+                    self.footnotes.push((label, content_lines));
                 }
                 self.needs_blank = true;
             }
@@ -636,8 +635,31 @@ impl<'t> RenderState<'t> {
             return;
         }
 
-        // Handle task list markers that were deferred
-        if let Some(checked) = self.pending_task_marker.take() {
+        // Handle deferred list item prefix
+        // Task markers take precedence over bullet points
+        if self.pending_list_prefix {
+            self.pending_list_prefix = false;
+            let indent = "  ".repeat(self.list_stack.len().saturating_sub(1));
+
+            if let Some(checked) = self.pending_task_marker.take() {
+                // Task list item - use checkbox instead of bullet
+                let (marker, style) = if checked {
+                    ("✓ ", self.theme.task_done)
+                } else {
+                    ("☐ ", self.theme.task_todo)
+                };
+                self.current_spans
+                    .push(Span::styled(format!("{indent}{marker}"), style));
+            } else {
+                // Regular list item - use bullet
+                let prefix = self.list_prefix();
+                self.current_spans.push(Span::styled(
+                    format!("{indent}{prefix}"),
+                    self.theme.list_bullet,
+                ));
+            }
+        } else if let Some(checked) = self.pending_task_marker.take() {
+            // Task marker without pending prefix (shouldn't happen normally)
             let indent = "  ".repeat(self.list_stack.len().saturating_sub(1));
             let (marker, style) = if checked {
                 ("✓ ", self.theme.task_done)
@@ -811,7 +833,17 @@ impl<'t> RenderState<'t> {
     fn flush_line(&mut self) {
         if !self.current_spans.is_empty() {
             let spans = std::mem::take(&mut self.current_spans);
-            self.lines.push(Line::from_spans(spans));
+            let line = Line::from_spans(spans);
+            if self.in_footnote_definition() {
+                // Redirect to footnote collection with indentation
+                let indented = Line::styled(
+                    format!("  {}", line.to_plain_text()),
+                    self.theme.footnote_def,
+                );
+                self.current_footnote_lines.push(indented);
+            } else {
+                self.lines.push(line);
+            }
         }
     }
 
@@ -833,6 +865,22 @@ impl<'t> RenderState<'t> {
         // If the code block was empty or ended with newline, still show at least nothing
         if code.is_empty() {
             self.lines.push(Line::styled(String::from("  "), style));
+        }
+    }
+
+    fn in_footnote_definition(&self) -> bool {
+        self.current_footnote.is_some()
+    }
+
+    fn flush_footnote_line(&mut self) {
+        if !self.current_spans.is_empty() {
+            let spans = std::mem::take(&mut self.current_spans);
+            let line = Line::from_spans(spans);
+            let indented_line = Line::styled(
+                format!("  {}", line.to_plain_text()),
+                self.theme.footnote_def,
+            );
+            self.current_footnote_lines.push(indented_line);
         }
     }
 

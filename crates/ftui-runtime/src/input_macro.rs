@@ -568,6 +568,7 @@ impl RecordingFilter {
             Event::Paste(_) => self.paste,
             Event::Focus(_) => self.focus,
             Event::Clipboard(_) => true, // Always record clipboard responses
+            Event::Tick => false,        // Internal timing, not recorded
         }
     }
 }

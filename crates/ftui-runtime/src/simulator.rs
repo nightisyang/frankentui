@@ -107,6 +107,14 @@ impl<M: Model> ProgramSimulator<M> {
         }
     }
 
+    /// Inject a single terminal event into the model.
+    ///
+    /// The event is converted to a message via `From<Event>` and dispatched
+    /// through `Model::update()`. Commands returned from update are executed.
+    pub fn inject_event(&mut self, event: Event) {
+        self.inject_events(&[event]);
+    }
+
     /// Send a specific message to the model.
     ///
     /// The message is dispatched through `Model::update()` and returned
