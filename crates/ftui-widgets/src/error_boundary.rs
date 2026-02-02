@@ -298,12 +298,20 @@ fn render_error_fallback(frame: &mut Frame, area: Rect, error: &CapturedError) {
         let inner_y = top + 1;
         let max_chars = (inner_right.saturating_sub(inner_left)) as usize;
 
-        let msg: String = if error.message.len() > max_chars.saturating_sub(2) {
-            let truncated: String = error
-                .message
-                .chars()
-                .take(max_chars.saturating_sub(3))
-                .collect();
+        let msg: String = if unicode_width::UnicodeWidthStr::width(error.message.as_str())
+            > max_chars.saturating_sub(2)
+        {
+            let mut truncated = String::new();
+            let mut w = 0;
+            let limit = max_chars.saturating_sub(3);
+            for ch in error.message.chars() {
+                let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                if w + ch_w > limit {
+                    break;
+                }
+                truncated.push(ch);
+                w += ch_w;
+            }
             format!("! {truncated}\u{2026}")
         } else {
             format!("! {}", error.message)

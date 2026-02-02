@@ -22,7 +22,7 @@ unicode-width = { version = "0.2", optional = true }
 
 [features]
 canvas = ["dep:ftui-core", "dep:ftui-render", "dep:ftui-style", "dep:ftui-widgets"]
-charts = ["canvas"]
+charts = ["canvas", "dep:unicode-width"]
 clipboard = ["dep:base64", "dep:ftui-core"]
 console = ["dep:ftui-render", "dep:ftui-style", "dep:ftui-text", "dep:unicode-segmentation", "dep:unicode-width"]
 clipboard-fallback = ["clipboard"]

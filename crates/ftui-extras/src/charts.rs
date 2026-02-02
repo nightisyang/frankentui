@@ -604,7 +604,12 @@ impl Widget for LineChart<'_> {
         let y_axis_width: u16 = if self.y_labels.is_empty() {
             1
         } else {
-            self.y_labels.iter().map(|l| l.len()).max().unwrap_or(0) as u16 + 1
+            self.y_labels
+                .iter()
+                .map(|l| unicode_width::UnicodeWidthStr::width(*l))
+                .max()
+                .unwrap_or(0) as u16
+                + 1
         };
         let x_axis_height: u16 = if self.x_labels.is_empty() { 1 } else { 2 };
 
@@ -715,13 +720,19 @@ impl Widget for LineChart<'_> {
                             / (n as u32 - 1).max(1)) as u16
                 };
                 let max_len = y_axis_width.saturating_sub(1) as usize;
-                let label_len = label.len().min(max_len);
+                let label_width = unicode_width::UnicodeWidthStr::width(*label).min(max_len);
                 let start_x =
-                    area.x + (y_axis_width.saturating_sub(1)).saturating_sub(label_len as u16);
-                for (j, ch) in label.chars().enumerate().take(label_len) {
+                    area.x + (y_axis_width.saturating_sub(1)).saturating_sub(label_width as u16);
+                let mut col = 0u16;
+                for ch in label.chars() {
+                    let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                    if col as usize + ch_width > max_len {
+                        break;
+                    }
                     let mut cell = Cell::from_char(ch);
                     style_cell(&mut cell, self.style);
-                    frame.buffer.set(start_x + j as u16, y, cell);
+                    frame.buffer.set(start_x + col, y, cell);
+                    col += ch_width as u16;
                 }
             }
         }
@@ -738,20 +749,29 @@ impl Widget for LineChart<'_> {
                         + (i as u32 * chart_area.width.saturating_sub(1) as u32
                             / (n as u32 - 1).max(1)) as u16
                 };
-                for (j, ch) in label.chars().enumerate() {
-                    let lx = x + j as u16;
-                    if lx < area.right() {
-                        let mut cell = Cell::from_char(ch);
-                        style_cell(&mut cell, self.style);
-                        frame.buffer.set(lx, text_y, cell);
+                let mut col = 0u16;
+                for ch in label.chars() {
+                    let lx = x + col;
+                    let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                    if lx >= area.right() {
+                        break;
                     }
+                    let mut cell = Cell::from_char(ch);
+                    style_cell(&mut cell, self.style);
+                    frame.buffer.set(lx, text_y, cell);
+                    col += ch_width as u16;
                 }
             }
         }
 
         // Legend.
         if self.show_legend && !self.series.is_empty() {
-            let max_name = self.series.iter().map(|s| s.name.len()).max().unwrap_or(0);
+            let max_name = self
+                .series
+                .iter()
+                .map(|s| unicode_width::UnicodeWidthStr::width(s.name))
+                .max()
+                .unwrap_or(0);
             let legend_width = max_name as u16 + 3; // "■ name"
             let legend_x = chart_area.right().saturating_sub(legend_width);
 
@@ -764,13 +784,17 @@ impl Widget for LineChart<'_> {
                 marker.fg = series.color;
                 frame.buffer.set(legend_x, y, marker);
 
-                for (j, ch) in series.name.chars().enumerate() {
-                    let x = legend_x + 2 + j as u16;
-                    if x < area.right() {
-                        let mut cell = Cell::from_char(ch);
-                        style_cell(&mut cell, self.style);
-                        frame.buffer.set(x, y, cell);
+                let mut col = 0u16;
+                for ch in series.name.chars() {
+                    let x = legend_x + 2 + col;
+                    let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                    if x >= area.right() {
+                        break;
                     }
+                    let mut cell = Cell::from_char(ch);
+                    style_cell(&mut cell, self.style);
+                    frame.buffer.set(x, y, cell);
+                    col += ch_width as u16;
                 }
             }
         }

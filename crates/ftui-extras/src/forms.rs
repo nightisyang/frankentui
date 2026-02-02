@@ -583,9 +583,15 @@ impl FormState {
 
     fn handle_text_char(&mut self, form: &mut Form, c: char) -> bool {
         if let Some(FormField::Text { value, .. }) = form.fields.get_mut(self.focused) {
+            let before_count = grapheme_count(value);
             let byte_offset = grapheme_byte_offset(value, self.text_cursor);
             value.insert(byte_offset, c);
-            self.text_cursor += 1;
+            let after_count = grapheme_count(value);
+            if after_count > before_count {
+                self.text_cursor += 1;
+            } else {
+                self.text_cursor = self.text_cursor.min(after_count);
+            }
             return true;
         }
         false
@@ -712,7 +718,9 @@ impl StatefulWidget for Form {
             );
 
             // Draw ": " separator
-            let sep_x = area.x + label.len().min((label_w.saturating_sub(2)) as usize) as u16;
+            let sep_x = area.x
+                + unicode_width::UnicodeWidthStr::width(label)
+                    .min((label_w.saturating_sub(2)) as usize) as u16;
             draw_str(frame, sep_x, y, ": ", label_style, 2);
 
             // Draw field value
@@ -736,7 +744,9 @@ impl StatefulWidget for Form {
             // Draw error indicator
             if let Some(msg) = error_msg {
                 // Show error after value if space allows
-                let err_x = value_x + value_width.saturating_sub(msg.len() as u16 + 2);
+                let err_x = value_x
+                    + value_width
+                        .saturating_sub(unicode_width::UnicodeWidthStr::width(msg) as u16 + 2);
                 if err_x > value_x {
                     draw_str(frame, err_x, y, msg, self.error_style, value_width);
                 }
@@ -772,7 +782,8 @@ impl Form {
                 // Draw cursor if focused
                 if is_focused {
                     let buf = &mut frame.buffer;
-                    let cursor_x = x + state.text_cursor.min(width as usize) as u16;
+                    let cursor_col = grapheme_display_width(value, state.text_cursor);
+                    let cursor_x = x + cursor_col.min(width as usize) as u16;
                     if cursor_x < x + width
                         && let Some(cell) = buf.get_mut(cursor_x, y)
                     {
@@ -958,13 +969,15 @@ impl StatefulWidget for ConfirmDialog {
 
         let yes_str = format!("[ {} ]", self.yes_label);
         let no_str = format!("[ {} ]", self.no_label);
-        let total_btn_width = yes_str.len() + 2 + no_str.len();
+        let yes_w = unicode_width::UnicodeWidthStr::width(yes_str.as_str());
+        let no_w = unicode_width::UnicodeWidthStr::width(no_str.as_str());
+        let total_btn_width = yes_w + 2 + no_w;
         let start_x = area
             .x
             .saturating_add(area.width.saturating_sub(total_btn_width as u16) / 2);
 
         draw_str(frame, start_x, btn_y, &yes_str, yes_style, area.width);
-        let no_x = start_x + yes_str.len() as u16 + 2;
+        let no_x = start_x + yes_w as u16 + 2;
         draw_str(frame, no_x, btn_y, &no_str, no_style, area.width);
     }
 }
@@ -1046,6 +1059,14 @@ fn draw_str(frame: &mut Frame, x: u16, y: u16, s: &str, style: Style, max_width:
 /// Count grapheme clusters in a string.
 fn grapheme_count(s: &str) -> usize {
     unicode_segmentation::UnicodeSegmentation::graphemes(s, true).count()
+}
+
+/// Compute the display width (cells) of the first `grapheme_count` graphemes.
+fn grapheme_display_width(s: &str, grapheme_count: usize) -> usize {
+    unicode_segmentation::UnicodeSegmentation::graphemes(s, true)
+        .take(grapheme_count)
+        .map(unicode_width::UnicodeWidthStr::width)
+        .sum()
 }
 
 /// Get byte offset of the nth grapheme cluster.

@@ -253,7 +253,7 @@ impl SvgExporter {
                 if cell.bg != PackedRgba::TRANSPARENT && cell.bg.a() > 0 {
                     let bx = f32::from(x) * self.cell_width;
                     let by = f32::from(y) * self.cell_height;
-                    let bw = self.cell_width * content.len().max(1) as f32;
+                    let bw = self.cell_width * cell.content.width().max(1) as f32;
                     write!(
                         out,
                         "<rect x=\"{bx}\" y=\"{by}\" width=\"{bw}\" height=\"{}\" \

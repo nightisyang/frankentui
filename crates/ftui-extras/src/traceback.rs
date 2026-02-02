@@ -198,8 +198,6 @@ impl Traceback {
         }
         // Exception line
         count += 1;
-        // Border bottom
-        count += 1;
         count
     }
 
@@ -292,7 +290,8 @@ impl Traceback {
         if y < max_y {
             let exception = format!("{}: {}", self.exception_type, self.exception_message);
             // Draw type in exception_type style, message in exception_message style
-            let type_end = self.exception_type.len().min(width);
+            let type_end =
+                unicode_width::UnicodeWidthStr::width(self.exception_type.as_str()).min(width);
             draw_line(
                 &mut frame.buffer,
                 area.x,
@@ -681,10 +680,10 @@ mod tests {
     fn read_line(buffer: &Buffer, y: u16, width: u16) -> String {
         let mut s = String::new();
         for x in 0..width {
-            if let Some(cell) = buffer.get(x, y) {
-                if let Some(ch) = cell.content.as_char() {
-                    s.push(ch);
-                }
+            if let Some(cell) = buffer.get(x, y)
+                && let Some(ch) = cell.content.as_char()
+            {
+                s.push(ch);
             }
         }
         s

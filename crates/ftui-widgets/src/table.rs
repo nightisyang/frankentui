@@ -187,12 +187,10 @@ impl<'a> StatefulWidget for Table<'a> {
         let header_height = self
             .header
             .as_ref()
-            .map(|h| h.height + h.bottom_margin)
+            .map(|h| h.height.saturating_add(h.bottom_margin))
             .unwrap_or(0);
 
-        if let Some(header) = &self.header
-            && header.height > table_area.height
-        {
+        if header_height > table_area.height {
             return;
         }
 
@@ -237,7 +235,13 @@ impl<'a> StatefulWidget for Table<'a> {
                     // Iterate backwards from selected to find the earliest start row that fits
                     for i in (0..=selected).rev() {
                         let row = &self.rows[i];
-                        let total_row_height = row.height + row.bottom_margin;
+                        // The selected row is the last visible; its bottom_margin extends
+                        // below the viewport and should not count toward required space.
+                        let total_row_height = if i == selected {
+                            row.height
+                        } else {
+                            row.height.saturating_add(row.bottom_margin)
+                        };
 
                         if accumulated_height + total_row_height > available_height {
                             // Cannot fit this row (i) along with subsequent rows up to selected.
@@ -283,7 +287,9 @@ impl<'a> StatefulWidget for Table<'a> {
                 Style::default()
             };
             render_row(header, &column_rects, frame, y, header_style);
-            y += header.height + header.bottom_margin;
+            y = y
+                .saturating_add(header.height)
+                .saturating_add(header.bottom_margin);
         }
 
         // Render rows
