@@ -287,15 +287,15 @@ fn render_error_fallback(frame: &mut Frame, area: Rect, error: &CapturedError) {
 
     // Title "[Error]" on top border
     if area.width >= 9 {
-        let title_x = left + 1;
+        let title_x = left.saturating_add(1);
         draw_text_span(frame, title_x, top, "[Error]", border_style, right);
     }
 
     // Error message inside
     if area.height >= 3 && area.width >= 5 {
-        let inner_left = left + 2;
+        let inner_left = left.saturating_add(2);
         let inner_right = right;
-        let inner_y = top + 1;
+        let inner_y = top.saturating_add(1);
         let max_chars = (inner_right.saturating_sub(inner_left)) as usize;
 
         let msg: String = if unicode_width::UnicodeWidthStr::width(error.message.as_str())
@@ -326,7 +326,7 @@ fn render_error_fallback(frame: &mut Frame, area: Rect, error: &CapturedError) {
             draw_text_span(
                 frame,
                 inner_left,
-                inner_y + 1,
+                inner_y.saturating_add(1),
                 &name_msg,
                 name_style,
                 inner_right,
@@ -339,7 +339,7 @@ fn render_error_fallback(frame: &mut Frame, area: Rect, error: &CapturedError) {
             draw_text_span(
                 frame,
                 inner_left,
-                inner_y + 2,
+                inner_y.saturating_add(2),
                 "  Press R to retry",
                 hint_style,
                 inner_right,
@@ -406,8 +406,8 @@ impl Widget for FallbackWidget {
         if !self.show_retry_hint && area.height >= 5 {
             let error_bg = PackedRgba::rgb(40, 0, 0);
             let bg_style = Style::new().bg(error_bg);
-            let inner_y = area.y + 3;
-            let inner_left = area.x + 2;
+            let inner_y = area.y.saturating_add(3);
+            let inner_left = area.x.saturating_add(2);
             let inner_right = area.x.saturating_add(area.width).saturating_sub(1);
             // Clear the retry hint line
             for x in inner_left..inner_right {

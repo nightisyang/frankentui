@@ -35,8 +35,6 @@
 //! viewer.render(area, frame, &mut state);
 //! ```
 
-use std::cell::Cell;
-
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
@@ -109,8 +107,6 @@ pub struct LogViewer {
     filtered_indices: Option<Vec<usize>>,
     /// Scroll offset within the filtered set (top index of filtered list).
     filtered_scroll_offset: usize,
-    /// Last rendered viewport height (for filtered auto-scroll).
-    last_viewport_height: Cell<usize>,
     /// Active search state.
     search: Option<SearchState>,
 }
@@ -143,7 +139,6 @@ impl LogViewer {
             filter: None,
             filtered_indices: None,
             filtered_scroll_offset: 0,
-            last_viewport_height: Cell::new(0),
             search: None,
         }
     }
@@ -178,10 +173,9 @@ impl LogViewer {
     /// # Auto-scroll Behavior
     /// If follow mode is enabled, view stays at bottom after push.
     pub fn push(&mut self, line: impl Into<Text>) {
-        let follow_filtered = self
-            .filtered_indices
-            .as_ref()
-            .is_some_and(|indices| self.is_filtered_at_bottom(indices.len()));
+        let follow_filtered = self.filtered_indices.as_ref().is_some_and(|indices| {
+            self.is_filtered_at_bottom(indices.len(), self.virt.visible_count())
+        });
         let text: Text = line.into();
 
         // Split multi-line text into individual items for smooth scrolling

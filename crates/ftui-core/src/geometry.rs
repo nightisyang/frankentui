@@ -132,7 +132,12 @@ impl Rect {
         let bottom = self.bottom().min(other.bottom());
 
         if x < right && y < bottom {
-            Some(Rect::new(x, y, right - x, bottom - y))
+            Some(Rect::new(
+                x,
+                y,
+                right.saturating_sub(x),
+                bottom.saturating_sub(y),
+            ))
         } else {
             None
         }
