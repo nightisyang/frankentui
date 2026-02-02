@@ -44,10 +44,10 @@
 - [x] **Wire mux suite** into `tests/e2e/scripts/run_all.sh`
 - [x] **Run mux suite** with `E2E_HARNESS_BIN=/data/tmp/cargo-target/debug/ftui-harness`
 - [x] **If failures:** inspect PTY capture + adjust expectations (not needed)
-- [ ] **Close bead** `bd-2nu8.15.14` when green
-- [ ] **Sync beads** (`br sync --flush-only`)
-- [ ] **Release reservation** for `tests/e2e/scripts/test_mux.sh`
-- [ ] **Post completion message** in Agent Mail thread `bd-2nu8.15.14`
+- [x] **Close bead** `bd-2nu8.15.14` when green (already closed on attempt)
+- [x] **Sync beads** (`br sync --flush-only`)
+- [x] **Release reservation** for `tests/e2e/scripts/test_mux.sh`
+- [x] **Post completion message** in Agent Mail thread `bd-2nu8.15.14`
 
 ## 1. Restore Terminal Safety
 - [x] **Read Cargo.toml**: Confirm current `panic` setting.
