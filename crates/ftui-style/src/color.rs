@@ -873,16 +873,16 @@ mod downgrade_edge_cases {
     #[test]
     fn cube_index_boundaries() {
         // cube_index uses thresholds: 0-47->0, 48-114->1, 115+->computed
-        // Test the boundary values
-        assert_eq!(cube_index(0), 0);
-        assert_eq!(cube_index(47), 0);
-        assert_eq!(cube_index(48), 1);
-        assert_eq!(cube_index(114), 1);
-        assert_eq!(cube_index(115), 2);
-        assert_eq!(cube_index(155), 3);
-        assert_eq!(cube_index(195), 4);
-        assert_eq!(cube_index(235), 5);
-        assert_eq!(cube_index(255), 5);
+        // Test the boundary values (using super:: to access private fn)
+        assert_eq!(super::cube_index(0), 0);
+        assert_eq!(super::cube_index(47), 0);
+        assert_eq!(super::cube_index(48), 1);
+        assert_eq!(super::cube_index(114), 1);
+        assert_eq!(super::cube_index(115), 2);
+        assert_eq!(super::cube_index(155), 3);
+        assert_eq!(super::cube_index(195), 4);
+        assert_eq!(super::cube_index(235), 5);
+        assert_eq!(super::cube_index(255), 5);
     }
 
     // =========================================================================
