@@ -14,10 +14,20 @@ source "$LIB_DIR/pty.sh"
 E2E_SUITE_SCRIPT="$SCRIPT_DIR/test_paste.sh"
 export E2E_SUITE_SCRIPT
 ONLY_CASE="${E2E_ONLY_CASE:-}"
+FIXTURE_DIR="$E2E_ROOT/fixtures"
+
+ALL_CASES=(
+    paste_basic
+    paste_multiline
+    paste_large
+    paste_unicode
+    paste_embedded_escape
+    paste_dos_limit
+)
 
 if [[ ! -x "${E2E_HARNESS_BIN:-}" ]]; then
     LOG_FILE="$E2E_LOG_DIR/paste_missing.log"
-    for t in paste_basic paste_multiline paste_large; do
+    for t in "${ALL_CASES[@]}"; do
         log_test_skip "$t" "ftui-harness binary missing"
         record_result "$t" "skipped" 0 "$LOG_FILE" "binary missing"
     done
@@ -106,8 +116,106 @@ paste_large() {
     [[ "$size" -gt 2000 ]] || return 1
 }
 
+paste_unicode() {
+    LOG_FILE="$E2E_LOG_DIR/paste_unicode.log"
+    local output_file="$E2E_LOG_DIR/paste_unicode.pty"
+    local fixture="$FIXTURE_DIR/paste_unicode.txt"
+
+    log_test_start "paste_unicode"
+
+    if [[ ! -f "$fixture" ]]; then
+        log_test_fail "paste_unicode" "missing fixture $fixture"
+        return 1
+    fi
+
+    local payload
+    payload="$(cat "$fixture")"
+
+    PTY_SEND=$'\x1b[200~'"$payload"$'\x1b[201~' \
+    PTY_SEND_DELAY_MS=300 \
+    FTUI_HARNESS_EXIT_AFTER_MS=1500 \
+    PTY_TIMEOUT=4 \
+        pty_run "$output_file" "$E2E_HARNESS_BIN"
+
+    grep -a -q "Paste: こんにちは" "$output_file" || return 1
+    grep -a -q "café" "$output_file" || return 1
+}
+
+paste_embedded_escape() {
+    LOG_FILE="$E2E_LOG_DIR/paste_embedded_escape.log"
+    local output_file="$E2E_LOG_DIR/paste_embedded_escape.pty"
+
+    log_test_start "paste_embedded_escape"
+
+    local payload
+    payload=$'alpha\x1b[31mbeta\x1b[0m gamma'
+
+    PTY_SEND=$'\x1b[200~'"$payload"$'\x1b[201~' \
+    PTY_SEND_DELAY_MS=300 \
+    FTUI_HARNESS_EXIT_AFTER_MS=1500 \
+    PTY_TIMEOUT=4 \
+        pty_run "$output_file" "$E2E_HARNESS_BIN"
+
+    grep -a -q "Paste: alpha" "$output_file" || return 1
+    grep -a -q "beta" "$output_file" || return 1
+    grep -a -q "gamma" "$output_file" || return 1
+}
+
+paste_dos_limit() {
+    LOG_FILE="$E2E_LOG_DIR/paste_dos_limit.log"
+    local output_file="$E2E_LOG_DIR/paste_dos_limit.pty"
+    local payload_file="$E2E_LOG_DIR/paste_dos_payload.bin"
+
+    log_test_start "paste_dos_limit"
+
+    if [[ -z "${E2E_PYTHON:-}" ]]; then
+        log_test_fail "paste_dos_limit" "E2E_PYTHON missing"
+        return 1
+    fi
+
+    "$E2E_PYTHON" - "$payload_file" <<'PY'
+import sys
+
+path = sys.argv[1]
+max_len = 1024 * 1024
+prefix = "PREFIX-"
+tail_marker = "TAIL-"
+marker_len = 64
+
+if len(prefix) + marker_len >= max_len:
+    raise SystemExit("Marker setup exceeds max length")
+
+fill_len = max_len - len(prefix) - marker_len
+marker = tail_marker + ("Z" * (marker_len - len(tail_marker)))
+overflow = "B" * 256 + "SUFFIX"
+content = prefix + ("A" * fill_len) + marker + overflow
+
+if len(content) <= max_len:
+    raise SystemExit("Payload does not exceed MAX_PASTE_LEN")
+
+with open(path, "wb") as handle:
+    handle.write(b"\x1b[200~")
+    handle.write(content.encode("ascii"))
+    handle.write(b"\x1b[201~")
+PY
+
+    PTY_SEND_FILE="$payload_file" \
+    PTY_SEND_DELAY_MS=300 \
+    FTUI_HARNESS_EXIT_AFTER_MS=2000 \
+    PTY_TIMEOUT=6 \
+        pty_run "$output_file" "$E2E_HARNESS_BIN"
+
+    grep -a -q "Paste: TAIL-" "$output_file" || return 1
+    if grep -a -q "PREFIX-" "$output_file"; then
+        return 1
+    fi
+}
+
 FAILURES=0
 run_case "paste_basic" paste_basic         || FAILURES=$((FAILURES + 1))
 run_case "paste_multiline" paste_multiline || FAILURES=$((FAILURES + 1))
 run_case "paste_large" paste_large         || FAILURES=$((FAILURES + 1))
+run_case "paste_unicode" paste_unicode     || FAILURES=$((FAILURES + 1))
+run_case "paste_embedded_escape" paste_embedded_escape || FAILURES=$((FAILURES + 1))
+run_case "paste_dos_limit" paste_dos_limit || FAILURES=$((FAILURES + 1))
 exit "$FAILURES"

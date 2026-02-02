@@ -1,6 +1,22 @@
 #!/bin/bash
 set -euo pipefail
 
+# ─────────────────────────────────────────────────────────────────────────────
+# E2E Tests: Mouse SGR Protocol
+#
+# KNOWN LIMITATION: Crossterm reads from /dev/tty directly on Unix, bypassing
+# PTY input for complex escape sequences. These tests verify the SGR mouse
+# sequences would be correctly handled IF delivered to the event system.
+#
+# For comprehensive input parser coverage, see unit tests in:
+#   crates/ftui-core/src/input_parser.rs (mouse_sgr_* tests)
+#
+# These E2E tests may fail in PTY environments due to crossterm's /dev/tty
+# reading behavior. They serve as documentation of expected behavior and will
+# pass when running with a real TTY or when the test infrastructure is improved
+# to support stdin-based event reading.
+# ─────────────────────────────────────────────────────────────────────────────
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/../lib"
 

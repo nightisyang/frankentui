@@ -159,10 +159,54 @@ input_multi_keystrokes() {
     grep -a -q "claude-3.5" "$output_file" || return 1
 }
 
+input_kitty_keyboard_basic() {
+    LOG_FILE="$E2E_LOG_DIR/input_kitty_keyboard_basic.log"
+    local output_file="$E2E_LOG_DIR/input_kitty_keyboard_basic.pty"
+
+    log_test_start "input_kitty_keyboard_basic"
+
+    local kitty_seq
+    kitty_seq=$'\x1b[107u\x1b[105u\x1b[116u\x1b[116u\x1b[121u\x1b[13u'
+
+    PTY_SEND="$kitty_seq" \
+    PTY_SEND_DELAY_MS=300 \
+    FTUI_HARNESS_EXIT_AFTER_MS=2000 \
+    PTY_TIMEOUT=5 \
+        pty_run "$output_file" "$E2E_HARNESS_BIN"
+
+    grep -a -q "> kitty" "$output_file" || return 1
+    local size
+    size=$(wc -c < "$output_file" | tr -d ' ')
+    [[ "$size" -gt 500 ]] || return 1
+}
+
+input_kitty_keyboard_kinds_mods() {
+    LOG_FILE="$E2E_LOG_DIR/input_kitty_keyboard_kinds_mods.log"
+    local output_file="$E2E_LOG_DIR/input_kitty_keyboard_kinds_mods.pty"
+
+    log_test_start "input_kitty_keyboard_kinds_mods"
+
+    local kitty_seq
+    kitty_seq=$'\x1b[97u\x1b[98;1:2u\x1b[99;1:3u\x1b[100u\x1b[13u\x1b[99;5u'
+
+    PTY_SEND="$kitty_seq" \
+    PTY_SEND_DELAY_MS=300 \
+    FTUI_HARNESS_EXIT_AFTER_MS=3000 \
+    PTY_TIMEOUT=5 \
+        pty_run "$output_file" "$E2E_HARNESS_BIN" || true
+
+    grep -a -q "> abd" "$output_file" || return 1
+    local size
+    size=$(wc -c < "$output_file" | tr -d ' ')
+    [[ "$size" -gt 300 ]] || return 1
+}
+
 FAILURES=0
 run_case "input_typing_stable" input_typing_stable       || FAILURES=$((FAILURES + 1))
 run_case "input_enter_stable" input_enter_stable         || FAILURES=$((FAILURES + 1))
 run_case "input_ctrl_c_quit" input_ctrl_c_quit           || FAILURES=$((FAILURES + 1))
 run_case "input_quit_command" input_quit_command          || FAILURES=$((FAILURES + 1))
 run_case "input_multi_keystrokes" input_multi_keystrokes || FAILURES=$((FAILURES + 1))
+run_case "input_kitty_keyboard_basic" input_kitty_keyboard_basic || FAILURES=$((FAILURES + 1))
+run_case "input_kitty_keyboard_kinds_mods" input_kitty_keyboard_kinds_mods || FAILURES=$((FAILURES + 1))
 exit "$FAILURES"

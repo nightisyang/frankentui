@@ -121,6 +121,12 @@ else
     run_suite "ansi"      "$SCRIPT_DIR/test_ansi.sh"
     run_suite "unicode"   "$SCRIPT_DIR/test_unicode.sh"
     run_suite "focus"     "$SCRIPT_DIR/test_focus_events.sh"
+    run_suite "paste"     "$SCRIPT_DIR/test_paste.sh"
+    run_suite "kitty"     "$SCRIPT_DIR/test_kitty_keyboard.sh"
+    run_suite "mouse_sgr" "$SCRIPT_DIR/test_mouse_sgr.sh"
+    run_suite "resize"    "$SCRIPT_DIR/test_resize.sh"
+    run_suite "resize_scroll_region" "$SCRIPT_DIR/test_resize_scroll_region.sh"
+    run_suite "mux"       "$SCRIPT_DIR/test_mux.sh"
 fi
 
 # Finalize JSON summary
