@@ -118,6 +118,7 @@ run_group() {
 log_info "Running tests..."
 run_group "$SCRIPT_DIR/render"
 run_group "$SCRIPT_DIR/layout"
+run_group "$SCRIPT_DIR/capability_sim"
 run_group "$SCRIPT_DIR/widgets"
 run_group "$SCRIPT_DIR/input"
 run_group "$SCRIPT_DIR/integration"

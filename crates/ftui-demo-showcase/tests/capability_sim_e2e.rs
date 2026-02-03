@@ -99,18 +99,6 @@ fn buffer_hash(frame: &Frame, area: Rect) -> u64 {
     hasher.finish()
 }
 
-fn render_frame(screen: &TerminalCapabilitiesScreen, w: u16, h: u16) -> Frame<'static> {
-    // Leak the pool to get a 'static lifetime (test-only pattern for hash comparison)
-    let pool = Box::leak(Box::new(GraphemePool::new()));
-    let mut frame = Frame::new(w, h, pool);
-    screen.view(&mut frame, Rect::new(0, 0, w, h));
-    frame
-}
-
-fn find_line<'a>(lines: &'a [String], needle: &str) -> Option<&'a String> {
-    lines.iter().find(|line| line.contains(needle))
-}
-
 // =============================================================================
 // 1. Profile Accuracy
 // =============================================================================

@@ -2596,14 +2596,8 @@ mod tests {
         if depth < max_depth {
             for _ in 0..breadth {
                 let child_area = random_rect(seed, area);
-                let child = build_widget_tree(
-                    seed,
-                    depth + 1,
-                    max_depth,
-                    breadth,
-                    child_area,
-                    count,
-                );
+                let child =
+                    build_widget_tree(seed, depth + 1, max_depth, breadth, child_area, count);
                 node.add_child(child);
             }
         }
@@ -2618,13 +2612,15 @@ mod tests {
         breadth: u8,
         area: Rect,
     ) -> (InspectorState, usize) {
-        let mut state = InspectorState::default();
-        state.mode = InspectorMode::Full;
-        state.show_hits = true;
-        state.show_bounds = true;
-        state.show_names = true;
-        state.show_detail_panel = true;
-        state.hover_pos = Some((area.x + 1, area.y + 1));
+        let mut state = InspectorState {
+            mode: InspectorMode::Full,
+            show_hits: true,
+            show_bounds: true,
+            show_names: true,
+            show_detail_panel: true,
+            hover_pos: Some((area.x + 1, area.y + 1)),
+            ..Default::default()
+        };
 
         let mut count = 0usize;
         for _ in 0..roots {
@@ -2636,12 +2632,7 @@ mod tests {
         (state, count)
     }
 
-    fn populate_hit_grid(
-        frame: &mut Frame,
-        seed: &mut u64,
-        count: usize,
-        area: Rect,
-    ) -> usize {
+    fn populate_hit_grid(frame: &mut Frame, seed: &mut u64, count: usize, area: Rect) -> usize {
         for idx in 0..count {
             let region = match idx % 6 {
                 0 => HitRegion::Content,
