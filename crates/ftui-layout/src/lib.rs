@@ -34,10 +34,12 @@ pub mod debug;
 pub mod grid;
 #[cfg(test)]
 mod repro_max_constraint;
+pub mod responsive;
 
 pub use cache::{CoherenceCache, CoherenceId, LayoutCache, LayoutCacheKey, LayoutCacheStats};
 pub use ftui_core::geometry::{Rect, Sides, Size};
 pub use grid::{Grid, GridArea, GridLayout};
+pub use responsive::Responsive;
 use std::cmp::min;
 
 /// A constraint on the size of a layout area.
@@ -1769,6 +1771,728 @@ mod tests {
                 total,
                 n,
                 result
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Property Tests: Constraint Satisfaction (bd-4kq0.4.3)
+    // -----------------------------------------------------------------------
+
+    mod property_constraint_tests {
+        use super::super::*;
+
+        /// Deterministic LCG pseudo-random number generator (no external deps).
+        struct Lcg(u64);
+
+        impl Lcg {
+            fn new(seed: u64) -> Self {
+                Self(seed)
+            }
+            fn next_u32(&mut self) -> u32 {
+                self.0 = self
+                    .0
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                (self.0 >> 33) as u32
+            }
+            fn next_u16_range(&mut self, lo: u16, hi: u16) -> u16 {
+                if lo >= hi {
+                    return lo;
+                }
+                lo + (self.next_u32() % (hi - lo) as u32) as u16
+            }
+            fn next_f32(&mut self) -> f32 {
+                (self.next_u32() & 0x00FF_FFFF) as f32 / 16_777_216.0
+            }
+        }
+
+        /// Generate a random constraint from the LCG.
+        fn random_constraint(rng: &mut Lcg) -> Constraint {
+            match rng.next_u32() % 7 {
+                0 => Constraint::Fixed(rng.next_u16_range(1, 80)),
+                1 => Constraint::Percentage(rng.next_f32() * 100.0),
+                2 => Constraint::Min(rng.next_u16_range(0, 40)),
+                3 => Constraint::Max(rng.next_u16_range(5, 120)),
+                4 => {
+                    let n = (rng.next_u32() % 5 + 1) as u32;
+                    let d = (rng.next_u32() % 5 + 1) as u32;
+                    Constraint::Ratio(n, d)
+                }
+                5 => Constraint::Fill,
+                _ => Constraint::FitContent,
+            }
+        }
+
+        #[test]
+        fn property_constraints_respected_fixed() {
+            let mut rng = Lcg::new(0xDEAD_BEEF);
+            for _ in 0..200 {
+                let fixed_val = rng.next_u16_range(1, 60);
+                let avail = rng.next_u16_range(10, 200);
+                let flex = Flex::horizontal().constraints([Constraint::Fixed(fixed_val)]);
+                let rects = flex.split(Rect::new(0, 0, avail, 10));
+                assert!(
+                    rects[0].width <= fixed_val.min(avail),
+                    "Fixed({}) in avail {} -> width {}",
+                    fixed_val,
+                    avail,
+                    rects[0].width
+                );
+            }
+        }
+
+        #[test]
+        fn property_constraints_respected_max() {
+            let mut rng = Lcg::new(0xCAFE_BABE);
+            for _ in 0..200 {
+                let max_val = rng.next_u16_range(5, 80);
+                let avail = rng.next_u16_range(10, 200);
+                let flex =
+                    Flex::horizontal().constraints([Constraint::Max(max_val), Constraint::Fill]);
+                let rects = flex.split(Rect::new(0, 0, avail, 10));
+                assert!(
+                    rects[0].width <= max_val,
+                    "Max({}) in avail {} -> width {}",
+                    max_val,
+                    avail,
+                    rects[0].width
+                );
+            }
+        }
+
+        #[test]
+        fn property_constraints_respected_min() {
+            let mut rng = Lcg::new(0xBAAD_F00D);
+            for _ in 0..200 {
+                let min_val = rng.next_u16_range(0, 40);
+                let avail = rng.next_u16_range(min_val.max(1), 200);
+                let flex = Flex::horizontal().constraints([Constraint::Min(min_val)]);
+                let rects = flex.split(Rect::new(0, 0, avail, 10));
+                assert!(
+                    rects[0].width >= min_val,
+                    "Min({}) in avail {} -> width {}",
+                    min_val,
+                    avail,
+                    rects[0].width
+                );
+            }
+        }
+
+        #[test]
+        fn property_constraints_respected_ratio_proportional() {
+            let mut rng = Lcg::new(0x1234_5678);
+            for _ in 0..200 {
+                let n1 = (rng.next_u32() % 5 + 1) as u32;
+                let n2 = (rng.next_u32() % 5 + 1) as u32;
+                let d = (rng.next_u32() % 5 + 1) as u32;
+                let avail = rng.next_u16_range(20, 200);
+                let flex = Flex::horizontal()
+                    .constraints([Constraint::Ratio(n1, d), Constraint::Ratio(n2, d)]);
+                let rects = flex.split(Rect::new(0, 0, avail, 10));
+                let w1 = rects[0].width as f64;
+                let w2 = rects[1].width as f64;
+                let total = w1 + w2;
+                if total > 0.0 {
+                    let expected_ratio = n1 as f64 / (n1 + n2) as f64;
+                    let actual_ratio = w1 / total;
+                    assert!(
+                        (actual_ratio - expected_ratio).abs() < 0.15 || total < 4.0,
+                        "Ratio({},{})/({}+{}) avail={}: ~{:.2} got {:.2} (w1={}, w2={})",
+                        n1,
+                        d,
+                        n1,
+                        n2,
+                        avail,
+                        expected_ratio,
+                        actual_ratio,
+                        w1,
+                        w2
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn property_total_allocation_never_exceeds_available() {
+            let mut rng = Lcg::new(0xFACE_FEED);
+            for _ in 0..500 {
+                let n = (rng.next_u32() % 6 + 1) as usize;
+                let constraints: Vec<Constraint> =
+                    (0..n).map(|_| random_constraint(&mut rng)).collect();
+                let avail = rng.next_u16_range(5, 200);
+                let dir = if rng.next_u32() % 2 == 0 {
+                    Direction::Horizontal
+                } else {
+                    Direction::Vertical
+                };
+                let flex = Flex::default().direction(dir).constraints(constraints);
+                let area = Rect::new(0, 0, avail, avail);
+                let rects = flex.split(area);
+                let total: u16 = rects
+                    .iter()
+                    .map(|r| match dir {
+                        Direction::Horizontal => r.width,
+                        Direction::Vertical => r.height,
+                    })
+                    .sum();
+                assert!(
+                    total <= avail,
+                    "Total {} exceeded available {} with {} constraints",
+                    total,
+                    avail,
+                    n
+                );
+            }
+        }
+
+        #[test]
+        fn property_no_overlap_horizontal() {
+            let mut rng = Lcg::new(0xABCD_1234);
+            for _ in 0..300 {
+                let n = (rng.next_u32() % 5 + 2) as usize;
+                let constraints: Vec<Constraint> =
+                    (0..n).map(|_| random_constraint(&mut rng)).collect();
+                let avail = rng.next_u16_range(20, 200);
+                let flex = Flex::horizontal().constraints(constraints);
+                let rects = flex.split(Rect::new(0, 0, avail, 10));
+
+                for i in 1..rects.len() {
+                    let prev_end = rects[i - 1].x + rects[i - 1].width;
+                    assert!(
+                        rects[i].x >= prev_end,
+                        "Overlap at {}: prev ends {}, next starts {}",
+                        i,
+                        prev_end,
+                        rects[i].x
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn property_deterministic_across_runs() {
+            let mut rng1 = Lcg::new(0x9999_8888);
+            let mut rng2 = Lcg::new(0x9999_8888);
+            for _ in 0..100 {
+                let n = (rng1.next_u32() % 5 + 1) as usize;
+                let c1: Vec<Constraint> = (0..n).map(|_| random_constraint(&mut rng1)).collect();
+                let c2: Vec<Constraint> = (0..n).map(|_| random_constraint(&mut rng2)).collect();
+                let avail1 = rng1.next_u16_range(10, 200);
+                let avail2 = rng2.next_u16_range(10, 200);
+                assert_eq!(c1, c2);
+                assert_eq!(avail1, avail2);
+                let r1 = Flex::horizontal()
+                    .constraints(c1)
+                    .split(Rect::new(0, 0, avail1, 10));
+                let r2 = Flex::horizontal()
+                    .constraints(c2)
+                    .split(Rect::new(0, 0, avail2, 10));
+                assert_eq!(r1, r2, "Determinism violation at avail={}", avail1);
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Property Tests: Temporal Stability (bd-4kq0.4.3)
+    // -----------------------------------------------------------------------
+
+    mod property_temporal_tests {
+        use super::super::*;
+        use crate::cache::{CoherenceCache, CoherenceId};
+
+        /// Deterministic LCG.
+        struct Lcg(u64);
+
+        impl Lcg {
+            fn new(seed: u64) -> Self {
+                Self(seed)
+            }
+            fn next_u32(&mut self) -> u32 {
+                self.0 = self
+                    .0
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1);
+                (self.0 >> 33) as u32
+            }
+        }
+
+        #[test]
+        fn property_temporal_stability_small_resize() {
+            let constraints = [
+                Constraint::Percentage(33.3),
+                Constraint::Percentage(33.3),
+                Constraint::Fill,
+            ];
+            let mut coherence = CoherenceCache::new(64);
+            let id = CoherenceId::new(&constraints, Direction::Horizontal);
+
+            for total in [80u16, 100, 120] {
+                let flex = Flex::horizontal().constraints(constraints);
+                let rects = flex.split(Rect::new(0, 0, total, 10));
+                let widths: Vec<u16> = rects.iter().map(|r| r.width).collect();
+
+                let targets: Vec<f64> = widths.iter().map(|&w| w as f64).collect();
+                let prev = coherence.get(&id);
+                let rounded = round_layout_stable(&targets, total, prev);
+
+                if let Some(old) = coherence.get(&id) {
+                    let (sum_disp, max_disp) = coherence.displacement(&id, &rounded);
+                    assert!(
+                        max_disp <= total.abs_diff(old.iter().copied().sum()) as u32 + 1,
+                        "max_disp={} too large for size change {} -> {}",
+                        max_disp,
+                        old.iter().copied().sum::<u16>(),
+                        total
+                    );
+                    let _ = sum_disp;
+                }
+                coherence.store(id, rounded);
+            }
+        }
+
+        #[test]
+        fn property_temporal_stability_random_walk() {
+            let constraints = [
+                Constraint::Ratio(1, 3),
+                Constraint::Ratio(1, 3),
+                Constraint::Ratio(1, 3),
+            ];
+            let id = CoherenceId::new(&constraints, Direction::Horizontal);
+            let mut coherence = CoherenceCache::new(64);
+            let mut rng = Lcg::new(0x5555_AAAA);
+            let mut total: u16 = 90;
+
+            for step in 0..200 {
+                let prev_total = total;
+                let delta = (rng.next_u32() % 7) as i32 - 3;
+                total = (total as i32 + delta).clamp(10, 250) as u16;
+
+                let flex = Flex::horizontal().constraints(constraints);
+                let rects = flex.split(Rect::new(0, 0, total, 10));
+                let widths: Vec<u16> = rects.iter().map(|r| r.width).collect();
+
+                let targets: Vec<f64> = widths.iter().map(|&w| w as f64).collect();
+                let prev = coherence.get(&id);
+                let rounded = round_layout_stable(&targets, total, prev);
+
+                if coherence.get(&id).is_some() {
+                    let (_, max_disp) = coherence.displacement(&id, &rounded);
+                    let size_change = total.abs_diff(prev_total);
+                    assert!(
+                        max_disp <= size_change as u32 + 2,
+                        "step {}: max_disp={} exceeds size_change={} + 2",
+                        step,
+                        max_disp,
+                        size_change
+                    );
+                }
+                coherence.store(id, rounded);
+            }
+        }
+
+        #[test]
+        fn property_temporal_stability_identical_frames() {
+            let constraints = [
+                Constraint::Fixed(20),
+                Constraint::Fill,
+                Constraint::Fixed(15),
+            ];
+            let id = CoherenceId::new(&constraints, Direction::Horizontal);
+            let mut coherence = CoherenceCache::new(64);
+
+            let flex = Flex::horizontal().constraints(constraints);
+            let rects = flex.split(Rect::new(0, 0, 100, 10));
+            let widths: Vec<u16> = rects.iter().map(|r| r.width).collect();
+            coherence.store(id, widths.clone());
+
+            for _ in 0..10 {
+                let targets: Vec<f64> = widths.iter().map(|&w| w as f64).collect();
+                let prev = coherence.get(&id);
+                let rounded = round_layout_stable(&targets, 100, prev);
+                let (sum_disp, max_disp) = coherence.displacement(&id, &rounded);
+                assert_eq!(sum_disp, 0, "Identical frames: zero displacement");
+                assert_eq!(max_disp, 0);
+                coherence.store(id, rounded);
+            }
+        }
+
+        #[test]
+        fn property_temporal_coherence_sweep() {
+            let constraints = [
+                Constraint::Percentage(25.0),
+                Constraint::Percentage(50.0),
+                Constraint::Fill,
+            ];
+            let id = CoherenceId::new(&constraints, Direction::Horizontal);
+            let mut coherence = CoherenceCache::new(64);
+            let mut total_displacement: u64 = 0;
+
+            for total in 60u16..=140 {
+                let flex = Flex::horizontal().constraints(constraints);
+                let rects = flex.split(Rect::new(0, 0, total, 10));
+                let widths: Vec<u16> = rects.iter().map(|r| r.width).collect();
+
+                let targets: Vec<f64> = widths.iter().map(|&w| w as f64).collect();
+                let prev = coherence.get(&id);
+                let rounded = round_layout_stable(&targets, total, prev);
+
+                if coherence.get(&id).is_some() {
+                    let (sum_disp, _) = coherence.displacement(&id, &rounded);
+                    total_displacement += sum_disp;
+                }
+                coherence.store(id, rounded);
+            }
+
+            assert!(
+                total_displacement <= 80 * 3,
+                "Total displacement {} exceeds bound for 80-step sweep",
+                total_displacement
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Snapshot Regression: Canonical Flex/Grid Layouts (bd-4kq0.4.3)
+    // -----------------------------------------------------------------------
+
+    mod snapshot_layout_tests {
+        use super::super::*;
+        use crate::grid::{Grid, GridArea};
+
+        fn snapshot_flex(
+            constraints: &[Constraint],
+            dir: Direction,
+            width: u16,
+            height: u16,
+        ) -> String {
+            let flex = Flex::default()
+                .direction(dir)
+                .constraints(constraints.iter().copied());
+            let rects = flex.split(Rect::new(0, 0, width, height));
+            let mut out = format!(
+                "Flex {:?} {}x{} ({} constraints)\n",
+                dir,
+                width,
+                height,
+                constraints.len()
+            );
+            for (i, r) in rects.iter().enumerate() {
+                out.push_str(&format!(
+                    "  [{}] x={} y={} w={} h={}\n",
+                    i, r.x, r.y, r.width, r.height
+                ));
+            }
+            let total: u16 = rects
+                .iter()
+                .map(|r| match dir {
+                    Direction::Horizontal => r.width,
+                    Direction::Vertical => r.height,
+                })
+                .sum();
+            out.push_str(&format!("  total={}\n", total));
+            out
+        }
+
+        fn snapshot_grid(
+            rows: &[Constraint],
+            cols: &[Constraint],
+            areas: &[(&str, GridArea)],
+            width: u16,
+            height: u16,
+        ) -> String {
+            let mut grid = Grid::new()
+                .rows(rows.iter().copied())
+                .columns(cols.iter().copied());
+            for &(name, area) in areas {
+                grid = grid.area(name, area);
+            }
+            let layout = grid.split(Rect::new(0, 0, width, height));
+
+            let mut out = format!(
+                "Grid {}x{} ({}r x {}c)\n",
+                width,
+                height,
+                rows.len(),
+                cols.len()
+            );
+            for r in 0..rows.len() {
+                for c in 0..cols.len() {
+                    let rect = layout.cell(r, c);
+                    out.push_str(&format!(
+                        "  [{},{}] x={} y={} w={} h={}\n",
+                        r, c, rect.x, rect.y, rect.width, rect.height
+                    ));
+                }
+            }
+            for &(name, _) in areas {
+                if let Some(rect) = layout.area(name) {
+                    out.push_str(&format!(
+                        "  area({}) x={} y={} w={} h={}\n",
+                        name, rect.x, rect.y, rect.width, rect.height
+                    ));
+                }
+            }
+            out
+        }
+
+        // --- Flex snapshots: 80x24 ---
+
+        #[test]
+        fn snapshot_flex_thirds_80x24() {
+            let snap = snapshot_flex(
+                &[
+                    Constraint::Ratio(1, 3),
+                    Constraint::Ratio(1, 3),
+                    Constraint::Ratio(1, 3),
+                ],
+                Direction::Horizontal,
+                80,
+                24,
+            );
+            assert_eq!(
+                snap,
+                "\
+Flex Horizontal 80x24 (3 constraints)
+  [0] x=0 y=0 w=26 h=24
+  [1] x=26 y=0 w=27 h=24
+  [2] x=53 y=0 w=27 h=24
+  total=80
+"
+            );
+        }
+
+        #[test]
+        fn snapshot_flex_sidebar_content_80x24() {
+            let snap = snapshot_flex(
+                &[Constraint::Fixed(20), Constraint::Fill],
+                Direction::Horizontal,
+                80,
+                24,
+            );
+            assert_eq!(
+                snap,
+                "\
+Flex Horizontal 80x24 (2 constraints)
+  [0] x=0 y=0 w=20 h=24
+  [1] x=20 y=0 w=60 h=24
+  total=80
+"
+            );
+        }
+
+        #[test]
+        fn snapshot_flex_header_body_footer_80x24() {
+            let snap = snapshot_flex(
+                &[Constraint::Fixed(3), Constraint::Fill, Constraint::Fixed(1)],
+                Direction::Vertical,
+                80,
+                24,
+            );
+            assert_eq!(
+                snap,
+                "\
+Flex Vertical 80x24 (3 constraints)
+  [0] x=0 y=0 w=80 h=3
+  [1] x=0 y=3 w=80 h=20
+  [2] x=0 y=23 w=80 h=1
+  total=24
+"
+            );
+        }
+
+        // --- Flex snapshots: 120x40 ---
+
+        #[test]
+        fn snapshot_flex_thirds_120x40() {
+            let snap = snapshot_flex(
+                &[
+                    Constraint::Ratio(1, 3),
+                    Constraint::Ratio(1, 3),
+                    Constraint::Ratio(1, 3),
+                ],
+                Direction::Horizontal,
+                120,
+                40,
+            );
+            assert_eq!(
+                snap,
+                "\
+Flex Horizontal 120x40 (3 constraints)
+  [0] x=0 y=0 w=40 h=40
+  [1] x=40 y=0 w=40 h=40
+  [2] x=80 y=0 w=40 h=40
+  total=120
+"
+            );
+        }
+
+        #[test]
+        fn snapshot_flex_sidebar_content_120x40() {
+            let snap = snapshot_flex(
+                &[Constraint::Fixed(20), Constraint::Fill],
+                Direction::Horizontal,
+                120,
+                40,
+            );
+            assert_eq!(
+                snap,
+                "\
+Flex Horizontal 120x40 (2 constraints)
+  [0] x=0 y=0 w=20 h=40
+  [1] x=20 y=0 w=100 h=40
+  total=120
+"
+            );
+        }
+
+        #[test]
+        fn snapshot_flex_percentage_mix_120x40() {
+            let snap = snapshot_flex(
+                &[
+                    Constraint::Percentage(25.0),
+                    Constraint::Percentage(50.0),
+                    Constraint::Fill,
+                ],
+                Direction::Horizontal,
+                120,
+                40,
+            );
+            assert_eq!(
+                snap,
+                "\
+Flex Horizontal 120x40 (3 constraints)
+  [0] x=0 y=0 w=30 h=40
+  [1] x=30 y=0 w=60 h=40
+  [2] x=90 y=0 w=30 h=40
+  total=120
+"
+            );
+        }
+
+        // --- Grid snapshots: 80x24 ---
+
+        #[test]
+        fn snapshot_grid_2x2_80x24() {
+            let snap = snapshot_grid(
+                &[Constraint::Fixed(3), Constraint::Fill],
+                &[Constraint::Fixed(20), Constraint::Fill],
+                &[
+                    ("header", GridArea::span(0, 0, 1, 2)),
+                    ("sidebar", GridArea::span(1, 0, 1, 1)),
+                    ("content", GridArea::cell(1, 1)),
+                ],
+                80,
+                24,
+            );
+            assert_eq!(
+                snap,
+                "\
+Grid 80x24 (2r x 2c)
+  [0,0] x=0 y=0 w=20 h=3
+  [0,1] x=20 y=0 w=60 h=3
+  [1,0] x=0 y=3 w=20 h=21
+  [1,1] x=20 y=3 w=60 h=21
+  area(header) x=0 y=0 w=80 h=3
+  area(sidebar) x=0 y=3 w=20 h=21
+  area(content) x=20 y=3 w=60 h=21
+"
+            );
+        }
+
+        #[test]
+        fn snapshot_grid_3x3_80x24() {
+            let snap = snapshot_grid(
+                &[Constraint::Fixed(1), Constraint::Fill, Constraint::Fixed(1)],
+                &[
+                    Constraint::Fixed(10),
+                    Constraint::Fill,
+                    Constraint::Fixed(10),
+                ],
+                &[],
+                80,
+                24,
+            );
+            assert_eq!(
+                snap,
+                "\
+Grid 80x24 (3r x 3c)
+  [0,0] x=0 y=0 w=10 h=1
+  [0,1] x=10 y=0 w=60 h=1
+  [0,2] x=70 y=0 w=10 h=1
+  [1,0] x=0 y=1 w=10 h=22
+  [1,1] x=10 y=1 w=60 h=22
+  [1,2] x=70 y=1 w=10 h=22
+  [2,0] x=0 y=23 w=10 h=1
+  [2,1] x=10 y=23 w=60 h=1
+  [2,2] x=70 y=23 w=10 h=1
+"
+            );
+        }
+
+        // --- Grid snapshots: 120x40 ---
+
+        #[test]
+        fn snapshot_grid_2x2_120x40() {
+            let snap = snapshot_grid(
+                &[Constraint::Fixed(3), Constraint::Fill],
+                &[Constraint::Fixed(20), Constraint::Fill],
+                &[
+                    ("header", GridArea::span(0, 0, 1, 2)),
+                    ("sidebar", GridArea::span(1, 0, 1, 1)),
+                    ("content", GridArea::cell(1, 1)),
+                ],
+                120,
+                40,
+            );
+            assert_eq!(
+                snap,
+                "\
+Grid 120x40 (2r x 2c)
+  [0,0] x=0 y=0 w=20 h=3
+  [0,1] x=20 y=0 w=100 h=3
+  [1,0] x=0 y=3 w=20 h=37
+  [1,1] x=20 y=3 w=100 h=37
+  area(header) x=0 y=0 w=120 h=3
+  area(sidebar) x=0 y=3 w=20 h=37
+  area(content) x=20 y=3 w=100 h=37
+"
+            );
+        }
+
+        #[test]
+        fn snapshot_grid_dashboard_120x40() {
+            let snap = snapshot_grid(
+                &[
+                    Constraint::Fixed(3),
+                    Constraint::Percentage(60.0),
+                    Constraint::Fill,
+                ],
+                &[Constraint::Percentage(30.0), Constraint::Fill],
+                &[
+                    ("nav", GridArea::span(0, 0, 1, 2)),
+                    ("chart", GridArea::cell(1, 0)),
+                    ("detail", GridArea::cell(1, 1)),
+                    ("log", GridArea::span(2, 0, 1, 2)),
+                ],
+                120,
+                40,
+            );
+            assert_eq!(
+                snap,
+                "\
+Grid 120x40 (3r x 2c)
+  [0,0] x=0 y=0 w=36 h=3
+  [0,1] x=36 y=0 w=84 h=3
+  [1,0] x=0 y=3 w=36 h=24
+  [1,1] x=36 y=3 w=84 h=24
+  [2,0] x=0 y=27 w=36 h=13
+  [2,1] x=36 y=27 w=84 h=13
+  area(nav) x=0 y=0 w=120 h=3
+  area(chart) x=0 y=3 w=36 h=24
+  area(detail) x=36 y=3 w=84 h=24
+  area(log) x=0 y=27 w=120 h=13
+"
             );
         }
     }
