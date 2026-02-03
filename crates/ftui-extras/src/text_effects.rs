@@ -1447,6 +1447,228 @@ impl std::ops::Add for CharacterOffset {
 }
 
 // =============================================================================
+// Shadow and Multi-Layer Rendering (bd-3hsz)
+// =============================================================================
+
+/// Drop shadow configuration for text effects.
+///
+/// Shadows add depth and dimension to text by rendering a copy of the text
+/// offset from the original position. Multiple shadows can be combined for
+/// complex layered effects.
+///
+/// # Invariants
+///
+/// 1. **Offset bounds**: dx/dy are i8 (-128 to 127 cells), sufficient for any
+///    reasonable shadow depth while preventing excessive offsets.
+/// 2. **Opacity range**: opacity is clamped to 0.0-1.0 during rendering.
+/// 3. **Z-order**: Shadows always render behind the main text.
+///
+/// # Failure Modes
+///
+/// | Scenario | Behavior |
+/// |----------|----------|
+/// | Shadow extends beyond terminal | Saturating arithmetic clips to bounds |
+/// | Zero opacity | Shadow not rendered (optimization) |
+/// | Negative dx/dy | Shadow appears up/left of text (valid) |
+///
+/// # Example
+///
+/// ```rust,ignore
+/// Shadow::new(1, 1)
+///     .color(PackedRgba::rgb(0, 0, 0))
+///     .opacity(0.5)
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shadow {
+    /// Horizontal offset in cells (positive = right, negative = left).
+    pub dx: i8,
+    /// Vertical offset in rows (positive = down, negative = up).
+    pub dy: i8,
+    /// Shadow color (usually darker than text or a specific color).
+    pub color: PackedRgba,
+    /// Shadow opacity (0.0 = invisible, 1.0 = fully opaque).
+    pub opacity: f64,
+}
+
+impl Default for Shadow {
+    fn default() -> Self {
+        Self {
+            dx: 1,
+            dy: 1,
+            color: PackedRgba::rgb(0, 0, 0),
+            opacity: 0.5,
+        }
+    }
+}
+
+impl Shadow {
+    /// Create a new shadow with the given offset.
+    #[must_use]
+    pub const fn new(dx: i8, dy: i8) -> Self {
+        Self {
+            dx,
+            dy,
+            color: PackedRgba::rgb(0, 0, 0),
+            opacity: 0.5,
+        }
+    }
+
+    /// Set the shadow color.
+    #[must_use]
+    pub const fn color(mut self, color: PackedRgba) -> Self {
+        self.color = color;
+        self
+    }
+
+    /// Set the shadow opacity (0.0-1.0).
+    #[must_use]
+    pub fn opacity(mut self, opacity: f64) -> Self {
+        self.opacity = opacity.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Apply shadow offset to a position, clamping to terminal bounds.
+    ///
+    /// Returns None if the shadow position is outside the terminal.
+    #[inline]
+    pub fn apply_offset(&self, x: u16, y: u16, width: u16, height: u16) -> Option<(u16, u16)> {
+        let new_x = (x as i32).saturating_add(i32::from(self.dx));
+        let new_y = (y as i32).saturating_add(i32::from(self.dy));
+
+        if new_x >= 0 && new_x < i32::from(width) && new_y >= 0 && new_y < i32::from(height) {
+            Some((new_x as u16, new_y as u16))
+        } else {
+            None
+        }
+    }
+
+    /// Get the shadow color with opacity applied.
+    #[inline]
+    #[must_use]
+    pub fn effective_color(&self) -> PackedRgba {
+        apply_alpha(self.color, self.opacity)
+    }
+}
+
+/// Multi-layer glow configuration for soft lighting effects.
+///
+/// Creates a halo effect around text by rendering multiple increasingly
+/// transparent layers at expanding offsets. This produces a soft, diffuse
+/// glow similar to neon signage or game UI elements.
+///
+/// # Invariants
+///
+/// 1. **Layer count**: layers is clamped to 1-5 to prevent performance issues.
+/// 2. **Falloff bounds**: falloff is clamped to 0.1-0.9 for visible effect.
+/// 3. **Intensity range**: intensity is clamped to 0.0-1.0.
+///
+/// # Rendering Algorithm
+///
+/// For each layer i (from outermost to innermost):
+/// 1. Calculate layer opacity: `intensity * falloff^(layers - 1 - i)`
+/// 2. Render text at offsets (-i,-i), (-i,0), (-i,+i), (0,-i), (0,+i), (+i,-i), (+i,0), (+i,+i)
+/// 3. Main text renders last (on top)
+///
+/// # Example
+///
+/// ```rust,ignore
+/// GlowConfig::new(PackedRgba::rgb(0, 255, 255))
+///     .intensity(0.8)
+///     .layers(3)
+///     .falloff(0.5)
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GlowConfig {
+    /// Glow color (usually bright, saturated).
+    pub color: PackedRgba,
+    /// Base intensity of innermost glow layer (0.0-1.0).
+    pub intensity: f64,
+    /// Number of glow layers (1-5). More layers = softer, wider glow.
+    pub layers: u8,
+    /// Opacity falloff per layer (0.1-0.9). Lower = faster fade.
+    pub falloff: f64,
+}
+
+impl Default for GlowConfig {
+    fn default() -> Self {
+        Self {
+            color: PackedRgba::rgb(255, 255, 255),
+            intensity: 0.6,
+            layers: 2,
+            falloff: 0.5,
+        }
+    }
+}
+
+impl GlowConfig {
+    /// Create a new glow configuration with the given color.
+    #[must_use]
+    pub const fn new(color: PackedRgba) -> Self {
+        Self {
+            color,
+            intensity: 0.6,
+            layers: 2,
+            falloff: 0.5,
+        }
+    }
+
+    /// Set the glow intensity (0.0-1.0).
+    #[must_use]
+    pub fn intensity(mut self, intensity: f64) -> Self {
+        self.intensity = intensity.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Set the number of glow layers (1-5).
+    #[must_use]
+    pub fn layers(mut self, layers: u8) -> Self {
+        self.layers = layers.clamp(1, 5);
+        self
+    }
+
+    /// Set the opacity falloff per layer (0.1-0.9).
+    #[must_use]
+    pub fn falloff(mut self, falloff: f64) -> Self {
+        self.falloff = falloff.clamp(0.1, 0.9);
+        self
+    }
+
+    /// Calculate the opacity for a given layer index (0 = outermost).
+    #[inline]
+    #[must_use]
+    pub fn layer_opacity(&self, layer_index: u8) -> f64 {
+        // Outermost layer has lowest opacity, innermost has highest
+        let distance_from_text = self.layers.saturating_sub(layer_index).saturating_sub(1);
+        self.intensity * self.falloff.powi(i32::from(distance_from_text))
+    }
+
+    /// Get the glow color with opacity applied for a given layer.
+    #[inline]
+    #[must_use]
+    pub fn layer_color(&self, layer_index: u8) -> PackedRgba {
+        apply_alpha(self.color, self.layer_opacity(layer_index))
+    }
+
+    /// Generate all shadow offsets for a given layer.
+    ///
+    /// Returns up to 8 positions (3x3 grid minus center) for the glow layer.
+    pub fn layer_offsets(&self, layer_index: u8) -> impl Iterator<Item = (i8, i8)> {
+        let radius = i8::try_from(self.layers.saturating_sub(layer_index)).unwrap_or(1);
+        let offsets = [
+            (-radius, -radius),
+            (-radius, 0),
+            (-radius, radius),
+            (0, -radius),
+            (0, radius),
+            (radius, -radius),
+            (radius, 0),
+            (radius, radius),
+        ];
+        offsets.into_iter()
+    }
+}
+
+// =============================================================================
 // Cursor Animation Types
 // =============================================================================
 
@@ -2021,6 +2243,10 @@ pub struct StyledText {
     seed: u64,
     /// Easing function for time-based effects.
     easing: Easing,
+    /// Drop shadows to render behind text.
+    shadows: Vec<Shadow>,
+    /// Multi-layer glow configuration.
+    glow_config: Option<GlowConfig>,
 }
 
 impl StyledText {
@@ -2037,6 +2263,8 @@ impl StyledText {
             time: 0.0,
             seed: 12345,
             easing: Easing::default(),
+            shadows: Vec::new(),
+            glow_config: None,
         }
     }
 
@@ -2106,6 +2334,121 @@ impl StyledText {
     pub fn easing(mut self, easing: Easing) -> Self {
         self.easing = easing;
         self
+    }
+
+    // =========================================================================
+    // Shadow and Glow Methods (bd-3hsz)
+    // =========================================================================
+
+    /// Add a single drop shadow.
+    ///
+    /// Shadows render behind the main text at the specified offset.
+    /// Multiple shadows can be added by calling this method multiple times
+    /// or using [`shadows`](#method.shadows).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// StyledText::new("SHADOW")
+    ///     .shadow(Shadow::new(1, 1).opacity(0.5))
+    /// ```
+    #[must_use]
+    pub fn shadow(mut self, shadow: Shadow) -> Self {
+        // Skip zero-opacity shadows (optimization)
+        if shadow.opacity > 0.0 {
+            self.shadows.push(shadow);
+        }
+        self
+    }
+
+    /// Add multiple drop shadows.
+    ///
+    /// Shadows render behind the main text in the order specified (first shadow
+    /// is furthest from text, last shadow is closest to text).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// StyledText::new("DEPTH")
+    ///     .shadows(vec![
+    ///         Shadow::new(3, 3).opacity(0.2),  // Outer shadow
+    ///         Shadow::new(2, 2).opacity(0.3),  // Middle shadow
+    ///         Shadow::new(1, 1).opacity(0.5),  // Inner shadow
+    ///     ])
+    /// ```
+    #[must_use]
+    pub fn shadows(mut self, shadows: impl IntoIterator<Item = Shadow>) -> Self {
+        for shadow in shadows {
+            if shadow.opacity > 0.0 {
+                self.shadows.push(shadow);
+            }
+        }
+        self
+    }
+
+    /// Clear all shadows.
+    #[must_use]
+    pub fn clear_shadows(mut self) -> Self {
+        self.shadows.clear();
+        self
+    }
+
+    /// Check if shadows are configured.
+    #[must_use]
+    pub fn has_shadows(&self) -> bool {
+        !self.shadows.is_empty()
+    }
+
+    /// Get the number of configured shadows.
+    #[must_use]
+    pub fn shadow_count(&self) -> usize {
+        self.shadows.len()
+    }
+
+    /// Add a multi-layer glow effect.
+    ///
+    /// Glow creates a soft halo around text by rendering multiple layers
+    /// at expanding offsets with decreasing opacity. This produces a neon
+    /// or bloom effect.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// StyledText::new("NEON")
+    ///     .glow(GlowConfig::new(PackedRgba::rgb(0, 255, 255))
+    ///         .intensity(0.8)
+    ///         .layers(3)
+    ///         .falloff(0.5))
+    /// ```
+    #[must_use]
+    pub fn glow(mut self, config: GlowConfig) -> Self {
+        self.glow_config = Some(config);
+        self
+    }
+
+    /// Clear the glow effect.
+    #[must_use]
+    pub fn clear_glow(mut self) -> Self {
+        self.glow_config = None;
+        self
+    }
+
+    /// Check if glow is configured.
+    #[must_use]
+    pub fn has_glow(&self) -> bool {
+        self.glow_config.is_some()
+    }
+
+    /// Get the glow configuration if set.
+    #[must_use]
+    pub fn glow_config(&self) -> Option<&GlowConfig> {
+        self.glow_config.as_ref()
+    }
+
+    /// Get the configured shadows.
+    #[must_use]
+    pub fn get_shadows(&self) -> &[Shadow] {
+        &self.shadows
     }
 
     /// Set the base text color.
@@ -4324,6 +4667,222 @@ mod tests {
             oklab_var,
             rgb_var
         );
+    }
+
+    // =========================================================================
+    // Shadow and Multi-Layer Glow Tests (bd-3hsz)
+    // =========================================================================
+
+    #[test]
+    fn test_shadow_offset_applied() {
+        let shadow = Shadow::new(2, 3);
+        // Shadow at (10, 10) with offset (2, 3) should be at (12, 13)
+        let result = shadow.apply_offset(10, 10, 80, 24);
+        assert_eq!(result, Some((12, 13)));
+    }
+
+    #[test]
+    fn test_shadow_negative_offset() {
+        let shadow = Shadow::new(-1, -1);
+        // Shadow at (10, 10) with offset (-1, -1) should be at (9, 9)
+        let result = shadow.apply_offset(10, 10, 80, 24);
+        assert_eq!(result, Some((9, 9)));
+    }
+
+    #[test]
+    fn test_shadow_at_edge_clips() {
+        let shadow = Shadow::new(5, 5);
+        // Shadow at (0, 0) would be at (-5, -5) if unchecked - should return None
+        let result = shadow.apply_offset(2, 2, 80, 24);
+        // (2-5, 2-5) = (-3, -3) which is outside bounds
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_shadow_at_right_edge() {
+        let shadow = Shadow::new(5, 0);
+        // Shadow at (75, 10) in 80-wide terminal with dx=5 would be at (80, 10)
+        // which is outside bounds (0-79 valid)
+        let result = shadow.apply_offset(75, 10, 80, 24);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_shadow_opacity() {
+        let shadow = Shadow::new(1, 1)
+            .color(PackedRgba::rgb(100, 100, 100))
+            .opacity(0.5);
+        let effective = shadow.effective_color();
+        // Alpha should be around 127 (0.5 * 255)
+        assert!((127i16 - i16::from(effective.a())).abs() <= 1);
+    }
+
+    #[test]
+    fn test_shadow_zero_opacity_skipped() {
+        let text = StyledText::new("Test").shadow(Shadow::new(1, 1).opacity(0.0));
+        // Zero opacity shadow should not be added
+        assert!(!text.has_shadows());
+    }
+
+    #[test]
+    fn test_shadow_multiple_layers() {
+        let text = StyledText::new("DEPTH").shadows(vec![
+            Shadow::new(3, 3).opacity(0.2),
+            Shadow::new(2, 2).opacity(0.3),
+            Shadow::new(1, 1).opacity(0.5),
+        ]);
+        assert_eq!(text.shadow_count(), 3);
+        assert!(text.has_shadows());
+
+        let shadows = text.get_shadows();
+        assert_eq!(shadows[0].dx, 3);
+        assert_eq!(shadows[1].dx, 2);
+        assert_eq!(shadows[2].dx, 1);
+    }
+
+    #[test]
+    fn test_shadow_z_order() {
+        // Shadows should be stored in order: first is furthest, last is closest
+        let text = StyledText::new("Test")
+            .shadow(Shadow::new(3, 3).opacity(0.2))
+            .shadow(Shadow::new(1, 1).opacity(0.5));
+
+        let shadows = text.get_shadows();
+        assert_eq!(shadows.len(), 2);
+        assert_eq!(shadows[0].dx, 3); // First added = furthest
+        assert_eq!(shadows[1].dx, 1); // Last added = closest
+    }
+
+    #[test]
+    fn test_shadow_default() {
+        let shadow = Shadow::default();
+        assert_eq!(shadow.dx, 1);
+        assert_eq!(shadow.dy, 1);
+        assert!((shadow.opacity - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_glow_layer_count() {
+        let glow = GlowConfig::new(PackedRgba::rgb(255, 255, 255)).layers(3);
+        assert_eq!(glow.layers, 3);
+    }
+
+    #[test]
+    fn test_glow_layer_count_clamped() {
+        // Layers should be clamped to 1-5
+        let too_many = GlowConfig::default().layers(10);
+        assert_eq!(too_many.layers, 5);
+
+        let too_few = GlowConfig::default().layers(0);
+        assert_eq!(too_few.layers, 1);
+    }
+
+    #[test]
+    fn test_glow_falloff() {
+        let glow = GlowConfig::new(PackedRgba::rgb(0, 255, 255))
+            .intensity(0.8)
+            .layers(3)
+            .falloff(0.5);
+
+        // Layer 0 (outermost) should have lowest opacity
+        // Layer 2 (innermost) should have highest opacity
+        let layer0_opacity = glow.layer_opacity(0);
+        let layer1_opacity = glow.layer_opacity(1);
+        let layer2_opacity = glow.layer_opacity(2);
+
+        // Innermost layer should be brightest
+        assert!(layer2_opacity > layer1_opacity);
+        assert!(layer1_opacity > layer0_opacity);
+
+        // Verify falloff pattern: each layer dimmer by falloff factor
+        assert!((layer1_opacity / layer2_opacity - 0.5).abs() < 0.01);
+        assert!((layer0_opacity / layer1_opacity - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_glow_intensity_scales() {
+        let low_glow = GlowConfig::default().intensity(0.3).layers(2);
+        let high_glow = GlowConfig::default().intensity(0.9).layers(2);
+
+        // Higher intensity = brighter layers
+        assert!(high_glow.layer_opacity(1) > low_glow.layer_opacity(1));
+    }
+
+    #[test]
+    fn test_glow_layer_offsets() {
+        let glow = GlowConfig::default().layers(2);
+
+        // Layer 0 should have radius 2 (layers - 0 = 2)
+        let offsets: Vec<_> = glow.layer_offsets(0).collect();
+        assert_eq!(offsets.len(), 8);
+        // Should include corners and edges at radius 2
+        assert!(offsets.contains(&(-2, -2)));
+        assert!(offsets.contains(&(2, 2)));
+        assert!(offsets.contains(&(0, 2)));
+        assert!(offsets.contains(&(-2, 0)));
+    }
+
+    #[test]
+    fn test_glow_config_default() {
+        let glow = GlowConfig::default();
+        assert_eq!(glow.layers, 2);
+        assert!((glow.intensity - 0.6).abs() < 0.001);
+        assert!((glow.falloff - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_styled_text_with_shadow() {
+        let text = StyledText::new("SHADOW")
+            .shadow(Shadow::new(1, 1).color(PackedRgba::rgb(0, 0, 0)).opacity(0.5));
+
+        assert!(text.has_shadows());
+        assert_eq!(text.shadow_count(), 1);
+    }
+
+    #[test]
+    fn test_styled_text_with_glow() {
+        let text = StyledText::new("NEON").glow(
+            GlowConfig::new(PackedRgba::rgb(0, 255, 255))
+                .intensity(0.8)
+                .layers(3),
+        );
+
+        assert!(text.has_glow());
+        assert!(text.glow_config().is_some());
+        assert_eq!(text.glow_config().unwrap().layers, 3);
+    }
+
+    #[test]
+    fn test_styled_text_clear_shadows() {
+        let text = StyledText::new("Test")
+            .shadow(Shadow::new(1, 1))
+            .shadow(Shadow::new(2, 2))
+            .clear_shadows();
+
+        assert!(!text.has_shadows());
+        assert_eq!(text.shadow_count(), 0);
+    }
+
+    #[test]
+    fn test_styled_text_clear_glow() {
+        let text = StyledText::new("Test")
+            .glow(GlowConfig::default())
+            .clear_glow();
+
+        assert!(!text.has_glow());
+        assert!(text.glow_config().is_none());
+    }
+
+    #[test]
+    fn test_shadow_and_glow_combined() {
+        let text = StyledText::new("COMBINED")
+            .shadow(Shadow::new(2, 2).opacity(0.3))
+            .glow(GlowConfig::new(PackedRgba::rgb(255, 0, 255)).layers(2));
+
+        assert!(text.has_shadows());
+        assert!(text.has_glow());
+        assert_eq!(text.shadow_count(), 1);
+        assert!(text.glow_config().is_some());
     }
 
     // =========================================================================

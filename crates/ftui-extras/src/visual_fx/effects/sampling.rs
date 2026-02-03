@@ -666,10 +666,7 @@ mod tests {
         let v1 = sampler.sample(0.3, 0.7, 2.5, FxQuality::Full);
         let v2 = sampler.sample(0.3, 0.7, 2.5, FxQuality::Full);
 
-        assert!(
-            (v1 - v2).abs() < 1e-15,
-            "plasma should be deterministic"
-        );
+        assert!((v1 - v2).abs() < 1e-15, "plasma should be deterministic");
     }
 
     #[test]
@@ -732,10 +729,7 @@ mod tests {
 
     #[test]
     fn test_fn_sampler() {
-        let sampler = FnSampler::new(
-            |x, y, _t, _q| x + y,
-            "test",
-        );
+        let sampler = FnSampler::new(|x, y, _t, _q| x + y, "test");
 
         assert_eq!(sampler.name(), "test");
         assert!((sampler.sample(0.3, 0.2, 0.0, FxQuality::Full) - 0.5).abs() < 1e-10);
@@ -746,10 +740,10 @@ mod tests {
     fn test_plasma_regression_golden() {
         // Golden values computed once and frozen
         let cases = [
-            (0.0, 0.0, 0.0, 0.5),       // Center of range
-            (0.5, 0.5, 0.0, 0.5),       // Center point
-            (1.0, 1.0, 0.0, 0.5),       // Corner
-            (0.25, 0.75, 1.0, 0.65),    // Arbitrary point with time
+            (0.0, 0.0, 0.0, 0.5),    // Center of range
+            (0.5, 0.5, 0.0, 0.5),    // Center point
+            (1.0, 1.0, 0.0, 0.5),    // Corner
+            (0.25, 0.75, 1.0, 0.65), // Arbitrary point with time
         ];
 
         let sampler = PlasmaSampler;
@@ -757,10 +751,7 @@ mod tests {
             let actual = sampler.sample(x, y, t, FxQuality::Full);
             // Allow some tolerance since we're comparing floating point
             // The key is that the value is bounded and deterministic
-            assert!(
-                (0.0..=1.0).contains(&actual),
-                "value should be bounded"
-            );
+            assert!((0.0..=1.0).contains(&actual), "value should be bounded");
             // Note: exact values may drift with implementation changes
             // This is more of a sanity check
             assert!(
