@@ -5,8 +5,16 @@
 //! This module provides a small set of coherent, high-contrast themes and
 //! color tokens that resolve against the current theme at runtime.
 
+use std::cell::Cell;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard};
+
+// Thread-local flag to track if current thread holds THEME_TEST_LOCK.
+// Used for reentrant-style locking in set_theme() when called from within ScopedThemeLock.
+thread_local! {
+    static THEME_LOCK_HELD: Cell<bool> = const { Cell::new(false) };
+}
 
 #[cfg(feature = "syntax")]
 use crate::syntax::HighlightTheme;
@@ -324,9 +332,27 @@ const THEMES: [ThemePalette; 5] = [
 
 static CURRENT_THEME: AtomicUsize = AtomicUsize::new(0);
 
-/// Set the active theme.
-pub fn set_theme(theme: ThemeId) {
+/// Internal: set theme without acquiring the lock.
+/// Used by `ScopedThemeLock::new()` which already holds the lock.
+fn set_theme_internal(theme: ThemeId) {
     CURRENT_THEME.store(theme.index(), Ordering::Relaxed);
+}
+
+/// Set the active theme.
+///
+/// Acquires `THEME_TEST_LOCK` to serialize with parallel tests. If the current
+/// thread already holds the lock (via `ScopedThemeLock`), sets the theme directly.
+pub fn set_theme(theme: ThemeId) {
+    // Check if current thread already holds the lock (reentrant case from ScopedThemeLock)
+    let held = THEME_LOCK_HELD.with(|h| h.get());
+    if held {
+        // Current thread holds lock, set directly without re-acquiring
+        set_theme_internal(theme);
+    } else {
+        // Acquire lock to serialize with other threads
+        let _guard = THEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_theme_internal(theme);
+    }
 }
 
 /// Get the active theme.
@@ -359,6 +385,52 @@ pub fn current_palette() -> &'static ThemePalette {
 /// Return the total number of themes.
 pub const fn theme_count() -> usize {
     ThemeId::ALL.len()
+}
+
+/// Mutex for serializing theme access in tests.
+///
+/// Used by `ScopedThemeLock` to prevent race conditions when multiple
+/// tests set different themes concurrently.
+static THEME_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// RAII guard for exclusive theme access during tests.
+///
+/// Acquires `THEME_TEST_LOCK`, sets the specified theme, and releases
+/// the lock when dropped. This prevents race conditions in parallel tests
+/// that read from the global theme state.
+///
+/// # Example
+///
+/// ```ignore
+/// let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+/// // Theme is now CyberpunkAurora and other tests cannot change it
+/// let checksum = render_to_checksum(&frame);
+/// // Lock released when _guard is dropped
+/// ```
+pub struct ScopedThemeLock<'a> {
+    _guard: MutexGuard<'a, ()>,
+}
+
+impl<'a> ScopedThemeLock<'a> {
+    /// Create a new scoped theme lock, setting the specified theme.
+    ///
+    /// Blocks until the lock can be acquired. While held, other threads'
+    /// calls to `set_theme()` or `ScopedThemeLock::new()` will block.
+    #[must_use]
+    pub fn new(theme: ThemeId) -> Self {
+        let guard = THEME_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Mark that current thread holds the lock (for reentrant set_theme calls)
+        THEME_LOCK_HELD.with(|h| h.set(true));
+        set_theme_internal(theme);
+        Self { _guard: guard }
+    }
+}
+
+impl Drop for ScopedThemeLock<'_> {
+    fn drop(&mut self) {
+        // Clear the thread-local flag when releasing the lock
+        THEME_LOCK_HELD.with(|h| h.set(false));
+    }
 }
 
 /// Token that resolves to a theme color at runtime.
