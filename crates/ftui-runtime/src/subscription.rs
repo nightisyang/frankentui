@@ -74,15 +74,33 @@ impl StopSignal {
     ///
     /// Returns `true` if stopped, `false` if timed out.
     /// Blocks the thread efficiently using a condition variable.
+    /// Handles spurious wakeups by looping until condition met or timeout expired.
     pub fn wait_timeout(&self, duration: Duration) -> bool {
         let (lock, cvar) = &*self.inner;
         let mut stopped = lock.lock().unwrap();
         if *stopped {
             return true;
         }
-        let result = cvar.wait_timeout(stopped, duration).unwrap();
-        stopped = result.0;
-        *stopped
+
+        let start = std::time::Instant::now();
+        let mut remaining = duration;
+
+        loop {
+            let (guard, result) = cvar.wait_timeout(stopped, remaining).unwrap();
+            stopped = guard;
+            if *stopped {
+                return true;
+            }
+            if result.timed_out() {
+                return false;
+            }
+            // Check if we really timed out (spurious wakeup protection)
+            let elapsed = start.elapsed();
+            if elapsed >= duration {
+                return false;
+            }
+            remaining = duration - elapsed;
+        }
     }
 }
 

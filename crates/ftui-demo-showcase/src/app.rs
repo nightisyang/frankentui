@@ -145,10 +145,10 @@ fn emit_a11y_jsonl(event: &str, fields: &[(&str, &str)]) {
 /// Accessibility telemetry event types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum A11yEventKind {
-    PanelToggled,
-    HighContrastToggled,
-    ReducedMotionToggled,
-    LargeTextToggled,
+    Panel,
+    HighContrast,
+    ReducedMotion,
+    LargeText,
 }
 
 /// Telemetry payload for A11y events.
@@ -222,22 +222,22 @@ impl A11yTelemetryHooks {
             hook(event);
         }
         match event.kind {
-            A11yEventKind::Panel => {
+            A11yEventKind::PanelToggled => {
                 if let Some(ref hook) = self.on_panel_toggle {
                     hook(event);
                 }
             }
-            A11yEventKind::HighContrast => {
+            A11yEventKind::HighContrastToggled => {
                 if let Some(ref hook) = self.on_high_contrast {
                     hook(event);
                 }
             }
-            A11yEventKind::ReducedMotion => {
+            A11yEventKind::ReducedMotionToggled => {
                 if let Some(ref hook) = self.on_reduced_motion {
                     hook(event);
                 }
             }
-            A11yEventKind::LargeText => {
+            A11yEventKind::LargeTextToggled => {
                 if let Some(ref hook) = self.on_large_text {
                     hook(event);
                 }
@@ -896,10 +896,10 @@ impl AppModel {
 
         emit_a11y_jsonl(
             match kind {
-                A11yEventKind::Panel => "panel_toggle",
-                A11yEventKind::HighContrast => "high_contrast_toggle",
-                A11yEventKind::ReducedMotion => "reduced_motion_toggle",
-                A11yEventKind::LargeText => "large_text_toggle",
+                A11yEventKind::PanelToggled => "panel_toggle",
+                A11yEventKind::HighContrastToggled => "high_contrast_toggle",
+                A11yEventKind::ReducedMotionToggled => "reduced_motion_toggle",
+                A11yEventKind::LargeTextToggled => "large_text_toggle",
             },
             &[
                 ("tick", &event.tick.to_string()),
@@ -1084,7 +1084,7 @@ impl AppModel {
                     "Toggle A11y panel",
                     vec![("state".to_string(), state.to_string())],
                 );
-                self.emit_a11y_event(A11yEventKind::Panel);
+                self.emit_a11y_event(A11yEventKind::PanelToggled);
                 Cmd::None
             }
 
@@ -1100,7 +1100,7 @@ impl AppModel {
                     "Toggle high contrast",
                     vec![("state".to_string(), state.to_string())],
                 );
-                self.emit_a11y_event(A11yEventKind::HighContrast);
+                self.emit_a11y_event(A11yEventKind::HighContrastToggled);
                 Cmd::None
             }
 
@@ -1117,7 +1117,7 @@ impl AppModel {
                     "Toggle reduced motion",
                     vec![("state".to_string(), state.to_string())],
                 );
-                self.emit_a11y_event(A11yEventKind::ReducedMotion);
+                self.emit_a11y_event(A11yEventKind::ReducedMotionToggled);
                 Cmd::None
             }
 
@@ -1130,7 +1130,7 @@ impl AppModel {
                     "Toggle large text",
                     vec![("state".to_string(), state.to_string())],
                 );
-                self.emit_a11y_event(A11yEventKind::LargeText);
+                self.emit_a11y_event(A11yEventKind::LargeTextToggled);
                 Cmd::None
             }
 
@@ -2038,10 +2038,10 @@ mod tests {
         assert_eq!(
             collected.as_slice(),
             &[
-                A11yEventKind::Panel,
-                A11yEventKind::HighContrast,
-                A11yEventKind::ReducedMotion,
-                A11yEventKind::LargeText,
+                A11yEventKind::PanelToggled,
+                A11yEventKind::HighContrastToggled,
+                A11yEventKind::ReducedMotionToggled,
+                A11yEventKind::LargeTextToggled,
             ]
         );
     }
