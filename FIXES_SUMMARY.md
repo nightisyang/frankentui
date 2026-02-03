@@ -41,13 +41,24 @@ All tasks are complete. The codebase has been extensively refactored for Unicode
 
 ## 65. Table Partial Row Rendering
 **File:** `crates/ftui-widgets/src/table.rs`
-**Issue:** The rendering loop strictly required the full row height to be visible. If a row (especially a tall multiline row) partially extended below the viewport, it was skipped entirely, leaving empty space at the bottom.
+**Issue:** The rendering loop in `Table` contained a check that strictly required the *full* row height to fit within the remaining viewport height. If a row (especially a tall, multiline row) was only partially visible at the bottom of the table, it was skipped entirely, leaving a blank gap instead of showing the visible portion.
 **Fix:**
     - Changed the loop termination condition to check if `y >= max_y` instead of pre-checking row fit.
     - Relied on `Frame` clipping to safely render partially visible rows.
 
 ## 66. Scrollbar Unicode Rendering
 **File:** `crates/ftui-widgets/src/scrollbar.rs`
-**Issue:** Symbols were rendered using `symbol.chars().next()`, which breaks multi-byte graphemes (e.g., emoji with modifiers, complex symbols).
+**Issue:** Symbols were rendered using `symbol.chars().next()`, which breaks multi-byte grapheme clusters (e.g., emoji with modifiers, complex symbols).
 **Fix:**
-    - Replaced manual `Cell` construction with `draw_text_span`, which correctly handles grapheme clusters.
+    - Refactored the rendering logic to use the `draw_text_span` helper, which correctly handles grapheme clusters and composition. Added `draw_text_span` to the imports.
+
+## 67. TextInput Horizontal Clipping
+**File:** `crates/ftui-widgets/src/input.rs`
+**Issue:** `TextInput` rendering logic incorrectly handled wide characters (e.g., CJK) at the scrolling boundaries.
+    - **Left edge:** Partially scrolled-out wide characters (e.g., head scrolled out, tail visible) were incorrectly drawn at position 0, causing visual artifacts.
+    - **Right edge:** Wide characters overlapping the right boundary spilled into the adjacent buffer area because `buffer.set` checks buffer bounds (not widget area) and `TextInput` only checked `x < width` but wrote 2 cells.
+**Fix:**
+    - Updated rendering loops (placeholder and content) to:
+        1. Skip drawing graphemes that are partially scrolled out to the left.
+        2. Skip drawing graphemes that partially overlap the right edge.
+    - This ensures correct clipping and prevents drawing outside the widget's allocated area.

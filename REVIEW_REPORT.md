@@ -47,6 +47,7 @@ A comprehensive code review of the FrankenTUI codebase was conducted, focusing o
 4.  **Virtualized Rendering Ghosting:** Fixed a bug in `VirtualizedList` where items in the overscan region (above the viewport) were incorrectly rendered at the top of the screen (`y=0`) due to coordinate clamping. Added a check to skip rendering items that start off-screen.
 5.  **TextArea Scrolling:** Fixed a bug where `TextArea` used hardcoded heuristic limits for auto-scrolling, causing issues on wide terminals. Removed the heuristic to rely on the render loop for accurate forward scrolling.
 6.  **Table Rendering:** Fixed a bug where `Table` skipped partially visible rows at the bottom. Updated logic to allow partial rendering, improving UX for constrained layouts.
+7.  **TextInput Clipping:** Fixed a rendering bug in `TextInput` where wide characters (e.g. CJK) were not correctly clipped at the scrolling boundaries, causing visual artifacts on the left and potential buffer spills on the right. Added logic to skip partially visible graphemes.
 
 ## 4. Recommendations
 
