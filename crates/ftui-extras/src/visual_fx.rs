@@ -24,19 +24,118 @@ use ftui_render::cell::PackedRgba;
 use ftui_render::frame::Frame;
 use ftui_widgets::Widget;
 use std::cell::RefCell;
+use std::fmt;
 
 #[cfg(feature = "theme")]
 use crate::theme::ThemePalette;
 
 /// Quality hint for FX implementations.
 ///
-/// The mapping from runtime degradation/budgets is handled elsewhere; this enum is
-/// a stable "dial" so FX code can implement graceful degradation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// This enum is a stable "dial" so FX code can implement graceful degradation.
+/// Use [`FxQuality::from_degradation`] to map from runtime budget levels.
+///
+/// # Variants
+///
+/// - `Full`: Normal detail, all iterations and effects enabled.
+/// - `Reduced`: Fewer iterations, simplified math, lower frequency updates.
+/// - `Minimal`: Very cheap fallback (lowest trig ops, static or near-static).
+/// - `Off`: Render nothing (decorative effects are non-essential).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum FxQuality {
-    Low,
-    Medium,
-    High,
+    /// Render nothing - decorative effects are non-essential.
+    Off,
+    /// Very cheap fallback: minimal trig, near-static.
+    Minimal,
+    /// Fewer iterations, simplified math.
+    Reduced,
+    /// Normal detail, full quality.
+    #[default]
+    Full,
+}
+
+// ---------------------------------------------------------------------------
+// DegradationLevel -> FxQuality mapping
+// ---------------------------------------------------------------------------
+
+/// Area threshold (in cells) above which `Full` is clamped to `Reduced`.
+///
+/// A 240x80 terminal = 19,200 cells. We use 16,000 as a conservative threshold
+/// to trigger quality reduction on large areas even when budget allows Full.
+pub const FX_AREA_THRESHOLD_FULL_TO_REDUCED: usize = 16_000;
+
+/// Area threshold (in cells) above which `Reduced` is clamped to `Minimal`.
+///
+/// For extremely large renders (e.g., 4K equivalent), clamp to Minimal.
+pub const FX_AREA_THRESHOLD_REDUCED_TO_MINIMAL: usize = 64_000;
+
+impl FxQuality {
+    /// Map from `DegradationLevel` to `FxQuality`.
+    ///
+    /// # Mapping Table
+    ///
+    /// | DegradationLevel | FxQuality |
+    /// |------------------|-----------|
+    /// | Full             | Full      |
+    /// | SimpleBorders    | Reduced   |
+    /// | NoStyling        | Reduced   |
+    /// | EssentialOnly    | Off       |
+    /// | Skeleton         | Off       |
+    /// | SkipFrame        | Off       |
+    ///
+    /// Decorative backdrops are considered non-essential, so they disable
+    /// at `EssentialOnly` and below.
+    #[inline]
+    pub fn from_degradation(level: ftui_render::budget::DegradationLevel) -> Self {
+        use ftui_render::budget::DegradationLevel;
+        match level {
+            DegradationLevel::Full => Self::Full,
+            DegradationLevel::SimpleBorders | DegradationLevel::NoStyling => Self::Reduced,
+            DegradationLevel::EssentialOnly
+            | DegradationLevel::Skeleton
+            | DegradationLevel::SkipFrame => Self::Off,
+        }
+    }
+
+    /// Map from `DegradationLevel` with area-based clamping.
+    ///
+    /// Large areas automatically reduce quality even if budget allows `Full`:
+    /// - Area >= [`FX_AREA_THRESHOLD_FULL_TO_REDUCED`]: clamp `Full` to `Reduced`
+    /// - Area >= [`FX_AREA_THRESHOLD_REDUCED_TO_MINIMAL`]: clamp `Reduced` to `Minimal`
+    ///
+    /// This prevents expensive per-cell computations from blocking the render loop.
+    #[inline]
+    pub fn from_degradation_with_area(
+        level: ftui_render::budget::DegradationLevel,
+        area_cells: usize,
+    ) -> Self {
+        let base = Self::from_degradation(level);
+        Self::clamp_for_area(base, area_cells)
+    }
+
+    /// Clamp quality based on render area size.
+    ///
+    /// - Area >= [`FX_AREA_THRESHOLD_FULL_TO_REDUCED`]: `Full` becomes `Reduced`
+    /// - Area >= [`FX_AREA_THRESHOLD_REDUCED_TO_MINIMAL`]: `Reduced` becomes `Minimal`
+    #[inline]
+    pub fn clamp_for_area(quality: Self, area_cells: usize) -> Self {
+        match quality {
+            Self::Full if area_cells >= FX_AREA_THRESHOLD_FULL_TO_REDUCED => {
+                if area_cells >= FX_AREA_THRESHOLD_REDUCED_TO_MINIMAL {
+                    Self::Minimal
+                } else {
+                    Self::Reduced
+                }
+            }
+            Self::Reduced if area_cells >= FX_AREA_THRESHOLD_REDUCED_TO_MINIMAL => Self::Minimal,
+            other => other,
+        }
+    }
+
+    /// Returns `true` if effects should render (not `Off`).
+    #[inline]
+    pub fn is_enabled(self) -> bool {
+        self != Self::Off
+    }
 }
 
 /// Resolved theme inputs for FX.
@@ -329,6 +428,386 @@ pub trait BackdropFx {
 }
 
 // ---------------------------------------------------------------------------
+// StackedFx: Compositor for multiple BackdropFx layers (bd-l8x9.2.5)
+// ---------------------------------------------------------------------------
+
+/// Blend mode for layer composition.
+///
+/// Controls how each layer is combined with the layers below it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum BlendMode {
+    /// Standard alpha-over blending (layer painted on top).
+    #[default]
+    Over,
+    /// Additive blending (layer colors added to base).
+    Additive,
+    /// Multiply blending (layer colors multiply with base).
+    Multiply,
+    /// Screen blending (inverse multiply for lightening).
+    Screen,
+}
+
+impl BlendMode {
+    /// Blend two colors using this blend mode.
+    ///
+    /// `top` is the layer color, `bottom` is the accumulated color so far.
+    /// Both colors should have alpha in [0, 255].
+    #[inline]
+    pub fn blend(self, top: PackedRgba, bottom: PackedRgba) -> PackedRgba {
+        match self {
+            Self::Over => top.over(bottom),
+            Self::Additive => Self::blend_additive(top, bottom),
+            Self::Multiply => Self::blend_multiply(top, bottom),
+            Self::Screen => Self::blend_screen(top, bottom),
+        }
+    }
+
+    #[inline]
+    fn blend_additive(top: PackedRgba, bottom: PackedRgba) -> PackedRgba {
+        let ta = top.a() as f32 / 255.0;
+        let r = (bottom.r() as f32 + top.r() as f32 * ta).min(255.0) as u8;
+        let g = (bottom.g() as f32 + top.g() as f32 * ta).min(255.0) as u8;
+        let b = (bottom.b() as f32 + top.b() as f32 * ta).min(255.0) as u8;
+        // Result alpha is max of both
+        let a = bottom.a().max(top.a());
+        PackedRgba::rgba(r, g, b, a)
+    }
+
+    #[inline]
+    fn blend_multiply(top: PackedRgba, bottom: PackedRgba) -> PackedRgba {
+        let ta = top.a() as f32 / 255.0;
+        // Multiply: result = top * bottom / 255
+        let mr = (top.r() as f32 * bottom.r() as f32 / 255.0) as u8;
+        let mg = (top.g() as f32 * bottom.g() as f32 / 255.0) as u8;
+        let mb = (top.b() as f32 * bottom.b() as f32 / 255.0) as u8;
+        // Lerp between bottom and multiplied result based on top alpha
+        let r = (bottom.r() as f32 * (1.0 - ta) + mr as f32 * ta) as u8;
+        let g = (bottom.g() as f32 * (1.0 - ta) + mg as f32 * ta) as u8;
+        let b = (bottom.b() as f32 * (1.0 - ta) + mb as f32 * ta) as u8;
+        let a = bottom.a().max(top.a());
+        PackedRgba::rgba(r, g, b, a)
+    }
+
+    #[inline]
+    fn blend_screen(top: PackedRgba, bottom: PackedRgba) -> PackedRgba {
+        let ta = top.a() as f32 / 255.0;
+        // Screen: result = 255 - (255 - top) * (255 - bottom) / 255
+        let sr = 255 - ((255 - top.r()) as u16 * (255 - bottom.r()) as u16 / 255) as u8;
+        let sg = 255 - ((255 - top.g()) as u16 * (255 - bottom.g()) as u16 / 255) as u8;
+        let sb = 255 - ((255 - top.b()) as u16 * (255 - bottom.b()) as u16 / 255) as u8;
+        // Lerp between bottom and screened result based on top alpha
+        let r = (bottom.r() as f32 * (1.0 - ta) + sr as f32 * ta) as u8;
+        let g = (bottom.g() as f32 * (1.0 - ta) + sg as f32 * ta) as u8;
+        let b = (bottom.b() as f32 * (1.0 - ta) + sb as f32 * ta) as u8;
+        let a = bottom.a().max(top.a());
+        PackedRgba::rgba(r, g, b, a)
+    }
+}
+
+/// A single layer in a stacked backdrop composition.
+///
+/// Each layer has:
+/// - A `BackdropFx` effect
+/// - An opacity (0.0 = invisible, 1.0 = fully opaque)
+/// - A blend mode for compositing with layers below
+pub struct FxLayer {
+    fx: Box<dyn BackdropFx>,
+    opacity: f32,
+    blend_mode: BlendMode,
+}
+
+impl FxLayer {
+    /// Create a new layer with default opacity (1.0) and blend mode (Over).
+    #[inline]
+    pub fn new(fx: Box<dyn BackdropFx>) -> Self {
+        Self {
+            fx,
+            opacity: 1.0,
+            blend_mode: BlendMode::Over,
+        }
+    }
+
+    /// Create a new layer with specified opacity.
+    #[inline]
+    pub fn with_opacity(fx: Box<dyn BackdropFx>, opacity: f32) -> Self {
+        Self {
+            fx,
+            opacity: opacity.clamp(0.0, 1.0),
+            blend_mode: BlendMode::Over,
+        }
+    }
+
+    /// Create a new layer with specified blend mode.
+    #[inline]
+    pub fn with_blend(fx: Box<dyn BackdropFx>, blend_mode: BlendMode) -> Self {
+        Self {
+            fx,
+            opacity: 1.0,
+            blend_mode,
+        }
+    }
+
+    /// Create a new layer with both opacity and blend mode.
+    #[inline]
+    pub fn with_opacity_and_blend(
+        fx: Box<dyn BackdropFx>,
+        opacity: f32,
+        blend_mode: BlendMode,
+    ) -> Self {
+        Self {
+            fx,
+            opacity: opacity.clamp(0.0, 1.0),
+            blend_mode,
+        }
+    }
+
+    /// Set the opacity for this layer.
+    #[inline]
+    pub fn set_opacity(&mut self, opacity: f32) {
+        self.opacity = opacity.clamp(0.0, 1.0);
+    }
+
+    /// Set the blend mode for this layer.
+    #[inline]
+    pub fn set_blend_mode(&mut self, blend_mode: BlendMode) {
+        self.blend_mode = blend_mode;
+    }
+}
+
+impl fmt::Debug for FxLayer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FxLayer")
+            .field("name", &self.fx.name())
+            .field("opacity", &self.opacity)
+            .field("blend_mode", &self.blend_mode)
+            .finish()
+    }
+}
+
+/// Stacked backdrop compositor: multiple FX layers with single-pass output.
+///
+/// `StackedFx` implements `BackdropFx` and composes multiple effects efficiently:
+///
+/// # Design
+///
+/// - **Separate layer buffers**: Each layer renders to its own reusable buffer.
+/// - **Single final pass**: All layers are composited into the output in one pass.
+/// - **No per-frame allocations**: Buffers grow-only and are reused across frames.
+/// - **Explicit layer ordering**: Layers are rendered bottom-to-top (index 0 is bottom).
+///
+/// # Layer Ordering Semantics
+///
+/// Layers are composited in order: layer 0 is the base, layer 1 is painted on top,
+/// and so on. This matches typical graphics conventions ("painter's algorithm").
+///
+/// ```text
+/// Layer 2 (top)     ──┐
+/// Layer 1 (middle)  ──┼──▶ Final composited output
+/// Layer 0 (bottom)  ──┘
+/// ```
+///
+/// # Performance
+///
+/// - Each layer's `render()` is called once per frame
+/// - All layers are composited in a single tight loop
+/// - Buffer allocations only occur on first render or size increase
+///
+/// # Example
+///
+/// ```ignore
+/// use ftui_extras::visual_fx::{StackedFx, FxLayer, PlasmaFx, BlendMode};
+///
+/// let mut stack = StackedFx::new();
+/// stack.push(FxLayer::new(Box::new(PlasmaFx::ocean())));
+/// stack.push(FxLayer::with_opacity_and_blend(
+///     Box::new(PlasmaFx::fire()),
+///     0.3,
+///     BlendMode::Additive,
+/// ));
+///
+/// let backdrop = Backdrop::new(Box::new(stack), theme);
+/// backdrop.render(area, &mut frame);
+/// ```
+pub struct StackedFx {
+    layers: Vec<FxLayer>,
+    /// Per-layer render buffers (grow-only, reused across frames).
+    layer_bufs: Vec<Vec<PackedRgba>>,
+    /// Cached dimensions for resize optimization.
+    last_size: (u16, u16),
+}
+
+impl StackedFx {
+    /// Create an empty stacked compositor.
+    #[inline]
+    pub fn new() -> Self {
+        Self {
+            layers: Vec::new(),
+            layer_bufs: Vec::new(),
+            last_size: (0, 0),
+        }
+    }
+
+    /// Create a stacked compositor with pre-allocated capacity.
+    #[inline]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            layers: Vec::with_capacity(capacity),
+            layer_bufs: Vec::with_capacity(capacity),
+            last_size: (0, 0),
+        }
+    }
+
+    /// Add a layer to the top of the stack.
+    #[inline]
+    pub fn push(&mut self, layer: FxLayer) {
+        self.layers.push(layer);
+        self.layer_bufs.push(Vec::new());
+    }
+
+    /// Add a simple effect as a layer (opacity 1.0, Over blend).
+    #[inline]
+    pub fn push_fx(&mut self, fx: Box<dyn BackdropFx>) {
+        self.push(FxLayer::new(fx));
+    }
+
+    /// Remove and return the top layer, if any.
+    #[inline]
+    pub fn pop(&mut self) -> Option<FxLayer> {
+        self.layer_bufs.pop();
+        self.layers.pop()
+    }
+
+    /// Clear all layers.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.layers.clear();
+        self.layer_bufs.clear();
+        self.last_size = (0, 0);
+    }
+
+    /// Number of layers in the stack.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.layers.len()
+    }
+
+    /// Returns true if there are no layers.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.layers.is_empty()
+    }
+
+    /// Get mutable access to a layer by index.
+    #[inline]
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut FxLayer> {
+        self.layers.get_mut(index)
+    }
+
+    /// Iterate over layers (bottom to top).
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &FxLayer> {
+        self.layers.iter()
+    }
+
+    /// Iterate mutably over layers (bottom to top).
+    #[inline]
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut FxLayer> {
+        self.layers.iter_mut()
+    }
+
+    /// Ensure layer buffers are sized correctly (grow-only).
+    fn ensure_buffers(&mut self, len: usize) {
+        // Ensure we have enough buffer slots
+        while self.layer_bufs.len() < self.layers.len() {
+            self.layer_bufs.push(Vec::new());
+        }
+
+        // Grow each buffer if needed (never shrink)
+        for buf in &mut self.layer_bufs {
+            if buf.len() < len {
+                buf.resize(len, PackedRgba::TRANSPARENT);
+            }
+        }
+    }
+}
+
+impl Default for StackedFx {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Debug for StackedFx {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StackedFx")
+            .field("layers", &self.layers)
+            .field("last_size", &self.last_size)
+            .finish()
+    }
+}
+
+impl BackdropFx for StackedFx {
+    fn name(&self) -> &'static str {
+        "stacked"
+    }
+
+    fn resize(&mut self, width: u16, height: u16) {
+        if self.last_size != (width, height) {
+            self.last_size = (width, height);
+            // Notify each layer's effect of the resize
+            for layer in &mut self.layers {
+                layer.fx.resize(width, height);
+            }
+        }
+    }
+
+    fn render(&mut self, ctx: FxContext<'_>, out: &mut [PackedRgba]) {
+        // Early return for empty compositor or disabled quality
+        if self.is_empty() || !ctx.quality.is_enabled() || ctx.is_empty() {
+            return;
+        }
+
+        let len = ctx.len();
+        debug_assert_eq!(out.len(), len);
+
+        // Ensure buffers are ready
+        self.ensure_buffers(len);
+
+        // Phase 1: Render each layer to its buffer
+        for (layer, buf) in self.layers.iter_mut().zip(self.layer_bufs.iter_mut()) {
+            // Skip layers with zero opacity
+            if layer.opacity <= 0.0 {
+                continue;
+            }
+
+            // Clear buffer before rendering
+            buf[..len].fill(PackedRgba::TRANSPARENT);
+
+            // Render the effect
+            layer.fx.render(ctx, &mut buf[..len]);
+        }
+
+        // Phase 2: Composite all layers into output in a single pass
+        // This is the key optimization: one final pass over all cells
+        for i in 0..len {
+            let mut color = PackedRgba::TRANSPARENT;
+
+            // Blend layers bottom-to-top
+            for (layer, buf) in self.layers.iter().zip(self.layer_bufs.iter()) {
+                if layer.opacity <= 0.0 {
+                    continue;
+                }
+
+                let layer_color = buf[i].with_opacity(layer.opacity);
+                color = layer.blend_mode.blend(layer_color, color);
+            }
+
+            out[i] = color;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Backdrop widget: effect buffer + composition + scrim
 // ---------------------------------------------------------------------------
 
@@ -548,7 +1027,7 @@ impl Backdrop {
             base_fill,
             effect_opacity: 0.35,
             scrim: Scrim::Off,
-            quality: FxQuality::High,
+            quality: FxQuality::Full,
             frame: 0,
             time_seconds: 0.0,
         }
@@ -911,9 +1390,10 @@ impl PlasmaPalette {
 ///
 /// # Quality Tiers
 ///
-/// - `High`: 6 trigonometric evaluations per cell, full quality
-/// - `Medium`: Same as High (reserved for future downsampling)
-/// - `Low`: 3 trigonometric evaluations per cell, simpler waves
+/// - `Full`: 6 trigonometric evaluations per cell, full quality
+/// - `Reduced`: Same as Full (reserved for future downsampling/skip)
+/// - `Minimal`: 3 trigonometric evaluations per cell, simpler waves
+/// - `Off`: No rendering (early return)
 ///
 /// # Example
 ///
@@ -983,7 +1463,8 @@ impl BackdropFx for PlasmaFx {
     }
 
     fn render(&mut self, ctx: FxContext<'_>, out: &mut [PackedRgba]) {
-        if ctx.is_empty() {
+        // Early return if quality is Off (decorative effects are non-essential)
+        if !ctx.quality.is_enabled() || ctx.is_empty() {
             return;
         }
         debug_assert_eq!(out.len(), ctx.len());
@@ -991,7 +1472,9 @@ impl BackdropFx for PlasmaFx {
         let w = ctx.width as f64;
         let h = ctx.height as f64;
         let time = ctx.time_seconds;
-        let use_low_quality = ctx.quality == FxQuality::Low;
+
+        // Use simplified wave for Minimal quality
+        let use_simplified = ctx.quality == FxQuality::Minimal;
 
         for dy in 0..ctx.height {
             for dx in 0..ctx.width {
@@ -1002,7 +1485,7 @@ impl BackdropFx for PlasmaFx {
                 let ny = dy as f64 / h;
 
                 // Compute wave value based on quality
-                let wave = if use_low_quality {
+                let wave = if use_simplified {
                     plasma_wave_low(nx, ny, time)
                 } else {
                     plasma_wave(nx, ny, time)
@@ -1044,7 +1527,7 @@ mod tests {
             height: 3,
             frame: 0,
             time_seconds: 0.0,
-            quality: FxQuality::Low,
+            quality: FxQuality::Minimal,
             theme: &theme,
         };
         let mut out = vec![PackedRgba::TRANSPARENT; ctx.len()];
@@ -1065,7 +1548,7 @@ mod tests {
             height: 0,
             frame: 0,
             time_seconds: 0.0,
-            quality: FxQuality::Low,
+            quality: FxQuality::Minimal,
             theme: &theme,
         };
         let mut out = Vec::new();
@@ -1396,5 +1879,534 @@ mod tests {
         let center = scrim.overlay_at(&theme, 2, 2, 5, 5).a();
         let edge = scrim.overlay_at(&theme, 0, 0, 5, 5).a();
         assert!(edge >= center);
+    }
+
+    // -----------------------------------------------------------------------
+    // FxQuality mapping tests (DegradationLevel -> FxQuality)
+    // -----------------------------------------------------------------------
+
+    mod fx_quality_mapping {
+        use super::*;
+        use ftui_render::budget::DegradationLevel;
+
+        #[test]
+        fn from_degradation_full() {
+            assert_eq!(
+                FxQuality::from_degradation(DegradationLevel::Full),
+                FxQuality::Full
+            );
+        }
+
+        #[test]
+        fn from_degradation_simple_borders() {
+            assert_eq!(
+                FxQuality::from_degradation(DegradationLevel::SimpleBorders),
+                FxQuality::Reduced
+            );
+        }
+
+        #[test]
+        fn from_degradation_no_styling() {
+            assert_eq!(
+                FxQuality::from_degradation(DegradationLevel::NoStyling),
+                FxQuality::Reduced
+            );
+        }
+
+        #[test]
+        fn from_degradation_essential_only() {
+            assert_eq!(
+                FxQuality::from_degradation(DegradationLevel::EssentialOnly),
+                FxQuality::Off
+            );
+        }
+
+        #[test]
+        fn from_degradation_skeleton() {
+            assert_eq!(
+                FxQuality::from_degradation(DegradationLevel::Skeleton),
+                FxQuality::Off
+            );
+        }
+
+        #[test]
+        fn from_degradation_skip_frame() {
+            assert_eq!(
+                FxQuality::from_degradation(DegradationLevel::SkipFrame),
+                FxQuality::Off
+            );
+        }
+
+        #[test]
+        fn from_degradation_covers_all_variants() {
+            // Exhaustive match to catch if new variants are added
+            for level in [
+                DegradationLevel::Full,
+                DegradationLevel::SimpleBorders,
+                DegradationLevel::NoStyling,
+                DegradationLevel::EssentialOnly,
+                DegradationLevel::Skeleton,
+                DegradationLevel::SkipFrame,
+            ] {
+                let _ = FxQuality::from_degradation(level);
+            }
+        }
+
+        #[test]
+        fn area_clamp_small_area_unchanged() {
+            // 100x40 = 4000 cells, below threshold
+            assert_eq!(
+                FxQuality::clamp_for_area(FxQuality::Full, 4000),
+                FxQuality::Full
+            );
+            assert_eq!(
+                FxQuality::clamp_for_area(FxQuality::Reduced, 4000),
+                FxQuality::Reduced
+            );
+            assert_eq!(
+                FxQuality::clamp_for_area(FxQuality::Minimal, 4000),
+                FxQuality::Minimal
+            );
+            assert_eq!(
+                FxQuality::clamp_for_area(FxQuality::Off, 4000),
+                FxQuality::Off
+            );
+        }
+
+        #[test]
+        fn area_clamp_large_area_full_to_reduced() {
+            // 200x80 = 16000 cells, at threshold
+            assert_eq!(
+                FxQuality::clamp_for_area(FxQuality::Full, FX_AREA_THRESHOLD_FULL_TO_REDUCED),
+                FxQuality::Reduced
+            );
+        }
+
+        #[test]
+        fn area_clamp_huge_area_full_to_minimal() {
+            // 320x200 = 64000 cells, at higher threshold
+            assert_eq!(
+                FxQuality::clamp_for_area(FxQuality::Full, FX_AREA_THRESHOLD_REDUCED_TO_MINIMAL),
+                FxQuality::Minimal
+            );
+        }
+
+        #[test]
+        fn area_clamp_huge_area_reduced_to_minimal() {
+            assert_eq!(
+                FxQuality::clamp_for_area(FxQuality::Reduced, FX_AREA_THRESHOLD_REDUCED_TO_MINIMAL),
+                FxQuality::Minimal
+            );
+        }
+
+        #[test]
+        fn area_clamp_minimal_unchanged() {
+            // Minimal doesn't degrade further
+            assert_eq!(
+                FxQuality::clamp_for_area(FxQuality::Minimal, 100_000),
+                FxQuality::Minimal
+            );
+        }
+
+        #[test]
+        fn area_clamp_off_unchanged() {
+            // Off stays off
+            assert_eq!(
+                FxQuality::clamp_for_area(FxQuality::Off, 100_000),
+                FxQuality::Off
+            );
+        }
+
+        #[test]
+        fn from_degradation_with_area_combined() {
+            // Full budget + large area = Reduced
+            assert_eq!(
+                FxQuality::from_degradation_with_area(DegradationLevel::Full, 20_000),
+                FxQuality::Reduced
+            );
+
+            // SimpleBorders + large area = Reduced (already Reduced, below higher threshold)
+            assert_eq!(
+                FxQuality::from_degradation_with_area(DegradationLevel::SimpleBorders, 20_000),
+                FxQuality::Reduced
+            );
+
+            // EssentialOnly = Off regardless of area
+            assert_eq!(
+                FxQuality::from_degradation_with_area(DegradationLevel::EssentialOnly, 100),
+                FxQuality::Off
+            );
+        }
+
+        #[test]
+        fn is_enabled_true_for_quality_levels() {
+            assert!(FxQuality::Full.is_enabled());
+            assert!(FxQuality::Reduced.is_enabled());
+            assert!(FxQuality::Minimal.is_enabled());
+        }
+
+        #[test]
+        fn is_enabled_false_for_off() {
+            assert!(!FxQuality::Off.is_enabled());
+        }
+
+        #[test]
+        fn default_is_full() {
+            assert_eq!(FxQuality::default(), FxQuality::Full);
+        }
+
+        #[test]
+        fn threshold_constants_are_reasonable() {
+            // Verify thresholds are in expected order
+            assert!(FX_AREA_THRESHOLD_FULL_TO_REDUCED < FX_AREA_THRESHOLD_REDUCED_TO_MINIMAL);
+            // 16k cells = ~200x80 terminal
+            assert_eq!(FX_AREA_THRESHOLD_FULL_TO_REDUCED, 16_000);
+            // 64k cells = ~320x200 or 4K equivalent
+            assert_eq!(FX_AREA_THRESHOLD_REDUCED_TO_MINIMAL, 64_000);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // StackedFx tests (bd-l8x9.2.5)
+    // -----------------------------------------------------------------------
+
+    mod stacked_fx_tests {
+        use super::*;
+
+        /// Test effect that fills with a solid color.
+        struct SolidColor(PackedRgba);
+
+        impl BackdropFx for SolidColor {
+            fn name(&self) -> &'static str {
+                "solid-color"
+            }
+
+            fn render(&mut self, ctx: FxContext<'_>, out: &mut [PackedRgba]) {
+                if ctx.is_empty() {
+                    return;
+                }
+                out[..ctx.len()].fill(self.0);
+            }
+        }
+
+        /// Test effect that writes cell index as a gray value.
+        struct GradientFx;
+
+        impl BackdropFx for GradientFx {
+            fn name(&self) -> &'static str {
+                "gradient"
+            }
+
+            fn render(&mut self, ctx: FxContext<'_>, out: &mut [PackedRgba]) {
+                for i in 0..ctx.len() {
+                    let gray = (i % 256) as u8;
+                    out[i] = PackedRgba::rgb(gray, gray, gray);
+                }
+            }
+        }
+
+        #[test]
+        fn stacked_fx_empty_is_noop() {
+            let theme = ThemeInputs::default_dark();
+            let ctx = FxContext {
+                width: 4,
+                height: 3,
+                frame: 0,
+                time_seconds: 0.0,
+                quality: FxQuality::Full,
+                theme: &theme,
+            };
+            let mut out = vec![PackedRgba::rgb(1, 2, 3); ctx.len()];
+
+            let mut stack = StackedFx::new();
+            stack.render(ctx, &mut out);
+
+            // Output should be unchanged (empty stack is a no-op)
+            assert!(out.iter().all(|&c| c == PackedRgba::rgb(1, 2, 3)));
+        }
+
+        #[test]
+        fn stacked_fx_single_layer_renders() {
+            let theme = ThemeInputs::default_dark();
+            let ctx = FxContext {
+                width: 4,
+                height: 3,
+                frame: 0,
+                time_seconds: 0.0,
+                quality: FxQuality::Full,
+                theme: &theme,
+            };
+            let mut out = vec![PackedRgba::TRANSPARENT; ctx.len()];
+
+            let mut stack = StackedFx::new();
+            stack.push(FxLayer::new(Box::new(SolidColor(PackedRgba::rgb(100, 150, 200)))));
+            stack.render(ctx, &mut out);
+
+            // All cells should have the solid color
+            assert!(out.iter().all(|&c| c == PackedRgba::rgb(100, 150, 200)));
+        }
+
+        #[test]
+        fn stacked_fx_two_layer_composition_over() {
+            let theme = ThemeInputs::default_dark();
+            let ctx = FxContext {
+                width: 2,
+                height: 2,
+                frame: 0,
+                time_seconds: 0.0,
+                quality: FxQuality::Full,
+                theme: &theme,
+            };
+            let mut out = vec![PackedRgba::TRANSPARENT; ctx.len()];
+
+            let mut stack = StackedFx::new();
+            // Layer 0: opaque red
+            stack.push(FxLayer::new(Box::new(SolidColor(PackedRgba::rgb(255, 0, 0)))));
+            // Layer 1: 50% alpha blue (painted on top)
+            stack.push(FxLayer::with_opacity(
+                Box::new(SolidColor(PackedRgba::rgb(0, 0, 255))),
+                0.5,
+            ));
+            stack.render(ctx, &mut out);
+
+            // Expected: blue at 50% over red = some purple-ish color
+            // Using Over blend: 0.5*255 + 0.5*255 for R, 0.5*0 + 0.5*0 for G, 0.5*255 for B
+            // The exact values depend on the alpha blending formula
+            for color in &out {
+                // Red should be reduced, blue should be visible
+                assert!(color.r() > 0 && color.r() < 255);
+                assert!(color.b() > 0 && color.b() <= 255);
+                assert_eq!(color.g(), 0);
+            }
+        }
+
+        #[test]
+        fn stacked_fx_layer_ordering_bottom_to_top() {
+            let theme = ThemeInputs::default_dark();
+            let ctx = FxContext {
+                width: 1,
+                height: 1,
+                frame: 0,
+                time_seconds: 0.0,
+                quality: FxQuality::Full,
+                theme: &theme,
+            };
+            let mut out = vec![PackedRgba::TRANSPARENT; 1];
+
+            let mut stack = StackedFx::new();
+            // Layer 0: green (bottom)
+            stack.push(FxLayer::new(Box::new(SolidColor(PackedRgba::rgb(0, 255, 0)))));
+            // Layer 1: opaque red (top, should completely cover green)
+            stack.push(FxLayer::new(Box::new(SolidColor(PackedRgba::rgb(255, 0, 0)))));
+            stack.render(ctx, &mut out);
+
+            // Top layer (red) should fully cover bottom (green)
+            assert_eq!(out[0], PackedRgba::rgb(255, 0, 0));
+        }
+
+        #[test]
+        fn stacked_fx_zero_opacity_layer_invisible() {
+            let theme = ThemeInputs::default_dark();
+            let ctx = FxContext {
+                width: 2,
+                height: 2,
+                frame: 0,
+                time_seconds: 0.0,
+                quality: FxQuality::Full,
+                theme: &theme,
+            };
+            let mut out = vec![PackedRgba::TRANSPARENT; ctx.len()];
+
+            let mut stack = StackedFx::new();
+            // Layer 0: green
+            stack.push(FxLayer::new(Box::new(SolidColor(PackedRgba::rgb(0, 255, 0)))));
+            // Layer 1: red at 0% opacity (should be invisible)
+            stack.push(FxLayer::with_opacity(
+                Box::new(SolidColor(PackedRgba::rgb(255, 0, 0))),
+                0.0,
+            ));
+            stack.render(ctx, &mut out);
+
+            // Should only see green
+            assert!(out.iter().all(|&c| c == PackedRgba::rgb(0, 255, 0)));
+        }
+
+        #[test]
+        fn stacked_fx_buffer_reuse_no_alloc() {
+            let theme = ThemeInputs::default_dark();
+            let ctx = FxContext {
+                width: 10,
+                height: 10,
+                frame: 0,
+                time_seconds: 0.0,
+                quality: FxQuality::Full,
+                theme: &theme,
+            };
+            let mut out = vec![PackedRgba::TRANSPARENT; ctx.len()];
+
+            let mut stack = StackedFx::new();
+            stack.push(FxLayer::new(Box::new(SolidColor(PackedRgba::rgb(100, 100, 100)))));
+
+            // First render allocates buffers
+            stack.render(ctx, &mut out);
+            let cap1 = stack.layer_bufs[0].capacity();
+
+            // Second render should reuse buffers
+            stack.render(ctx, &mut out);
+            let cap2 = stack.layer_bufs[0].capacity();
+
+            assert_eq!(cap1, cap2, "Buffer should be reused, not reallocated");
+        }
+
+        #[test]
+        fn stacked_fx_resize_notifies_layers() {
+            let theme = ThemeInputs::default_dark();
+
+            // First context: 4x4
+            let ctx1 = FxContext {
+                width: 4,
+                height: 4,
+                frame: 0,
+                time_seconds: 0.0,
+                quality: FxQuality::Full,
+                theme: &theme,
+            };
+            let mut out1 = vec![PackedRgba::TRANSPARENT; ctx1.len()];
+
+            let mut stack = StackedFx::new();
+            stack.push(FxLayer::new(Box::new(GradientFx)));
+
+            stack.resize(4, 4);
+            stack.render(ctx1, &mut out1);
+
+            // Second context: 8x8 (resize)
+            let ctx2 = FxContext {
+                width: 8,
+                height: 8,
+                frame: 0,
+                time_seconds: 0.0,
+                quality: FxQuality::Full,
+                theme: &theme,
+            };
+            let mut out2 = vec![PackedRgba::TRANSPARENT; ctx2.len()];
+
+            stack.resize(8, 8);
+            stack.render(ctx2, &mut out2);
+
+            // Buffers should grow to accommodate new size
+            assert!(stack.layer_bufs[0].len() >= ctx2.len());
+        }
+
+        #[test]
+        fn blend_mode_additive() {
+            let theme = ThemeInputs::default_dark();
+            let ctx = FxContext {
+                width: 1,
+                height: 1,
+                frame: 0,
+                time_seconds: 0.0,
+                quality: FxQuality::Full,
+                theme: &theme,
+            };
+            let mut out = vec![PackedRgba::TRANSPARENT; 1];
+
+            let mut stack = StackedFx::new();
+            // Layer 0: dark red
+            stack.push(FxLayer::new(Box::new(SolidColor(PackedRgba::rgb(100, 0, 0)))));
+            // Layer 1: dark blue, additive blend
+            stack.push(FxLayer::with_blend(
+                Box::new(SolidColor(PackedRgba::rgb(0, 0, 100))),
+                BlendMode::Additive,
+            ));
+            stack.render(ctx, &mut out);
+
+            // Additive: R=100, B=100
+            assert_eq!(out[0].r(), 100);
+            assert_eq!(out[0].g(), 0);
+            assert_eq!(out[0].b(), 100);
+        }
+
+        #[test]
+        fn blend_mode_multiply() {
+            let bottom = PackedRgba::rgb(200, 100, 50);
+            let top = PackedRgba::rgba(128, 128, 128, 255);
+
+            let result = BlendMode::Multiply.blend(top, bottom);
+
+            // Multiply: (200*128)/255 ≈ 100, (100*128)/255 ≈ 50, (50*128)/255 ≈ 25
+            assert!(result.r() >= 98 && result.r() <= 102);
+            assert!(result.g() >= 48 && result.g() <= 52);
+            assert!(result.b() >= 23 && result.b() <= 27);
+        }
+
+        #[test]
+        fn blend_mode_screen() {
+            let bottom = PackedRgba::rgb(100, 50, 25);
+            let top = PackedRgba::rgba(100, 100, 100, 255);
+
+            let result = BlendMode::Screen.blend(top, bottom);
+
+            // Screen lightens: result should be brighter than bottom
+            assert!(result.r() >= bottom.r());
+            assert!(result.g() >= bottom.g());
+            assert!(result.b() >= bottom.b());
+        }
+
+        #[test]
+        fn stacked_fx_push_pop() {
+            let mut stack = StackedFx::new();
+            assert!(stack.is_empty());
+            assert_eq!(stack.len(), 0);
+
+            stack.push_fx(Box::new(SolidColor(PackedRgba::rgb(255, 0, 0))));
+            assert_eq!(stack.len(), 1);
+
+            stack.push_fx(Box::new(SolidColor(PackedRgba::rgb(0, 255, 0))));
+            assert_eq!(stack.len(), 2);
+
+            let popped = stack.pop();
+            assert!(popped.is_some());
+            assert_eq!(stack.len(), 1);
+
+            stack.clear();
+            assert!(stack.is_empty());
+        }
+
+        #[test]
+        fn stacked_fx_off_quality_is_noop() {
+            let theme = ThemeInputs::default_dark();
+            let ctx = FxContext {
+                width: 4,
+                height: 3,
+                frame: 0,
+                time_seconds: 0.0,
+                quality: FxQuality::Off,
+                theme: &theme,
+            };
+            let sentinel = PackedRgba::rgb(42, 42, 42);
+            let mut out = vec![sentinel; ctx.len()];
+
+            let mut stack = StackedFx::new();
+            stack.push(FxLayer::new(Box::new(SolidColor(PackedRgba::rgb(255, 0, 0)))));
+            stack.render(ctx, &mut out);
+
+            // With quality Off, output should be unchanged
+            assert!(out.iter().all(|&c| c == sentinel));
+        }
+
+        #[test]
+        fn fx_layer_debug_impl() {
+            let layer = FxLayer::new(Box::new(SolidColor(PackedRgba::rgb(100, 100, 100))));
+            let debug_str = format!("{:?}", layer);
+            assert!(debug_str.contains("solid-color"));
+            assert!(debug_str.contains("opacity"));
+            assert!(debug_str.contains("blend_mode"));
+        }
+
+        #[test]
+        fn stacked_fx_default() {
+            let stack = StackedFx::default();
+            assert!(stack.is_empty());
+        }
     }
 }
