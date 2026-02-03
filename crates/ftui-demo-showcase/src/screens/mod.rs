@@ -12,6 +12,7 @@ pub mod dashboard;
 pub mod data_viz;
 pub mod file_browser;
 pub mod forms_input;
+pub mod intrinsic_sizing;
 pub mod layout_lab;
 pub mod log_search;
 pub mod macro_recorder;

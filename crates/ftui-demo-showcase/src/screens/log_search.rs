@@ -560,7 +560,9 @@ mod tests {
 
         let initial_info = screen.viewer.search_info();
         screen.update(&key_press(KeyCode::Char('n')));
-        if let Some((_, total)) = initial_info && total > 1 {
+        if let Some((_, total)) = initial_info
+            && total > 1
+        {
             let (current, _) = screen.viewer.search_info().unwrap();
             assert_eq!(current, 2);
         }

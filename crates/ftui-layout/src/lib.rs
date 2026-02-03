@@ -1376,6 +1376,33 @@ mod tests {
         assert_eq!(rects[1].width, 100); // Fill gets all
     }
 
+    #[test]
+    fn fit_content_zero_area_returns_empty_rects() {
+        let flex = Flex::horizontal().constraints([Constraint::FitContent, Constraint::Fill]);
+        let rects = flex.split_with_measurer(Rect::new(0, 0, 0, 0), |_, _| LayoutSizeHint {
+            min: 5,
+            preferred: 10,
+            max: None,
+        });
+        assert_eq!(rects.len(), 2);
+        assert_eq!(rects[0].width, 0);
+        assert_eq!(rects[0].height, 0);
+        assert_eq!(rects[1].width, 0);
+        assert_eq!(rects[1].height, 0);
+    }
+
+    #[test]
+    fn fit_content_tiny_available_clamps_to_remaining() {
+        let flex = Flex::horizontal().constraints([Constraint::FitContent, Constraint::Fill]);
+        let rects = flex.split_with_measurer(Rect::new(0, 0, 1, 1), |_, _| LayoutSizeHint {
+            min: 5,
+            preferred: 10,
+            max: None,
+        });
+        assert_eq!(rects[0].width, 1);
+        assert_eq!(rects[1].width, 0);
+    }
+
     // --- FitContentBounded constraint ---
 
     #[test]
@@ -1391,6 +1418,40 @@ mod tests {
         });
         assert_eq!(rects[0].width, 20); // Clamped to min bound
         assert_eq!(rects[1].width, 80);
+    }
+
+    #[test]
+    fn fit_content_bounded_respects_small_available() {
+        let flex = Flex::horizontal().constraints([
+            Constraint::FitContentBounded { min: 20, max: 50 },
+            Constraint::Fill,
+        ]);
+        let rects = flex.split_with_measurer(Rect::new(0, 0, 5, 2), |_, _| LayoutSizeHint {
+            min: 5,
+            preferred: 10,
+            max: None,
+        });
+        // Available is 5 total, so FitContentBounded must clamp to remaining.
+        assert_eq!(rects[0].width, 5);
+        assert_eq!(rects[1].width, 0);
+    }
+
+    #[test]
+    fn fit_content_vertical_uses_preferred_height() {
+        let flex = Flex::vertical().constraints([Constraint::FitContent, Constraint::Fill]);
+        let rects = flex.split_with_measurer(Rect::new(0, 0, 10, 10), |idx, _| {
+            if idx == 0 {
+                LayoutSizeHint {
+                    min: 1,
+                    preferred: 4,
+                    max: None,
+                }
+            } else {
+                LayoutSizeHint::ZERO
+            }
+        });
+        assert_eq!(rects[0].height, 4);
+        assert_eq!(rects[1].height, 6);
     }
 
     #[test]

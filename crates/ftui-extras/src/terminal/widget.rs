@@ -109,7 +109,7 @@ impl TerminalEmulator {
             flags |= StyleFlags::HIDDEN;
         }
 
-        let cell_attrs = BufferCellAttrs::from_flags(flags);
+        let cell_attrs = BufferCellAttrs::new(flags, 0);
 
         BufferCell::from_char(ch)
             .with_fg(fg)
@@ -131,12 +131,12 @@ impl TerminalEmulator {
             match cursor.shape {
                 CursorShape::Block | CursorShape::Bar => {
                     // Invert colors for block/bar cursor
-                    let new_attrs = cell.attrs.with_flag(StyleFlags::REVERSE);
+                    let new_attrs = cell.attrs.with_flags(cell.attrs.flags() | StyleFlags::REVERSE);
                     cell.attrs = new_attrs;
                 }
                 CursorShape::Underline => {
                     // Add underline for underline cursor
-                    let new_attrs = cell.attrs.with_flag(StyleFlags::UNDERLINE);
+                    let new_attrs = cell.attrs.with_flags(cell.attrs.flags() | StyleFlags::UNDERLINE);
                     cell.attrs = new_attrs;
                 }
             }

@@ -172,7 +172,7 @@ fn install_palette_telemetry_logger() -> tracing::subscriber::DefaultGuard {
     }
 
     let subscriber = tracing_subscriber::registry()
-        .with(TelemetryLayer::default())
+        .with(TelemetryLayer)
         .with(Targets::new().with_target(PALETTE_TELEMETRY_TARGET, tracing::Level::INFO));
     tracing::subscriber::set_default(subscriber)
 }

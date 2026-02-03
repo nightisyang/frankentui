@@ -236,12 +236,8 @@ impl ActionTimeline {
     fn filtered_indices(&self) -> Vec<usize> {
         let mut indices = Vec::new();
         for (idx, event) in self.events.iter().enumerate() {
-            if self
-                .filter_component
-                .is_none_or(|c| c == event.component)
-                && self
-                    .filter_severity
-                    .is_none_or(|s| s == event.severity)
+            if self.filter_component.is_none_or(|c| c == event.component)
+                && self.filter_severity.is_none_or(|s| s == event.severity)
                 && self.filter_kind.is_none_or(|k| k == event.kind)
             {
                 indices.push(idx);

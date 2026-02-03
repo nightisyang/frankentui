@@ -70,6 +70,8 @@ pub enum ScreenId {
     Notifications,
     /// Action timeline / event stream viewer.
     ActionTimeline,
+    /// Content-aware layout examples (bd-2dow.7).
+    IntrinsicSizing,
 }
 
 impl ScreenId {
@@ -92,6 +94,7 @@ impl ScreenId {
         Self::LogSearch,
         Self::Notifications,
         Self::ActionTimeline,
+        Self::IntrinsicSizing,
     ];
 
     /// 0-based index in the ALL array.
@@ -131,6 +134,7 @@ impl ScreenId {
             Self::LogSearch => "Log Search",
             Self::Notifications => "Notifications",
             Self::ActionTimeline => "Action Timeline",
+            Self::IntrinsicSizing => "Intrinsic Sizing",
         }
     }
 
@@ -154,6 +158,7 @@ impl ScreenId {
             Self::LogSearch => "Logs",
             Self::Notifications => "Notify",
             Self::ActionTimeline => "Timeline",
+            Self::IntrinsicSizing => "Sizing",
         }
     }
 
@@ -177,6 +182,7 @@ impl ScreenId {
             Self::LogSearch => "LogSearch",
             Self::Notifications => "Notifications",
             Self::ActionTimeline => "ActionTimeline",
+            Self::IntrinsicSizing => "IntrinsicSizing",
         }
     }
 
@@ -232,9 +238,11 @@ pub struct ScreenStates {
     pub notifications: screens::notifications::Notifications,
     /// Action timeline / event stream viewer.
     pub action_timeline: screens::action_timeline::ActionTimeline,
+    /// Intrinsic sizing demo screen state (bd-2dow.7).
+    pub intrinsic_sizing: screens::intrinsic_sizing::IntrinsicSizingDemo,
     /// Tracks whether each screen has errored during rendering.
     /// Indexed by `ScreenId::index()`.
-    screen_errors: [Option<String>; 17],
+    screen_errors: [Option<String>; 18],
 }
 
 impl ScreenStates {
@@ -293,6 +301,9 @@ impl ScreenStates {
             ScreenId::ActionTimeline => {
                 self.action_timeline.update(event);
             }
+            ScreenId::IntrinsicSizing => {
+                self.intrinsic_sizing.update(event);
+            }
         }
     }
 
@@ -316,6 +327,7 @@ impl ScreenStates {
         self.log_search.tick(tick_count);
         self.notifications.tick(tick_count);
         self.action_timeline.tick(tick_count);
+        self.intrinsic_sizing.tick(tick_count);
     }
 
     fn apply_theme(&mut self) {
@@ -361,6 +373,7 @@ impl ScreenStates {
                 ScreenId::LogSearch => self.log_search.view(frame, area),
                 ScreenId::Notifications => self.notifications.view(frame, area),
                 ScreenId::ActionTimeline => self.action_timeline.view(frame, area),
+                ScreenId::IntrinsicSizing => self.intrinsic_sizing.view(frame, area),
             }
         }));
 
