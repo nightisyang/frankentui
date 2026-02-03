@@ -167,3 +167,5 @@ Profiling blocked; no reliable hotspots yet. Retry once perf access is enabled.
 ### Notes
 - Flamegraph command: `cargo flamegraph -p ftui-runtime --unit-test -o docs/profiling/bd-1rz0.28/voi_sampling_flamegraph.svg -- perf_voi_sampling_budget --nocapture`
 - Enable perf access via `perf_event_paranoid` or `CAP_PERFMON` to capture hotspots.
+ - 2026-02-03 check: `cat /proc/sys/kernel/perf_event_paranoid` → `4` (perf access still blocked in this environment).
+ - Once perf access is enabled, re-run the command above and attach the SVG + top hotspots summary here.
