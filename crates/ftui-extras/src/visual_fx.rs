@@ -1239,6 +1239,154 @@ mod tests {
         fx.render(ctx, &mut out);
     }
 
+    // -----------------------------------------------------------------------
+    // Tiny-area safety tests (bd-l8x9.8)
+    // Verify BackdropFx and Backdrop widget do not panic for edge-case sizes.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn tiny_area_1x1_is_safe() {
+        let theme = ThemeInputs::default_dark();
+        let mut fx = SolidBg;
+
+        let ctx = FxContext {
+            width: 1,
+            height: 1,
+            frame: 0,
+            time_seconds: 0.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        let mut out = vec![PackedRgba::TRANSPARENT; 1];
+        fx.render(ctx, &mut out);
+        assert_eq!(out[0], theme.bg_base);
+    }
+
+    #[test]
+    fn tiny_area_1xn_narrow_is_safe() {
+        let theme = ThemeInputs::default_dark();
+        let mut fx = SolidBg;
+
+        // 1 column, 10 rows (narrow vertical strip)
+        let ctx = FxContext {
+            width: 1,
+            height: 10,
+            frame: 0,
+            time_seconds: 0.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        let mut out = vec![PackedRgba::TRANSPARENT; 10];
+        fx.render(ctx, &mut out);
+        assert!(out.iter().all(|&c| c == theme.bg_base));
+    }
+
+    #[test]
+    fn tiny_area_nx1_narrow_is_safe() {
+        let theme = ThemeInputs::default_dark();
+        let mut fx = SolidBg;
+
+        // 10 columns, 1 row (narrow horizontal strip)
+        let ctx = FxContext {
+            width: 10,
+            height: 1,
+            frame: 0,
+            time_seconds: 0.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        let mut out = vec![PackedRgba::TRANSPARENT; 10];
+        fx.render(ctx, &mut out);
+        assert!(out.iter().all(|&c| c == theme.bg_base));
+    }
+
+    #[test]
+    fn backdrop_widget_tiny_1x1_is_safe() {
+        let theme = ThemeInputs::default_dark();
+        let backdrop = Backdrop::new(Box::new(SolidBg), theme);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(1, 1, &mut pool);
+        let area = Rect::new(0, 0, 1, 1);
+
+        // Should not panic
+        backdrop.render(area, &mut frame);
+
+        // Background should be set
+        let cell = frame.buffer.get(0, 0).unwrap();
+        assert_ne!(cell.bg, PackedRgba::TRANSPARENT);
+    }
+
+    #[test]
+    fn backdrop_widget_tiny_1xn_is_safe() {
+        let theme = ThemeInputs::default_dark();
+        let backdrop = Backdrop::new(Box::new(SolidBg), theme);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(1, 8, &mut pool);
+        let area = Rect::new(0, 0, 1, 8);
+
+        // Should not panic
+        backdrop.render(area, &mut frame);
+
+        // All cells should have background set
+        for y in 0..8 {
+            let cell = frame.buffer.get(0, y).unwrap();
+            assert_ne!(cell.bg, PackedRgba::TRANSPARENT);
+        }
+    }
+
+    #[test]
+    fn backdrop_widget_tiny_nx1_is_safe() {
+        let theme = ThemeInputs::default_dark();
+        let backdrop = Backdrop::new(Box::new(SolidBg), theme);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(8, 1, &mut pool);
+        let area = Rect::new(0, 0, 8, 1);
+
+        // Should not panic
+        backdrop.render(area, &mut frame);
+
+        // All cells should have background set
+        for x in 0..8 {
+            let cell = frame.buffer.get(x, 0).unwrap();
+            assert_ne!(cell.bg, PackedRgba::TRANSPARENT);
+        }
+    }
+
+    #[test]
+    fn backdrop_widget_empty_0x0_is_safe() {
+        let theme = ThemeInputs::default_dark();
+        let backdrop = Backdrop::new(Box::new(SolidBg), theme);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 10, &mut pool);
+        // Empty area (0 width)
+        let area = Rect::new(5, 5, 0, 0);
+
+        // Should not panic (no-op for empty area)
+        backdrop.render(area, &mut frame);
+    }
+
+    #[test]
+    fn scrim_tiny_area_vignette_1x1_is_safe() {
+        let theme = ThemeInputs::default_dark();
+        let scrim = Scrim::vignette(0.5);
+        // Should not panic for 1x1 area
+        let _ = scrim.overlay_at(&theme, 0, 0, 1, 1);
+    }
+
+    #[test]
+    fn scrim_tiny_area_vertical_fade_1_row_is_safe() {
+        let theme = ThemeInputs::default_dark();
+        let scrim = Scrim::vertical_fade(0.1, 0.9);
+        // Should not panic for single-row area
+        let overlay = scrim.overlay_at(&theme, 0, 0, 10, 1);
+        // With height=1, t=1.0 so opacity should be bottom_opacity (0.9)
+        assert!(overlay.a() > 0);
+    }
+
     #[test]
     fn theme_inputs_has_opaque_backgrounds() {
         let theme = ThemeInputs::default_dark();
@@ -1436,6 +1584,259 @@ mod tests {
         let cap2 = backdrop.fx_buf.borrow().capacity();
 
         assert_eq!(cap1, cap2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Buffer caching tests (bd-l8x9.2.1)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn backdrop_capacity_stable_across_many_renders() {
+        // Unit test: capacity does not change across many renders at a stable size
+        let theme = ThemeInputs::default_dark();
+        let backdrop = Backdrop::new(Box::new(SolidBg), theme);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 10, &mut pool);
+        let area = Rect::new(0, 0, 20, 10);
+
+        // First render allocates the buffer
+        backdrop.render(area, &mut frame);
+        let initial_capacity = backdrop.fx_buf.borrow().capacity();
+
+        // Render 50 more times - capacity must never change
+        for i in 1..=50 {
+            backdrop.render(area, &mut frame);
+            let current_capacity = backdrop.fx_buf.borrow().capacity();
+            assert_eq!(
+                current_capacity, initial_capacity,
+                "Capacity changed on render {} from {} to {}",
+                i, initial_capacity, current_capacity
+            );
+        }
+    }
+
+    #[test]
+    fn backdrop_resize_larger_grows_once() {
+        // Unit test: resize to larger size grows once; not repeatedly
+        let theme = ThemeInputs::default_dark();
+        let backdrop = Backdrop::new(Box::new(SolidBg), theme);
+
+        let mut pool = GraphemePool::new();
+
+        // Start small (10x5 = 50 cells)
+        let mut frame_small = Frame::new(10, 5, &mut pool);
+        let area_small = Rect::new(0, 0, 10, 5);
+        backdrop.render(area_small, &mut frame_small);
+        let cap_small = backdrop.fx_buf.borrow().capacity();
+        assert!(cap_small >= 50, "Buffer should be at least 50 cells");
+
+        // Grow to larger (20x10 = 200 cells)
+        let mut frame_large = Frame::new(20, 10, &mut pool);
+        let area_large = Rect::new(0, 0, 20, 10);
+        backdrop.render(area_large, &mut frame_large);
+        let cap_after_grow = backdrop.fx_buf.borrow().capacity();
+        assert!(
+            cap_after_grow >= 200,
+            "Buffer should grow to at least 200 cells"
+        );
+
+        // Render at same large size multiple times - no further growth
+        for _ in 0..10 {
+            backdrop.render(area_large, &mut frame_large);
+            let cap_current = backdrop.fx_buf.borrow().capacity();
+            assert_eq!(
+                cap_current, cap_after_grow,
+                "Buffer should not grow again at stable size"
+            );
+        }
+    }
+
+    #[test]
+    fn backdrop_resize_smaller_does_not_shrink() {
+        // Unit test: resize to smaller size does not shrink the buffer
+        let theme = ThemeInputs::default_dark();
+        let backdrop = Backdrop::new(Box::new(SolidBg), theme);
+
+        let mut pool = GraphemePool::new();
+
+        // Start large (30x15 = 450 cells)
+        let mut frame_large = Frame::new(30, 15, &mut pool);
+        let area_large = Rect::new(0, 0, 30, 15);
+        backdrop.render(area_large, &mut frame_large);
+        let cap_large = backdrop.fx_buf.borrow().capacity();
+        assert!(cap_large >= 450, "Buffer should be at least 450 cells");
+
+        // Shrink to smaller (10x5 = 50 cells)
+        let mut frame_small = Frame::new(10, 5, &mut pool);
+        let area_small = Rect::new(0, 0, 10, 5);
+        backdrop.render(area_small, &mut frame_small);
+        let cap_after_shrink = backdrop.fx_buf.borrow().capacity();
+
+        // Buffer capacity must NOT decrease (grow-only policy)
+        assert!(
+            cap_after_shrink >= cap_large,
+            "Buffer must not shrink: was {}, now {}",
+            cap_large,
+            cap_after_shrink
+        );
+
+        // Render at small size multiple times - still no shrinking
+        for _ in 0..5 {
+            backdrop.render(area_small, &mut frame_small);
+            let cap_current = backdrop.fx_buf.borrow().capacity();
+            assert!(
+                cap_current >= cap_large,
+                "Buffer must never shrink below peak capacity"
+            );
+        }
+    }
+
+    /// Test effect that records which cells it wrote to
+    struct WriteTracker {
+        written: std::cell::RefCell<Vec<bool>>,
+    }
+
+    impl WriteTracker {
+        fn new() -> Self {
+            Self {
+                written: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+
+        #[allow(dead_code)]
+        fn all_written(&self, len: usize) -> bool {
+            let w = self.written.borrow();
+            w.len() >= len && w[..len].iter().all(|&b| b)
+        }
+    }
+
+    impl BackdropFx for WriteTracker {
+        fn name(&self) -> &'static str {
+            "write-tracker"
+        }
+
+        fn resize(&mut self, width: u16, height: u16) {
+            let len = width as usize * height as usize;
+            let mut w = self.written.borrow_mut();
+            if w.len() < len {
+                w.resize(len, false);
+            }
+            // Reset tracking for new size
+            for b in w.iter_mut() {
+                *b = false;
+            }
+        }
+
+        fn render(&mut self, ctx: FxContext<'_>, out: &mut [PackedRgba]) {
+            if ctx.is_empty() {
+                return;
+            }
+            let len = ctx.len();
+            let mut w = self.written.borrow_mut();
+            if w.len() < len {
+                w.resize(len, false);
+            }
+            // Mark all cells as written and fill with a known color
+            for i in 0..len {
+                out[i] = ctx.theme.accent_primary;
+                w[i] = true;
+            }
+        }
+    }
+
+    #[test]
+    fn backdrop_buffer_fully_written_no_stale_pixels() {
+        // Unit test: buffer is fully written each frame (no stale pixels)
+        let theme = ThemeInputs::default_dark();
+        let tracker = WriteTracker::new();
+        let backdrop = Backdrop::new(Box::new(tracker), theme);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(8, 6, &mut pool);
+        let area = Rect::new(0, 0, 8, 6);
+        let len = 8 * 6;
+
+        // Render once - all cells should be written
+        backdrop.render(area, &mut frame);
+
+        // Verify all cells got the effect color (not stale TRANSPARENT)
+        let fx_buf = backdrop.fx_buf.borrow();
+        for (i, &color) in fx_buf.iter().take(len).enumerate() {
+            // The buffer should have been filled by the effect
+            // (WriteTracker fills with accent_primary)
+            assert_ne!(
+                color,
+                PackedRgba::TRANSPARENT,
+                "Cell {} was not written (stale pixel)",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn backdrop_buffer_no_stale_after_resize_grow() {
+        // After growing, all cells in new size should be written
+        let theme = ThemeInputs::default_dark();
+        let backdrop = Backdrop::new(Box::new(SolidBg), theme);
+
+        let mut pool = GraphemePool::new();
+
+        // Small render
+        let mut frame_small = Frame::new(4, 4, &mut pool);
+        let area_small = Rect::new(0, 0, 4, 4);
+        backdrop.render(area_small, &mut frame_small);
+
+        // Grow and render
+        let mut frame_large = Frame::new(10, 8, &mut pool);
+        let area_large = Rect::new(0, 0, 10, 8);
+        backdrop.render(area_large, &mut frame_large);
+
+        // All 80 cells should be filled (SolidBg fills with bg_base)
+        let fx_buf = backdrop.fx_buf.borrow();
+        for (i, &color) in fx_buf.iter().take(80).enumerate() {
+            assert_eq!(
+                color, theme.bg_base,
+                "Cell {} has wrong color after resize grow",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn backdrop_buffer_active_region_correct_after_shrink() {
+        // After shrinking, only the active region cells matter (first w*h)
+        let theme = ThemeInputs::default_dark();
+        let backdrop = Backdrop::new(Box::new(SolidBg), theme);
+
+        let mut pool = GraphemePool::new();
+
+        // Large render (10x10 = 100 cells)
+        let mut frame_large = Frame::new(10, 10, &mut pool);
+        let area_large = Rect::new(0, 0, 10, 10);
+        backdrop.render(area_large, &mut frame_large);
+        let cap_after_large = backdrop.fx_buf.borrow().capacity();
+
+        // Shrink to smaller (4x4 = 16 cells)
+        let mut frame_small = Frame::new(4, 4, &mut pool);
+        let area_small = Rect::new(0, 0, 4, 4);
+        backdrop.render(area_small, &mut frame_small);
+
+        // Active region (first 16 cells) should be properly filled
+        let fx_buf = backdrop.fx_buf.borrow();
+        for (i, &color) in fx_buf.iter().take(16).enumerate() {
+            assert_eq!(
+                color, theme.bg_base,
+                "Active cell {} has wrong color after shrink",
+                i
+            );
+        }
+
+        // Capacity should still be at least 100 (no shrinking)
+        assert!(
+            fx_buf.capacity() >= cap_after_large,
+            "Capacity shrunk unexpectedly"
+        );
     }
 
     struct WriteChar(char);
@@ -2107,6 +2508,281 @@ mod tests {
         fn stacked_fx_default() {
             let stack = StackedFx::default();
             assert!(stack.is_empty());
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Alpha blending correctness tests (bd-l8x9.8)
+    // -----------------------------------------------------------------------
+
+    mod alpha_blending_correctness {
+        use super::*;
+
+        /// Test effect that outputs a known semi-transparent color.
+        struct SemiTransparentFx {
+            color: PackedRgba,
+        }
+
+        impl SemiTransparentFx {
+            fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
+                Self {
+                    color: PackedRgba::rgba(r, g, b, a),
+                }
+            }
+        }
+
+        impl BackdropFx for SemiTransparentFx {
+            fn name(&self) -> &'static str {
+                "semi-transparent"
+            }
+
+            fn render(&mut self, ctx: FxContext<'_>, out: &mut [PackedRgba]) {
+                if ctx.is_empty() {
+                    return;
+                }
+                out[..ctx.len()].fill(self.color);
+            }
+        }
+
+        #[test]
+        fn backdrop_composition_matches_explicit_over_math() {
+            // Verify that Backdrop's composition matches explicit PackedRgba::over() calculations.
+            // Composition order: base_fill <- effect (with opacity) <- scrim (Off = no scrim)
+            let theme = ThemeInputs::default_dark();
+
+            // Create effect that outputs a known color
+            let fx_output = PackedRgba::rgb(200, 100, 50);
+            let fx = SemiTransparentFx::new(fx_output.r(), fx_output.g(), fx_output.b(), 255);
+
+            let mut backdrop = Backdrop::new(Box::new(fx), theme);
+            backdrop.set_effect_opacity(0.5);
+            backdrop.set_scrim(Scrim::Off);
+
+            let mut pool = GraphemePool::new();
+            let mut frame = Frame::new(1, 1, &mut pool);
+            let area = Rect::new(0, 0, 1, 1);
+
+            backdrop.render(area, &mut frame);
+
+            let cell = frame.buffer.get(0, 0).unwrap();
+
+            // Manually compute expected result:
+            // base_fill = theme.bg_surface (opaque)
+            // effect at 50% opacity = fx_output.with_opacity(0.5)
+            // final = effect.over(base_fill)
+            let base_fill = PackedRgba::rgb(
+                theme.bg_surface.r(),
+                theme.bg_surface.g(),
+                theme.bg_surface.b(),
+            );
+            let effect_with_opacity = fx_output.with_opacity(0.5);
+            let expected = effect_with_opacity.over(base_fill);
+
+            assert_eq!(
+                cell.bg, expected,
+                "Backdrop composition mismatch: got {:?}, expected {:?}",
+                cell.bg, expected
+            );
+        }
+
+        #[test]
+        fn backdrop_scrim_applies_correctly_over_effect() {
+            // Verify scrim is applied after effect compositing
+            let theme = ThemeInputs::default_dark();
+
+            let fx = SemiTransparentFx::new(100, 150, 200, 255);
+            let mut backdrop = Backdrop::new(Box::new(fx), theme);
+            backdrop.set_effect_opacity(1.0);
+            backdrop.set_scrim(Scrim::uniform_raw(0.5));
+
+            let mut pool = GraphemePool::new();
+            let mut frame = Frame::new(1, 1, &mut pool);
+            let area = Rect::new(0, 0, 1, 1);
+
+            backdrop.render(area, &mut frame);
+
+            let cell = frame.buffer.get(0, 0).unwrap();
+
+            // Manually compute expected result:
+            // base_fill = theme.bg_surface (opaque)
+            // effect at 100% = fx_output
+            // after_effect = effect.over(base_fill)
+            // scrim = theme.bg_overlay at 50% opacity
+            // final = scrim.over(after_effect)
+            let base_fill = PackedRgba::rgb(
+                theme.bg_surface.r(),
+                theme.bg_surface.g(),
+                theme.bg_surface.b(),
+            );
+            let fx_output = PackedRgba::rgb(100, 150, 200);
+            let after_effect = fx_output.over(base_fill);
+            let scrim_color = theme.bg_overlay.with_opacity(0.5);
+            let expected = scrim_color.over(after_effect);
+
+            assert_eq!(
+                cell.bg, expected,
+                "Scrim composition mismatch: got {:?}, expected {:?}",
+                cell.bg, expected
+            );
+        }
+
+        #[test]
+        fn backdrop_zero_effect_opacity_shows_only_base_and_scrim() {
+            let theme = ThemeInputs::default_dark();
+
+            // Effect that would output red, but at 0% opacity
+            let fx = SemiTransparentFx::new(255, 0, 0, 255);
+            let mut backdrop = Backdrop::new(Box::new(fx), theme);
+            backdrop.set_effect_opacity(0.0);
+            backdrop.set_scrim(Scrim::Off);
+
+            let mut pool = GraphemePool::new();
+            let mut frame = Frame::new(1, 1, &mut pool);
+            let area = Rect::new(0, 0, 1, 1);
+
+            backdrop.render(area, &mut frame);
+
+            let cell = frame.buffer.get(0, 0).unwrap();
+
+            // With 0% effect opacity, only base_fill should show
+            let base_fill = PackedRgba::rgb(
+                theme.bg_surface.r(),
+                theme.bg_surface.g(),
+                theme.bg_surface.b(),
+            );
+
+            // Effect at 0 opacity over base = base unchanged
+            let fx_zero = PackedRgba::rgba(255, 0, 0, 0);
+            let expected = fx_zero.over(base_fill);
+
+            assert_eq!(
+                cell.bg, expected,
+                "Zero opacity effect should not affect output"
+            );
+        }
+
+        #[test]
+        fn backdrop_full_effect_opacity_dominates() {
+            let theme = ThemeInputs::default_dark();
+
+            // Opaque effect at 100% opacity
+            let fx = SemiTransparentFx::new(255, 128, 64, 255);
+            let mut backdrop = Backdrop::new(Box::new(fx), theme);
+            backdrop.set_effect_opacity(1.0);
+            backdrop.set_scrim(Scrim::Off);
+
+            let mut pool = GraphemePool::new();
+            let mut frame = Frame::new(1, 1, &mut pool);
+            let area = Rect::new(0, 0, 1, 1);
+
+            backdrop.render(area, &mut frame);
+
+            let cell = frame.buffer.get(0, 0).unwrap();
+
+            // Opaque effect at 100% opacity completely covers base
+            let expected = PackedRgba::rgb(255, 128, 64);
+
+            assert_eq!(cell.bg, expected, "Full opacity effect should dominate");
+        }
+
+        #[test]
+        fn packed_rgba_over_is_commutative_only_for_opaque() {
+            // Verify our understanding of alpha compositing:
+            // A.over(B) != B.over(A) in general (only equal if both opaque)
+            let opaque_red = PackedRgba::rgb(255, 0, 0);
+            let opaque_blue = PackedRgba::rgb(0, 0, 255);
+            let semi_red = PackedRgba::rgba(255, 0, 0, 128);
+            let semi_blue = PackedRgba::rgba(0, 0, 255, 128);
+
+            // Opaque case: the top color wins, so A.over(B) = A
+            assert_eq!(opaque_red.over(opaque_blue), opaque_red);
+            assert_eq!(opaque_blue.over(opaque_red), opaque_blue);
+
+            // Semi-transparent case: order matters
+            let red_over_blue = semi_red.over(semi_blue);
+            let blue_over_red = semi_blue.over(semi_red);
+            assert_ne!(
+                red_over_blue, blue_over_red,
+                "Semi-transparent alpha compositing should not be commutative"
+            );
+        }
+
+        #[test]
+        fn backdrop_deterministic_across_renders() {
+            // Same inputs should produce identical outputs every time
+            let theme = ThemeInputs::default_dark();
+            let fx = SemiTransparentFx::new(150, 100, 200, 255);
+
+            let mut backdrop = Backdrop::new(Box::new(fx), theme);
+            backdrop.set_effect_opacity(0.7);
+            backdrop.set_scrim(Scrim::uniform(0.3));
+            backdrop.set_time(100, 5.5);
+
+            let mut pool = GraphemePool::new();
+            let area = Rect::new(0, 0, 4, 4);
+
+            // First render - capture cell colors
+            let colors1: Vec<PackedRgba> = {
+                let mut frame1 = Frame::new(4, 4, &mut pool);
+                backdrop.render(area, &mut frame1);
+                let mut colors = Vec::with_capacity(16);
+                for y in 0..4 {
+                    for x in 0..4 {
+                        colors.push(frame1.buffer.get(x, y).unwrap().bg);
+                    }
+                }
+                colors
+            };
+
+            // Second render - compare with first
+            let mut frame2 = Frame::new(4, 4, &mut pool);
+            backdrop.render(area, &mut frame2);
+
+            for y in 0..4 {
+                for x in 0..4 {
+                    let c1 = colors1[(y * 4 + x) as usize];
+                    let c2 = frame2.buffer.get(x, y).unwrap().bg;
+                    assert_eq!(c1, c2, "Cell ({x}, {y}) differs between renders");
+                }
+            }
+        }
+
+        #[test]
+        fn stacked_fx_alpha_matches_sequential_over() {
+            // Verify that StackedFx composition matches sequential PackedRgba::over()
+            let theme = ThemeInputs::default_dark();
+
+            let color_a = PackedRgba::rgba(255, 0, 0, 200);
+            let color_b = PackedRgba::rgba(0, 255, 0, 150);
+            let color_c = PackedRgba::rgba(0, 0, 255, 100);
+
+            let ctx = FxContext {
+                width: 1,
+                height: 1,
+                frame: 0,
+                time_seconds: 0.0,
+                quality: FxQuality::Full,
+                theme: &theme,
+            };
+            let mut out = vec![PackedRgba::TRANSPARENT; 1];
+
+            let mut stack = StackedFx::new();
+            // Layers: A (bottom) <- B <- C (top)
+            stack.push(FxLayer::new(Box::new(SemiTransparentFx { color: color_a })));
+            stack.push(FxLayer::new(Box::new(SemiTransparentFx { color: color_b })));
+            stack.push(FxLayer::new(Box::new(SemiTransparentFx { color: color_c })));
+            stack.render(ctx, &mut out);
+
+            // Manual calculation: start with TRANSPARENT, then over each layer
+            let step1 = color_a.over(PackedRgba::TRANSPARENT);
+            let step2 = color_b.over(step1);
+            let expected = color_c.over(step2);
+
+            assert_eq!(
+                out[0], expected,
+                "StackedFx composition should match sequential over(): got {:?}, expected {:?}",
+                out[0], expected
+            );
         }
     }
 }
