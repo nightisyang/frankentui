@@ -12,6 +12,7 @@ members = [
   "crates/ftui-widgets",
   "crates/ftui-extras",
   "crates/ftui-harness",
+  "crates/ftui-i18n",
   "crates/ftui-pty",
   "crates/ftui-simd",
   "crates/ftui-demo-showcase",
