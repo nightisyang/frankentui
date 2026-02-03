@@ -492,7 +492,9 @@ impl<A: Animation> Animation for Delayed<A> {
     }
 }
 
+pub mod group;
 pub mod timeline;
+pub use group::AnimationGroup;
 pub use timeline::Timeline;
 
 // ---------------------------------------------------------------------------
