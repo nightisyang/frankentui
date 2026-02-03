@@ -302,10 +302,10 @@ impl InputFairnessGuard {
         let pending_latency = self
             .pending_input_arrival
             .map(|t| now.duration_since(t));
-        if let Some(latency) = pending_latency {
-            if latency > self.stats.max_input_latency {
-                self.stats.max_input_latency = latency;
-            }
+        if let Some(latency) = pending_latency
+            && latency > self.stats.max_input_latency
+        {
+            self.stats.max_input_latency = latency;
         }
 
         // Determine if intervention is needed
@@ -360,19 +360,19 @@ impl InputFairnessGuard {
         };
 
         // Update sliding window
-        if self.processing_window.len() >= FAIRNESS_WINDOW_SIZE {
-            if let Some(old) = self.processing_window.pop_front() {
-                match old.event_type {
-                    EventType::Input => {
-                        self.input_time_us =
-                            self.input_time_us.saturating_sub(old.duration.as_micros() as u64);
-                    }
-                    EventType::Resize => {
-                        self.resize_time_us =
-                            self.resize_time_us.saturating_sub(old.duration.as_micros() as u64);
-                    }
-                    EventType::Tick => {}
+        if self.processing_window.len() >= FAIRNESS_WINDOW_SIZE
+            && let Some(old) = self.processing_window.pop_front()
+        {
+            match old.event_type {
+                EventType::Input => {
+                    self.input_time_us =
+                        self.input_time_us.saturating_sub(old.duration.as_micros() as u64);
                 }
+                EventType::Resize => {
+                    self.resize_time_us =
+                        self.resize_time_us.saturating_sub(old.duration.as_micros() as u64);
+                }
+                EventType::Tick => {}
             }
         }
 
@@ -420,10 +420,10 @@ impl InputFairnessGuard {
         jain: f64,
     ) -> InterventionReason {
         // Priority 1: Latency threshold (most urgent)
-        if let Some(latency) = pending_latency {
-            if latency >= self.config.input_priority_threshold {
-                return InterventionReason::InputLatency;
-            }
+        if let Some(latency) = pending_latency
+            && latency >= self.config.input_priority_threshold
+        {
+            return InterventionReason::InputLatency;
         }
 
         // Priority 2: Resize dominance
