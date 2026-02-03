@@ -1029,9 +1029,7 @@ impl RenderBudget {
     /// (degrade / upgrade / hold) is applied automatically. The simple
     /// threshold-based upgrade path is skipped in that case.
     pub fn next_frame(&mut self) {
-        let frame_time = self
-            .last_frame_time
-            .unwrap_or_else(|| self.start.elapsed());
+        let frame_time = self.last_frame_time.unwrap_or_else(|| self.start.elapsed());
 
         if self.controller.is_some() {
             // Measure how long the previous frame took

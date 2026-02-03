@@ -546,16 +546,16 @@ mod tests {
 
         StatefulWidget::render(&sb, area, &mut frame, &mut state);
 
-        // x=0: Head "👍"
+        // x=0: Head "👍" (wide emoji stored as grapheme, not direct char)
         let c0 = frame.buffer.get(0, 0).unwrap();
-        assert!(c0.content.as_char().is_some()); // Head
+        assert!(!c0.is_empty() && !c0.is_continuation()); // Head
         // x=1: Continuation
         let c1 = frame.buffer.get(1, 0).unwrap();
         assert!(c1.is_continuation());
 
         // x=2: Head "👍"
         let c2 = frame.buffer.get(2, 0).unwrap();
-        assert!(c2.content.as_char().is_some()); // Head
+        assert!(!c2.is_empty() && !c2.is_continuation()); // Head
         // x=3: Continuation
         let c3 = frame.buffer.get(3, 0).unwrap();
         assert!(c3.is_continuation());
@@ -573,15 +573,15 @@ mod tests {
 
         StatefulWidget::render(&sb, area, &mut frame, &mut state);
 
-        // Row 0: "👍" at x=0
+        // Row 0: "👍" at x=0 (wide emoji stored as grapheme, not direct char)
         let r0_c0 = frame.buffer.get(0, 0).unwrap();
-        assert!(r0_c0.content.as_char().is_some()); // Head
+        assert!(!r0_c0.is_empty() && !r0_c0.is_continuation()); // Head
         let r0_c1 = frame.buffer.get(1, 0).unwrap();
         assert!(r0_c1.is_continuation()); // Tail
 
         // Row 1: "👍" at x=0 (should NOT be skipped)
         let r1_c0 = frame.buffer.get(0, 1).unwrap();
-        assert!(r1_c0.content.as_char().is_some()); // Head
+        assert!(!r1_c0.is_empty() && !r1_c0.is_continuation()); // Head
         let r1_c1 = frame.buffer.get(1, 1).unwrap();
         assert!(r1_c1.is_continuation()); // Tail
     }

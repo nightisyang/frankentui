@@ -804,7 +804,7 @@ mod tests {
         let seg = BidiSegment::new(text, None);
 
         // The segment should handle markers without panicking.
-        assert!(seg.len() > 0);
+        assert!(!seg.is_empty());
 
         // Verify permutation validity.
         let mut sorted_vtl = seg.visual_to_logical.clone();
