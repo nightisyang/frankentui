@@ -556,6 +556,38 @@ impl HitTarget {
     }
 }
 
+/// Which panel currently has keyboard focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Focus {
+    /// Focus on the hit-test target grid.
+    #[default]
+    Targets,
+    /// Focus on the event log panel.
+    EventLog,
+    /// Focus on the stats panel.
+    Stats,
+}
+
+impl Focus {
+    /// Cycle to the next focus panel.
+    fn next(self) -> Self {
+        match self {
+            Self::Targets => Self::EventLog,
+            Self::EventLog => Self::Stats,
+            Self::Stats => Self::Targets,
+        }
+    }
+
+    /// Cycle to the previous focus panel.
+    fn prev(self) -> Self {
+        match self {
+            Self::Targets => Self::Stats,
+            Self::EventLog => Self::Targets,
+            Self::Stats => Self::EventLog,
+        }
+    }
+}
+
 /// Mouse Playground demo screen state.
 pub struct MousePlayground {
     /// Global tick counter.
@@ -580,6 +612,10 @@ pub struct MousePlayground {
     diagnostic_log: Option<DiagnosticLog>,
     /// Telemetry hooks for external observers (bd-bksf.5).
     telemetry_hooks: Option<TelemetryHooks>,
+    /// Current panel focus (bd-bksf.6 UX/A11y).
+    focus: Focus,
+    /// Keyboard-focused target index (0-based, for Targets panel).
+    focused_target_index: usize,
 }
 
 impl Default for MousePlayground {
@@ -616,6 +652,8 @@ impl MousePlayground {
             last_grid_area: Cell::new(Rect::default()),
             diagnostic_log,
             telemetry_hooks: None,
+            focus: Focus::default(),
+            focused_target_index: 0,
         }
     }
 

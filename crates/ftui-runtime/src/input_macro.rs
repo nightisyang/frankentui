@@ -755,6 +755,7 @@ impl EventRecorder {
         self.finish_internal(true)
     }
 
+    #[allow(unused_variables)]
     fn finish_internal(self, log: bool) -> InputMacro {
         let paused = self.total_paused();
         let macro_data = self.inner.finish();
@@ -908,6 +909,7 @@ impl FilteredEventRecorder {
     }
 
     /// Stop recording and produce the final macro.
+    #[allow(unused_variables)]
     pub fn finish(self) -> InputMacro {
         let filtered = self.filtered_count;
         let paused = self.recorder.total_paused();

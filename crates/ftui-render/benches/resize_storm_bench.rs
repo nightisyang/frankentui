@@ -27,13 +27,13 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use ftui_harness::resize_storm::{ResizeStorm, StormConfig, StormPattern};
 use ftui_render::buffer::AdaptiveDoubleBuffer;
 use std::hint::black_box;
-use std::time::Instant;
 
 // =============================================================================
 // Performance Budget Constants (nanoseconds)
 // =============================================================================
 
-/// Budget thresholds for different patterns
+/// Budget thresholds for different patterns (referenced in perf docs/checklists).
+#[allow(dead_code)]
 mod budgets {
     /// Burst pattern: 50 rapid resizes
     pub mod burst_50 {

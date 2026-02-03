@@ -17,7 +17,7 @@ use ftui_extras::forms::{Form, FormField, FormState, FormValue, ValidationError}
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
-use ftui_style::Style;
+use ftui_style::{Style, StyleFlags};
 use ftui_text::CursorPosition;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
@@ -149,7 +149,7 @@ impl Default for FormsInput {
 
 impl FormsInput {
     pub fn new() -> Self {
-        let form = Form::new(vec![
+        let mut form = Form::new(vec![
             FormField::text_with_placeholder("Name", "Enter your name..."),
             FormField::text_with_placeholder("Email", "user@example.com"),
             FormField::select(
@@ -167,7 +167,59 @@ impl FormsInput {
             ),
             FormField::number_bounded("Age", 25, 0, 120),
             FormField::checkbox("Accept Terms", false),
-        ]);
+        ])
+        .validate(
+            0,
+            Box::new(|field| {
+                if let FormField::Text { value, .. } = field
+                    && value.trim().is_empty()
+                {
+                    return Some("Name is required".into());
+                }
+                None
+            }),
+        )
+        .validate(
+            1,
+            Box::new(|field| {
+                if let FormField::Text { value, .. } = field {
+                    if value.trim().is_empty() {
+                        return Some("Email is required".into());
+                    }
+                    if !value.contains('@') || !value.contains('.') {
+                        return Some("Enter a valid email".into());
+                    }
+                }
+                None
+            }),
+        )
+        .validate(
+            4,
+            Box::new(|field| {
+                if let FormField::Number { value, .. } = field
+                    && *value < 18
+                {
+                    return Some("Must be 18+".into());
+                }
+                None
+            }),
+        )
+        .validate(
+            5,
+            Box::new(|field| {
+                if let FormField::Checkbox { checked, .. } = field
+                    && !*checked
+                {
+                    return Some("Required to continue".into());
+                }
+                None
+            }),
+        );
+
+        form.set_required(0, true);
+        form.set_required(1, true);
+        form.set_required(5, true);
+        form.set_disabled(3, true);
 
         let search_input = TextInput::new()
             .with_placeholder("Search...")
@@ -210,6 +262,8 @@ impl FormsInput {
             undo_keys: UndoKeybindings::default(),
         };
         state.apply_theme();
+        state.form_state.borrow_mut().init_tracking(&state.form);
+        state.update_form_validation(false);
         state
     }
 
@@ -320,12 +374,27 @@ impl FormsInput {
             self.undo_stack.len(),
             self.redo_stack.len()
         );
+        let error_info = format!("Errors: {}", form_state.errors.len());
         let history_hint = if self.undo_panel_visible {
             "Ctrl+U: Hide history"
         } else {
             "Ctrl+U: Show history"
         };
-        self.status_text = format!("{base} | {undo_info} | {history_hint}");
+        self.status_text = format!("{base} | {undo_info} | {error_info} | {history_hint}");
+    }
+
+    fn update_form_validation(&mut self, force_all: bool) {
+        let errors = self.form.validate_all();
+        let mut state = self.form_state.borrow_mut();
+        if force_all {
+            state.errors = errors;
+            return;
+        }
+
+        state.errors = errors
+            .into_iter()
+            .filter(|err| state.is_touched(err.field) || state.is_dirty(err.field))
+            .collect();
     }
 
     fn snapshot(&self) -> FormsInputSnapshot {

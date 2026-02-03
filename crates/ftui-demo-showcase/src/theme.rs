@@ -1389,9 +1389,9 @@ mod tests {
     }
 
     #[test]
-    fn a11y_settings_is_clone() {
+    fn a11y_settings_is_copy() {
         let a = A11ySettings::all();
-        let b = a.clone();
+        let b = a; // A11ySettings implements Copy
         assert_eq!(a, b);
     }
 
@@ -1597,10 +1597,8 @@ mod tests {
         let style = Style::new().fg(fg::PRIMARY).attrs(StyleFlags::UNDERLINE);
         let result = apply_large_text(style);
 
-        // Should have both underline and bold
-        let attrs = result.attrs.unwrap_or(StyleFlags::NONE);
-        // Note: .bold() in ftui_style replaces attrs, but this tests the API intent
-        // The actual behavior may vary based on ftui_style implementation
+        // Should have some attributes set (exact behavior depends on ftui_style implementation)
+        let _attrs = result.attrs.unwrap_or(StyleFlags::NONE);
 
         set_large_text(initial);
     }
@@ -1665,9 +1663,7 @@ mod tests {
 
         // Value that would overflow when doubled
         let result = scale_spacing(40000);
-        // 40000 * 2 = 80000 > u16::MAX (65535), so should saturate
-        assert!(result <= u16::MAX);
-        // Actually 40000 * 2 = 80000 which is > 65535
+        // 40000 * 2 = 80000 > u16::MAX (65535), so should saturate to max
         assert_eq!(result, u16::MAX);
 
         set_large_text(initial);
@@ -1785,8 +1781,7 @@ mod a11y_proptests {
             set_large_text(true);
             let result = scale_spacing(spacing);
 
-            prop_assert!(result <= u16::MAX);
-            // When enabled, result is spacing * 2 or u16::MAX
+            // When enabled, result is spacing * 2 (saturated to u16::MAX)
             if spacing <= u16::MAX / 2 {
                 prop_assert_eq!(result, spacing * 2);
             } else {
