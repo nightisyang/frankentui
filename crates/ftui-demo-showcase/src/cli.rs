@@ -114,6 +114,7 @@ impl Opts {
         if let Ok(val) = env::var("FTUI_DEMO_EXIT_AFTER_MS")
             && let Ok(n) = val.parse()
         {
+            eprintln!("WARNING: FTUI_DEMO_EXIT_AFTER_MS is set to {n}. App will auto-exit.");
             opts.exit_after_ms = n;
         }
 
