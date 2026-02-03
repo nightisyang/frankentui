@@ -36,6 +36,7 @@ pub mod grid;
 mod repro_max_constraint;
 pub mod responsive;
 pub mod responsive_layout;
+pub mod visibility;
 
 pub use cache::{CoherenceCache, CoherenceId, LayoutCache, LayoutCacheKey, LayoutCacheStats};
 pub use ftui_core::geometry::{Rect, Sides, Size};
@@ -43,6 +44,7 @@ pub use grid::{Grid, GridArea, GridLayout};
 pub use responsive::Responsive;
 pub use responsive_layout::{ResponsiveLayout, ResponsiveSplit};
 use std::cmp::min;
+pub use visibility::Visibility;
 
 /// A constraint on the size of a layout area.
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -181,7 +181,11 @@ impl ResponsiveLayout {
     ///
     /// Returns `Some((old, new))` if the breakpoint changed, `None` otherwise.
     #[must_use]
-    pub fn detect_transition(&self, old_width: u16, new_width: u16) -> Option<(Breakpoint, Breakpoint)> {
+    pub fn detect_transition(
+        &self,
+        old_width: u16,
+        new_width: u16,
+    ) -> Option<(Breakpoint, Breakpoint)> {
         let old_bp = self.breakpoints.classify_width(old_width);
         let new_bp = self.breakpoints.classify_width(new_width);
         if old_bp != new_bp {
@@ -232,8 +236,7 @@ mod tests {
 
     #[test]
     fn switches_at_breakpoint() {
-        let layout = ResponsiveLayout::new(single_column())
-            .at(Breakpoint::Md, two_column());
+        let layout = ResponsiveLayout::new(single_column()).at(Breakpoint::Md, two_column());
 
         // Xs (width < 60): single column
         let result = layout.split(area(50, 24));
@@ -248,8 +251,7 @@ mod tests {
 
     #[test]
     fn inherits_from_smaller() {
-        let layout = ResponsiveLayout::new(single_column())
-            .at(Breakpoint::Md, two_column());
+        let layout = ResponsiveLayout::new(single_column()).at(Breakpoint::Md, two_column());
 
         // Lg inherits from Md
         let result = layout.split(area(130, 24));
@@ -272,8 +274,7 @@ mod tests {
 
     #[test]
     fn split_for_ignores_width() {
-        let layout = ResponsiveLayout::new(single_column())
-            .at(Breakpoint::Lg, two_column());
+        let layout = ResponsiveLayout::new(single_column()).at(Breakpoint::Lg, two_column());
 
         // Even though area is narrow, split_for uses the explicit breakpoint.
         let result = layout.split_for(Breakpoint::Lg, area(40, 24));
@@ -337,8 +338,7 @@ mod tests {
 
     #[test]
     fn layout_for_access() {
-        let layout = ResponsiveLayout::new(single_column())
-            .at(Breakpoint::Md, two_column());
+        let layout = ResponsiveLayout::new(single_column()).at(Breakpoint::Md, two_column());
 
         let flex = layout.layout_for(Breakpoint::Md);
         assert_eq!(flex.constraint_count(), 2);
@@ -346,8 +346,7 @@ mod tests {
 
     #[test]
     fn has_explicit_check() {
-        let layout = ResponsiveLayout::new(single_column())
-            .at(Breakpoint::Lg, two_column());
+        let layout = ResponsiveLayout::new(single_column()).at(Breakpoint::Lg, two_column());
 
         assert!(layout.has_explicit(Breakpoint::Xs));
         assert!(!layout.has_explicit(Breakpoint::Sm));
@@ -364,8 +363,7 @@ mod tests {
 
     #[test]
     fn clear_reverts_to_inheritance() {
-        let mut layout = ResponsiveLayout::new(single_column())
-            .at(Breakpoint::Md, two_column());
+        let mut layout = ResponsiveLayout::new(single_column()).at(Breakpoint::Md, two_column());
 
         assert_eq!(layout.constraint_count(Breakpoint::Md), 2);
         layout.clear(Breakpoint::Md);
@@ -398,8 +396,7 @@ mod tests {
     #[test]
     fn breakpoints_accessor() {
         let bps = Breakpoints::new(50, 80, 110);
-        let layout = ResponsiveLayout::new(single_column())
-            .with_breakpoints(bps);
+        let layout = ResponsiveLayout::new(single_column()).with_breakpoints(bps);
         assert_eq!(layout.breakpoints(), bps);
     }
 
