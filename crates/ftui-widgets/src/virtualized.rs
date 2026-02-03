@@ -94,8 +94,10 @@ pub enum VirtualizedStorage<T> {
 pub enum ItemHeight {
     /// All items have fixed height.
     Fixed(u16),
-    /// Items have variable height, cached lazily.
+    /// Items have variable height, cached lazily (linear scan).
     Variable(HeightCache),
+    /// Items have variable height with O(log n) scroll-to-index via Fenwick tree.
+    VariableFenwick(VariableHeightsFenwick),
 }
 
 /// LRU cache for measured item heights.

@@ -24,6 +24,7 @@ pub mod notifications;
 pub mod performance;
 pub mod responsive_demo;
 pub mod shakespeare;
+pub mod virtualized_search;
 pub mod visual_effects;
 pub mod widget_gallery;
 

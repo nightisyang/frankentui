@@ -155,7 +155,10 @@ impl Tooltip {
 
     /// Wrap content into lines respecting max_width.
     fn wrap_content(&self) -> Vec<String> {
-        let max_width = self.config.max_width.saturating_sub(self.config.padding * 2);
+        let max_width = self
+            .config
+            .max_width
+            .saturating_sub(self.config.padding * 2);
         if max_width == 0 {
             return vec![];
         }
@@ -468,7 +471,10 @@ mod tests {
         let (_, y) = tooltip.calculate_position(screen);
 
         // Should be above target
-        assert!(y < 20, "Should position above target when no space below");
+        assert!(
+            y < 20,
+            "Should position above target when no space below"
+        );
     }
 
     #[test]
@@ -560,8 +566,7 @@ mod tests {
 
     #[test]
     fn content_size_includes_padding() {
-        let tooltip =
-            Tooltip::new("Hi").config(TooltipConfig::default().max_width(20).padding(2));
+        let tooltip = Tooltip::new("Hi").config(TooltipConfig::default().max_width(20).padding(2));
 
         let size = tooltip.content_size();
         assert!(size.width >= 2 + 4, "Width should include padding");

@@ -41,8 +41,8 @@ use ftui_core::geometry::Rect;
 use ftui_harness::assert_snapshot;
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
-use ftui_widgets::textarea::{TextArea, TextAreaState};
 use ftui_widgets::StatefulWidget;
+use ftui_widgets::textarea::{TextArea, TextAreaState};
 
 // ============================================================================
 // Test Helpers
