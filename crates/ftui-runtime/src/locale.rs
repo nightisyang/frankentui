@@ -282,6 +282,9 @@ mod tests {
             } else {
                 prop_assert_eq!(ctx.current_locale(), "en");
             }
+            // Drop remaining guards in LIFO order (Vec drops front-to-back,
+            // but the override stack expects last-pushed-first-dropped).
+            while guards.pop().is_some() {}
         }
     }
 }
