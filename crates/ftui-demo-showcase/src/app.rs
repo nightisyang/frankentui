@@ -20,6 +20,7 @@ use ftui_style::Style;
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
+use ftui_widgets::command_palette::{CommandPalette, PaletteAction};
 use ftui_widgets::error_boundary::FallbackWidget;
 use ftui_widgets::paragraph::Paragraph;
 
@@ -401,6 +402,8 @@ pub struct AppModel {
     pub help_visible: bool,
     /// Whether the debug overlay is visible.
     pub debug_visible: bool,
+    /// Command palette for instant action search (Ctrl+K).
+    pub command_palette: CommandPalette,
     /// Global tick counter (incremented every 100ms).
     pub tick_count: u64,
     /// Total frames rendered.
@@ -423,17 +426,62 @@ impl AppModel {
     /// Create a new application model with default state.
     pub fn new() -> Self {
         theme::set_theme(theme::ThemeId::CyberpunkAurora);
+        let mut palette = CommandPalette::new().with_max_visible(12);
+        Self::register_palette_actions(&mut palette);
         Self {
             current_screen: ScreenId::Dashboard,
             screens: ScreenStates::default(),
             help_visible: false,
             debug_visible: false,
+            command_palette: palette,
             tick_count: 0,
             frame_count: 0,
             terminal_width: 0,
             terminal_height: 0,
             exit_after_ms: 0,
         }
+    }
+
+    /// Register all palette actions (screens + global commands).
+    fn register_palette_actions(palette: &mut CommandPalette) {
+        use ftui_widgets::command_palette::ActionItem;
+
+        // Screen navigation actions
+        for &id in ScreenId::ALL {
+            let action_id = format!("screen:{}", id.title().to_lowercase().replace(' ', "_"));
+            palette.register_action(
+                ActionItem::new(&action_id, format!("Go to {}", id.title()))
+                    .with_description(format!("Switch to the {} screen", id.title()))
+                    .with_tags(&["screen", "navigate"])
+                    .with_category("Navigate"),
+            );
+        }
+
+        // Global commands
+        palette.register_action(
+            ActionItem::new("cmd:toggle_help", "Toggle Help")
+                .with_description("Show or hide the keyboard shortcuts overlay")
+                .with_tags(&["help", "shortcuts"])
+                .with_category("View"),
+        );
+        palette.register_action(
+            ActionItem::new("cmd:toggle_debug", "Toggle Debug Overlay")
+                .with_description("Show or hide the debug information panel")
+                .with_tags(&["debug", "info"])
+                .with_category("View"),
+        );
+        palette.register_action(
+            ActionItem::new("cmd:cycle_theme", "Cycle Theme")
+                .with_description("Switch to the next color theme")
+                .with_tags(&["theme", "colors", "appearance"])
+                .with_category("View"),
+        );
+        palette.register_action(
+            ActionItem::new("cmd:quit", "Quit")
+                .with_description("Exit the application")
+                .with_tags(&["exit", "close"])
+                .with_category("App"),
+        );
     }
 
     fn handle_msg(&mut self, msg: AppMsg, source: EventSource) -> Cmd<AppMsg> {
@@ -499,6 +547,14 @@ impl AppModel {
                         .record_event(&event, filter_controls);
                 }
 
+                // When the command palette is visible, route events to it first.
+                if self.command_palette.is_visible() {
+                    if let Some(action) = self.command_palette.handle_event(&event) {
+                        return self.execute_palette_action(action);
+                    }
+                    return Cmd::None;
+                }
+
                 if let Event::Key(KeyEvent {
                     code,
                     modifiers,
@@ -510,6 +566,11 @@ impl AppModel {
                         // Quit
                         (KeyCode::Char('q'), Modifiers::NONE) => return Cmd::Quit,
                         (KeyCode::Char('c'), Modifiers::CTRL) => return Cmd::Quit,
+                        // Command palette (Ctrl+K)
+                        (KeyCode::Char('k'), Modifiers::CTRL) => {
+                            self.command_palette.open();
+                            return Cmd::None;
+                        }
                         // Help
                         (KeyCode::Char('?'), _) => {
                             self.help_visible = !self.help_visible;
@@ -635,6 +696,11 @@ impl Model for AppModel {
             self.render_debug_overlay(frame, area);
         }
 
+        // Command palette overlay (topmost layer)
+        if self.command_palette.is_visible() {
+            self.command_palette.render(area, frame);
+        }
+
         // Status bar (chrome module)
         let status_state = crate::chrome::StatusBarState {
             screen_title: self.current_screen.title(),
@@ -683,6 +749,41 @@ impl AppModel {
                 action: e.action,
             })
             .collect()
+    }
+
+    /// Execute an action returned by the command palette.
+    fn execute_palette_action(&mut self, action: PaletteAction) -> Cmd<AppMsg> {
+        match action {
+            PaletteAction::Dismiss => Cmd::None,
+            PaletteAction::Execute(id) => {
+                // Screen navigation: "screen:<name>"
+                if let Some(screen_name) = id.strip_prefix("screen:") {
+                    for &sid in ScreenId::ALL {
+                        let expected = sid.title().to_lowercase().replace(' ', "_");
+                        if expected == screen_name {
+                            self.current_screen = sid;
+                            return Cmd::None;
+                        }
+                    }
+                }
+                // Global commands
+                match id.as_str() {
+                    "cmd:toggle_help" => {
+                        self.help_visible = !self.help_visible;
+                    }
+                    "cmd:toggle_debug" => {
+                        self.debug_visible = !self.debug_visible;
+                    }
+                    "cmd:cycle_theme" => {
+                        theme::cycle_theme();
+                        self.screens.apply_theme();
+                    }
+                    "cmd:quit" => return Cmd::Quit,
+                    _ => {}
+                }
+                Cmd::None
+            }
+        }
     }
 
     /// Render the debug overlay in the top-right corner.
@@ -1014,5 +1115,129 @@ mod tests {
     #[test]
     fn all_screens_count() {
         assert_eq!(ScreenId::ALL.len(), 13);
+    }
+
+    // -----------------------------------------------------------------------
+    // Command palette integration tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ctrl_k_opens_palette() {
+        let mut app = AppModel::new();
+        assert!(!app.command_palette.is_visible());
+
+        let event = Event::Key(KeyEvent {
+            code: KeyCode::Char('k'),
+            modifiers: Modifiers::CTRL,
+            kind: KeyEventKind::Press,
+        });
+        app.update(AppMsg::from(event));
+        assert!(app.command_palette.is_visible());
+    }
+
+    #[test]
+    fn palette_esc_dismisses() {
+        let mut app = AppModel::new();
+        app.command_palette.open();
+        assert!(app.command_palette.is_visible());
+
+        let esc = Event::Key(KeyEvent {
+            code: KeyCode::Escape,
+            modifiers: Modifiers::NONE,
+            kind: KeyEventKind::Press,
+        });
+        app.update(AppMsg::from(esc));
+        assert!(!app.command_palette.is_visible());
+    }
+
+    #[test]
+    fn palette_has_actions_for_all_screens() {
+        let app = AppModel::new();
+        // One action per screen + 4 global commands
+        let expected = ScreenId::ALL.len() + 4;
+        assert_eq!(app.command_palette.action_count(), expected);
+    }
+
+    #[test]
+    fn palette_navigate_to_screen() {
+        let mut app = AppModel::new();
+        assert_eq!(app.current_screen, ScreenId::Dashboard);
+
+        // Open palette, type "shakespeare", press Enter
+        app.command_palette.open();
+        for ch in "shakespeare".chars() {
+            let event = Event::Key(KeyEvent {
+                code: KeyCode::Char(ch),
+                modifiers: Modifiers::NONE,
+                kind: KeyEventKind::Press,
+            });
+            app.update(AppMsg::from(event));
+        }
+
+        let enter = Event::Key(KeyEvent {
+            code: KeyCode::Enter,
+            modifiers: Modifiers::NONE,
+            kind: KeyEventKind::Press,
+        });
+        app.update(AppMsg::from(enter));
+        assert_eq!(app.current_screen, ScreenId::Shakespeare);
+        assert!(!app.command_palette.is_visible());
+    }
+
+    #[test]
+    fn palette_execute_quit() {
+        let mut app = AppModel::new();
+
+        // Directly test execute_palette_action
+        let cmd = app.execute_palette_action(PaletteAction::Execute("cmd:quit".into()));
+        assert!(matches!(cmd, Cmd::Quit));
+    }
+
+    #[test]
+    fn palette_toggle_help_via_action() {
+        let mut app = AppModel::new();
+        assert!(!app.help_visible);
+
+        app.execute_palette_action(PaletteAction::Execute("cmd:toggle_help".into()));
+        assert!(app.help_visible);
+    }
+
+    #[test]
+    fn palette_cycle_theme_via_action() {
+        let mut app = AppModel::new();
+        let before = theme::current_theme_name();
+        app.execute_palette_action(PaletteAction::Execute("cmd:cycle_theme".into()));
+        let after = theme::current_theme_name();
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn palette_blocks_screen_events_when_open() {
+        let mut app = AppModel::new();
+        app.command_palette.open();
+
+        // 'q' key should NOT quit the app when palette is open
+        let q = Event::Key(KeyEvent {
+            code: KeyCode::Char('q'),
+            modifiers: Modifiers::NONE,
+            kind: KeyEventKind::Press,
+        });
+        let cmd = app.update(AppMsg::from(q));
+        assert!(!matches!(cmd, Cmd::Quit));
+        // The 'q' was consumed by the palette as query input
+        assert_eq!(app.command_palette.query(), "q");
+    }
+
+    #[test]
+    fn palette_renders_as_overlay() {
+        let mut app = AppModel::new();
+        app.terminal_width = 80;
+        app.terminal_height = 24;
+        app.command_palette.open();
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        app.view(&mut frame);
+        // Should not panic — overlay rendered on top of content.
     }
 }

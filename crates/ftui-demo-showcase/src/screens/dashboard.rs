@@ -35,7 +35,8 @@ use ftui_widgets::paragraph::Paragraph;
 use ftui_widgets::progress::{MiniBar, MiniBarColors};
 
 use super::{HelpEntry, Screen};
-use crate::data::SimulatedData;
+use crate::app::ScreenId;
+use crate::data::{AlertSeverity, SimulatedData};
 use crate::theme;
 
 /// Dashboard state.
@@ -468,6 +469,115 @@ impl Dashboard {
         render_text(frame, inner, &rendered);
     }
 
+    /// Render statistics section showing demo showcase counts.
+    fn render_stats(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() || area.height < 2 {
+            return;
+        }
+
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Statistics")
+            .title_alignment(Alignment::Center)
+            .style(Style::new().fg(theme::screen_accent::WIDGET_GALLERY));
+
+        let inner = block.inner(area);
+        block.render(area, frame);
+
+        if inner.is_empty() {
+            return;
+        }
+
+        // Calculate display counts
+        let screen_count = ScreenId::ALL.len();
+        let widget_count = 45; // Approximate: widgets demonstrated in gallery
+        let effect_count = 7; // Visual effects showcased
+
+        // Format with emoji indicators for visual polish
+        let stats_text = if inner.width >= 40 {
+            format!(
+                " {} Screens   {} Widgets   {} Effects",
+                screen_count, widget_count, effect_count
+            )
+        } else if inner.width >= 25 {
+            format!("{}S {}W {}E", screen_count, widget_count, effect_count)
+        } else {
+            format!("{}/{}/{}", screen_count, widget_count, effect_count)
+        };
+
+        Paragraph::new(stats_text)
+            .style(Style::new().fg(theme::fg::PRIMARY))
+            .render(inner, frame);
+    }
+
+    /// Render activity feed showing recent simulated events.
+    fn render_activity_feed(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() || area.height < 3 {
+            return;
+        }
+
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Activity")
+            .title_alignment(Alignment::Center)
+            .style(Style::new().fg(theme::screen_accent::ADVANCED));
+
+        let inner = block.inner(area);
+        block.render(area, frame);
+
+        if inner.is_empty() {
+            return;
+        }
+
+        // Get recent alerts from simulated data
+        let max_items = inner.height as usize;
+        let alerts: Vec<_> = self
+            .simulated_data
+            .alerts
+            .iter()
+            .rev()
+            .take(max_items)
+            .collect();
+
+        for (i, alert) in alerts.iter().enumerate() {
+            if i as u16 >= inner.height {
+                break;
+            }
+
+            let y = inner.y + i as u16;
+
+            // Severity indicator and color
+            let (indicator, style) = match alert.severity {
+                AlertSeverity::Error => ("!", Style::new().fg(theme::intent::error_text())),
+                AlertSeverity::Warning => ("*", Style::new().fg(theme::intent::warning_text())),
+                AlertSeverity::Info => ("-", Style::new().fg(theme::intent::info_text())),
+            };
+
+            // Format timestamp as MM:SS
+            let ts_secs = (alert.timestamp / 10) % 3600;
+            let ts_min = ts_secs / 60;
+            let ts_sec = ts_secs % 60;
+
+            // Build the line: [indicator] HH:MM message
+            let time_str = format!("{:02}:{:02}", ts_min, ts_sec);
+            let max_msg_len = inner.width.saturating_sub(8) as usize;
+            let msg: String = alert.message.chars().take(max_msg_len).collect();
+            let line = format!("{} {} {}", indicator, time_str, msg);
+
+            let line_area = Rect::new(inner.x, y, inner.width, 1);
+            Paragraph::new(line).style(style).render(line_area, frame);
+        }
+
+        // If no alerts yet, show placeholder
+        if alerts.is_empty() {
+            Paragraph::new("  No recent activity")
+                .style(Style::new().fg(theme::fg::MUTED))
+                .render(inner, frame);
+        }
+    }
+
     /// Render navigation footer.
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
         if area.is_empty() {
@@ -500,7 +610,7 @@ impl Dashboard {
 
         // Content area: split into top row and bottom row
         let content_rows = Flex::vertical()
-            .constraints([Constraint::Percentage(60.0), Constraint::Percentage(40.0)])
+            .constraints([Constraint::Percentage(55.0), Constraint::Percentage(45.0)])
             .split(main[1]);
 
         // Top row: 4 panels (plasma, charts, code, info)
@@ -518,8 +628,18 @@ impl Dashboard {
         self.render_code(frame, top_cols[2]);
         self.render_info(frame, top_cols[3], (area.width, area.height));
 
-        // Bottom row: markdown preview
-        self.render_markdown(frame, content_rows[1]);
+        // Bottom row: stats, activity feed, markdown
+        let bottom_cols = Flex::horizontal()
+            .constraints([
+                Constraint::Percentage(25.0),
+                Constraint::Percentage(40.0),
+                Constraint::Percentage(35.0),
+            ])
+            .split(content_rows[1]);
+
+        self.render_stats(frame, bottom_cols[0]);
+        self.render_activity_feed(frame, bottom_cols[1]);
+        self.render_markdown(frame, bottom_cols[2]);
     }
 
     /// Medium layout (70x20+).
@@ -535,9 +655,9 @@ impl Dashboard {
         self.render_header(frame, main[0]);
         self.render_footer(frame, main[2]);
 
-        // Content: top row with panels, bottom row with markdown
+        // Content: top row with panels, bottom row with stats + activity
         let content_rows = Flex::vertical()
-            .constraints([Constraint::Percentage(65.0), Constraint::Percentage(35.0)])
+            .constraints([Constraint::Percentage(60.0), Constraint::Percentage(40.0)])
             .split(main[1]);
 
         // Top row: 3 panels
@@ -560,7 +680,13 @@ impl Dashboard {
         self.render_code(frame, right_split[0]);
         self.render_info(frame, right_split[1], (area.width, area.height));
 
-        self.render_markdown(frame, content_rows[1]);
+        // Bottom row: stats and activity feed
+        let bottom_cols = Flex::horizontal()
+            .constraints([Constraint::Percentage(40.0), Constraint::Percentage(60.0)])
+            .split(content_rows[1]);
+
+        self.render_stats(frame, bottom_cols[0]);
+        self.render_activity_feed(frame, bottom_cols[1]);
     }
 
     /// Tiny layout (<70x20).
@@ -721,11 +847,27 @@ impl Screen for Dashboard {
         }
 
         // Choose layout based on terminal size
-        match (area.width, area.height) {
-            (w, h) if w >= 100 && h >= 30 => self.render_large(frame, area),
-            (w, h) if w >= 70 && h >= 20 => self.render_medium(frame, area),
-            _ => self.render_tiny(frame, area),
-        }
+        let _layout = match (area.width, area.height) {
+            (w, h) if w >= 100 && h >= 30 => {
+                self.render_large(frame, area);
+                "large"
+            }
+            (w, h) if w >= 70 && h >= 20 => {
+                self.render_medium(frame, area);
+                "medium"
+            }
+            _ => {
+                self.render_tiny(frame, area);
+                "tiny"
+            }
+        };
+        crate::debug_render!(
+            "dashboard",
+            "layout={_layout}, area={}x{}, tick={}",
+            area.width,
+            area.height,
+            self.tick_count
+        );
     }
 
     fn keybindings(&self) -> Vec<HelpEntry> {
@@ -747,5 +889,194 @@ impl Screen for Dashboard {
 
     fn tab_label(&self) -> &'static str {
         "Dashboard"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ftui_render::grapheme_pool::GraphemePool;
+
+    #[test]
+    fn dashboard_renders_header() {
+        let mut state = Dashboard::new();
+        state.tick(10);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(120, 40, &mut pool);
+
+        state.view(&mut frame, Rect::new(0, 0, 120, 40));
+
+        // Header should be present (first row should not be empty)
+        let mut has_content = false;
+        for x in 0..120 {
+            if let Some(cell) = frame.buffer.get(x, 0)
+                && cell.content.as_char() != Some(' ')
+                && !cell.is_empty()
+            {
+                has_content = true;
+                break;
+            }
+        }
+        assert!(has_content, "Header should render content");
+    }
+
+    #[test]
+    fn dashboard_shows_metrics() {
+        let mut state = Dashboard::new();
+        // Populate some history
+        for t in 0..50 {
+            state.tick(t);
+        }
+
+        assert!(
+            !state.simulated_data.cpu_history.is_empty(),
+            "CPU history should be populated"
+        );
+        assert!(
+            !state.simulated_data.memory_history.is_empty(),
+            "Memory history should be populated"
+        );
+    }
+
+    #[test]
+    fn dashboard_sparklines_update() {
+        let mut state = Dashboard::new();
+        let initial_len = state.simulated_data.cpu_history.len();
+
+        state.tick(100);
+
+        assert!(
+            state.simulated_data.cpu_history.len() > initial_len,
+            "CPU history should grow on tick"
+        );
+    }
+
+    #[test]
+    fn dashboard_handles_resize() {
+        let state = Dashboard::new();
+
+        // Small terminal
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(40, 15, &mut pool);
+        state.view(&mut frame, Rect::new(0, 0, 40, 15));
+        // Should not panic
+
+        // Large terminal
+        let mut pool2 = GraphemePool::new();
+        let mut frame2 = Frame::new(200, 60, &mut pool2);
+        state.view(&mut frame2, Rect::new(0, 0, 200, 60));
+        // Should not panic
+    }
+
+    #[test]
+    fn dashboard_activity_feed_populates() {
+        let mut state = Dashboard::new();
+
+        // Run enough ticks to generate alerts (ALERT_INTERVAL is 20)
+        for t in 0..100 {
+            state.tick(t);
+        }
+
+        // Should have alerts
+        assert!(
+            !state.simulated_data.alerts.is_empty(),
+            "Alerts should be generated after sufficient ticks"
+        );
+    }
+
+    #[test]
+    fn dashboard_stats_renders() {
+        let state = Dashboard::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(50, 5, &mut pool);
+
+        // Render just the stats panel
+        state.render_stats(&mut frame, Rect::new(0, 0, 50, 5));
+
+        // Check that content was rendered (border + stats)
+        let top_left = frame.buffer.get(0, 0).and_then(|c| c.content.as_char());
+        assert!(
+            top_left.is_some(),
+            "Stats panel should render border character"
+        );
+    }
+
+    #[test]
+    fn dashboard_activity_feed_renders() {
+        let mut state = Dashboard::new();
+        // Generate some alerts first
+        for t in 0..100 {
+            state.tick(t);
+        }
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(60, 10, &mut pool);
+
+        // Render just the activity feed panel
+        state.render_activity_feed(&mut frame, Rect::new(0, 0, 60, 10));
+
+        // Check that border was rendered
+        let top_left = frame.buffer.get(0, 0).and_then(|c| c.content.as_char());
+        assert!(
+            top_left.is_some(),
+            "Activity feed should render border character"
+        );
+    }
+
+    #[test]
+    fn dashboard_tick_updates_time() {
+        let mut state = Dashboard::new();
+        assert_eq!(state.tick_count, 30); // Pre-populated in new()
+
+        state.tick(50);
+        assert_eq!(state.tick_count, 50);
+        assert!(
+            (state.time - 5.0).abs() < f64::EPSILON,
+            "time should be tick * 0.1"
+        );
+    }
+
+    #[test]
+    fn dashboard_empty_area_handled() {
+        let state = Dashboard::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(1, 1, &mut pool);
+
+        // Should not panic with empty area
+        state.view(&mut frame, Rect::new(0, 0, 0, 0));
+    }
+
+    #[test]
+    fn dashboard_layout_large_threshold() {
+        let state = Dashboard::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(100, 30, &mut pool);
+
+        // At exactly 100x30, should use large layout
+        state.view(&mut frame, Rect::new(0, 0, 100, 30));
+        // Should not panic
+    }
+
+    #[test]
+    fn dashboard_layout_medium_threshold() {
+        let state = Dashboard::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(70, 20, &mut pool);
+
+        // At exactly 70x20, should use medium layout
+        state.view(&mut frame, Rect::new(0, 0, 70, 20));
+        // Should not panic
+    }
+
+    #[test]
+    fn dashboard_layout_tiny_threshold() {
+        let state = Dashboard::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(50, 15, &mut pool);
+
+        // Below medium thresholds, should use tiny layout
+        state.view(&mut frame, Rect::new(0, 0, 50, 15));
+        // Should not panic
     }
 }

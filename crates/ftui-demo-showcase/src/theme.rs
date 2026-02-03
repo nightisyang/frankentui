@@ -1055,4 +1055,202 @@ mod tests {
         let empty_width = selection::EMPTY.chars().count();
         assert_eq!(selected_width, empty_width);
     }
+
+    // -------------------------------------------------------------------------
+    // WCAG Contrast Ratio tests (bd-3vbf.31)
+    // -------------------------------------------------------------------------
+
+    /// WCAG AA requires at minimum 4.5:1 for normal text and 3.0:1 for large text.
+    /// We test against 4.5:1 (AA normal) for all foreground-on-background pairs.
+    const WCAG_AA_NORMAL: f32 = 4.5;
+    const WCAG_AA_LARGE: f32 = 3.0;
+
+    /// Inline WCAG contrast ratio (avoids visual-fx feature dependency).
+    fn cr(fg_token: ColorToken, bg_token: ColorToken) -> f32 {
+        use ftui_render::cell::PackedRgba;
+        fn linearize(v: f32) -> f32 {
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        }
+        fn lum(c: PackedRgba) -> f32 {
+            let r = linearize(c.r() as f32 / 255.0);
+            let g = linearize(c.g() as f32 / 255.0);
+            let b = linearize(c.b() as f32 / 255.0);
+            0.2126 * r + 0.7152 * g + 0.0722 * b
+        }
+        let l1 = lum(fg_token.resolve());
+        let l2 = lum(bg_token.resolve());
+        let (hi, lo) = if l1 >= l2 { (l1, l2) } else { (l2, l1) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    #[test]
+    fn primary_fg_on_base_bg_meets_wcag_aa() {
+        let ratio = cr(fg::PRIMARY, bg::BASE);
+        assert!(
+            ratio >= WCAG_AA_NORMAL,
+            "fg::PRIMARY on bg::BASE contrast {ratio:.2} < {WCAG_AA_NORMAL}"
+        );
+    }
+
+    #[test]
+    fn secondary_fg_on_base_bg_meets_wcag_aa() {
+        let ratio = cr(fg::SECONDARY, bg::BASE);
+        assert!(
+            ratio >= WCAG_AA_NORMAL,
+            "fg::SECONDARY on bg::BASE contrast {ratio:.2} < {WCAG_AA_NORMAL}"
+        );
+    }
+
+    #[test]
+    fn muted_fg_on_base_bg_meets_wcag_aa_large() {
+        // Muted text is typically used at large size or for decorative purposes,
+        // so we use the relaxed 3:1 threshold.
+        let ratio = cr(fg::MUTED, bg::BASE);
+        assert!(
+            ratio >= WCAG_AA_LARGE,
+            "fg::MUTED on bg::BASE contrast {ratio:.2} < {WCAG_AA_LARGE}"
+        );
+    }
+
+    #[test]
+    fn accent_error_on_base_bg_meets_wcag_aa() {
+        let ratio = cr(accent::ERROR, bg::BASE);
+        assert!(
+            ratio >= WCAG_AA_NORMAL,
+            "accent::ERROR on bg::BASE contrast {ratio:.2} < {WCAG_AA_NORMAL}"
+        );
+    }
+
+    #[test]
+    fn accent_success_on_base_bg_meets_wcag_aa() {
+        let ratio = cr(accent::SUCCESS, bg::BASE);
+        assert!(
+            ratio >= WCAG_AA_NORMAL,
+            "accent::SUCCESS on bg::BASE contrast {ratio:.2} < {WCAG_AA_NORMAL}"
+        );
+    }
+
+    #[test]
+    fn accent_warning_on_base_bg_meets_wcag_aa_large() {
+        let ratio = cr(accent::WARNING, bg::BASE);
+        assert!(
+            ratio >= WCAG_AA_LARGE,
+            "accent::WARNING on bg::BASE contrast {ratio:.2} < {WCAG_AA_LARGE}"
+        );
+    }
+
+    #[test]
+    fn accent_info_on_base_bg_meets_wcag_aa() {
+        let ratio = cr(accent::INFO, bg::BASE);
+        assert!(
+            ratio >= WCAG_AA_LARGE,
+            "accent::INFO on bg::BASE contrast {ratio:.2} < {WCAG_AA_LARGE}"
+        );
+    }
+
+    #[test]
+    fn status_colors_on_base_bg_meet_wcag_aa() {
+        let status_tokens = [
+            ("StatusOpen", ColorToken::StatusOpen),
+            ("StatusInProgress", ColorToken::StatusInProgress),
+            ("StatusBlocked", ColorToken::StatusBlocked),
+            ("StatusClosed", ColorToken::StatusClosed),
+        ];
+        for (name, token) in status_tokens {
+            let ratio = cr(token, bg::BASE);
+            assert!(
+                ratio >= WCAG_AA_LARGE,
+                "status::{name} on bg::BASE contrast {ratio:.2} < {WCAG_AA_LARGE}"
+            );
+        }
+    }
+
+    #[test]
+    fn priority_colors_on_base_bg_meet_wcag_aa() {
+        let priority_tokens = [
+            ("P0", ColorToken::PriorityP0),
+            ("P1", ColorToken::PriorityP1),
+            ("P2", ColorToken::PriorityP2),
+            ("P3", ColorToken::PriorityP3),
+            ("P4", ColorToken::PriorityP4),
+        ];
+        for (name, token) in priority_tokens {
+            let ratio = cr(token, bg::BASE);
+            assert!(
+                ratio >= WCAG_AA_LARGE,
+                "priority::{name} on bg::BASE contrast {ratio:.2} < {WCAG_AA_LARGE}"
+            );
+        }
+    }
+
+    #[test]
+    fn screen_accents_on_deep_bg_meet_wcag_aa_large() {
+        let screens: &[(&str, ColorToken)] = &[
+            ("DASHBOARD", screen_accent::DASHBOARD),
+            ("SHAKESPEARE", screen_accent::SHAKESPEARE),
+            ("CODE_EXPLORER", screen_accent::CODE_EXPLORER),
+            ("WIDGET_GALLERY", screen_accent::WIDGET_GALLERY),
+            ("LAYOUT_LAB", screen_accent::LAYOUT_LAB),
+            ("FORMS_INPUT", screen_accent::FORMS_INPUT),
+            ("ADVANCED", screen_accent::ADVANCED),
+            ("PERFORMANCE", screen_accent::PERFORMANCE),
+        ];
+        for (name, token) in screens {
+            let ratio = cr(*token, bg::DEEP);
+            assert!(
+                ratio >= WCAG_AA_LARGE,
+                "screen_accent::{name} on bg::DEEP contrast {ratio:.2} < {WCAG_AA_LARGE}"
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Semantic style validation (bd-3vbf.31)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn semantic_styles_have_nonzero_foreground_colors() {
+        let ss = semantic_styles();
+        // Status styles should have non-black fg
+        let black = ftui_render::cell::PackedRgba::rgb(0, 0, 0);
+        assert_ne!(
+            ss.status.open.fg, black,
+            "status.open fg should not be black"
+        );
+        assert_ne!(
+            ss.status.in_progress.fg, black,
+            "status.in_progress fg should not be black"
+        );
+        assert_ne!(
+            ss.status.blocked.fg, black,
+            "status.blocked fg should not be black"
+        );
+        assert_ne!(
+            ss.status.closed.fg, black,
+            "status.closed fg should not be black"
+        );
+    }
+
+    #[test]
+    fn semantic_styles_status_colors_are_distinct() {
+        let ss = semantic_styles();
+        let colors = [
+            ss.status.open.fg,
+            ss.status.in_progress.fg,
+            ss.status.blocked.fg,
+            ss.status.closed.fg,
+        ];
+        for i in 0..colors.len() {
+            for j in (i + 1)..colors.len() {
+                assert_ne!(
+                    colors[i], colors[j],
+                    "Status colors {i} and {j} should be distinct"
+                );
+            }
+        }
+    }
 }

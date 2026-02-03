@@ -11,6 +11,7 @@
 //! - Tunnel zoom effect
 //! - Fire simulation
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::f64::consts::TAU;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -18,7 +19,7 @@ use std::time::Instant;
 
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ftui_core::geometry::Rect;
-use ftui_extras::canvas::{Canvas, Mode, Painter};
+use ftui_extras::canvas::{CanvasRef, Mode, Painter};
 use ftui_extras::text_effects::{ColorGradient, TransitionState};
 use ftui_render::cell::PackedRgba;
 use ftui_render::frame::Frame;
@@ -84,6 +85,8 @@ pub struct VisualEffectsScreen {
     max_frame_time_us: f64,
     /// Transition overlay state for effect changes.
     transition: TransitionState,
+    /// Cached painter buffer (grow-only) for canvas rendering.
+    painter: RefCell<Painter>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2342,6 +2345,7 @@ impl Default for VisualEffectsScreen {
             max_frame_time_us: 0.0,
             // Transition overlay
             transition: TransitionState::new(),
+            painter: RefCell::new(Painter::new(0, 0, Mode::Braille)),
         }
     }
 }
@@ -2440,32 +2444,38 @@ impl Screen for VisualEffectsScreen {
             height: area.height.saturating_sub(1),
         };
 
-        // Create painter and render current effect
-        let mut painter = Painter::for_area(canvas_area, Mode::Braille);
-        let (pw, ph) = painter.size();
+        // Reuse cached painter (grow-only) and render current effect.
+        {
+            let mut painter = self.painter.borrow_mut();
+            painter.ensure_for_area(canvas_area, Mode::Braille);
+            painter.clear();
+            let (pw, ph) = painter.size();
 
-        match self.effect {
-            EffectType::Metaballs => self.metaballs.render(&mut painter, pw, ph, self.time),
-            EffectType::Shape3D => self.shape3d.render(&mut painter, pw, ph, self.time),
-            EffectType::Plasma => self.plasma.render(&mut painter, pw, ph),
-            EffectType::Particles => self.particles.render(&mut painter, pw, ph),
-            EffectType::Matrix => self.matrix.render(&mut painter, pw, ph),
-            EffectType::Tunnel => self.tunnel.render(&mut painter, pw, ph),
-            EffectType::Fire => self.fire.render(&mut painter, pw, ph),
-            EffectType::ReactionDiffusion => self.reaction_diffusion.render(&mut painter, pw, ph),
-            EffectType::StrangeAttractor => self.attractor.render(&mut painter, pw, ph),
-            EffectType::Mandelbrot => self.mandelbrot.render(&mut painter, pw, ph),
-            EffectType::Lissajous => self.lissajous.render(&mut painter, pw, ph),
-            EffectType::FlowField => self.flow_field.render(&mut painter, pw, ph),
-            EffectType::Julia => self.julia.render(&mut painter, pw, ph),
-            EffectType::WaveInterference => self.wave_interference.render(&mut painter, pw, ph),
-            EffectType::Spiral => self.spiral.render(&mut painter, pw, ph),
-            EffectType::SpinLattice => self.spin_lattice.render(&mut painter, pw, ph),
+            match self.effect {
+                EffectType::Metaballs => self.metaballs.render(&mut painter, pw, ph, self.time),
+                EffectType::Shape3D => self.shape3d.render(&mut painter, pw, ph, self.time),
+                EffectType::Plasma => self.plasma.render(&mut painter, pw, ph),
+                EffectType::Particles => self.particles.render(&mut painter, pw, ph),
+                EffectType::Matrix => self.matrix.render(&mut painter, pw, ph),
+                EffectType::Tunnel => self.tunnel.render(&mut painter, pw, ph),
+                EffectType::Fire => self.fire.render(&mut painter, pw, ph),
+                EffectType::ReactionDiffusion => {
+                    self.reaction_diffusion.render(&mut painter, pw, ph)
+                }
+                EffectType::StrangeAttractor => self.attractor.render(&mut painter, pw, ph),
+                EffectType::Mandelbrot => self.mandelbrot.render(&mut painter, pw, ph),
+                EffectType::Lissajous => self.lissajous.render(&mut painter, pw, ph),
+                EffectType::FlowField => self.flow_field.render(&mut painter, pw, ph),
+                EffectType::Julia => self.julia.render(&mut painter, pw, ph),
+                EffectType::WaveInterference => self.wave_interference.render(&mut painter, pw, ph),
+                EffectType::Spiral => self.spiral.render(&mut painter, pw, ph),
+                EffectType::SpinLattice => self.spin_lattice.render(&mut painter, pw, ph),
+            }
+
+            // Render canvas to frame without cloning painter buffers.
+            let canvas = CanvasRef::from_painter(&painter);
+            canvas.render(canvas_area, frame);
         }
-
-        // Render canvas to frame
-        let canvas = Canvas::from_painter(&painter);
-        canvas.render(canvas_area, frame);
 
         // Render transition overlay if active
         if self.transition.is_visible() {
@@ -2575,5 +2585,48 @@ impl Screen for VisualEffectsScreen {
 
     fn tab_label(&self) -> &'static str {
         "VFX"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ftui_render::frame::Frame;
+    use ftui_render::grapheme_pool::GraphemePool;
+
+    #[test]
+    fn painter_buffer_reused_at_stable_size() {
+        let screen = VisualEffectsScreen::default();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(60, 20, &mut pool);
+        let area = Rect::new(0, 0, 60, 20);
+
+        screen.view(&mut frame, area);
+        let len1 = screen.painter.borrow().buffer_len();
+        screen.view(&mut frame, area);
+        let len2 = screen.painter.borrow().buffer_len();
+
+        assert_eq!(len1, len2);
+    }
+
+    #[test]
+    fn painter_buffer_grows_only_on_resize() {
+        let screen = VisualEffectsScreen::default();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 40, &mut pool);
+
+        let small = Rect::new(0, 0, 30, 12);
+        screen.view(&mut frame, small);
+        let len_small = screen.painter.borrow().buffer_len();
+
+        let large = Rect::new(0, 0, 80, 40);
+        screen.view(&mut frame, large);
+        let len_large = screen.painter.borrow().buffer_len();
+        assert!(len_large >= len_small);
+
+        let smaller = Rect::new(0, 0, 20, 8);
+        screen.view(&mut frame, smaller);
+        let len_after = screen.painter.borrow().buffer_len();
+        assert_eq!(len_after, len_large);
     }
 }

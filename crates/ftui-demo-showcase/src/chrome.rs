@@ -5,6 +5,7 @@
 use ftui_core::geometry::Rect;
 use ftui_render::frame::{Frame, HitId};
 use ftui_style::{Style, StyleFlags};
+use ftui_text::{Line, Span, Text};
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
@@ -49,7 +50,7 @@ pub fn render_tab_bar(current: ScreenId, frame: &mut Frame, area: Rect) {
     // Lay out tabs left-to-right
     let mut x = area.x;
     for (i, &id) in ScreenId::ALL.iter().enumerate() {
-        let key = if i < 9 {
+        let key_label = if i < 9 {
             format!("{}", i + 1)
         } else if i == 9 {
             "0".into()
@@ -57,8 +58,8 @@ pub fn render_tab_bar(current: ScreenId, frame: &mut Frame, area: Rect) {
             "-".into()
         };
 
-        let label = format!(" {key}:{} ", id.tab_label());
-        let label_width = label.len() as u16;
+        let label_text = id.tab_label();
+        let label_width = 1 + key_label.len() as u16 + 2 + label_text.len() as u16 + 1; // " {key}: {label} "
 
         if x + label_width > area.x + area.width {
             break; // No room for more tabs
@@ -66,23 +67,52 @@ pub fn render_tab_bar(current: ScreenId, frame: &mut Frame, area: Rect) {
 
         let tab_area = Rect::new(x, area.y, label_width, 1);
 
-        let style = if id == current {
-            let accent_bg = theme::with_alpha(accent_for(id), TAB_ACCENT_ALPHA);
+        let is_active = id == current;
+        let bg = if is_active {
+            theme::with_alpha(accent_for(id), TAB_ACCENT_ALPHA)
+        } else {
+            theme::alpha::SURFACE.into()
+        };
+        let label_style = if is_active {
             Style::new()
-                .bg(accent_bg)
+                .bg(bg)
                 .fg(theme::fg::PRIMARY)
                 .attrs(StyleFlags::BOLD)
         } else {
-            Style::new().bg(theme::alpha::SURFACE).fg(theme::fg::MUTED)
+            Style::new().bg(bg).fg(theme::fg::MUTED)
         };
+        let key_style = Style::new()
+            .bg(bg)
+            .fg(theme::fg::MUTED)
+            .attrs(StyleFlags::DIM);
+        let pad_style = Style::new().bg(bg);
 
-        let tab = Paragraph::new(label).style(style);
+        let line = Line::from_spans([
+            Span::styled(" ", pad_style),
+            Span::styled(key_label.clone(), key_style),
+            Span::styled(": ", key_style),
+            Span::styled(label_text, label_style),
+            Span::styled(" ", pad_style),
+        ]);
+        let tab = Paragraph::new(Text::from_lines([line]));
         tab.render(tab_area, frame);
 
         // Register hit region for mouse clicks
         frame.register_hit_region(tab_area, HitId::new(TAB_HIT_BASE + i as u32));
 
         x += label_width;
+
+        // Subtle separator between tabs
+        if x < area.x + area.width {
+            let sep_area = Rect::new(x, area.y, 1, 1);
+            let sep_style = Style::new()
+                .bg(theme::alpha::SURFACE)
+                .fg(theme::fg::MUTED)
+                .attrs(StyleFlags::DIM);
+            let sep = Paragraph::new("│").style(sep_style);
+            sep.render(sep_area, frame);
+            x = x.saturating_add(1);
+        }
     }
 }
 
@@ -205,6 +235,7 @@ pub fn render_help_overlay(
     text.push_str("  Tab / L    Next screen\n");
     text.push_str("  S-Tab / H  Previous screen\n");
     text.push_str("  ?          Toggle this help\n");
+    text.push_str("  Ctrl+K     Command palette\n");
     text.push_str("  Ctrl+T     Cycle theme\n");
     text.push_str("  F12        Toggle debug overlay\n");
     text.push_str("  q          Quit\n");

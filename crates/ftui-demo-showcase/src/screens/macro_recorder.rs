@@ -7,14 +7,16 @@
 //! - Deterministic playback with speed control
 //! - Timeline and scenario runner panels
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseEvent};
 use ftui_core::geometry::Rect;
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
-use ftui_runtime::input_macro::{FilteredEventRecorder, InputMacro, RecordingFilter};
+use ftui_runtime::input_macro::{
+    FilteredEventRecorder, InputMacro, MacroPlayback, RecordingFilter,
+};
 use ftui_style::Style;
 use ftui_text::{Line, Span, Text};
 use ftui_widgets::Widget;
@@ -38,14 +40,6 @@ enum UiState {
     Stopped,
     Playing,
     Error(String),
-}
-
-#[derive(Debug, Clone)]
-struct PlaybackState {
-    playhead: usize,
-    elapsed_ms: f64,
-    next_due_ms: u64,
-    last_tick: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -73,7 +67,8 @@ pub struct MacroRecorderScreen {
     state: UiState,
     recorder: Option<FilteredEventRecorder>,
     macro_data: Option<InputMacro>,
-    playback: Option<PlaybackState>,
+    playback: Option<MacroPlayback>,
+    playback_last_tick: Option<u64>,
     pending_playback: Vec<Event>,
     recording_started: Option<Instant>,
     recorded_events: usize,
@@ -97,6 +92,7 @@ impl MacroRecorderScreen {
             recorder: None,
             macro_data: None,
             playback: None,
+            playback_last_tick: None,
             pending_playback: Vec::new(),
             recording_started: None,
             recorded_events: 0,
@@ -147,6 +143,7 @@ impl MacroRecorderScreen {
         self.filtered_events = 0;
         self.macro_data = None;
         self.playback = None;
+        self.playback_last_tick = None;
         self.recording_started = Some(Instant::now());
         self.state = UiState::Recording;
     }
@@ -162,30 +159,28 @@ impl MacroRecorderScreen {
         self.filtered_events = filtered;
         self.macro_data = Some(macro_data);
         self.playback = None;
+        self.playback_last_tick = None;
         self.recording_started = None;
         self.state = UiState::Stopped;
     }
 
     fn start_playback(&mut self, tick_count: u64) {
         let Some(macro_data) = &self.macro_data else {
-            self.state = UiState::Error("No macro recorded".to_string());
+            self.state =
+                UiState::Error("No macro recorded — press 'r' to start recording".to_string());
             return;
         };
         if macro_data.is_empty() {
-            self.state = UiState::Error("Macro is empty".to_string());
+            self.state =
+                UiState::Error("Macro is empty — record some keystrokes first".to_string());
             return;
         }
-        let next_due_ms = macro_data
-            .events()
-            .first()
-            .map(|e| e.delay.as_millis() as u64)
-            .unwrap_or(0);
-        self.playback = Some(PlaybackState {
-            playhead: 0,
-            elapsed_ms: 0.0,
-            next_due_ms,
-            last_tick: tick_count,
-        });
+        let mut playback = MacroPlayback::new(macro_data.clone())
+            .with_speed(self.speed)
+            .with_looping(self.looping);
+        playback.reset();
+        self.playback = Some(playback);
+        self.playback_last_tick = Some(tick_count);
         self.state = UiState::Playing;
     }
 
@@ -197,6 +192,7 @@ impl MacroRecorderScreen {
 
     fn stop_playback(&mut self) {
         self.playback = None;
+        self.playback_last_tick = None;
         self.state = UiState::Stopped;
     }
 
@@ -206,9 +202,7 @@ impl MacroRecorderScreen {
             UiState::Stopped => {
                 if self.playback.is_some() {
                     self.state = UiState::Playing;
-                    if let Some(playback) = &mut self.playback {
-                        playback.last_tick = tick_count;
-                    }
+                    self.playback_last_tick = Some(tick_count);
                 } else {
                     self.start_playback(tick_count);
                 }
@@ -227,12 +221,18 @@ impl MacroRecorderScreen {
 
     fn toggle_loop(&mut self) {
         self.looping = !self.looping;
+        if let Some(playback) = &mut self.playback {
+            playback.set_looping(self.looping);
+        }
     }
 
     fn adjust_speed(&mut self, delta: f64) {
         let mut speed = self.speed + delta;
         speed = speed.clamp(SPEED_MIN, SPEED_MAX);
         self.speed = speed;
+        if let Some(playback) = &mut self.playback {
+            playback.set_speed(self.speed);
+        }
     }
 
     fn handle_controls(&mut self, event: &Event) {
@@ -267,7 +267,7 @@ impl MacroRecorderScreen {
                     self.stop_recording();
                 } else if self.state == UiState::Playing {
                     self.stop_playback();
-                } else if matches!(self.state, UiState::Error(_)) {
+                } else if matches!(&self.state, UiState::Error(_)) {
                     if self.macro_data.is_some() {
                         self.state = UiState::Stopped;
                     } else {
@@ -283,41 +283,22 @@ impl MacroRecorderScreen {
         if self.state != UiState::Playing {
             return;
         }
-        let Some(macro_data) = &self.macro_data else {
-            return;
-        };
         let Some(playback) = &mut self.playback else {
             return;
         };
 
-        let delta_ticks = tick_count.saturating_sub(playback.last_tick).max(1);
-        playback.last_tick = tick_count;
-        playback.elapsed_ms += delta_ticks as f64 * TICK_MS as f64 * self.speed;
+        let last_tick = self.playback_last_tick.get_or_insert(tick_count);
+        let delta_ticks = tick_count.saturating_sub(*last_tick).max(1);
+        *last_tick = tick_count;
 
-        let events = macro_data.events();
-        while playback.playhead < events.len() && playback.elapsed_ms >= playback.next_due_ms as f64
-        {
-            let timed = &events[playback.playhead];
-            self.pending_playback.push(timed.event.clone());
-            playback.playhead += 1;
-            if playback.playhead < events.len() {
-                playback.next_due_ms += events[playback.playhead].delay.as_millis() as u64;
-            }
-        }
+        let delta = Duration::from_millis(delta_ticks * TICK_MS);
+        let events = playback.advance(delta);
+        self.pending_playback.extend(events);
 
-        if playback.playhead >= events.len() {
-            if self.looping {
-                playback.playhead = 0;
-                playback.elapsed_ms = 0.0;
-                playback.next_due_ms = events
-                    .first()
-                    .map(|e| e.delay.as_millis() as u64)
-                    .unwrap_or(0);
-                playback.last_tick = tick_count;
-            } else {
-                self.state = UiState::Stopped;
-                self.playback = None;
-            }
+        if playback.is_done() {
+            self.state = UiState::Stopped;
+            self.playback = None;
+            self.playback_last_tick = None;
         }
     }
 
@@ -337,24 +318,28 @@ impl MacroRecorderScreen {
             return;
         }
 
+        // A11y: state labels include Unicode symbols so states are distinguishable
+        // without color (bd-2lus.9).
         let state_label = match &self.state {
-            UiState::Idle => "Idle",
-            UiState::Recording => "Recording",
+            UiState::Idle => "○ Idle",
+            UiState::Recording => "● Recording",
             UiState::Stopped => {
                 if self.playback.is_some() {
-                    "Paused"
+                    "⏸ Paused"
                 } else {
-                    "Stopped"
+                    "■ Stopped"
                 }
             }
-            UiState::Playing => "Playing",
-            UiState::Error(_) => "Error",
+            UiState::Playing => "▶ Playing",
+            UiState::Error(_) => "⚠ Error",
         };
 
+        // A11y: Recording uses italic, Error uses underline so they are
+        // visually distinct beyond color alone (bd-2lus.9).
         let state_style = match &self.state {
-            UiState::Recording => Style::new().fg(theme::accent::ERROR).bold(),
+            UiState::Recording => Style::new().fg(theme::accent::ERROR).bold().italic(),
             UiState::Playing => Style::new().fg(theme::accent::SUCCESS).bold(),
-            UiState::Error(_) => Style::new().fg(theme::accent::ERROR).bold(),
+            UiState::Error(_) => Style::new().fg(theme::accent::WARNING).bold().underline(),
             UiState::Stopped => Style::new().fg(theme::accent::WARNING),
             UiState::Idle => Style::new().fg(theme::fg::MUTED),
         };
@@ -434,9 +419,14 @@ impl MacroRecorderScreen {
         ];
 
         if let UiState::Error(message) = &self.state {
+            // A11y: error row uses underline + distinct color to be
+            // distinguishable from normal content without color (bd-2lus.9).
             lines.push(Line::from_spans([
-                Span::styled("Error: ", Style::new().fg(theme::accent::ERROR)),
-                Span::styled(message, Style::new().fg(theme::fg::MUTED)),
+                Span::styled(
+                    "⚠ Error: ",
+                    Style::new().fg(theme::accent::ERROR).bold().underline(),
+                ),
+                Span::styled(message, Style::new().fg(theme::fg::SECONDARY).italic()),
             ]));
         }
 
@@ -477,7 +467,11 @@ impl MacroRecorderScreen {
             return;
         }
 
-        let playhead = self.playback.as_ref().map(|p| p.playhead).unwrap_or(0);
+        let playhead = self
+            .playback
+            .as_ref()
+            .map(MacroPlayback::position)
+            .unwrap_or(0);
         let max_lines = inner.height as usize;
         let mut lines = Vec::new();
 
@@ -499,14 +493,20 @@ impl MacroRecorderScreen {
             }
             cumulative_ms += timed.delay.as_millis() as u64;
 
+            // A11y: use Unicode symbols instead of ASCII so playhead position
+            // is distinguishable without color (bd-2lus.9).
             let marker = if self.state == UiState::Playing && idx == playhead {
-                ">"
+                "▶"
             } else if idx < playhead {
-                "*"
+                "●"
             } else {
-                " "
+                "○"
             };
-            let label = format_event(&timed.event);
+            let raw_label = format_event(&timed.event);
+            // A11y: truncate long labels with ellipsis so the timeline
+            // stays readable at narrow widths (bd-2lus.9).
+            let max_label = (inner.width as usize).saturating_sub(22);
+            let label = truncate_with_ellipsis(&raw_label, max_label);
             let line = Line::from_spans([
                 Span::styled(marker, Style::new().fg(theme::accent::PRIMARY)),
                 Span::raw(" "),
@@ -579,7 +579,11 @@ impl MacroRecorderScreen {
         if total <= 0.0 {
             return if macro_data.is_empty() { 0.0 } else { 1.0 };
         }
-        let elapsed = self.playback.as_ref().map(|p| p.elapsed_ms).unwrap_or(0.0);
+        let elapsed = self
+            .playback
+            .as_ref()
+            .map(|p| p.elapsed().as_millis() as f64)
+            .unwrap_or(0.0);
         (elapsed / total).clamp(0.0, 1.0)
     }
 }
@@ -596,8 +600,13 @@ impl Screen for MacroRecorderScreen {
     }
 
     fn view(&self, frame: &mut Frame, area: Rect) {
+        let controls_height: u16 = if matches!(&self.state, UiState::Error(_)) {
+            7
+        } else {
+            6
+        };
         let sections = Flex::vertical()
-            .constraints([Constraint::Fixed(5), Constraint::Min(1)])
+            .constraints([Constraint::Fixed(controls_height), Constraint::Min(1)])
             .split(area);
 
         self.render_controls_panel(frame, sections[0]);
@@ -735,6 +744,15 @@ fn format_mouse_event(mouse: &MouseEvent) -> String {
     format!("Mouse({:?} @{}, {})", mouse.kind, mouse.x, mouse.y)
 }
 
+fn truncate_with_ellipsis(s: &str, max_chars: usize) -> String {
+    if max_chars < 2 || s.len() <= max_chars {
+        return s.to_string();
+    }
+    let mut result: String = s.chars().take(max_chars - 1).collect();
+    result.push('…');
+    result
+}
+
 fn format_duration(duration: std::time::Duration) -> String {
     let ms = duration.as_millis();
     if ms < 1000 {
@@ -836,5 +854,141 @@ mod tests {
             .expect("macro_data should be present after stop_recording")
             .bare_events();
         assert_eq!(recorded, vec![key_event('a')]);
+    }
+
+    // ====================================================================
+    // Accessibility tests (bd-2lus.9)
+    // ====================================================================
+
+    #[test]
+    fn state_labels_contain_unicode_symbol_prefix() {
+        // Each state label must contain a non-ASCII symbol so states are
+        // distinguishable without colour.
+        let mut screen = MacroRecorderScreen::new();
+        let area = Rect::from_size(80, 24);
+        let mut pool = ftui_render::grapheme_pool::GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+
+        // Idle
+        screen.view(&mut frame, area);
+        let buf_str = frame_text(&frame);
+        assert!(buf_str.contains('○'), "Idle state should contain ○ symbol");
+
+        // Recording
+        screen.start_recording();
+        frame.buffer.clear();
+        screen.view(&mut frame, area);
+        let buf_str = frame_text(&frame);
+        assert!(
+            buf_str.contains('●'),
+            "Recording state should contain ● symbol"
+        );
+        screen.stop_recording();
+
+        // Playing (need a macro first)
+        screen.macro_data = Some(InputMacro::from_events("test", vec![key_event('x')]));
+        screen.start_playback(0);
+        frame.buffer.clear();
+        screen.view(&mut frame, area);
+        let buf_str = frame_text(&frame);
+        assert!(
+            buf_str.contains('▶'),
+            "Playing state should contain ▶ symbol"
+        );
+    }
+
+    #[test]
+    fn error_messages_include_recovery_hint() {
+        let mut screen = MacroRecorderScreen::new();
+        // Trigger "No macro recorded" error
+        screen.start_playback(0);
+        match &screen.state {
+            UiState::Error(msg) => {
+                assert!(
+                    msg.contains("press 'r'"),
+                    "Error should include recovery action, got: {msg}"
+                );
+            }
+            other => panic!("Expected Error state, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn error_state_uses_distinct_style_from_recording() {
+        // Error should use WARNING color + underline while Recording uses
+        // ERROR color + italic, ensuring they are visually distinct.
+        let screen_rec = {
+            let mut s = MacroRecorderScreen::new();
+            s.state = UiState::Recording;
+            s
+        };
+        let screen_err = {
+            let mut s = MacroRecorderScreen::new();
+            s.state = UiState::Error("test".into());
+            s
+        };
+
+        let area = Rect::from_size(80, 24);
+        let mut pool = ftui_render::grapheme_pool::GraphemePool::new();
+        let mut frame_rec = Frame::new(80, 24, &mut pool);
+        screen_rec.view(&mut frame_rec, area);
+
+        let mut pool2 = ftui_render::grapheme_pool::GraphemePool::new();
+        let mut frame_err = Frame::new(80, 24, &mut pool2);
+        screen_err.view(&mut frame_err, area);
+
+        // The "State:" label cell (column after "State: ") should differ
+        // between recording and error frames.
+        let rec_text = frame_text(&frame_rec);
+        let err_text = frame_text(&frame_err);
+        assert!(rec_text.contains("● Recording"), "Recording label mismatch");
+        assert!(err_text.contains("⚠ Error"), "Error label mismatch");
+    }
+
+    #[test]
+    fn timeline_playhead_uses_unicode_markers() {
+        let mut screen = MacroRecorderScreen::new();
+        screen.macro_data = Some(macro_with_delays(
+            "markers",
+            &[('a', 0), ('b', 500), ('c', 500)],
+        ));
+        screen.start_playback(0);
+        // Don't tick, so playhead is at position 0.
+        let area = Rect::from_size(80, 24);
+        let mut pool = ftui_render::grapheme_pool::GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        screen.view(&mut frame, area);
+        let buf_str = frame_text(&frame);
+
+        // The playhead marker ▶ should appear and future markers ○ should too.
+        assert!(buf_str.contains('▶'), "Playhead should show ▶");
+        assert!(buf_str.contains('○'), "Future events should show ○");
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_works() {
+        assert_eq!(super::truncate_with_ellipsis("hello", 10), "hello");
+        assert_eq!(super::truncate_with_ellipsis("hello world", 6), "hello…");
+        assert_eq!(super::truncate_with_ellipsis("ab", 2), "ab");
+        assert_eq!(super::truncate_with_ellipsis("abc", 2), "a…");
+        // max_chars < 2 returns original
+        assert_eq!(super::truncate_with_ellipsis("abc", 1), "abc");
+    }
+
+    /// Extract all text content from a frame buffer as a single string.
+    fn frame_text(frame: &Frame) -> String {
+        let mut out = String::new();
+        for y in 0..frame.buffer.height() {
+            for x in 0..frame.buffer.width() {
+                if let Some(cell) = frame.buffer.get(x, y) {
+                    if let Some(ch) = cell.content.as_char() {
+                        out.push(ch);
+                    } else {
+                        out.push(' ');
+                    }
+                }
+            }
+        }
+        out
     }
 }

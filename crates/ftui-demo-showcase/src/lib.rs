@@ -12,3 +12,21 @@ pub mod cli;
 pub mod data;
 pub mod screens;
 pub mod theme;
+
+/// Debug logging macro for visual render diagnostics (bd-3vbf.31).
+///
+/// Only emits to stderr when `debug-render` feature is enabled.
+/// Usage: `debug_render!("dashboard", "layout={layout:?}, area={area:?}");`
+#[cfg(feature = "debug-render")]
+#[macro_export]
+macro_rules! debug_render {
+    ($component:expr, $($arg:tt)*) => {
+        eprintln!("[debug-render][{}] {}", $component, format_args!($($arg)*));
+    };
+}
+
+#[cfg(not(feature = "debug-render"))]
+#[macro_export]
+macro_rules! debug_render {
+    ($component:expr, $($arg:tt)*) => {};
+}

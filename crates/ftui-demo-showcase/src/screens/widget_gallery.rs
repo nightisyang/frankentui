@@ -8,6 +8,7 @@ use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::{Style, StyleFlags};
+use ftui_widgets::Badge;
 use ftui_widgets::StatefulWidget;
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
@@ -57,14 +58,14 @@ impl Default for WidgetGallery {
 
 impl WidgetGallery {
     pub fn new() -> Self {
+        let mut list_state = ListState::default();
+        list_state.selected = Some(0);
+        list_state.offset = 0;
         Self {
             current_section: 0,
             tick_count: 0,
             spinner_state: SpinnerState::default(),
-            list_state: ListState {
-                selected: Some(0),
-                offset: 0,
-            },
+            list_state,
         }
     }
 }
@@ -341,13 +342,15 @@ impl WidgetGallery {
                 Constraint::Fixed(3),
                 Constraint::Fixed(1),
                 Constraint::Min(2),
+                Constraint::Fixed(1),
+                Constraint::Fixed(3),
             ])
             .split(area);
 
         // TrueColor gradient strip
         self.render_color_gradient(frame, rows[0]);
 
-        // Separator
+        // Separator: named colors
         Rule::new()
             .title("Named Colors")
             .title_alignment(Alignment::Center)
@@ -356,6 +359,15 @@ impl WidgetGallery {
 
         // Named accent colors
         self.render_named_colors(frame, rows[2]);
+
+        // Separator: semantic badges
+        Rule::new()
+            .title("Semantic Badges")
+            .title_alignment(Alignment::Center)
+            .style(theme::muted())
+            .render(rows[3], frame);
+
+        self.render_badges(frame, rows[4]);
     }
 
     fn render_color_gradient(&self, frame: &mut Frame, area: Rect) {
@@ -426,6 +438,60 @@ impl WidgetGallery {
             Paragraph::new(text)
                 .style(Style::new().fg(*color))
                 .render(cell_area, frame);
+        }
+    }
+
+    fn render_badges(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            return;
+        }
+
+        let styles = theme::semantic_styles();
+
+        let status_row = Rect::new(area.x, area.y, area.width, 1);
+        let priority_row = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
+
+        self.render_badge_row(
+            frame,
+            status_row,
+            &[
+                ("OPEN", styles.status.open.badge_style),
+                ("PROG", styles.status.in_progress.badge_style),
+                ("BLKD", styles.status.blocked.badge_style),
+                ("DONE", styles.status.closed.badge_style),
+            ],
+        );
+
+        self.render_badge_row(
+            frame,
+            priority_row,
+            &[
+                ("P0", styles.priority.p0.badge_style),
+                ("P1", styles.priority.p1.badge_style),
+                ("P2", styles.priority.p2.badge_style),
+                ("P3", styles.priority.p3.badge_style),
+                ("P4", styles.priority.p4.badge_style),
+            ],
+        );
+    }
+
+    fn render_badge_row(&self, frame: &mut Frame, area: Rect, badges: &[(&str, Style)]) {
+        if area.is_empty() {
+            return;
+        }
+
+        let mut x = area.x;
+        let max_x = area.right();
+        let y = area.y;
+
+        for (label, style) in badges {
+            let badge = Badge::new(*label).with_style(*style);
+            let w = badge.width().min(area.width);
+            if x >= max_x || x.saturating_add(w) > max_x {
+                break;
+            }
+            badge.render(Rect::new(x, y, w, 1), frame);
+            x = x.saturating_add(w).saturating_add(1);
         }
     }
 
