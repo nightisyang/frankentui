@@ -14,13 +14,13 @@ use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::Style;
-use ftui_text::search::{search_ascii_case_insensitive, SearchResult};
+use ftui_text::search::{SearchResult, search_ascii_case_insensitive};
+use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::input::TextInput;
 use ftui_widgets::paragraph::Paragraph;
 use ftui_widgets::textarea::TextArea;
-use ftui_widgets::Widget;
 
 use super::{HelpEntry, Screen};
 use crate::theme;
@@ -143,7 +143,11 @@ and proper Unicode handling throughout.
         self.editor = self
             .editor
             .clone()
-            .with_style(Style::new().fg(theme::fg::PRIMARY).bg(theme::alpha::SURFACE))
+            .with_style(
+                Style::new()
+                    .fg(theme::fg::PRIMARY)
+                    .bg(theme::alpha::SURFACE),
+            )
             .with_cursor_line_style(Style::new().bg(theme::alpha::HIGHLIGHT))
             .with_selection_style(
                 Style::new()
@@ -216,13 +220,12 @@ and proper Unicode handling throughout.
         let mut byte_offset = 0;
         for (line_idx, line) in text.lines().enumerate() {
             if line_idx == cursor.line {
-                // Count graphemes up to cursor.grapheme
-                use unicode_segmentation::UnicodeSegmentation;
-                for (g_idx, g) in line.graphemes(true).enumerate() {
-                    if g_idx >= cursor.grapheme {
+                // Count chars up to cursor.grapheme (approximation for ASCII search)
+                for (c_idx, c) in line.chars().enumerate() {
+                    if c_idx >= cursor.grapheme {
                         break;
                     }
-                    byte_offset += g.len();
+                    byte_offset += c.len_utf8();
                 }
                 break;
             }
@@ -240,29 +243,22 @@ and proper Unicode handling throughout.
             return;
         };
 
-        // Convert byte offset to line/grapheme position
+        // Convert byte offset to line/column position
         let text = self.editor.text();
         let target_byte = result.range.start;
         let mut line = 0;
-        let mut grapheme = 0;
+        let mut column = 0;
         let mut byte = 0;
 
         for (line_idx, line_text) in text.lines().enumerate() {
             let line_end = byte + line_text.len();
             if target_byte <= line_end {
                 line = line_idx;
-                // Count graphemes within this line
-                use unicode_segmentation::UnicodeSegmentation;
-                let mut g = 0;
-                let mut b = byte;
-                for grapheme_str in line_text.graphemes(true) {
-                    if b >= target_byte {
-                        break;
-                    }
-                    b += grapheme_str.len();
-                    g += 1;
-                }
-                grapheme = g;
+                // Count chars within this line up to target byte
+                let offset_in_line = target_byte.saturating_sub(byte);
+                column = line_text[..offset_in_line.min(line_text.len())]
+                    .chars()
+                    .count();
                 break;
             }
             byte = line_end + 1; // +1 for newline
@@ -271,7 +267,7 @@ and proper Unicode handling throughout.
         // Set cursor position
         self.editor
             .editor_mut()
-            .set_cursor(ftui_text::CursorPosition::new(line, grapheme, grapheme));
+            .set_cursor(ftui_text::CursorPosition::new(line, column, column));
     }
 
     /// Move to the next search match.
@@ -390,8 +386,7 @@ and proper Unicode handling throughout.
     /// Render the main editor panel.
     fn render_editor_panel(&self, frame: &mut Frame, area: Rect) {
         let focused = self.focus == Focus::Editor;
-        let border_style =
-            theme::panel_border_style(focused, theme::screen_accent::FORMS_INPUT);
+        let border_style = theme::panel_border_style(focused, theme::screen_accent::FORMS_INPUT);
 
         let block = Block::new()
             .borders(Borders::ALL)
@@ -417,8 +412,7 @@ and proper Unicode handling throughout.
         }
 
         let focused = self.focus == Focus::Search || self.focus == Focus::Replace;
-        let border_style =
-            theme::panel_border_style(focused, theme::screen_accent::FORMS_INPUT);
+        let border_style = theme::panel_border_style(focused, theme::screen_accent::FORMS_INPUT);
 
         let block = Block::new()
             .borders(Borders::ALL)
@@ -887,9 +881,7 @@ mod tests {
         // Set up replacement
         screen.focus = Focus::Replace;
         for ch in "XXX".chars() {
-            screen
-                .replace_input
-                .handle_event(&press(KeyCode::Char(ch)));
+            screen.replace_input.handle_event(&press(KeyCode::Char(ch)));
         }
 
         // Replace all

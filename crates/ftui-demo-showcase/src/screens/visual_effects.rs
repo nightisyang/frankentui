@@ -2644,8 +2644,8 @@ impl VisualEffectsScreen {
                 ..area
             };
             let hint = " [1-6] Switch tabs │ [Space] Cycle effect │ [t] Canvas mode";
-            let hint_para = Paragraph::new(hint)
-                .style(Style::new().fg(PackedRgba::rgb(120, 120, 150)));
+            let hint_para =
+                Paragraph::new(hint).style(Style::new().fg(PackedRgba::rgb(120, 120, 150)));
             hint_para.render(hint_area, frame);
         }
     }
@@ -2677,7 +2677,7 @@ impl VisualEffectsScreen {
             _ => {
                 // Standard StyledText rendering
                 let styled = StyledText::new(demo_text)
-                    .style(Style::new().bold())
+                    .bold()
                     .effect(effect)
                     .time(self.text_effects.time);
                 styled.render(text_area, frame);
@@ -2701,8 +2701,8 @@ impl VisualEffectsScreen {
                 self.text_effects.effect_idx + 1,
                 self.text_effects.tab.effect_count()
             );
-            let info_para = Paragraph::new(info)
-                .style(Style::new().fg(PackedRgba::rgb(150, 180, 200)));
+            let info_para =
+                Paragraph::new(info).style(Style::new().fg(PackedRgba::rgb(150, 180, 200)));
             info_para.render(info_area, frame);
         }
     }
@@ -2718,12 +2718,12 @@ impl VisualEffectsScreen {
                     y: area.y + 1,
                     ..area
                 };
-                let shadow_styled = StyledText::new(text)
-                    .style(Style::new().fg(PackedRgba::rgb(50, 50, 80)));
+                let shadow_styled = StyledText::new(text).base_color(PackedRgba::rgb(50, 50, 80));
                 shadow_styled.render(shadow_area, frame);
 
                 let main_styled = StyledText::new(text)
-                    .style(Style::new().bold().fg(PackedRgba::rgb(255, 255, 255)));
+                    .bold()
+                    .base_color(PackedRgba::rgb(255, 255, 255));
                 main_styled.render(area, frame);
             }
             1 => {
@@ -2733,7 +2733,7 @@ impl VisualEffectsScreen {
                     speed: 1.5,
                 };
                 let styled = StyledText::new(text)
-                    .style(Style::new().bold())
+                    .bold()
                     .effect(glow_effect)
                     .time(self.text_effects.time);
                 styled.render(area, frame);
@@ -2741,14 +2741,16 @@ impl VisualEffectsScreen {
             2 => {
                 // Outline effect - approximated with bright text
                 let outline_styled = StyledText::new(text)
-                    .style(Style::new().bold().fg(PackedRgba::rgb(255, 255, 100)));
+                    .bold()
+                    .base_color(PackedRgba::rgb(255, 255, 100));
                 outline_styled.render(area, frame);
             }
             3 => {
                 // Mirror reflection
                 let reflection = Reflection::new(text, 0.5, PackedRgba::rgb(100, 150, 200));
                 let main_styled = StyledText::new(text)
-                    .style(Style::new().bold().fg(PackedRgba::rgb(200, 220, 255)));
+                    .bold()
+                    .base_color(PackedRgba::rgb(200, 220, 255));
                 main_styled.render(area, frame);
 
                 // Render reflection below
@@ -2764,7 +2766,8 @@ impl VisualEffectsScreen {
             _ => {
                 // ASCII Art
                 let ascii = AsciiArtText::new(text, AsciiArtStyle::Block);
-                let ascii_styled = ascii.styled()
+                let ascii_styled = ascii
+                    .styled()
                     .effect(TextEffect::RainbowGradient { speed: 0.3 })
                     .time(self.text_effects.time);
                 ascii_styled.render(area, frame);
@@ -2780,7 +2783,8 @@ impl VisualEffectsScreen {
                 let scanline_time = (self.text_effects.time * 10.0) as usize;
                 let brightness = if scanline_time % 2 == 0 { 255u8 } else { 180u8 };
                 let styled = StyledText::new(text)
-                    .style(Style::new().bold().fg(PackedRgba::rgb(brightness, brightness, brightness)));
+                    .bold()
+                    .base_color(PackedRgba::rgb(brightness, brightness, brightness));
                 styled.render(area, frame);
             }
             _ => {
@@ -2793,7 +2797,7 @@ impl VisualEffectsScreen {
                     ]),
                 };
                 let styled = StyledText::new(text)
-                    .style(Style::new().bold())
+                    .bold()
                     .effect(matrix_effect)
                     .time(self.text_effects.time);
                 styled.render(area, frame);
@@ -2807,18 +2811,32 @@ impl VisualEffectsScreen {
             TextEffectsTab::Combinations => {
                 format!(
                     "Combos: [1]Gradient:{} [2]Anim:{} [3]Typo:{} [4]FX:{}",
-                    if self.text_effects.combo_enabled[0] { "ON" } else { "off" },
-                    if self.text_effects.combo_enabled[1] { "ON" } else { "off" },
-                    if self.text_effects.combo_enabled[2] { "ON" } else { "off" },
-                    if self.text_effects.combo_enabled[3] { "ON" } else { "off" },
+                    if self.text_effects.combo_enabled[0] {
+                        "ON"
+                    } else {
+                        "off"
+                    },
+                    if self.text_effects.combo_enabled[1] {
+                        "ON"
+                    } else {
+                        "off"
+                    },
+                    if self.text_effects.combo_enabled[2] {
+                        "ON"
+                    } else {
+                        "off"
+                    },
+                    if self.text_effects.combo_enabled[3] {
+                        "ON"
+                    } else {
+                        "off"
+                    },
                 )
             }
             _ => {
                 format!(
                     "FPS: {:.1} │ Time: {:.2} │ Easing: {:?}",
-                    self.fps,
-                    self.text_effects.time,
-                    self.text_effects.easing
+                    self.fps, self.text_effects.time, self.text_effects.easing
                 )
             }
         };
@@ -2860,17 +2878,15 @@ impl Screen for VisualEffectsScreen {
                             self.effect = self.effect.next();
                             self.start_transition();
                         }
-                        KeyCode::Char('p') => {
-                            match self.effect {
-                                EffectType::Shape3D => {
-                                    self.shape3d.shape = self.shape3d.shape.next();
-                                }
-                                EffectType::Plasma => {
-                                    self.cycle_plasma_palette();
-                                }
-                                _ => {}
+                        KeyCode::Char('p') => match self.effect {
+                            EffectType::Shape3D => {
+                                self.shape3d.shape = self.shape3d.shape.next();
                             }
-                        }
+                            EffectType::Plasma => {
+                                self.cycle_plasma_palette();
+                            }
+                            _ => {}
+                        },
                         _ => {}
                     }
                 }

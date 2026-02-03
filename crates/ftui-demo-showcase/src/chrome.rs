@@ -4,11 +4,12 @@
 
 use ftui_core::geometry::Rect;
 use ftui_render::frame::{Frame, HitId};
-use ftui_style::{Style, StyleFlags};
+use ftui_style::Style;
 use ftui_text::{Line, Span, Text};
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
+use ftui_widgets::help::{Help, HelpMode};
 use ftui_widgets::paragraph::Paragraph;
 
 use crate::app::ScreenId;
@@ -204,52 +205,132 @@ pub struct HelpEntry {
 }
 
 /// Render a centered help overlay with global and screen-specific keybindings.
+///
+/// # Design (bd-3vbf.7)
+///
+/// The overlay uses a professional modal design with:
+/// - Double border for visual emphasis
+/// - Two-column layout with aligned key/action pairs
+/// - Section headers for Global and screen-specific bindings
+/// - Styled keys with bold/accent styling
+/// - Dismissal hint in the title
 pub fn render_help_overlay(
     current: ScreenId,
     screen_bindings: &[HelpEntry],
     frame: &mut Frame,
     area: Rect,
 ) {
-    // Size: 60% width, 70% height, clamped
-    let overlay_width = ((area.width as u32 * 60) / 100).clamp(30, 70) as u16;
-    let overlay_height = ((area.height as u32 * 70) / 100).clamp(10, 24) as u16;
+    // Size: 60% width, 70% height, clamped to reasonable bounds
+    let overlay_width = ((area.width as u32 * 60) / 100).clamp(36, 72) as u16;
+    let overlay_height = ((area.height as u32 * 70) / 100).clamp(14, 28) as u16;
     let overlay_width = overlay_width.min(area.width.saturating_sub(2));
     let overlay_height = overlay_height.min(area.height.saturating_sub(2));
     let x = area.x + (area.width.saturating_sub(overlay_width)) / 2;
     let y = area.y + (area.height.saturating_sub(overlay_height)) / 2;
     let overlay_area = Rect::new(x, y, overlay_width, overlay_height);
 
+    // Professional modal frame with double border
     let block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Double)
-        .title("Keyboard Shortcuts — Press ? to close")
+        .title(" ⌨ Keyboard Shortcuts ")
         .title_alignment(Alignment::Center)
         .style(theme::help_overlay());
 
     let inner = block.inner(overlay_area);
     block.render(overlay_area, frame);
 
-    // Build help text
-    let mut text = String::from("Global:\n");
-    text.push_str("  1-9, 0     Switch to screen by number\n");
-    text.push_str("  Tab / L    Next screen\n");
-    text.push_str("  S-Tab / H  Previous screen\n");
-    text.push_str("  ?          Toggle this help\n");
-    text.push_str("  Ctrl+K     Command palette\n");
-    text.push_str("  Ctrl+T     Cycle theme\n");
-    text.push_str("  F12        Toggle debug overlay\n");
-    text.push_str("  q          Quit\n");
-    text.push_str("  Ctrl+C     Quit\n");
-
-    if !screen_bindings.is_empty() {
-        text.push_str(&format!("\n{}:\n", current.title()));
-        for entry in screen_bindings {
-            text.push_str(&format!("  {:12}{}\n", entry.key, entry.action));
-        }
+    if inner.width < 10 || inner.height < 5 {
+        return;
     }
 
-    let help = Paragraph::new(text).style(theme::body());
-    help.render(inner, frame);
+    // Key styling: bold with accent color
+    let key_style = Style::new().bold().fg(theme::accent::PRIMARY);
+
+    // Description styling: normal body text
+    let desc_style = theme::body();
+
+    // Section header styling
+    let section_style = Style::new()
+        .bold()
+        .underline()
+        .fg(theme::fg::SECONDARY);
+
+    // Calculate layout: split inner area for sections
+    let content_y = inner.y;
+    let content_width = inner.width;
+    let mut current_y = content_y;
+
+    // Render "Global Navigation" section header
+    let global_header = "Global Navigation";
+    Paragraph::new(global_header)
+        .style(section_style)
+        .render(Rect::new(inner.x, current_y, content_width, 1), frame);
+    current_y += 2; // Header + blank line
+
+    // Global keybindings using Help widget
+    let global_help = Help::new()
+        .with_mode(HelpMode::Full)
+        .with_key_style(key_style)
+        .with_desc_style(desc_style)
+        .entry("1-9, 0", "Switch to screen by number")
+        .entry("Tab / L", "Next screen")
+        .entry("S-Tab / H", "Previous screen")
+        .entry("?", "Toggle this help overlay")
+        .entry("Ctrl+K", "Open command palette")
+        .entry("Ctrl+T", "Cycle color theme")
+        .entry("F12", "Toggle debug overlay")
+        .entry("q / Ctrl+C", "Quit application");
+
+    let global_entries = 8u16;
+    let global_area = Rect::new(
+        inner.x + 1,
+        current_y,
+        content_width.saturating_sub(2),
+        global_entries.min(inner.height.saturating_sub(current_y - content_y)),
+    );
+    global_help.render(global_area, frame);
+    current_y += global_entries + 1;
+
+    // Render screen-specific bindings if available
+    if !screen_bindings.is_empty() && current_y + 3 < inner.bottom() {
+        // Section header for current screen
+        let screen_header = format!("{} Controls", current.title());
+        Paragraph::new(screen_header)
+            .style(section_style)
+            .render(Rect::new(inner.x, current_y, content_width, 1), frame);
+        current_y += 2;
+
+        // Build Help widget for screen-specific bindings
+        let mut screen_help = Help::new()
+            .with_mode(HelpMode::Full)
+            .with_key_style(key_style)
+            .with_desc_style(desc_style);
+
+        for entry in screen_bindings {
+            screen_help = screen_help.entry(entry.key, entry.action);
+        }
+
+        let remaining_height = inner.bottom().saturating_sub(current_y);
+        let screen_area = Rect::new(
+            inner.x + 1,
+            current_y,
+            content_width.saturating_sub(2),
+            remaining_height.min(screen_bindings.len() as u16),
+        );
+        screen_help.render(screen_area, frame);
+    }
+
+    // Footer hint at bottom
+    let footer_y = overlay_area.bottom().saturating_sub(1);
+    if footer_y > current_y {
+        let footer = "Press ? or Esc to close";
+        let footer_style = Style::new().fg(theme::fg::MUTED);
+        let footer_x = inner.x + (inner.width.saturating_sub(footer.len() as u16)) / 2;
+        Paragraph::new(footer)
+            .style(footer_style)
+            .render(Rect::new(footer_x, footer_y, footer.len() as u16, 1), frame);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -277,7 +358,8 @@ pub fn accent_for(id: ScreenId) -> theme::ColorToken {
         ScreenId::Notifications => theme::screen_accent::ADVANCED,
         ScreenId::ActionTimeline => theme::screen_accent::ACTION_TIMELINE,
         ScreenId::IntrinsicSizing => theme::screen_accent::INTRINSIC_SIZING,
-        ScreenId::MousePlayground => theme::screen_accent::ADVANCED,
+        ScreenId::AdvancedTextEditor => theme::screen_accent::ADVANCED,
+        ScreenId::MousePlayground => theme::screen_accent::PERFORMANCE,
     }
 }
 

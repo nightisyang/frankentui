@@ -72,7 +72,10 @@ pub enum ScreenId {
     ActionTimeline,
     /// Content-aware layout examples (bd-2dow.7).
     IntrinsicSizing,
-    // TODO(bd-bksf): MousePlayground pending API integration
+    /// Multi-line text editor with search/replace (bd-12o8).
+    AdvancedTextEditor,
+    /// Mouse/hit-test playground (bd-bksf).
+    MousePlayground,
 }
 
 impl ScreenId {
@@ -96,6 +99,8 @@ impl ScreenId {
         Self::Notifications,
         Self::ActionTimeline,
         Self::IntrinsicSizing,
+        Self::AdvancedTextEditor,
+        Self::MousePlayground,
     ];
 
     /// 0-based index in the ALL array.
@@ -136,6 +141,8 @@ impl ScreenId {
             Self::Notifications => "Notifications",
             Self::ActionTimeline => "Action Timeline",
             Self::IntrinsicSizing => "Intrinsic Sizing",
+            Self::AdvancedTextEditor => "Advanced Text Editor",
+            Self::MousePlayground => "Mouse Playground",
         }
     }
 
@@ -160,6 +167,8 @@ impl ScreenId {
             Self::Notifications => "Notify",
             Self::ActionTimeline => "Timeline",
             Self::IntrinsicSizing => "Sizing",
+            Self::AdvancedTextEditor => "Editor",
+            Self::MousePlayground => "Mouse",
         }
     }
 
@@ -184,6 +193,8 @@ impl ScreenId {
             Self::Notifications => "Notifications",
             Self::ActionTimeline => "ActionTimeline",
             Self::IntrinsicSizing => "IntrinsicSizing",
+            Self::AdvancedTextEditor => "AdvancedTextEditor",
+            Self::MousePlayground => "MousePlayground",
         }
     }
 
@@ -241,10 +252,13 @@ pub struct ScreenStates {
     pub action_timeline: screens::action_timeline::ActionTimeline,
     /// Intrinsic sizing demo screen state (bd-2dow.7).
     pub intrinsic_sizing: screens::intrinsic_sizing::IntrinsicSizingDemo,
-    // TODO(bd-bksf): mouse_playground pending API integration
+    /// Advanced text editor demo screen state (bd-12o8).
+    pub advanced_text_editor: screens::advanced_text_editor::AdvancedTextEditor,
+    /// Mouse/hit-test playground screen state (bd-bksf).
+    pub mouse_playground: screens::mouse_playground::MousePlayground,
     /// Tracks whether each screen has errored during rendering.
     /// Indexed by `ScreenId::index()`.
-    screen_errors: [Option<String>; 18],
+    screen_errors: [Option<String>; 20],
 }
 
 impl ScreenStates {
@@ -306,6 +320,12 @@ impl ScreenStates {
             ScreenId::IntrinsicSizing => {
                 self.intrinsic_sizing.update(event);
             }
+            ScreenId::AdvancedTextEditor => {
+                self.advanced_text_editor.update(event);
+            }
+            ScreenId::MousePlayground => {
+                self.mouse_playground.update(event);
+            }
         }
     }
 
@@ -330,6 +350,8 @@ impl ScreenStates {
         self.notifications.tick(tick_count);
         self.action_timeline.tick(tick_count);
         self.intrinsic_sizing.tick(tick_count);
+        self.advanced_text_editor.tick(tick_count);
+        self.mouse_playground.tick(tick_count);
     }
 
     fn apply_theme(&mut self) {
@@ -339,6 +361,7 @@ impl ScreenStates {
         self.forms_input.apply_theme();
         self.shakespeare.apply_theme();
         self.markdown_rich_text.apply_theme();
+        self.advanced_text_editor.apply_theme();
     }
 
     /// Render the screen identified by `id` into the given area.
@@ -376,6 +399,8 @@ impl ScreenStates {
                 ScreenId::Notifications => self.notifications.view(frame, area),
                 ScreenId::ActionTimeline => self.action_timeline.view(frame, area),
                 ScreenId::IntrinsicSizing => self.intrinsic_sizing.view(frame, area),
+                ScreenId::AdvancedTextEditor => self.advanced_text_editor.view(frame, area),
+                ScreenId::MousePlayground => self.mouse_playground.view(frame, area),
             }
         }));
 
@@ -929,6 +954,7 @@ impl AppModel {
             ScreenId::Notifications => self.screens.notifications.keybindings(),
             ScreenId::ActionTimeline => self.screens.action_timeline.keybindings(),
             ScreenId::IntrinsicSizing => self.screens.intrinsic_sizing.keybindings(),
+            ScreenId::AdvancedTextEditor => self.screens.advanced_text_editor.keybindings(),
             ScreenId::MousePlayground => self.screens.mouse_playground.keybindings(),
         };
         // Convert screens::HelpEntry to chrome::HelpEntry (same struct, different module).
@@ -1286,7 +1312,7 @@ mod tests {
         assert_eq!(app.current_screen, ScreenId::Dashboard);
 
         app.update(AppMsg::PrevScreen);
-        assert_eq!(app.current_screen, ScreenId::IntrinsicSizing);
+        assert_eq!(app.current_screen, ScreenId::MousePlayground);
     }
 
     #[test]
@@ -1364,7 +1390,7 @@ mod tests {
     fn screen_next_prev_wraps() {
         assert_eq!(ScreenId::Dashboard.next(), ScreenId::Shakespeare);
         assert_eq!(ScreenId::VisualEffects.next(), ScreenId::ResponsiveDemo);
-        assert_eq!(ScreenId::Dashboard.prev(), ScreenId::IntrinsicSizing);
+        assert_eq!(ScreenId::Dashboard.prev(), ScreenId::MousePlayground);
         assert_eq!(ScreenId::Shakespeare.prev(), ScreenId::Dashboard);
     }
 
@@ -1543,7 +1569,7 @@ mod tests {
     /// Verify all screens have the expected count.
     #[test]
     fn all_screens_count() {
-        assert_eq!(ScreenId::ALL.len(), 18);
+        assert_eq!(ScreenId::ALL.len(), 20);
     }
 
     // -----------------------------------------------------------------------

@@ -8,6 +8,7 @@
 //! - Hover jitter stabilization (bd-9n09)
 //! - Interactive widgets with click/hover feedback
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::time::Instant;
 
@@ -17,6 +18,7 @@ use ftui_core::event::{
 use ftui_core::geometry::Rect;
 use ftui_core::hover_stabilizer::{HoverStabilizer, HoverStabilizerConfig};
 use ftui_layout::{Constraint, Flex};
+use ftui_render::cell::{Cell, CellAttrs, StyleFlags};
 use ftui_render::frame::{Frame, HitId, HitRegion};
 use ftui_runtime::Cmd;
 use ftui_style::Style;
@@ -89,8 +91,8 @@ pub struct MousePlayground {
     show_jitter_stats: bool,
     /// Last raw hover position.
     last_mouse_pos: Option<(u16, u16)>,
-    /// Last frame's target rects for hit testing.
-    target_rects: Vec<(u64, Rect)>,
+    /// Last rendered grid area for hit testing.
+    last_grid_area: Cell<Rect>,
 }
 
 impl Default for MousePlayground {
@@ -117,7 +119,7 @@ impl MousePlayground {
             show_overlay: false,
             show_jitter_stats: false,
             last_mouse_pos: None,
-            target_rects: Vec::new(),
+            last_grid_area: Cell::new(Rect::default()),
         }
     }
 
@@ -163,7 +165,9 @@ impl MousePlayground {
 
         // Update hover with stabilization
         let raw_target = self.hit_test(x, y);
-        let stabilized = self.hover_stabilizer.update(raw_target, (x, y), Instant::now());
+        let stabilized = self
+            .hover_stabilizer
+            .update(raw_target, (x, y), Instant::now());
 
         // Update hovered state on targets
         if stabilized != self.current_hover {
@@ -183,15 +187,30 @@ impl MousePlayground {
         }
     }
 
-    /// Hit test against stored target rects.
+    /// Hit test against last rendered grid area.
     fn hit_test(&self, x: u16, y: u16) -> Option<u64> {
-        // Simple linear search through targets (for demo purposes)
-        // In production, use SpatialHitIndex from ftui-render
-        for (id, rect) in &self.target_rects {
-            if rect.contains(x, y) {
-                return Some(*id);
+        let grid_area = self.last_grid_area.get();
+        if grid_area.width == 0 || grid_area.height == 0 {
+            return None;
+        }
+
+        let cell_width = grid_area.width / GRID_COLS as u16;
+        let cell_height = grid_area.height / GRID_ROWS as u16;
+        if cell_width == 0 || cell_height == 0 {
+            return None;
+        }
+
+        for row in 0..GRID_ROWS {
+            for col in 0..GRID_COLS {
+                let x0 = grid_area.x + (col as u16) * cell_width;
+                let y0 = grid_area.y + (row as u16) * cell_height;
+                let rect = Rect::new(x0 + 1, y0, cell_width.saturating_sub(2), cell_height);
+                if rect.contains(x, y) {
+                    return Some((row * GRID_COLS + col) as u64 + 1);
+                }
             }
         }
+
         None
     }
 
@@ -247,8 +266,7 @@ impl Screen for MousePlayground {
 
     fn view(&self, frame: &mut Frame, area: Rect) {
         // Main layout: left panel (targets) + right panel (event log)
-        let chunks =
-            Flex::horizontal()
+        let chunks = Flex::horizontal()
             .constraints([Constraint::Percentage(60.0), Constraint::Percentage(40.0)])
             .split(area);
 
@@ -354,7 +372,9 @@ impl MousePlayground {
 
             // Style based on hover/click state
             let style = if target.hovered {
-                Style::new().fg(theme::accent::PRIMARY).bg(theme::accent::PRIMARY)
+                Style::new()
+                    .fg(theme::accent::PRIMARY)
+                    .bg(theme::accent::PRIMARY)
             } else {
                 Style::new().bg(theme::bg::SURFACE)
             };
@@ -394,7 +414,12 @@ impl MousePlayground {
             }
 
             // Register hit region
-            frame.register_hit(target_rect, HitId::new(target.id), HitRegion::Content, 0);
+            frame.register_hit(
+                target_rect,
+                HitId::new(target.id as u32),
+                HitRegion::Content,
+                0,
+            );
         }
 
         // Store rects for hit testing (via interior mutability would be cleaner,
@@ -458,14 +483,22 @@ impl MousePlayground {
         if let Some((x, y)) = self.last_mouse_pos {
             if x < area.x + area.width && y < area.y + area.height {
                 // Draw crosshair at mouse position
-                let crosshair_style = Style::new().fg(theme::accent::PRIMARY);
+                let horiz_cell = Cell::from_char('-')
+                    .with_fg(theme::accent::PRIMARY)
+                    .with_attrs(CellAttrs::new(StyleFlags::DIM, 0));
+                let vert_cell = Cell::from_char('|')
+                    .with_fg(theme::accent::PRIMARY)
+                    .with_attrs(CellAttrs::new(StyleFlags::DIM, 0));
+                let center_cell = Cell::from_char('+')
+                    .with_fg(theme::accent::PRIMARY)
+                    .with_attrs(CellAttrs::new(StyleFlags::BOLD, 0));
 
                 // Horizontal line (within bounds)
                 let h_start = area.x;
                 let h_end = (area.x + area.width).min(x.saturating_add(20));
                 for hx in h_start..h_end {
                     if hx != x {
-                        frame.set_style(Rect::new(hx, y, 1, 1), crosshair_style.dim());
+                        frame.buffer.set(hx, y, horiz_cell);
                     }
                 }
 
@@ -474,12 +507,12 @@ impl MousePlayground {
                 let v_end = (area.y + area.height).min(y.saturating_add(10));
                 for vy in v_start..v_end {
                     if vy != y {
-                        frame.set_style(Rect::new(x, vy, 1, 1), crosshair_style.dim());
+                        frame.buffer.set(x, vy, vert_cell);
                     }
                 }
 
                 // Center marker
-                frame.set_style(Rect::new(x, y, 1, 1), crosshair_style.bold());
+                frame.buffer.set(x, y, center_cell);
             }
         }
     }
