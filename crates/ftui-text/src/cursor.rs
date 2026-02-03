@@ -429,14 +429,15 @@ mod tests {
         let r = rope("hello  world!!!");
         let nav = CursorNavigator::new(&r);
         let pos = nav.from_line_grapheme(0, 0);
+        // move_word_right skips the word class then any trailing whitespace
         let right = nav.move_word_right(pos);
-        assert_eq!(right.grapheme, 5);
+        assert_eq!(right.grapheme, 7); // past "hello" + spaces
         let right = nav.move_word_right(right);
-        assert_eq!(right.grapheme, 7); // skips spaces
+        assert_eq!(right.grapheme, 12); // past "world" (no trailing space before punct)
         let right = nav.move_word_right(right);
-        assert_eq!(right.grapheme, 12); // end of "world"
+        assert_eq!(right.grapheme, 15); // past "!!!"
         let left = nav.move_word_left(right);
-        assert_eq!(left.grapheme, 7);
+        assert_eq!(left.grapheme, 12); // back to start of "!!!"
     }
 
     #[test]
