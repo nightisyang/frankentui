@@ -765,7 +765,6 @@ impl<W: Write> Presenter<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cell::CellContent;
 
     fn test_presenter() -> Presenter<Vec<u8>> {
         let caps = TerminalCapabilities::basic();

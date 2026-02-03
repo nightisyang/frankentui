@@ -44,6 +44,10 @@ pub use effects::{
     },
 };
 
+// Canvas adapters for sub-pixel (Braille) FX rendering
+#[cfg(feature = "canvas")]
+pub use effects::{MetaballsCanvasAdapter, PlasmaCanvasAdapter};
+
 /// Quality hint for FX implementations.
 ///
 /// This enum is a stable "dial" so FX code can implement graceful degradation.

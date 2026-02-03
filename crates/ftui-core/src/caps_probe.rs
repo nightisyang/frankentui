@@ -1928,17 +1928,17 @@ mod tests {
 
     #[test]
     fn unit_evidence_weights_signs() {
-        // Positive evidence weights are positive.
-        assert!(evidence_weights::ENV_POSITIVE > 0.0);
-        assert!(evidence_weights::DA2_KNOWN_TERMINAL > 0.0);
-        assert!(evidence_weights::DA1_CONFIRMED > 0.0);
-        assert!(evidence_weights::DECRPM_CONFIRMED > 0.0);
+        // Positive evidence weights are positive (compile-time checks).
+        const { assert!(evidence_weights::ENV_POSITIVE > 0.0) };
+        const { assert!(evidence_weights::DA2_KNOWN_TERMINAL > 0.0) };
+        const { assert!(evidence_weights::DA1_CONFIRMED > 0.0) };
+        const { assert!(evidence_weights::DECRPM_CONFIRMED > 0.0) };
 
-        // Negative evidence weights are negative.
-        assert!(evidence_weights::ENV_ABSENT < 0.0);
-        assert!(evidence_weights::DECRPM_DENIED < 0.0);
-        assert!(evidence_weights::TIMEOUT < 0.0);
-        assert!(evidence_weights::MUX_PENALTY < 0.0);
+        // Negative evidence weights are negative (compile-time checks).
+        const { assert!(evidence_weights::ENV_ABSENT < 0.0) };
+        const { assert!(evidence_weights::DECRPM_DENIED < 0.0) };
+        const { assert!(evidence_weights::TIMEOUT < 0.0) };
+        const { assert!(evidence_weights::MUX_PENALTY < 0.0) };
     }
 
     #[test]

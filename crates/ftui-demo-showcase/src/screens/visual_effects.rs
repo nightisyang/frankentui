@@ -26,7 +26,7 @@ use ftui_extras::text_effects::{
     StyledText, TextEffect, TransitionState,
 };
 use ftui_extras::visual_fx::{
-    Backdrop, FxQuality, MetaballsFx, PlasmaFx, PlasmaPalette, ThemeInputs,
+    FxQuality, MetaballsCanvasAdapter, PlasmaCanvasAdapter, PlasmaPalette, ThemeInputs,
 };
 use ftui_render::cell::PackedRgba;
 use ftui_render::frame::Frame;
@@ -61,12 +61,12 @@ pub struct VisualEffectsScreen {
     frame: u64,
     /// Global time for animations.
     time: f64,
-    /// Metaballs backdrop (ftui-extras).
-    metaballs_backdrop: RefCell<Backdrop>,
+    /// Metaballs canvas adapter (high-res via Braille).
+    metaballs_adapter: RefCell<MetaballsCanvasAdapter>,
     /// 3D shape state.
     shape3d: Shape3DState,
-    /// Plasma backdrop (ftui-extras).
-    plasma_backdrop: RefCell<Backdrop>,
+    /// Plasma canvas adapter (high-res via Braille).
+    plasma_adapter: RefCell<PlasmaCanvasAdapter>,
     /// Current plasma palette.
     plasma_palette: PlasmaPalette,
     /// Particle system state.
@@ -2521,25 +2521,16 @@ fn rand_simple() -> f64 {
 
 impl Default for VisualEffectsScreen {
     fn default() -> Self {
-        let theme_inputs = current_fx_theme();
-        let mut metaballs_backdrop =
-            Backdrop::new(Box::new(MetaballsFx::default_theme()), theme_inputs);
-        metaballs_backdrop.set_effect_opacity(0.6);
-
         let plasma_palette = PlasmaPalette::Sunset;
-        let mut plasma_backdrop =
-            Backdrop::new(Box::new(PlasmaFx::new(plasma_palette)), theme_inputs);
-        plasma_backdrop.set_effect_opacity(0.6);
-
         let markdown_panel = render_markdown(MARKDOWN_OVERLAY);
 
         Self {
             effect: EffectType::Metaballs,
             frame: 0,
             time: 0.0,
-            metaballs_backdrop: RefCell::new(metaballs_backdrop),
+            metaballs_adapter: RefCell::new(MetaballsCanvasAdapter::new()),
             shape3d: Shape3DState::default(),
-            plasma_backdrop: RefCell::new(plasma_backdrop),
+            plasma_adapter: RefCell::new(PlasmaCanvasAdapter::new(plasma_palette)),
             plasma_palette,
             particles: ParticleState::default(),
             matrix: MatrixState::default(),
@@ -2586,11 +2577,7 @@ impl VisualEffectsScreen {
 
     fn cycle_plasma_palette(&mut self) {
         self.plasma_palette = next_plasma_palette(self.plasma_palette);
-        let theme_inputs = current_fx_theme();
-        let mut plasma_backdrop =
-            Backdrop::new(Box::new(PlasmaFx::new(self.plasma_palette)), theme_inputs);
-        plasma_backdrop.set_effect_opacity(0.6);
-        *self.plasma_backdrop.borrow_mut() = plasma_backdrop;
+        self.plasma_adapter.borrow_mut().set_palette(self.plasma_palette);
     }
 
     /// Start a transition overlay for text effects.
