@@ -34,6 +34,7 @@
 //! | `text-effects` | [`text_effects`] | Animated text effects (gradients, fades, ASCII art) |
 //! | `visual-fx` | [`visual_fx`] | Feature-gated visual FX primitives (backdrops, CPU/GPU adapters) |
 //! | `fx-gpu` | `visual_fx::gpu` | Optional GPU acceleration for metaballs (silent CPU fallback) |
+//! | `help` | [`help`] | Contextual help system with tooltips |
 
 #[cfg(feature = "canvas")]
 pub mod canvas;
@@ -103,3 +104,6 @@ pub mod text_effects;
 
 #[cfg(feature = "visual-fx")]
 pub mod visual_fx;
+
+#[cfg(feature = "help")]
+pub mod help;
