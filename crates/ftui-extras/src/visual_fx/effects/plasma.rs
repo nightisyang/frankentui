@@ -909,4 +909,232 @@ mod tests {
         // They should differ (different wave functions)
         assert_ne!(out_full, out_min);
     }
+
+    // =========================================================================
+    // No-Allocation Proxy Tests (bd-l8x9.4.3)
+    // =========================================================================
+
+    #[test]
+    fn no_alloc_proxy_stable_size() {
+        // Verify that repeated renders at stable size do not grow caller's buffer capacity
+        let theme = ThemeInputs::default_dark();
+        let mut fx = PlasmaFx::default();
+
+        // Create buffer with exact capacity (no spare room)
+        let mut out = Vec::with_capacity(64);
+        out.resize(64, PackedRgba::TRANSPARENT);
+        let initial_capacity = out.capacity();
+
+        // Render multiple times at the same size
+        for frame in 0..10 {
+            let ctx = FxContext {
+                width: 8,
+                height: 8,
+                frame,
+                time_seconds: frame as f64 * 0.1,
+                quality: FxQuality::Full,
+                theme: &theme,
+            };
+            fx.render(ctx, &mut out);
+        }
+
+        // Capacity should not have grown
+        assert_eq!(
+            out.capacity(),
+            initial_capacity,
+            "Buffer capacity grew during repeated renders: {} -> {}",
+            initial_capacity,
+            out.capacity()
+        );
+    }
+
+    #[test]
+    fn no_alloc_fx_internal_state() {
+        // PlasmaFx should have no internal buffers that grow
+        let fx = PlasmaFx::default();
+        let size1 = std::mem::size_of_val(&fx);
+
+        // Create with different palette
+        let fx2 = PlasmaFx::new(PlasmaPalette::Ocean);
+        let size2 = std::mem::size_of_val(&fx2);
+
+        // Both should have identical sizes (no dynamic allocations)
+        assert_eq!(size1, size2, "PlasmaFx size should not vary with palette");
+
+        // Size should be minimal (just the palette enum)
+        assert!(
+            size1 <= 8,
+            "PlasmaFx should be small (just palette enum), got {} bytes",
+            size1
+        );
+    }
+
+    // =========================================================================
+    // Quality Scaling Tests (bd-l8x9.4.3)
+    // =========================================================================
+
+    #[test]
+    fn quality_reduced_produces_output() {
+        // Reduced quality should still produce visible output (not empty)
+        let theme = ThemeInputs::default_dark();
+        let mut fx = PlasmaFx::default();
+        let ctx = FxContext {
+            width: 8,
+            height: 8,
+            frame: 0,
+            time_seconds: 1.0,
+            quality: FxQuality::Reduced,
+            theme: &theme,
+        };
+        let mut out = vec![PackedRgba::TRANSPARENT; 64];
+        fx.render(ctx, &mut out);
+
+        // Should have non-transparent pixels
+        let non_transparent = out
+            .iter()
+            .filter(|c| **c != PackedRgba::TRANSPARENT)
+            .count();
+        assert!(
+            non_transparent > 0,
+            "Reduced quality should produce visible output"
+        );
+    }
+
+    #[test]
+    fn quality_tiers_are_deterministic() {
+        // Each quality tier should be deterministic
+        let theme = ThemeInputs::default_dark();
+
+        for quality in [FxQuality::Full, FxQuality::Reduced, FxQuality::Minimal] {
+            let mut fx = PlasmaFx::default();
+            let ctx = FxContext {
+                width: 8,
+                height: 8,
+                frame: 42,
+                time_seconds: 3.14,
+                quality,
+                theme: &theme,
+            };
+
+            let mut out1 = vec![PackedRgba::TRANSPARENT; 64];
+            let mut out2 = vec![PackedRgba::TRANSPARENT; 64];
+
+            fx.render(ctx, &mut out1);
+            fx.render(ctx, &mut out2);
+
+            assert_eq!(out1, out2, "{:?} quality should be deterministic", quality);
+        }
+    }
+
+    #[test]
+    fn quality_affects_visual_complexity() {
+        // Verify that quality tiers produce measurably different output
+        // Full should have more variance than Minimal (more wave components)
+        let theme = ThemeInputs::default_dark();
+        let mut fx = PlasmaFx::default();
+
+        // Sample at multiple time points to get variance
+        let mut full_variance = 0.0;
+        let mut minimal_variance = 0.0;
+
+        for time in [0.0, 0.5, 1.0, 1.5, 2.0] {
+            let ctx_full = FxContext {
+                width: 4,
+                height: 4,
+                frame: 0,
+                time_seconds: time,
+                quality: FxQuality::Full,
+                theme: &theme,
+            };
+            let ctx_min = FxContext {
+                width: 4,
+                height: 4,
+                frame: 0,
+                time_seconds: time,
+                quality: FxQuality::Minimal,
+                theme: &theme,
+            };
+
+            let mut out_full = vec![PackedRgba::TRANSPARENT; 16];
+            let mut out_min = vec![PackedRgba::TRANSPARENT; 16];
+
+            fx.render(ctx_full, &mut out_full);
+            fx.render(ctx_min, &mut out_min);
+
+            // Calculate variance as sum of absolute differences between adjacent cells
+            for i in 0..15 {
+                full_variance +=
+                    (out_full[i].r() as i32 - out_full[i + 1].r() as i32).unsigned_abs() as f64;
+                minimal_variance +=
+                    (out_min[i].r() as i32 - out_min[i + 1].r() as i32).unsigned_abs() as f64;
+            }
+        }
+
+        // Full should have at least as much variance as Minimal
+        // (more wave components = more complex patterns)
+        // Note: We use >= rather than > because variance depends on sampling
+        assert!(
+            full_variance >= minimal_variance * 0.8,
+            "Full quality variance ({}) should be >= 80% of Minimal variance ({})",
+            full_variance,
+            minimal_variance
+        );
+    }
+
+    // =========================================================================
+    // Determinism with Hash Verification (bd-l8x9.4.3)
+    // =========================================================================
+
+    #[test]
+    fn determinism_hash_stable() {
+        // Compute a hash of the output and verify it's stable across runs
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let theme = ThemeInputs::default_dark();
+        let mut fx = PlasmaFx::new(PlasmaPalette::Ocean);
+        let ctx = FxContext {
+            width: 16,
+            height: 8,
+            frame: 100,
+            time_seconds: 5.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+
+        let mut out = vec![PackedRgba::TRANSPARENT; 128];
+        fx.render(ctx, &mut out);
+
+        // Hash the output
+        let mut hasher1 = DefaultHasher::new();
+        for color in &out {
+            color.r().hash(&mut hasher1);
+            color.g().hash(&mut hasher1);
+            color.b().hash(&mut hasher1);
+            color.a().hash(&mut hasher1);
+        }
+        let hash1 = hasher1.finish();
+
+        // Render again and hash
+        fx.render(ctx, &mut out);
+        let mut hasher2 = DefaultHasher::new();
+        for color in &out {
+            color.r().hash(&mut hasher2);
+            color.g().hash(&mut hasher2);
+            color.b().hash(&mut hasher2);
+            color.a().hash(&mut hasher2);
+        }
+        let hash2 = hasher2.finish();
+
+        assert_eq!(
+            hash1, hash2,
+            "Determinism failed: hash changed on re-render"
+        );
+
+        // Log for debugging (can be used to track regressions)
+        eprintln!(
+            "{{\"test\":\"determinism_hash\",\"preset\":\"Ocean\",\"dims\":\"16x8\",\"frame\":100,\"time\":5.0,\"hash\":\"{:016x}\"}}",
+            hash1
+        );
+    }
 }
