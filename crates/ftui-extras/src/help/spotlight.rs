@@ -1,0 +1,719 @@
+#![forbid(unsafe_code)]
+
+//! Spotlight overlay widget for highlighting target widgets during tours.
+//!
+//! # Invariants
+//!
+//! 1. The spotlight creates a dimmed overlay with a "cutout" for the target.
+//! 2. The info panel is positioned to avoid obscuring the target.
+//! 3. Animation state is deterministic given elapsed time.
+//!
+//! # Example
+//!
+//! ```ignore
+//! use ftui_extras::help::{Spotlight, SpotlightConfig};
+//!
+//! let spotlight = Spotlight::new()
+//!     .target(Rect::new(10, 5, 20, 3))
+//!     .title("Search Bar")
+//!     .content("Use this to find items quickly.");
+//! ```
+
+use ftui_core::geometry::Rect;
+use ftui_render::cell::{CellContent, PackedRgba};
+use ftui_render::frame::Frame;
+use ftui_style::Style;
+use ftui_widgets::Widget;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+/// Spotlight configuration.
+#[derive(Debug, Clone)]
+pub struct SpotlightConfig {
+    /// Overlay dim color (semi-transparent).
+    pub overlay_color: PackedRgba,
+    /// Info panel background color.
+    pub panel_bg: PackedRgba,
+    /// Info panel foreground color.
+    pub panel_fg: PackedRgba,
+    /// Title style.
+    pub title_style: Style,
+    /// Content style.
+    pub content_style: Style,
+    /// Navigation hint style.
+    pub hint_style: Style,
+    /// Padding around the target (spotlight "breathing room").
+    pub target_padding: u16,
+    /// Panel max width.
+    pub panel_max_width: u16,
+    /// Panel padding.
+    pub panel_padding: u16,
+    /// Show navigation hints.
+    pub show_hints: bool,
+}
+
+impl Default for SpotlightConfig {
+    fn default() -> Self {
+        Self {
+            overlay_color: PackedRgba::rgba(0, 0, 0, 180),
+            panel_bg: PackedRgba::rgb(40, 44, 52),
+            panel_fg: PackedRgba::rgb(220, 220, 220),
+            title_style: Style::new().fg(PackedRgba::rgb(97, 175, 239)),
+            content_style: Style::new().fg(PackedRgba::rgb(200, 200, 200)),
+            hint_style: Style::new().fg(PackedRgba::rgb(140, 140, 140)),
+            target_padding: 1,
+            panel_max_width: 50,
+            panel_padding: 1,
+            show_hints: true,
+        }
+    }
+}
+
+impl SpotlightConfig {
+    /// Set overlay color.
+    #[must_use]
+    pub fn overlay_color(mut self, color: PackedRgba) -> Self {
+        self.overlay_color = color;
+        self
+    }
+
+    /// Set panel background.
+    #[must_use]
+    pub fn panel_bg(mut self, color: PackedRgba) -> Self {
+        self.panel_bg = color;
+        self
+    }
+
+    /// Set panel foreground.
+    #[must_use]
+    pub fn panel_fg(mut self, color: PackedRgba) -> Self {
+        self.panel_fg = color;
+        self
+    }
+
+    /// Set title style.
+    #[must_use]
+    pub fn title_style(mut self, style: Style) -> Self {
+        self.title_style = style;
+        self
+    }
+
+    /// Set target padding.
+    #[must_use]
+    pub fn target_padding(mut self, padding: u16) -> Self {
+        self.target_padding = padding;
+        self
+    }
+
+    /// Set panel max width.
+    #[must_use]
+    pub fn panel_max_width(mut self, width: u16) -> Self {
+        self.panel_max_width = width;
+        self
+    }
+
+    /// Set whether to show navigation hints.
+    #[must_use]
+    pub fn show_hints(mut self, show: bool) -> Self {
+        self.show_hints = show;
+        self
+    }
+}
+
+/// Position for the info panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanelPosition {
+    /// Above the target.
+    Above,
+    /// Below the target.
+    Below,
+    /// Left of the target.
+    Left,
+    /// Right of the target.
+    Right,
+}
+
+/// Spotlight overlay widget.
+#[derive(Debug, Clone)]
+pub struct Spotlight {
+    /// Target bounds to highlight.
+    target: Option<Rect>,
+    /// Step title.
+    title: String,
+    /// Step content.
+    content: String,
+    /// Progress indicator (e.g., "2 of 5").
+    progress: Option<String>,
+    /// Navigation hints (e.g., "Enter: Next | Esc: Skip").
+    hints: Option<String>,
+    /// Configuration.
+    config: SpotlightConfig,
+    /// Force panel position.
+    forced_position: Option<PanelPosition>,
+}
+
+impl Default for Spotlight {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Spotlight {
+    /// Create a new spotlight.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            target: None,
+            title: String::new(),
+            content: String::new(),
+            progress: None,
+            hints: None,
+            config: SpotlightConfig::default(),
+            forced_position: None,
+        }
+    }
+
+    /// Set the target bounds.
+    #[must_use]
+    pub fn target(mut self, bounds: Rect) -> Self {
+        self.target = Some(bounds);
+        self
+    }
+
+    /// Set the title.
+    #[must_use]
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = title.into();
+        self
+    }
+
+    /// Set the content.
+    #[must_use]
+    pub fn content(mut self, content: impl Into<String>) -> Self {
+        self.content = content.into();
+        self
+    }
+
+    /// Set progress text.
+    #[must_use]
+    pub fn progress(mut self, progress: impl Into<String>) -> Self {
+        self.progress = Some(progress.into());
+        self
+    }
+
+    /// Set navigation hints.
+    #[must_use]
+    pub fn hints(mut self, hints: impl Into<String>) -> Self {
+        self.hints = Some(hints.into());
+        self
+    }
+
+    /// Set configuration.
+    #[must_use]
+    pub fn config(mut self, config: SpotlightConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Force panel position.
+    #[must_use]
+    pub fn force_position(mut self, position: PanelPosition) -> Self {
+        self.forced_position = Some(position);
+        self
+    }
+
+    /// Get padded target bounds.
+    fn padded_target(&self) -> Option<Rect> {
+        self.target.map(|t| {
+            let pad = self.config.target_padding;
+            Rect::new(
+                t.x.saturating_sub(pad),
+                t.y.saturating_sub(pad),
+                t.width + pad * 2,
+                t.height + pad * 2,
+            )
+        })
+    }
+
+    /// Wrap text into lines respecting max width.
+    fn wrap_text(&self, text: &str, max_width: usize) -> Vec<String> {
+        if max_width == 0 {
+            return vec![];
+        }
+
+        let mut lines = Vec::new();
+        for paragraph in text.lines() {
+            if paragraph.is_empty() {
+                lines.push(String::new());
+                continue;
+            }
+
+            let mut current_line = String::new();
+            let mut current_width: usize = 0;
+
+            for word in paragraph.split_whitespace() {
+                let word_width = UnicodeWidthStr::width(word);
+
+                if current_width == 0 {
+                    current_line = word.to_string();
+                    current_width = word_width;
+                } else if current_width + 1 + word_width <= max_width {
+                    current_line.push(' ');
+                    current_line.push_str(word);
+                    current_width += 1 + word_width;
+                } else {
+                    lines.push(current_line);
+                    current_line = word.to_string();
+                    current_width = word_width;
+                }
+            }
+
+            if !current_line.is_empty() {
+                lines.push(current_line);
+            }
+        }
+
+        lines
+    }
+
+    /// Calculate panel dimensions.
+    fn panel_size(&self, screen: Rect) -> (u16, u16) {
+        let padding = self.config.panel_padding as usize;
+        let inner_width = (self.config.panel_max_width as usize).saturating_sub(padding * 2);
+
+        let title_lines = self.wrap_text(&self.title, inner_width);
+        let content_lines = self.wrap_text(&self.content, inner_width);
+
+        let mut height = padding * 2;
+        height += title_lines.len();
+        if !content_lines.is_empty() {
+            height += 1; // Spacing
+            height += content_lines.len();
+        }
+        if self.progress.is_some() {
+            height += 1;
+        }
+        if self.config.show_hints && self.hints.is_some() {
+            height += 1;
+        }
+
+        let max_line_width = title_lines
+            .iter()
+            .chain(content_lines.iter())
+            .map(|l| UnicodeWidthStr::width(l.as_str()))
+            .max()
+            .unwrap_or(0);
+
+        let width = (max_line_width + padding * 2)
+            .min(self.config.panel_max_width as usize)
+            .min(screen.width as usize);
+
+        (width as u16, height as u16)
+    }
+
+    /// Calculate panel position.
+    fn panel_position(&self, screen: Rect) -> (u16, u16, PanelPosition) {
+        let (width, height) = self.panel_size(screen);
+        let target =
+            self.padded_target()
+                .unwrap_or(Rect::new(screen.width / 2, screen.height / 2, 0, 0));
+
+        let gap = 1u16;
+
+        // Helper to check if position fits
+        let fits = |x: i32, y: i32| -> bool {
+            x >= screen.x as i32
+                && y >= screen.y as i32
+                && x + width as i32 <= screen.right() as i32
+                && y + height as i32 <= screen.bottom() as i32
+        };
+
+        // Try positions in order: below, above, right, left
+        let below = (target.x as i32, target.bottom() as i32 + gap as i32);
+        let above = (
+            target.x as i32,
+            target.y as i32 - height as i32 - gap as i32,
+        );
+        let right = (target.right() as i32 + gap as i32, target.y as i32);
+        let left = (target.x as i32 - width as i32 - gap as i32, target.y as i32);
+
+        let (x, y, pos) = match self.forced_position {
+            Some(PanelPosition::Below) => (below.0, below.1, PanelPosition::Below),
+            Some(PanelPosition::Above) => (above.0, above.1, PanelPosition::Above),
+            Some(PanelPosition::Right) => (right.0, right.1, PanelPosition::Right),
+            Some(PanelPosition::Left) => (left.0, left.1, PanelPosition::Left),
+            None => {
+                if fits(below.0, below.1) {
+                    (below.0, below.1, PanelPosition::Below)
+                } else if fits(above.0, above.1) {
+                    (above.0, above.1, PanelPosition::Above)
+                } else if fits(right.0, right.1) {
+                    (right.0, right.1, PanelPosition::Right)
+                } else if fits(left.0, left.1) {
+                    (left.0, left.1, PanelPosition::Left)
+                } else {
+                    // Default to below, clamped
+                    (below.0, below.1, PanelPosition::Below)
+                }
+            }
+        };
+
+        // Clamp to screen bounds
+        let clamped_x = x
+            .max(screen.x as i32)
+            .min((screen.right() as i32).saturating_sub(width as i32));
+        let clamped_y = y
+            .max(screen.y as i32)
+            .min((screen.bottom() as i32).saturating_sub(height as i32));
+
+        (clamped_x.max(0) as u16, clamped_y.max(0) as u16, pos)
+    }
+
+    /// Render the dimmed overlay (excluding target area).
+    fn render_overlay(&self, frame: &mut Frame, area: Rect) {
+        let target = self.padded_target();
+        let overlay_color = self.config.overlay_color;
+
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                // Skip the target cutout area
+                if let Some(t) = target
+                    && x >= t.x
+                    && x < t.right()
+                    && y >= t.y
+                    && y < t.bottom()
+                {
+                    continue;
+                }
+
+                if let Some(cell) = frame.buffer.get_mut(x, y) {
+                    // Blend overlay color onto existing background
+                    match overlay_color.a() {
+                        0 => {}
+                        255 => cell.bg = overlay_color,
+                        _ => cell.bg = overlay_color.over(cell.bg),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Render the info panel.
+    fn render_panel(&self, frame: &mut Frame, area: Rect) {
+        let (px, py, _pos) = self.panel_position(area);
+        let (width, height) = self.panel_size(area);
+        let panel_rect = Rect::new(px, py, width, height);
+
+        if panel_rect.is_empty() || width < 2 || height < 2 {
+            return;
+        }
+
+        // Fill panel background
+        for y in panel_rect.y..panel_rect.bottom() {
+            for x in panel_rect.x..panel_rect.right() {
+                if let Some(cell) = frame.buffer.get_mut(x, y) {
+                    cell.bg = self.config.panel_bg;
+                    cell.fg = self.config.panel_fg;
+                    cell.content = CellContent::from_char(' ');
+                }
+            }
+        }
+
+        let padding = self.config.panel_padding;
+        let inner_width = (width as usize).saturating_sub(padding as usize * 2);
+        let mut row = panel_rect.y + padding;
+
+        // Render title
+        let title_lines = self.wrap_text(&self.title, inner_width);
+        for line in &title_lines {
+            if row >= panel_rect.bottom().saturating_sub(padding) {
+                break;
+            }
+            self.render_line(
+                frame,
+                panel_rect.x + padding,
+                row,
+                line,
+                &self.config.title_style,
+                inner_width,
+            );
+            row += 1;
+        }
+
+        // Render content
+        let content_lines = self.wrap_text(&self.content, inner_width);
+        if !content_lines.is_empty() {
+            row += 1; // Spacing
+            for line in &content_lines {
+                if row >= panel_rect.bottom().saturating_sub(padding) {
+                    break;
+                }
+                self.render_line(
+                    frame,
+                    panel_rect.x + padding,
+                    row,
+                    line,
+                    &self.config.content_style,
+                    inner_width,
+                );
+                row += 1;
+            }
+        }
+
+        // Render progress
+        if let Some(ref progress) = self.progress
+            && row < panel_rect.bottom().saturating_sub(padding)
+        {
+            self.render_line(
+                frame,
+                panel_rect.x + padding,
+                row,
+                progress,
+                &self.config.hint_style,
+                inner_width,
+            );
+            row += 1;
+        }
+
+        // Render hints
+        if self.config.show_hints
+            && let Some(ref hints) = self.hints
+            && row < panel_rect.bottom().saturating_sub(padding)
+        {
+            self.render_line(
+                frame,
+                panel_rect.x + padding,
+                row,
+                hints,
+                &self.config.hint_style,
+                inner_width,
+            );
+        }
+    }
+
+    /// Render a single line of text.
+    fn render_line(
+        &self,
+        frame: &mut Frame,
+        start_x: u16,
+        y: u16,
+        text: &str,
+        style: &Style,
+        max_width: usize,
+    ) {
+        let mut x = start_x;
+        let mut width_used = 0usize;
+
+        for grapheme in text.graphemes(true) {
+            let w = UnicodeWidthStr::width(grapheme);
+            if w == 0 {
+                continue;
+            }
+            if width_used + w > max_width {
+                break;
+            }
+
+            if let Some(cell) = frame.buffer.get_mut(x, y)
+                && let Some(c) = grapheme.chars().next()
+            {
+                cell.content = CellContent::from_char(c);
+                if let Some(fg) = style.fg {
+                    cell.fg = fg;
+                }
+                if let Some(bg) = style.bg {
+                    cell.bg = bg;
+                }
+            }
+
+            // Mark continuation cells for wide chars
+            for offset in 1..w {
+                if let Some(cell) = frame.buffer.get_mut(x + offset as u16, y) {
+                    cell.content = CellContent::CONTINUATION;
+                }
+            }
+
+            x += w as u16;
+            width_used += w;
+        }
+    }
+
+    /// Get the panel bounds for hit testing.
+    #[must_use]
+    pub fn panel_bounds(&self, screen: Rect) -> Rect {
+        let (px, py, _) = self.panel_position(screen);
+        let (width, height) = self.panel_size(screen);
+        Rect::new(px, py, width, height)
+    }
+}
+
+impl Widget for Spotlight {
+    fn render(&self, area: Rect, frame: &mut Frame) {
+        if area.is_empty() {
+            return;
+        }
+
+        // First render the overlay
+        self.render_overlay(frame, area);
+
+        // Then render the info panel
+        self.render_panel(frame, area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ftui_render::grapheme_pool::GraphemePool;
+
+    // ── Configuration tests ──────────────────────────────────────────────
+
+    #[test]
+    fn config_builder() {
+        let config = SpotlightConfig::default()
+            .target_padding(2)
+            .panel_max_width(60)
+            .show_hints(false);
+
+        assert_eq!(config.target_padding, 2);
+        assert_eq!(config.panel_max_width, 60);
+        assert!(!config.show_hints);
+    }
+
+    // ── Spotlight construction ───────────────────────────────────────────
+
+    #[test]
+    fn spotlight_construction() {
+        let spotlight = Spotlight::new()
+            .target(Rect::new(10, 5, 20, 3))
+            .title("Test Title")
+            .content("Test content here")
+            .progress("Step 1 of 3")
+            .hints("Enter: Next | Esc: Skip");
+
+        assert_eq!(spotlight.title, "Test Title");
+        assert_eq!(spotlight.content, "Test content here");
+        assert_eq!(spotlight.progress, Some("Step 1 of 3".into()));
+        assert_eq!(spotlight.hints, Some("Enter: Next | Esc: Skip".into()));
+    }
+
+    // ── Panel positioning ────────────────────────────────────────────────
+
+    #[test]
+    fn panel_prefers_below() {
+        let spotlight = Spotlight::new()
+            .target(Rect::new(10, 5, 20, 3))
+            .title("Test")
+            .content("Content");
+
+        let screen = Rect::new(0, 0, 80, 24);
+        let (_, py, pos) = spotlight.panel_position(screen);
+
+        assert_eq!(pos, PanelPosition::Below);
+        assert!(py > 5 + 3, "Panel should be below target");
+    }
+
+    #[test]
+    fn panel_uses_above_when_no_space_below() {
+        let spotlight = Spotlight::new()
+            .target(Rect::new(10, 18, 20, 3)) // Near bottom
+            .title("Test")
+            .content("Content");
+
+        let screen = Rect::new(0, 0, 80, 24);
+        let (_, py, pos) = spotlight.panel_position(screen);
+
+        assert_eq!(pos, PanelPosition::Above);
+        assert!(py < 18, "Panel should be above target");
+    }
+
+    #[test]
+    fn panel_forced_position() {
+        let spotlight = Spotlight::new()
+            .target(Rect::new(10, 5, 20, 3))
+            .title("Test")
+            .force_position(PanelPosition::Right);
+
+        let screen = Rect::new(0, 0, 80, 24);
+        let (_, _, pos) = spotlight.panel_position(screen);
+
+        assert_eq!(pos, PanelPosition::Right);
+    }
+
+    // ── Text wrapping ────────────────────────────────────────────────────
+
+    #[test]
+    fn text_wrap_respects_width() {
+        let spotlight = Spotlight::new();
+        let lines = spotlight.wrap_text("This is a long line that should wrap", 15);
+
+        for line in &lines {
+            assert!(
+                UnicodeWidthStr::width(line.as_str()) <= 15,
+                "Line too wide: {:?}",
+                line
+            );
+        }
+    }
+
+    #[test]
+    fn text_wrap_empty() {
+        let spotlight = Spotlight::new();
+        let lines = spotlight.wrap_text("", 20);
+        assert!(lines.is_empty());
+    }
+
+    // ── Render tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn render_does_not_panic() {
+        let spotlight = Spotlight::new()
+            .target(Rect::new(10, 5, 20, 3))
+            .title("Welcome")
+            .content("This is a test spotlight.");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+
+        spotlight.render(Rect::new(0, 0, 80, 24), &mut frame);
+    }
+
+    #[test]
+    fn render_empty_area() {
+        let spotlight = Spotlight::new()
+            .target(Rect::new(10, 5, 20, 3))
+            .title("Test");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+
+        // Should not panic
+        spotlight.render(Rect::new(0, 0, 0, 0), &mut frame);
+    }
+
+    #[test]
+    fn render_no_target() {
+        let spotlight = Spotlight::new().title("Centered").content("No target");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+
+        // Should render centered panel
+        spotlight.render(Rect::new(0, 0, 80, 24), &mut frame);
+    }
+
+    // ── Panel bounds ─────────────────────────────────────────────────────
+
+    #[test]
+    fn panel_bounds_for_hit_testing() {
+        let spotlight = Spotlight::new()
+            .target(Rect::new(10, 5, 20, 3))
+            .title("Test")
+            .content("Content");
+
+        let screen = Rect::new(0, 0, 80, 24);
+        let bounds = spotlight.panel_bounds(screen);
+
+        assert!(bounds.width > 0);
+        assert!(bounds.height > 0);
+    }
+}
