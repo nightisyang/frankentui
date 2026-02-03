@@ -1088,10 +1088,13 @@ impl Screen for ThemeStudioDemo {
                         let theme_name = theme::current_theme().name();
                         self.export_status = Some(format!("Applied theme: {theme_name}"));
                         self.record_diagnostic(
-                            DiagnosticEntry::new(DiagnosticEventKind::ThemeApplied, self.tick_count)
-                                .with_focus(self.focus.as_str())
-                                .with_preset(theme_name)
-                                .with_preset_index(self.preset_index),
+                            DiagnosticEntry::new(
+                                DiagnosticEventKind::ThemeApplied,
+                                self.tick_count,
+                            )
+                            .with_focus(self.focus.as_str())
+                            .with_preset(theme_name)
+                            .with_preset_index(self.preset_index),
                         );
                     }
                 }
@@ -1118,15 +1121,12 @@ impl Screen for ThemeStudioDemo {
                         json.len()
                     ));
                     self.record_diagnostic(
-                        DiagnosticEntry::new(
-                            DiagnosticEventKind::ThemeExported,
-                            self.tick_count,
-                        )
-                        .with_focus(self.focus.as_str())
-                        .with_preset(theme_name)
-                        .with_preset_index(self.preset_index)
-                        .with_export_bytes(json.len())
-                        .with_context("json"),
+                        DiagnosticEntry::new(DiagnosticEventKind::ThemeExported, self.tick_count)
+                            .with_focus(self.focus.as_str())
+                            .with_preset(theme_name)
+                            .with_preset_index(self.preset_index)
+                            .with_export_bytes(json.len())
+                            .with_context("json"),
                     );
                 }
                 // Export Ghostty (Shift+E)
@@ -1139,15 +1139,12 @@ impl Screen for ThemeStudioDemo {
                         ghostty.len()
                     ));
                     self.record_diagnostic(
-                        DiagnosticEntry::new(
-                            DiagnosticEventKind::ThemeExported,
-                            self.tick_count,
-                        )
-                        .with_focus(self.focus.as_str())
-                        .with_preset(theme_name)
-                        .with_preset_index(self.preset_index)
-                        .with_export_bytes(ghostty.len())
-                        .with_context("ghostty"),
+                        DiagnosticEntry::new(DiagnosticEventKind::ThemeExported, self.tick_count)
+                            .with_focus(self.focus.as_str())
+                            .with_preset(theme_name)
+                            .with_preset_index(self.preset_index)
+                            .with_export_bytes(ghostty.len())
+                            .with_context("ghostty"),
                     );
                 }
                 _ => {}
@@ -1285,6 +1282,8 @@ impl Screen for ThemeStudioDemo {
 mod tests {
     use super::*;
     use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     fn press(code: KeyCode) -> Event {
         Event::Key(KeyEvent {
@@ -1664,6 +1663,57 @@ mod tests {
             demo.export_status.is_none(),
             "Status should clear on key press"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Diagnostics + Telemetry Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn diagnostic_entry_checksum_deterministic() {
+        let entry1 =
+            DiagnosticEntry::new(DiagnosticEventKind::ThemeExported, 10)
+                .with_focus("presets")
+                .with_preset("Solar")
+                .with_preset_index(2)
+                .with_export_bytes(120)
+                .with_context("json")
+                .with_checksum();
+        let entry2 =
+            DiagnosticEntry::new(DiagnosticEventKind::ThemeExported, 10)
+                .with_focus("presets")
+                .with_preset("Solar")
+                .with_preset_index(2)
+                .with_export_bytes(120)
+                .with_context("json")
+                .with_checksum();
+        assert_eq!(entry1.checksum, entry2.checksum);
+        assert_ne!(entry1.checksum, 0);
+    }
+
+    #[test]
+    fn diagnostic_log_records_focus_and_token_changes() {
+        let mut demo = ThemeStudioDemo::new().with_diagnostics();
+        demo.update(&press(KeyCode::Tab));
+        demo.update(&press(KeyCode::Down));
+        let log = demo.diagnostic_log().expect("diagnostic log should exist");
+        assert!(!log.entries().is_empty());
+        assert!(!log.entries_of_kind(DiagnosticEventKind::FocusChanged).is_empty());
+        assert!(!log.entries_of_kind(DiagnosticEventKind::TokenChanged).is_empty());
+    }
+
+    #[test]
+    fn telemetry_hooks_on_any_fires() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let count_ref = Arc::clone(&count);
+        let hooks = TelemetryHooks::new().on_any(move |_| {
+            count_ref.fetch_add(1, Ordering::Relaxed);
+        });
+        let mut demo = ThemeStudioDemo::new()
+            .with_diagnostics()
+            .with_telemetry_hooks(hooks);
+        demo.update(&press(KeyCode::Tab));
+        assert!(count.load(Ordering::Relaxed) > 0);
     }
 
     // -----------------------------------------------------------------------
