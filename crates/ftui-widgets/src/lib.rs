@@ -140,6 +140,7 @@ pub mod group;
 /// Bayesian height prediction with conformal bounds for virtualized lists.
 pub mod height_predictor;
 pub mod help;
+pub mod help_registry;
 /// Utility-based keybinding hint ranking with Bayesian posteriors.
 pub mod hint_ranker;
 pub mod input;
@@ -195,6 +196,7 @@ pub use debug_overlay::{
     DebugOverlayStatefulState,
 };
 pub use group::Group;
+pub use help_registry::{HelpContent, HelpId, HelpRegistry, Keybinding};
 pub use layout_debugger::{LayoutConstraints, LayoutDebugger, LayoutRecord};
 pub use log_ring::LogRing;
 pub use log_viewer::{LogViewer, LogViewerState, LogWrapMode, SearchConfig, SearchMode};

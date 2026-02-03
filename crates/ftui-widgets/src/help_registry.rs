@@ -157,7 +157,11 @@ impl HelpRegistry {
     /// Register a lazy provider that will be called on first lookup.
     ///
     /// The provider is invoked at most once; its result is cached.
-    pub fn register_lazy(&mut self, id: HelpId, provider: impl FnOnce() -> HelpContent + Send + 'static) {
+    pub fn register_lazy(
+        &mut self,
+        id: HelpId,
+        provider: impl FnOnce() -> HelpContent + Send + 'static,
+    ) {
         self.entries.insert(id, Entry::Lazy(Box::new(provider)));
     }
 
@@ -201,11 +205,11 @@ impl HelpRegistry {
     /// Forces lazy providers if present.
     pub fn get(&mut self, id: HelpId) -> Option<&HelpContent> {
         // Force lazy → loaded if needed.
-        if matches!(self.entries.get(&id), Some(Entry::Lazy(_))) {
-            if let Some(Entry::Lazy(provider)) = self.entries.remove(&id) {
-                let content = provider();
-                self.entries.insert(id, Entry::Loaded(content));
-            }
+        if matches!(self.entries.get(&id), Some(Entry::Lazy(_)))
+            && let Some(Entry::Lazy(provider)) = self.entries.remove(&id)
+        {
+            let content = provider();
+            self.entries.insert(id, Entry::Loaded(content));
         }
         match self.entries.get(&id) {
             Some(Entry::Loaded(c)) => Some(c),
@@ -231,11 +235,11 @@ impl HelpRegistry {
         let chain = self.ancestor_chain(id);
         // Force any lazy entries in the chain.
         for &cid in &chain {
-            if matches!(self.entries.get(&cid), Some(Entry::Lazy(_))) {
-                if let Some(Entry::Lazy(provider)) = self.entries.remove(&cid) {
-                    let content = provider();
-                    self.entries.insert(cid, Entry::Loaded(content));
-                }
+            if matches!(self.entries.get(&cid), Some(Entry::Lazy(_)))
+                && let Some(Entry::Lazy(provider)) = self.entries.remove(&cid)
+            {
+                let content = provider();
+                self.entries.insert(cid, Entry::Loaded(content));
             }
         }
         // Now find the first loaded entry.
