@@ -706,7 +706,7 @@ impl<M: Model> Program<M, Stdout> {
 
         let evidence_sink = EvidenceSink::from_config(&config.evidence_sink)?;
         if let Some(ref sink) = evidence_sink {
-            writer.set_evidence_sink(Some(sink.clone()));
+            writer = writer.with_evidence_sink(sink.clone());
         }
 
         // Get terminal size for initial frame
@@ -722,7 +722,7 @@ impl<M: Model> Program<M, Stdout> {
         let mut resize_coalescer =
             ResizeCoalescer::new(config.resize_coalescer.clone(), (width, height));
         if let Some(ref sink) = evidence_sink {
-            resize_coalescer.set_evidence_sink(Some(sink.clone()));
+            resize_coalescer = resize_coalescer.with_evidence_sink(sink.clone());
         }
         let subscriptions = SubscriptionManager::new();
         let (task_sender, task_receiver) = std::sync::mpsc::channel();

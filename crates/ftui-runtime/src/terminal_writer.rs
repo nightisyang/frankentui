@@ -425,6 +425,13 @@ impl<W: Write> TerminalWriter<W> {
         &self.diff_config
     }
 
+    /// Attach an evidence sink for diff decision logging.
+    #[must_use]
+    pub fn with_evidence_sink(mut self, sink: EvidenceSink) -> Self {
+        self.evidence_sink = Some(sink);
+        self
+    }
+
     /// Set the evidence JSONL sink for diff decision logging.
     pub fn set_evidence_sink(&mut self, sink: Option<EvidenceSink>) {
         self.evidence_sink = sink;
