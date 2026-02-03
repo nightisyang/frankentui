@@ -2001,8 +2001,8 @@ mod tests {
 
     #[test]
     fn incremental_lowered_matches_full() {
-        let corpus = vec!["Open File", "Save File", "Close", "Launch 🚀"];
-        let corpus_refs: Vec<&str> = corpus.iter().map(|s| *s).collect();
+        let corpus = ["Open File", "Save File", "Close", "Launch 🚀"];
+        let corpus_refs: Vec<&str> = corpus.iter().copied().collect();
         let lower: Vec<String> = corpus.iter().map(|s| s.to_lowercase()).collect();
         let lower_refs: Vec<&str> = lower.iter().map(|s| s.as_str()).collect();
 
