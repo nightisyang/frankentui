@@ -5,6 +5,9 @@ This spec defines the user experience, behavior, and test requirements for the
 lightweight, always-on-demand overlay that surfaces frame-budget health and
 render pipeline stats in real time.
 
+User guide: `docs/performance-hud.md`  
+Demo script: `scripts/perf_hud_demo.sh`
+
 ---
 
 ## 1) Goals
@@ -39,7 +42,7 @@ render pipeline stats in real time.
 
 ## 4) Input Model & Keybindings
 
-- **Toggle HUD:** `Ctrl+H` (global; low collision risk)
+- **Toggle HUD:** `Ctrl+P` (current demo binding)
 - **Cycle detail level:** `H` (Hidden → Compact → Full → Hidden)
 - **Freeze HUD snapshot:** `f` (optional; stops updating until toggled)
 
@@ -169,4 +172,3 @@ Evidence ledger fields:
   global chrome if the runtime provides hooks.
 - Stats should flow from `RenderBudget` and `PresentStats` (no custom timers).
 - The HUD must respect the one-writer rule and render via existing Frame APIs.
-

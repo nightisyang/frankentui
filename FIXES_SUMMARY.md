@@ -55,10 +55,8 @@ All tasks are complete. The codebase has been extensively refactored for Unicode
 ## 67. TextInput Horizontal Clipping
 **File:** `crates/ftui-widgets/src/input.rs`
 **Issue:** `TextInput` rendering logic incorrectly handled wide characters (e.g., CJK) at the scrolling boundaries.
-    - **Left edge:** Partially scrolled-out wide characters (e.g., head scrolled out, tail visible) were incorrectly drawn at position 0, causing visual artifacts.
-    - **Right edge:** Wide characters overlapping the right boundary spilled into the adjacent buffer area because `buffer.set` checks buffer bounds (not widget area) and `TextInput` only checked `x < width` but wrote 2 cells.
+    - **Left Edge:** Partially scrolled-out wide characters were incorrectly drawn at position 0.
+    - **Right Edge:** Wide characters overlapping the right boundary spilled into the adjacent buffer area because `buffer.set` checks buffer bounds, not widget area bounds.
 **Fix:**
-    - Updated rendering loops (placeholder and content) to:
-        1. Skip drawing graphemes that are partially scrolled out to the left.
-        2. Skip drawing graphemes that partially overlap the right edge.
+    - Updated rendering loops to skip drawing graphemes that are partially scrolled out to the left or partially overlapping the right edge.
     - This ensures correct clipping and prevents drawing outside the widget's allocated area.
