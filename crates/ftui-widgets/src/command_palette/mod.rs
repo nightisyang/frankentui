@@ -200,6 +200,20 @@ impl PaletteCloseReason {
     }
 }
 
+fn compute_word_starts(title_lower: &str) -> Vec<usize> {
+    let bytes = title_lower.as_bytes();
+    title_lower
+        .char_indices()
+        .filter_map(|(i, _)| {
+            let is_word_start = i == 0 || {
+                let prev = bytes.get(i.saturating_sub(1)).copied().unwrap_or(b' ');
+                prev == b' ' || prev == b'-' || prev == b'_'
+            };
+            is_word_start.then_some(i)
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Palette Style
 // ---------------------------------------------------------------------------
@@ -279,8 +293,12 @@ struct ScoredItem {
 pub struct CommandPalette {
     /// Registered actions.
     actions: Vec<ActionItem>,
+    /// Cached titles for scoring (avoids per-keystroke Vec allocation).
+    titles_cache: Vec<String>,
     /// Cached lowercased titles for scoring.
     titles_lower: Vec<String>,
+    /// Cached word-start positions for each lowercased title.
+    titles_word_starts: Vec<Vec<usize>>,
     /// Current query text.
     query: String,
     /// Cursor position in the query (byte offset for simplicity).
@@ -317,7 +335,9 @@ impl CommandPalette {
     pub fn new() -> Self {
         Self {
             actions: Vec::new(),
+            titles_cache: Vec::new(),
             titles_lower: Vec::new(),
+            titles_word_starts: Vec::new(),
             query: String::new(),
             cursor: 0,
             selected: 0,
@@ -347,6 +367,49 @@ impl CommandPalette {
 
     // --- Action Registration ---
 
+    fn push_title_cache_into(
+        titles_cache: &mut Vec<String>,
+        titles_lower: &mut Vec<String>,
+        titles_word_starts: &mut Vec<Vec<usize>>,
+        title: &str,
+    ) {
+        titles_cache.push(title.to_string());
+        let lower = title.to_lowercase();
+        titles_word_starts.push(compute_word_starts(&lower));
+        titles_lower.push(lower);
+    }
+
+    fn push_title_cache(&mut self, title: &str) {
+        Self::push_title_cache_into(
+            &mut self.titles_cache,
+            &mut self.titles_lower,
+            &mut self.titles_word_starts,
+            title,
+        );
+    }
+
+    fn rebuild_title_cache(&mut self) {
+        self.titles_cache.clear();
+        self.titles_lower.clear();
+        self.titles_word_starts.clear();
+
+        self.titles_cache.reserve(self.actions.len());
+        self.titles_lower.reserve(self.actions.len());
+        self.titles_word_starts.reserve(self.actions.len());
+
+        let titles_cache = &mut self.titles_cache;
+        let titles_lower = &mut self.titles_lower;
+        let titles_word_starts = &mut self.titles_word_starts;
+        for action in &self.actions {
+            Self::push_title_cache_into(
+                titles_cache,
+                titles_lower,
+                titles_word_starts,
+                &action.title,
+            );
+        }
+    }
+
     /// Register a new action.
     pub fn register(
         &mut self,
@@ -361,7 +424,7 @@ impl CommandPalette {
             item.description = Some(desc.to_string());
         }
         item.tags = tags.iter().map(|s| (*s).to_string()).collect();
-        self.titles_lower.push(item.title.to_lowercase());
+        self.push_title_cache(&item.title);
         self.actions.push(item);
         self.generation = self.generation.wrapping_add(1);
         self
@@ -369,7 +432,7 @@ impl CommandPalette {
 
     /// Register an action item directly.
     pub fn register_action(&mut self, action: ActionItem) -> &mut Self {
-        self.titles_lower.push(action.title.to_lowercase());
+        self.push_title_cache(&action.title);
         self.actions.push(action);
         self.generation = self.generation.wrapping_add(1);
         self
@@ -587,21 +650,18 @@ impl CommandPalette {
             None
         };
 
-        if self.titles_lower.len() != self.actions.len() {
-            self.titles_lower = self
-                .actions
-                .iter()
-                .map(|a| a.title.to_lowercase())
-                .collect();
+        if self.titles_cache.len() != self.actions.len()
+            || self.titles_lower.len() != self.actions.len()
+            || self.titles_word_starts.len() != self.actions.len()
+        {
+            self.rebuild_title_cache();
         }
 
-        let titles: Vec<&str> = self.actions.iter().map(|a| a.title.as_str()).collect();
-        let titles_lower: Vec<&str> = self.titles_lower.iter().map(|t| t.as_str()).collect();
-
-        let results = self.scorer.score_corpus_with_lowered(
+        let results = self.scorer.score_corpus_with_lowered_and_words(
             &self.query,
-            &titles,
-            &titles_lower,
+            &self.titles_cache,
+            &self.titles_lower,
+            &self.titles_word_starts,
             Some(self.generation),
         );
 

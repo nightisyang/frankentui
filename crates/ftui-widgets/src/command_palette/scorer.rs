@@ -314,7 +314,7 @@ impl BayesianScorer {
         }
 
         // Build evidence ledger and compute score
-        self.compute_score(match_type, &positions, &query_lower, title)
+        self.compute_score(match_type, positions, &query_lower, title)
     }
 
     /// Score a query using a pre-lowercased query string.
@@ -371,7 +371,7 @@ impl BayesianScorer {
         }
 
         // Build evidence ledger and compute score
-        self.compute_score(match_type, &positions, query_lower, title)
+        self.compute_score(match_type, positions, query_lower, title)
     }
 
     /// Score a query against a title with tags.
@@ -495,7 +495,8 @@ impl BayesianScorer {
             return (MatchType::Prefix, positions);
         }
 
-        if let Some(positions) = self.word_start_match_ascii(query_bytes, title_bytes, word_starts) {
+        if let Some(positions) = self.word_start_match_ascii(query_bytes, title_bytes, word_starts)
+        {
             return (MatchType::WordStart, positions);
         }
 
@@ -631,10 +632,11 @@ impl BayesianScorer {
     fn compute_score(
         &self,
         match_type: MatchType,
-        positions: &[usize],
+        positions: Vec<usize>,
         query: &str,
         title: &str,
     ) -> MatchResult {
+        let positions_ref = positions.as_slice();
         let mut evidence = EvidenceLedger::new();
 
         // Prior odds from match type
@@ -646,7 +648,7 @@ impl BayesianScorer {
         );
 
         // Position bonus: matches at start are better
-        if let Some(&first_pos) = positions.first() {
+        if let Some(&first_pos) = positions_ref.first() {
             let position_factor = 1.0 + (1.0 / (first_pos as f64 + 1.0)) * 0.5;
             evidence.add(
                 EvidenceKind::Position,
@@ -656,7 +658,7 @@ impl BayesianScorer {
         }
 
         // Word boundary bonus
-        let word_boundary_count = self.count_word_boundaries(positions, title);
+        let word_boundary_count = self.count_word_boundaries(positions_ref, title);
         if word_boundary_count > 0 {
             let boundary_factor = 1.0 + (word_boundary_count as f64 * 0.3);
             evidence.add(
@@ -667,8 +669,8 @@ impl BayesianScorer {
         }
 
         // Gap penalty for fuzzy matches
-        if match_type == MatchType::Fuzzy && positions.len() > 1 {
-            let total_gap = self.total_gap(positions);
+        if match_type == MatchType::Fuzzy && positions_ref.len() > 1 {
+            let total_gap = self.total_gap(positions_ref);
             let gap_factor = 1.0 / (1.0 + total_gap as f64 * 0.1);
             evidence.add(
                 EvidenceKind::GapPenalty,
@@ -693,7 +695,7 @@ impl BayesianScorer {
         MatchResult {
             score,
             match_type,
-            match_positions: positions.to_vec(),
+            match_positions: positions,
             evidence,
         }
     }
@@ -1036,8 +1038,6 @@ impl fmt::Display for RankingSummary {
 struct CachedEntry {
     /// Index into the corpus.
     corpus_index: usize,
-    /// Cached match result.
-    result: MatchResult,
 }
 
 /// Incremental scorer that caches results across keystrokes.
@@ -1187,10 +1187,7 @@ impl IncrementalScorer {
         self.prev_query.push_str(query);
         self.cache = results
             .iter()
-            .map(|(idx, result)| CachedEntry {
-                corpus_index: *idx,
-                result: result.clone(),
-            })
+            .map(|(idx, _result)| CachedEntry { corpus_index: *idx })
             .collect();
 
         results
@@ -1237,10 +1234,7 @@ impl IncrementalScorer {
         self.prev_query.push_str(query);
         self.cache = results
             .iter()
-            .map(|(idx, result)| CachedEntry {
-                corpus_index: *idx,
-                result: result.clone(),
-            })
+            .map(|(idx, _result)| CachedEntry { corpus_index: *idx })
             .collect();
 
         results
@@ -1291,7 +1285,13 @@ impl IncrementalScorer {
                 word_starts,
             )
         } else {
-            self.score_full_lowered_with_words(query, &query_lower, corpus, corpus_lower, word_starts)
+            self.score_full_lowered_with_words(
+                query,
+                &query_lower,
+                corpus,
+                corpus_lower,
+                word_starts,
+            )
         };
 
         // Update cache state.
@@ -1299,10 +1299,7 @@ impl IncrementalScorer {
         self.prev_query.push_str(query);
         self.cache = results
             .iter()
-            .map(|(idx, result)| CachedEntry {
-                corpus_index: *idx,
-                result: result.clone(),
-            })
+            .map(|(idx, _result)| CachedEntry { corpus_index: *idx })
             .collect();
 
         results
@@ -2296,10 +2293,7 @@ mod tests {
                     .char_indices()
                     .filter_map(|(i, _)| {
                         let is_word_start = i == 0 || {
-                            let prev = bytes
-                                .get(i.saturating_sub(1))
-                                .copied()
-                                .unwrap_or(b' ');
+                            let prev = bytes.get(i.saturating_sub(1)).copied().unwrap_or(b' ');
                             prev == b' ' || prev == b'-' || prev == b'_'
                         };
                         is_word_start.then_some(i)
@@ -2312,13 +2306,8 @@ mod tests {
         let mut lowered = IncrementalScorer::new();
 
         let a = full.score_corpus("fi", &corpus_refs, None);
-        let b = lowered.score_corpus_with_lowered_and_words(
-            "fi",
-            &corpus,
-            &lower,
-            &word_starts,
-            None,
-        );
+        let b =
+            lowered.score_corpus_with_lowered_and_words("fi", &corpus, &lower, &word_starts, None);
 
         assert_eq!(a.len(), b.len());
         for ((ia, ra), (ib, rb)) in a.iter().zip(b.iter()) {
@@ -2437,7 +2426,8 @@ mod perf_tests {
             times.push(start.elapsed().as_micros() as u64);
         }
         times.sort_unstable();
-        times[(times.len() as f64 * 0.95) as usize]
+        let len = times.len();
+        times[((len as f64 * 0.95) as usize).min(len.saturating_sub(1))]
     }
 
     #[test]
