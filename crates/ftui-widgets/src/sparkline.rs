@@ -16,8 +16,8 @@
 //! sparkline.render(area, frame);
 //! ```
 
-use crate::Widget;
-use ftui_core::geometry::Rect;
+use crate::{MeasurableWidget, SizeConstraints, Widget};
+use ftui_core::geometry::{Rect, Size};
 use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::frame::Frame;
 use ftui_style::Style;
@@ -252,6 +252,28 @@ impl Widget for Sparkline<'_> {
 
             frame.buffer.set(x, y, cell);
         }
+    }
+}
+
+impl MeasurableWidget for Sparkline<'_> {
+    fn measure(&self, _available: Size) -> SizeConstraints {
+        if self.data.is_empty() {
+            return SizeConstraints::ZERO;
+        }
+
+        // Sparklines are always 1 row tall
+        // Width is the number of data points
+        let width = self.data.len() as u16;
+
+        SizeConstraints {
+            min: Size::new(1, 1), // At least 1 data point visible
+            preferred: Size::new(width, 1),
+            max: Some(Size::new(width, 1)), // Fixed content size
+        }
+    }
+
+    fn has_intrinsic_size(&self) -> bool {
+        !self.data.is_empty()
     }
 }
 
@@ -502,5 +524,47 @@ mod tests {
         assert_eq!(mid.r(), 128);
         assert_eq!(mid.g(), 128);
         assert_eq!(mid.b(), 128);
+    }
+
+    // --- MeasurableWidget tests ---
+
+    #[test]
+    fn measure_empty_sparkline() {
+        let sparkline = Sparkline::new(&[]);
+        let c = sparkline.measure(Size::MAX);
+        assert_eq!(c, SizeConstraints::ZERO);
+        assert!(!sparkline.has_intrinsic_size());
+    }
+
+    #[test]
+    fn measure_single_value() {
+        let data = [5.0];
+        let sparkline = Sparkline::new(&data);
+        let c = sparkline.measure(Size::MAX);
+
+        assert_eq!(c.preferred.width, 1);
+        assert_eq!(c.preferred.height, 1);
+        assert!(sparkline.has_intrinsic_size());
+    }
+
+    #[test]
+    fn measure_multiple_values() {
+        let data: Vec<f64> = (0..50).map(|i| i as f64).collect();
+        let sparkline = Sparkline::new(&data);
+        let c = sparkline.measure(Size::MAX);
+
+        assert_eq!(c.preferred.width, 50);
+        assert_eq!(c.preferred.height, 1);
+        assert_eq!(c.min.width, 1);
+        assert_eq!(c.min.height, 1);
+    }
+
+    #[test]
+    fn measure_max_equals_preferred() {
+        let data = [1.0, 2.0, 3.0];
+        let sparkline = Sparkline::new(&data);
+        let c = sparkline.measure(Size::MAX);
+
+        assert_eq!(c.max, Some(Size::new(3, 1)));
     }
 }

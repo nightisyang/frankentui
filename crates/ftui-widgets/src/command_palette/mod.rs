@@ -49,6 +49,80 @@ use ftui_style::Style;
 
 use crate::Widget;
 
+#[cfg(feature = "tracing")]
+use std::time::Instant;
+#[cfg(feature = "tracing")]
+use tracing::{debug, info};
+
+#[cfg(feature = "tracing")]
+const TELEMETRY_TARGET: &str = "ftui_widgets::command_palette";
+
+#[cfg(feature = "tracing")]
+fn telemetry_enabled() -> bool {
+    tracing::enabled!(target: TELEMETRY_TARGET, tracing::Level::INFO)
+}
+
+#[cfg(feature = "tracing")]
+fn emit_palette_opened(action_count: usize, result_count: usize) {
+    info!(
+        target: TELEMETRY_TARGET,
+        event = "palette_opened",
+        action_count,
+        result_count
+    );
+}
+
+#[cfg(feature = "tracing")]
+fn emit_palette_query_updated(query: &str, match_count: usize, latency_ms: u128) {
+    info!(
+        target: TELEMETRY_TARGET,
+        event = "palette_query_updated",
+        query_len = query.len(),
+        match_count,
+        latency_ms
+    );
+    if tracing::enabled!(target: TELEMETRY_TARGET, tracing::Level::DEBUG) {
+        debug!(
+            target: TELEMETRY_TARGET,
+            event = "palette_query_text",
+            query
+        );
+    }
+}
+
+#[cfg(feature = "tracing")]
+fn emit_palette_action_executed(action_id: &str, latency_ms: Option<u128>) {
+    if let Some(latency_ms) = latency_ms {
+        info!(
+            target: TELEMETRY_TARGET,
+            event = "palette_action_executed",
+            action_id,
+            latency_ms
+        );
+    } else {
+        info!(
+            target: TELEMETRY_TARGET,
+            event = "palette_action_executed",
+            action_id
+        );
+    }
+}
+
+#[cfg(feature = "tracing")]
+fn emit_palette_closed(reason: PaletteCloseReason) {
+    info!(
+        target: TELEMETRY_TARGET,
+        event = "palette_closed",
+        reason = reason.as_str()
+    );
+}
+
+#[cfg(not(feature = "tracing"))]
+fn emit_palette_action_executed(_action_id: &str, _latency_ms: Option<u128>) {}
+
+#[cfg(not(feature = "tracing"))]
+fn emit_palette_closed(_reason: PaletteCloseReason) {}
+
 // ---------------------------------------------------------------------------
 // Action Item
 // ---------------------------------------------------------------------------
@@ -110,6 +184,26 @@ pub enum PaletteAction {
     Execute(String),
     /// User dismissed the palette (Esc).
     Dismiss,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaletteCloseReason {
+    Dismiss,
+    Execute,
+    Toggle,
+    Programmatic,
+}
+
+impl PaletteCloseReason {
+    #[cfg(feature = "tracing")]
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Dismiss => "dismiss",
+            Self::Execute => "execute",
+            Self::Toggle => "toggle",
+            Self::Programmatic => "programmatic",
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +305,9 @@ pub struct CommandPalette {
     generation: u64,
     /// Maximum visible results.
     max_visible: usize,
+    /// Telemetry timing anchor (only when tracing feature is enabled).
+    #[cfg(feature = "tracing")]
+    opened_at: Option<Instant>,
 }
 
 impl Default for CommandPalette {
@@ -234,6 +331,8 @@ impl CommandPalette {
             filtered: Vec::new(),
             generation: 0,
             max_visible: 10,
+            #[cfg(feature = "tracing")]
+            opened_at: None,
         }
     }
 
@@ -292,21 +391,24 @@ impl CommandPalette {
         self.selected = 0;
         self.scroll_offset = 0;
         self.scorer.invalidate();
-        self.update_filtered();
+        #[cfg(feature = "tracing")]
+        {
+            self.opened_at = Some(Instant::now());
+        }
+        self.update_filtered(false);
+        #[cfg(feature = "tracing")]
+        emit_palette_opened(self.actions.len(), self.filtered.len());
     }
 
     /// Close the palette.
     pub fn close(&mut self) {
-        self.visible = false;
-        self.query.clear();
-        self.cursor = 0;
-        self.filtered.clear();
+        self.close_with_reason(PaletteCloseReason::Programmatic);
     }
 
     /// Toggle visibility.
     pub fn toggle(&mut self) {
         if self.visible {
-            self.close();
+            self.close_with_reason(PaletteCloseReason::Toggle);
         } else {
             self.open();
         }
@@ -382,14 +484,19 @@ impl CommandPalette {
     fn handle_key(&mut self, code: KeyCode, modifiers: Modifiers) -> Option<PaletteAction> {
         match code {
             KeyCode::Escape => {
-                self.close();
+                self.close_with_reason(PaletteCloseReason::Dismiss);
                 return Some(PaletteAction::Dismiss);
             }
 
             KeyCode::Enter => {
                 if let Some(si) = self.filtered.get(self.selected) {
                     let id = self.actions[si.action_index].id.clone();
-                    self.close();
+                    #[cfg(feature = "tracing")]
+                    {
+                        let latency_ms = self.opened_at.map(|start| start.elapsed().as_millis());
+                        emit_palette_action_executed(&id, latency_ms);
+                    }
+                    self.close_with_reason(PaletteCloseReason::Execute);
                     return Some(PaletteAction::Execute(id));
                 }
             }
@@ -439,7 +546,7 @@ impl CommandPalette {
                     self.cursor = self.query.len();
                     self.selected = 0;
                     self.scroll_offset = 0;
-                    self.update_filtered();
+                    self.update_filtered(true);
                 }
             }
 
@@ -455,14 +562,14 @@ impl CommandPalette {
                         self.cursor = 0;
                         self.selected = 0;
                         self.scroll_offset = 0;
-                        self.update_filtered();
+                        self.update_filtered(true);
                     }
                 } else {
                     self.query.push(c);
                     self.cursor = self.query.len();
                     self.selected = 0;
                     self.scroll_offset = 0;
-                    self.update_filtered();
+                    self.update_filtered(true);
                 }
             }
 
@@ -473,7 +580,14 @@ impl CommandPalette {
     }
 
     /// Re-score the corpus against the current query.
-    fn update_filtered(&mut self) {
+    fn update_filtered(&mut self, _emit_telemetry: bool) {
+        #[cfg(feature = "tracing")]
+        let start = if _emit_telemetry && telemetry_enabled() {
+            Some(Instant::now())
+        } else {
+            None
+        };
+
         let titles: Vec<&str> = self.actions.iter().map(|a| a.title.as_str()).collect();
 
         let results = self
@@ -493,6 +607,27 @@ impl CommandPalette {
             self.selected = self.selected.min(self.filtered.len() - 1);
         } else {
             self.selected = 0;
+        }
+
+        #[cfg(feature = "tracing")]
+        if let Some(start) = start {
+            emit_palette_query_updated(
+                &self.query,
+                self.filtered.len(),
+                start.elapsed().as_millis(),
+            );
+        }
+    }
+
+    fn close_with_reason(&mut self, _reason: PaletteCloseReason) {
+        self.visible = false;
+        self.query.clear();
+        self.cursor = 0;
+        self.filtered.clear();
+        #[cfg(feature = "tracing")]
+        {
+            self.opened_at = None;
+            emit_palette_closed(_reason);
         }
     }
 
@@ -1438,5 +1573,106 @@ mod widget_tests {
             "Description text contrast {:.1}:1 < 4.5:1 (WCAG AA)",
             desc_ratio
         );
+    }
+
+    #[cfg(feature = "tracing")]
+    #[test]
+    fn telemetry_emits_in_order() {
+        use std::sync::{Arc, Mutex};
+        use tracing::Subscriber;
+        use tracing_subscriber::Layer;
+        use tracing_subscriber::filter::Targets;
+        use tracing_subscriber::layer::{Context, SubscriberExt};
+
+        #[derive(Default)]
+        struct EventCapture {
+            events: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl<S> Layer<S> for EventCapture
+        where
+            S: Subscriber,
+        {
+            fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+                use tracing::field::{Field, Visit};
+
+                struct EventVisitor {
+                    name: Option<String>,
+                }
+
+                impl Visit for EventVisitor {
+                    fn record_str(&mut self, field: &Field, value: &str) {
+                        if field.name() == "event" {
+                            self.name = Some(value.to_string());
+                        }
+                    }
+
+                    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+                        if field.name() == "event" {
+                            self.name = Some(format!("{value:?}"));
+                        }
+                    }
+                }
+
+                let mut visitor = EventVisitor { name: None };
+                event.record(&mut visitor);
+                if let Some(name) = visitor.name {
+                    self.events
+                        .lock()
+                        .expect("lock telemetry events")
+                        .push(name);
+                }
+            }
+        }
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let capture = EventCapture {
+            events: Arc::clone(&events),
+        };
+
+        let subscriber = tracing_subscriber::registry()
+            .with(capture)
+            .with(Targets::new().with_target(TELEMETRY_TARGET, tracing::Level::INFO));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let mut palette = CommandPalette::new();
+        palette.register("Alpha", None, &[]);
+        palette.open();
+
+        let a = Event::Key(KeyEvent {
+            code: KeyCode::Char('a'),
+            modifiers: Modifiers::empty(),
+            kind: KeyEventKind::Press,
+        });
+        palette.handle_event(&a);
+
+        let enter = Event::Key(KeyEvent {
+            code: KeyCode::Enter,
+            modifiers: Modifiers::empty(),
+            kind: KeyEventKind::Press,
+        });
+        let _ = palette.handle_event(&enter);
+
+        let events = events.lock().expect("lock telemetry events");
+        let open_idx = events
+            .iter()
+            .position(|e| e == "palette_opened")
+            .expect("palette_opened missing");
+        let query_idx = events
+            .iter()
+            .position(|e| e == "palette_query_updated")
+            .expect("palette_query_updated missing");
+        let exec_idx = events
+            .iter()
+            .position(|e| e == "palette_action_executed")
+            .expect("palette_action_executed missing");
+        let close_idx = events
+            .iter()
+            .position(|e| e == "palette_closed")
+            .expect("palette_closed missing");
+
+        assert!(open_idx < query_idx);
+        assert!(query_idx < exec_idx);
+        assert!(exec_idx < close_idx);
     }
 }

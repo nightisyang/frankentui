@@ -1,6 +1,6 @@
 use crate::block::Block;
-use crate::{StatefulWidget, Widget, set_style_area};
-use ftui_core::geometry::Rect;
+use crate::{MeasurableWidget, SizeConstraints, StatefulWidget, Widget, set_style_area};
+use ftui_core::geometry::{Rect, Size};
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::{Frame, HitId, HitRegion};
 use ftui_style::Style;
@@ -388,6 +388,95 @@ fn render_row(row: &Row, col_rects: &[Rect], frame: &mut Frame, y: u16, style: S
     }
 }
 
+impl MeasurableWidget for Table<'_> {
+    fn measure(&self, _available: Size) -> SizeConstraints {
+        if self.rows.is_empty() && self.header.is_none() {
+            return SizeConstraints::ZERO;
+        }
+
+        let col_count = self.widths.len();
+        if col_count == 0 {
+            return SizeConstraints::ZERO;
+        }
+
+        // Calculate column widths from cell content
+        let mut col_widths: Vec<u16> = vec![0; col_count];
+
+        // Measure header cells
+        if let Some(header) = &self.header {
+            for (i, cell) in header.cells.iter().enumerate() {
+                if i >= col_count {
+                    break;
+                }
+                let cell_width = cell.width() as u16;
+                col_widths[i] = col_widths[i].max(cell_width);
+            }
+        }
+
+        // Measure data cells
+        for row in &self.rows {
+            for (i, cell) in row.cells.iter().enumerate() {
+                if i >= col_count {
+                    break;
+                }
+                let cell_width = cell.width() as u16;
+                col_widths[i] = col_widths[i].max(cell_width);
+            }
+        }
+
+        // Total width = sum of column widths + column spacing
+        let separator_width = if col_count > 1 {
+            (col_count - 1) as u16 * self.column_spacing
+        } else {
+            0
+        };
+        let content_width: u16 = col_widths
+            .iter()
+            .sum::<u16>()
+            .saturating_add(separator_width);
+
+        // Total height = header height + row heights + margins
+        let header_height = self
+            .header
+            .as_ref()
+            .map(|h| h.height.saturating_add(h.bottom_margin))
+            .unwrap_or(0);
+
+        let rows_height: u16 = self
+            .rows
+            .iter()
+            .map(|r| r.height.saturating_add(r.bottom_margin))
+            .sum();
+
+        let content_height = header_height.saturating_add(rows_height);
+
+        // Add block overhead if present
+        let (block_width, block_height) = self
+            .block
+            .as_ref()
+            .map(|b| {
+                let inner = b.inner(Rect::new(0, 0, 100, 100));
+                let w_overhead = 100u16.saturating_sub(inner.width);
+                let h_overhead = 100u16.saturating_sub(inner.height);
+                (w_overhead, h_overhead)
+            })
+            .unwrap_or((0, 0));
+
+        let total_width = content_width.saturating_add(block_width);
+        let total_height = content_height.saturating_add(block_height);
+
+        SizeConstraints {
+            min: Size::new(col_count as u16, 1), // At least column count width, 1 row
+            preferred: Size::new(total_width, total_height),
+            max: Some(Size::new(total_width, total_height)), // Fixed content size
+        }
+    }
+
+    fn has_intrinsic_size(&self) -> bool {
+        !self.rows.is_empty() || self.header.is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -731,5 +820,132 @@ mod tests {
 
         // hit_test returns None when no hit grid
         assert!(frame.hit_test(2, 0).is_none());
+    }
+
+    // --- MeasurableWidget tests ---
+
+    #[test]
+    fn measure_empty_table() {
+        let table = Table::new(Vec::<Row>::new(), [Constraint::Fixed(5)]);
+        let c = table.measure(Size::MAX);
+        assert_eq!(c, SizeConstraints::ZERO);
+    }
+
+    #[test]
+    fn measure_empty_columns() {
+        let table = Table::new([Row::new(["A"])], Vec::<Constraint>::new());
+        let c = table.measure(Size::MAX);
+        assert_eq!(c, SizeConstraints::ZERO);
+    }
+
+    #[test]
+    fn measure_single_row() {
+        let table = Table::new([Row::new(["Hello"])], [Constraint::Fixed(10)]);
+        let c = table.measure(Size::MAX);
+
+        assert_eq!(c.preferred.width, 5); // "Hello" is 5 chars
+        assert_eq!(c.preferred.height, 1); // 1 row
+        assert!(table.has_intrinsic_size());
+    }
+
+    #[test]
+    fn measure_multiple_columns() {
+        let table = Table::new(
+            [Row::new(["A", "BB", "CCC"])],
+            [
+                Constraint::Fixed(5),
+                Constraint::Fixed(5),
+                Constraint::Fixed(5),
+            ],
+        )
+        .column_spacing(2);
+
+        let c = table.measure(Size::MAX);
+
+        // Widths: 1 + 2 + 3 = 6, plus 2 gaps of 2 = 4 → total 10
+        assert_eq!(c.preferred.width, 10);
+        assert_eq!(c.preferred.height, 1);
+    }
+
+    #[test]
+    fn measure_with_header() {
+        let header = Row::new(["Name", "Value"]);
+        let table = Table::new(
+            [Row::new(["foo", "42"])],
+            [Constraint::Fixed(5), Constraint::Fixed(5)],
+        )
+        .header(header);
+
+        let c = table.measure(Size::MAX);
+
+        // Header "Name" and "Value" are wider than "foo" and "42"
+        // Widths: max(4, 3) = 4, max(5, 2) = 5, plus 1 gap = 10
+        assert_eq!(c.preferred.width, 10);
+        // Height: 1 header + 1 data row = 2
+        assert_eq!(c.preferred.height, 2);
+    }
+
+    #[test]
+    fn measure_with_row_margins() {
+        let table = Table::new(
+            [
+                Row::new(["A"]).bottom_margin(2),
+                Row::new(["B"]).bottom_margin(1),
+            ],
+            [Constraint::Fixed(5)],
+        );
+
+        let c = table.measure(Size::MAX);
+
+        // Heights: (1 + 2) + (1 + 1) = 5
+        assert_eq!(c.preferred.height, 5);
+    }
+
+    #[test]
+    fn measure_column_widths_from_max_cell() {
+        let table = Table::new(
+            [Row::new(["A", "BB"]), Row::new(["CCC", "D"])],
+            [Constraint::Fixed(5), Constraint::Fixed(5)],
+        )
+        .column_spacing(1);
+
+        let c = table.measure(Size::MAX);
+
+        // Column 0: max(1, 3) = 3
+        // Column 1: max(2, 1) = 2
+        // Total: 3 + 2 + 1 gap = 6
+        assert_eq!(c.preferred.width, 6);
+        assert_eq!(c.preferred.height, 2);
+    }
+
+    #[test]
+    fn measure_min_is_column_count() {
+        let table = Table::new(
+            [Row::new(["A", "B", "C"])],
+            [
+                Constraint::Fixed(5),
+                Constraint::Fixed(5),
+                Constraint::Fixed(5),
+            ],
+        );
+
+        let c = table.measure(Size::MAX);
+
+        // Minimum width should be at least the number of columns
+        assert_eq!(c.min.width, 3);
+        assert_eq!(c.min.height, 1);
+    }
+
+    #[test]
+    fn measure_has_intrinsic_size() {
+        let empty = Table::new(Vec::<Row>::new(), [Constraint::Fixed(5)]);
+        assert!(!empty.has_intrinsic_size());
+
+        let with_rows = Table::new([Row::new(["X"])], [Constraint::Fixed(5)]);
+        assert!(with_rows.has_intrinsic_size());
+
+        let header_only =
+            Table::new(Vec::<Row>::new(), [Constraint::Fixed(5)]).header(Row::new(["Header"]));
+        assert!(header_only.has_intrinsic_size());
     }
 }

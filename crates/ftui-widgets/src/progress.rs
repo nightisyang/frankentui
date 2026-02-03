@@ -3,8 +3,8 @@
 //! Progress bar widget.
 
 use crate::block::Block;
-use crate::{Widget, apply_style, set_style_area};
-use ftui_core::geometry::Rect;
+use crate::{MeasurableWidget, SizeConstraints, Widget, apply_style, set_style_area};
+use ftui_core::geometry::{Rect, Size};
 use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::frame::Frame;
 use ftui_style::Style;
@@ -148,6 +148,39 @@ impl<'a> Widget for ProgressBar<'a> {
                 bar_area.right(),
             );
         }
+    }
+}
+
+impl MeasurableWidget for ProgressBar<'_> {
+    fn measure(&self, _available: Size) -> SizeConstraints {
+        // ProgressBar fills available width, has fixed height of 1 (or block inner height)
+        let (block_width, block_height) = self
+            .block
+            .as_ref()
+            .map(|b| {
+                let inner = b.inner(Rect::new(0, 0, 100, 100));
+                let w_overhead = 100u16.saturating_sub(inner.width);
+                let h_overhead = 100u16.saturating_sub(inner.height);
+                (w_overhead, h_overhead)
+            })
+            .unwrap_or((0, 0));
+
+        // Minimum: 1 cell for bar + block overhead
+        // Preferred: fills available width, 1 row + block overhead
+        let min_width = 1u16.saturating_add(block_width);
+        let min_height = 1u16.saturating_add(block_height);
+
+        SizeConstraints {
+            min: Size::new(min_width, min_height),
+            preferred: Size::new(min_width, min_height), // Fills width, so preferred = min
+            max: None,                                   // Can grow to fill available space
+        }
+    }
+
+    fn has_intrinsic_size(&self) -> bool {
+        // ProgressBar fills width, so it doesn't have true intrinsic width
+        // but it does have intrinsic height
+        true
     }
 }
 
@@ -446,6 +479,24 @@ impl Widget for MiniBar {
     }
 }
 
+impl MeasurableWidget for MiniBar {
+    fn measure(&self, _available: Size) -> SizeConstraints {
+        // MiniBar has fixed dimensions
+        let percent_width = if self.show_percent { 5 } else { 0 }; // " XXX%"
+        let total_width = self.width.saturating_add(percent_width);
+
+        SizeConstraints {
+            min: Size::new(1, 1), // At least show something
+            preferred: Size::new(total_width, 1),
+            max: Some(Size::new(total_width, 1)), // Fixed size
+        }
+    }
+
+    fn has_intrinsic_size(&self) -> bool {
+        self.width > 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -725,5 +776,62 @@ mod tests {
             let bar = MiniBar::new(0.5, width);
             assert_eq!(bar.render_string().chars().count(), width as usize);
         }
+    }
+
+    // --- MeasurableWidget tests ---
+
+    #[test]
+    fn progress_bar_measure_has_intrinsic_size() {
+        let pb = ProgressBar::new();
+        assert!(pb.has_intrinsic_size());
+    }
+
+    #[test]
+    fn progress_bar_measure_min_size() {
+        let pb = ProgressBar::new();
+        let c = pb.measure(Size::MAX);
+
+        assert_eq!(c.min.width, 1);
+        assert_eq!(c.min.height, 1);
+        assert!(c.max.is_none()); // Fills available width
+    }
+
+    #[test]
+    fn progress_bar_measure_with_block() {
+        let pb = ProgressBar::new().block(Block::bordered());
+        let c = pb.measure(Size::MAX);
+
+        // Block adds 2 (border on each side)
+        assert_eq!(c.min.width, 3);
+        assert_eq!(c.min.height, 3);
+    }
+
+    #[test]
+    fn minibar_measure_fixed_width() {
+        let bar = MiniBar::new(0.5, 10);
+        let c = bar.measure(Size::MAX);
+
+        assert_eq!(c.preferred.width, 10);
+        assert_eq!(c.preferred.height, 1);
+        assert_eq!(c.max, Some(Size::new(10, 1)));
+    }
+
+    #[test]
+    fn minibar_measure_with_percent() {
+        let bar = MiniBar::new(0.5, 10).show_percent(true);
+        let c = bar.measure(Size::MAX);
+
+        // Width = 10 + 5 (" XXX%") = 15
+        assert_eq!(c.preferred.width, 15);
+        assert_eq!(c.preferred.height, 1);
+    }
+
+    #[test]
+    fn minibar_measure_has_intrinsic_size() {
+        let bar = MiniBar::new(0.5, 10);
+        assert!(bar.has_intrinsic_size());
+
+        let zero_width = MiniBar::new(0.5, 0);
+        assert!(!zero_width.has_intrinsic_size());
     }
 }
