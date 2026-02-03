@@ -182,7 +182,6 @@ impl I18nDemo {
         if area.is_empty() {
             return;
         }
-        let colors = theme::current();
         let locale = self.current_locale();
         let info = self.current_info();
 
@@ -227,13 +226,13 @@ impl I18nDemo {
 
             let text = lines.join("\n");
             let paragraph = Paragraph::new(text)
-                .style(Style::new().fg(colors.text))
+                .style(Style::new().fg(theme::fg::PRIMARY))
                 .block(
                     Block::new()
                         .title("String Lookup")
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
-                        .border_style(Style::new().fg(colors.accent)),
+                        .border_style(Style::new().fg(theme::accent::PRIMARY)),
                 );
             paragraph.render(cols[0], frame);
         }
@@ -272,13 +271,13 @@ impl I18nDemo {
 
             let text = lines.join("\n");
             let paragraph = Paragraph::new(text)
-                .style(Style::new().fg(colors.text))
+                .style(Style::new().fg(theme::fg::PRIMARY))
                 .block(
                     Block::new()
                         .title("Catalog Info")
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
-                        .border_style(Style::new().fg(colors.secondary)),
+                        .border_style(Style::new().fg(theme::fg::SECONDARY)),
                 );
             paragraph.render(cols[1], frame);
         }
@@ -288,7 +287,6 @@ impl I18nDemo {
         if area.is_empty() {
             return;
         }
-        let colors = theme::current();
         let locale = self.current_locale();
 
         let mut lines = vec![
@@ -321,13 +319,13 @@ impl I18nDemo {
 
         let text = lines.join("\n");
         let paragraph = Paragraph::new(text)
-            .style(Style::new().fg(colors.text))
+            .style(Style::new().fg(theme::fg::PRIMARY))
             .block(
                 Block::new()
                     .title("Pluralization Rules")
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::new().fg(colors.accent)),
+                    .border_style(Style::new().fg(theme::accent::PRIMARY)),
             );
         paragraph.render(area, frame);
     }
@@ -336,8 +334,6 @@ impl I18nDemo {
         if area.is_empty() {
             return;
         }
-        let colors = theme::current();
-
         // Show side-by-side LTR vs RTL layout.
         let rows = Flex::vertical()
             .constraints([
@@ -351,22 +347,22 @@ impl I18nDemo {
         // Header.
         {
             let paragraph = Paragraph::new("RTL Layout Mirroring — Flex children reverse in RTL")
-                .style(Style::new().fg(colors.text))
+                .style(Style::new().fg(theme::fg::PRIMARY))
                 .alignment(Alignment::Center)
                 .block(
                     Block::new()
                         .borders(Borders::BOTTOM)
                         .border_type(BorderType::Rounded)
-                        .border_style(Style::new().fg(colors.border)),
+                        .border_style(Style::new().fg(theme::fg::MUTED)),
                 );
             paragraph.render(rows[0], frame);
         }
 
         // LTR layout.
-        self.render_direction_sample(frame, rows[1], FlowDirection::Ltr, &colors);
+        self.render_direction_sample(frame, rows[1], FlowDirection::Ltr);
 
         // RTL layout.
-        self.render_direction_sample(frame, rows[2], FlowDirection::Rtl, &colors);
+        self.render_direction_sample(frame, rows[2], FlowDirection::Rtl);
     }
 
     fn render_direction_sample(
