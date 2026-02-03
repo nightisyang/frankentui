@@ -376,6 +376,9 @@ pub struct MacroPlayback {
     next_due: Duration,
     speed: f64,
     looping: bool,
+    start_logged: bool,
+    stop_logged: bool,
+    error_logged: bool,
 }
 
 impl MacroPlayback {
@@ -393,6 +396,9 @@ impl MacroPlayback {
             next_due,
             speed: 1.0,
             looping: false,
+            start_logged: false,
+            stop_logged: false,
+            error_logged: false,
         }
     }
 
@@ -454,16 +460,64 @@ impl MacroPlayback {
             .first()
             .map(|e| e.delay)
             .unwrap_or(Duration::ZERO);
+        self.start_logged = false;
+        self.stop_logged = false;
+        self.error_logged = false;
     }
 
     /// Advance playback time and return any events now due.
     pub fn advance(&mut self, delta: Duration) -> Vec<Event> {
-        if self.input_macro.is_empty() || self.is_done() {
+        if self.input_macro.is_empty() {
+            #[cfg(feature = "tracing")]
+            if !self.error_logged {
+                let meta = self.input_macro.metadata();
+                tracing::warn!(
+                    macro_event = "playback_error",
+                    reason = "macro_empty",
+                    name = %meta.name,
+                    events = 0usize,
+                    duration_ms = self.input_macro.total_duration().as_millis() as u64,
+                );
+                self.error_logged = true;
+            }
+            return Vec::new();
+        }
+        if self.is_done() {
             return Vec::new();
         }
 
+        #[cfg(feature = "tracing")]
+        if !self.start_logged {
+            let meta = self.input_macro.metadata();
+            tracing::info!(
+                macro_event = "playback_start",
+                name = %meta.name,
+                events = self.input_macro.len(),
+                duration_ms = self.input_macro.total_duration().as_millis() as u64,
+                speed = self.speed,
+                looping = self.looping,
+            );
+            self.start_logged = true;
+        }
+
         self.elapsed += scale_duration(delta, self.speed);
-        self.drain_due_events()
+        let events = self.drain_due_events();
+
+        #[cfg(feature = "tracing")]
+        if self.is_done() && !self.stop_logged {
+            let meta = self.input_macro.metadata();
+            tracing::info!(
+                macro_event = "playback_stop",
+                reason = "completed",
+                name = %meta.name,
+                events = self.input_macro.len(),
+                elapsed_ms = self.elapsed.as_millis() as u64,
+                looping = self.looping,
+            );
+            self.stop_logged = true;
+        }
+
+        events
     }
 
     fn drain_due_events(&mut self) -> Vec<Event> {
@@ -615,6 +669,13 @@ impl EventRecorder {
         match self.state {
             RecordingState::Idle => {
                 self.state = RecordingState::Recording;
+                #[cfg(feature = "tracing")]
+                tracing::info!(
+                    macro_event = "recorder_start",
+                    name = %self.inner.name,
+                    term_cols = self.inner.terminal_size.0,
+                    term_rows = self.inner.terminal_size.1,
+                );
             }
             RecordingState::Paused => {
                 self.resume();
@@ -691,7 +752,26 @@ impl EventRecorder {
     ///
     /// Consumes the recorder.
     pub fn finish(self) -> InputMacro {
-        self.inner.finish()
+        self.finish_internal(true)
+    }
+
+    fn finish_internal(self, log: bool) -> InputMacro {
+        let paused = self.total_paused();
+        let macro_data = self.inner.finish();
+        #[cfg(feature = "tracing")]
+        if log {
+            let meta = macro_data.metadata();
+            tracing::info!(
+                macro_event = "recorder_stop",
+                name = %meta.name,
+                events = macro_data.len(),
+                duration_ms = macro_data.total_duration().as_millis() as u64,
+                paused_ms = paused.as_millis() as u64,
+                term_cols = meta.terminal_size.0,
+                term_rows = meta.terminal_size.1,
+            );
+        }
+        macro_data
     }
 
     /// Stop recording and discard all events.
@@ -829,7 +909,24 @@ impl FilteredEventRecorder {
 
     /// Stop recording and produce the final macro.
     pub fn finish(self) -> InputMacro {
-        self.recorder.finish()
+        let filtered = self.filtered_count;
+        let paused = self.recorder.total_paused();
+        let macro_data = self.recorder.finish_internal(false);
+        #[cfg(feature = "tracing")]
+        {
+            let meta = macro_data.metadata();
+            tracing::info!(
+                macro_event = "recorder_stop",
+                name = %meta.name,
+                events = macro_data.len(),
+                filtered,
+                duration_ms = macro_data.total_duration().as_millis() as u64,
+                paused_ms = paused.as_millis() as u64,
+                term_cols = meta.terminal_size.0,
+                term_rows = meta.terminal_size.1,
+            );
+        }
+        macro_data
     }
 }
 

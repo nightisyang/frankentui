@@ -67,6 +67,8 @@ pub struct TelemetryConfig {
     pub endpoint_source: EndpointSource,
     /// OTLP protocol (grpc or http/protobuf).
     pub protocol: Protocol,
+    /// Span processor mode (batch or simple).
+    pub processor: SpanProcessorKind,
     /// Service name for the resource.
     pub service_name: Option<String>,
     /// Extra resource attributes.
@@ -128,6 +130,38 @@ impl Protocol {
         match self {
             Self::Grpc => "http://localhost:4317",
             Self::HttpProtobuf => "http://localhost:4318",
+        }
+    }
+}
+
+/// Span processor mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SpanProcessorKind {
+    /// Batch processor (default; best for production).
+    #[default]
+    Batch,
+    /// Simple processor (best for tests; synchronous export).
+    Simple,
+}
+
+impl SpanProcessorKind {
+    fn from_env(value: Option<String>) -> Self {
+        match value
+            .as_deref()
+            .map(|v| v.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("simple") => Self::Simple,
+            Some("batch") => Self::Batch,
+            _ => Self::default(),
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Batch => "batch",
+            Self::Simple => "simple",
         }
     }
 }
@@ -269,8 +303,19 @@ impl TelemetryConfig {
     /// This follows the env var contract defined in `docs/spec/telemetry.md`.
     /// The parsing is deterministic and order-independent.
     pub fn from_env() -> Self {
+        Self::from_env_with(|key| env::var(key).ok())
+    }
+
+    /// Parse telemetry configuration using a custom environment getter.
+    ///
+    /// This is primarily useful for testing and benchmarking to avoid polluting
+    /// the actual process environment.
+    pub fn from_env_with<F>(mut get: F) -> Self
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
         // Step 1: Check for SDK disabled
-        if env::var("OTEL_SDK_DISABLED")
+        if get("OTEL_SDK_DISABLED")
             .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
         {
@@ -278,7 +323,7 @@ impl TelemetryConfig {
         }
 
         // Step 2: Check for exporter=none
-        if env::var("OTEL_TRACES_EXPORTER")
+        if get("OTEL_TRACES_EXPORTER")
             .map(|v| v.eq_ignore_ascii_case("none"))
             .unwrap_or(false)
         {
@@ -286,11 +331,11 @@ impl TelemetryConfig {
         }
 
         // Step 3: Determine if telemetry should be enabled
-        let explicit_otlp = env::var("OTEL_TRACES_EXPORTER")
+        let explicit_otlp = get("OTEL_TRACES_EXPORTER")
             .map(|v| v.eq_ignore_ascii_case("otlp"))
             .unwrap_or(false);
-        let has_otel_endpoint = env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok();
-        let has_ftui_endpoint = env::var("FTUI_OTEL_HTTP_ENDPOINT").is_ok();
+        let has_otel_endpoint = get("OTEL_EXPORTER_OTLP_ENDPOINT").is_some();
+        let has_ftui_endpoint = get("FTUI_OTEL_HTTP_ENDPOINT").is_some();
 
         let (enabled, enabled_reason) = if explicit_otlp {
             (true, EnabledReason::ExplicitOtlp)
@@ -307,8 +352,8 @@ impl TelemetryConfig {
         }
 
         // Step 4: Parse protocol
-        let protocol = env::var("OTEL_EXPORTER_OTLP_PROTOCOL")
-            .or_else(|_| env::var("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL"))
+        let protocol = get("OTEL_EXPORTER_OTLP_PROTOCOL")
+            .or_else(|| get("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL"))
             .map(|v| {
                 if v.eq_ignore_ascii_case("grpc") {
                     Protocol::Grpc
@@ -320,11 +365,11 @@ impl TelemetryConfig {
 
         // Step 5: Resolve endpoint
         let (endpoint, endpoint_source) =
-            if let Ok(ep) = env::var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") {
+            if let Some(ep) = get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") {
                 (Some(ep), EndpointSource::TracesEndpoint)
-            } else if let Ok(ep) = env::var("FTUI_OTEL_HTTP_ENDPOINT") {
+            } else if let Some(ep) = get("FTUI_OTEL_HTTP_ENDPOINT") {
                 (Some(ep), EndpointSource::FtuiOverride)
-            } else if let Ok(ep) = env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
+            } else if let Some(ep) = get("OTEL_EXPORTER_OTLP_ENDPOINT") {
                 (Some(ep), EndpointSource::BaseEndpoint)
             } else {
                 (
@@ -334,12 +379,8 @@ impl TelemetryConfig {
             };
 
         // Step 6: Parse trace context
-        let trace_id = env::var("OTEL_TRACE_ID")
-            .ok()
-            .and_then(|s| TraceId::parse(&s));
-        let parent_span_id = env::var("OTEL_PARENT_SPAN_ID")
-            .ok()
-            .and_then(|s| SpanId::parse(&s));
+        let trace_id = get("OTEL_TRACE_ID").and_then(|s| TraceId::parse(&s));
+        let parent_span_id = get("OTEL_PARENT_SPAN_ID").and_then(|s| SpanId::parse(&s));
 
         let trace_context_source = if trace_id.is_some() && parent_span_id.is_some() {
             TraceContextSource::Explicit
@@ -348,9 +389,12 @@ impl TelemetryConfig {
         };
 
         // Step 7: Parse other settings
-        let service_name = env::var("OTEL_SERVICE_NAME").ok();
-        let resource_attributes = Self::parse_kv_list(&env::var("OTEL_RESOURCE_ATTRIBUTES").ok());
-        let headers = Self::parse_kv_list(&env::var("OTEL_EXPORTER_OTLP_HEADERS").ok());
+        let service_name = get("OTEL_SERVICE_NAME");
+        let resource_attributes = Self::parse_kv_list(&get("OTEL_RESOURCE_ATTRIBUTES"));
+        let headers = Self::parse_kv_list(&get("OTEL_EXPORTER_OTLP_HEADERS"));
+        let processor = SpanProcessorKind::from_env(
+            get("FTUI_OTEL_SPAN_PROCESSOR").or_else(|| get("FTUI_OTEL_PROCESSOR")),
+        );
 
         Self {
             enabled,
@@ -358,6 +402,7 @@ impl TelemetryConfig {
             endpoint,
             endpoint_source,
             protocol,
+            processor,
             service_name,
             resource_attributes,
             trace_id,
@@ -375,6 +420,7 @@ impl TelemetryConfig {
             endpoint: None,
             endpoint_source: EndpointSource::None,
             protocol: Protocol::default(),
+            processor: SpanProcessorKind::default(),
             service_name: None,
             resource_attributes: vec![],
             trace_id: None,
@@ -507,10 +553,15 @@ impl TelemetryConfig {
                 TelemetryError::ExporterInit(e.to_string())
             })?;
 
-        // Build the provider with batch processor for production
-        let provider = SdkTracerProvider::builder()
-            .with_batch_exporter(exporter)
-            .build();
+        // Build the provider with configured span processor.
+        let provider = match self.processor {
+            SpanProcessorKind::Simple => SdkTracerProvider::builder()
+                .with_simple_exporter(exporter)
+                .build(),
+            SpanProcessorKind::Batch => SdkTracerProvider::builder()
+                .with_batch_exporter(exporter)
+                .build(),
+        };
 
         // Get a tracer
         let tracer = provider.tracer("ftui-runtime");
@@ -530,6 +581,7 @@ impl TelemetryConfig {
             enabled_reason: self.enabled_reason,
             endpoint_source: self.endpoint_source,
             protocol: self.protocol,
+            processor: self.processor,
             trace_context_source: self.trace_context_source,
             service_name: self.service_name.clone(),
         }
@@ -546,6 +598,7 @@ pub struct EvidenceLedger {
     pub enabled_reason: EnabledReason,
     pub endpoint_source: EndpointSource,
     pub protocol: Protocol,
+    pub processor: SpanProcessorKind,
     pub trace_context_source: TraceContextSource,
     pub service_name: Option<String>,
 }
@@ -1425,6 +1478,120 @@ mod tests {
         assert!(redact::process_args(&[]).starts_with("[redacted:"));
         assert!(redact::username("").starts_with("[redacted:"));
     }
+
+    // =========================================================================
+    // Perf Microbench (JSONL + Budget Gate)
+    // =========================================================================
+
+    #[test]
+    fn perf_telemetry_config_jsonl_budget() {
+        use std::io::Write as _;
+        use std::time::Instant;
+
+        const RUNS: usize = 40;
+        let mut jsonl = Vec::new();
+        let mut disabled = Vec::with_capacity(RUNS / 2 + 1);
+        let mut enabled = Vec::with_capacity(RUNS / 2 + 1);
+
+        for i in 0..RUNS {
+            let (label, config) = if i % 2 == 0 {
+                let start = Instant::now();
+                let config = TelemetryConfig::from_env_with(|_| None);
+                let elapsed_ns = start.elapsed().as_nanos() as u64;
+                disabled.push(elapsed_ns);
+                ("disabled", config)
+            } else {
+                let start = Instant::now();
+                let config = TelemetryConfig::from_env_with(|key| match key {
+                    "OTEL_TRACES_EXPORTER" => Some("otlp".into()),
+                    "OTEL_EXPORTER_OTLP_ENDPOINT" => Some("http://localhost:4318".into()),
+                    "OTEL_SERVICE_NAME" => Some("ftui-perf".into()),
+                    _ => None,
+                });
+                let elapsed_ns = start.elapsed().as_nanos() as u64;
+                enabled.push(elapsed_ns);
+                ("enabled_endpoint", config)
+            };
+
+            let ledger = config.evidence_ledger();
+            let checksum = {
+                let mut hash: u64 = 0xcbf29ce484222325;
+                let payload = format!(
+                    "{:?}{:?}{:?}{:?}{:?}",
+                    ledger.enabled,
+                    ledger.enabled_reason,
+                    ledger.endpoint_source,
+                    ledger.protocol,
+                    ledger.trace_context_source
+                );
+                for &b in payload.as_bytes() {
+                    hash ^= b as u64;
+                    hash = hash.wrapping_mul(0x100000001b3);
+                }
+                hash
+            };
+
+            writeln!(
+                &mut jsonl,
+                "{{\"test\":\"telemetry_config\",\"case\":\"{label}\",\
+\"elapsed_ns\":{},\"enabled\":{},\"enabled_reason\":\"{:?}\",\
+\"endpoint_source\":\"{:?}\",\"protocol\":\"{:?}\",\
+\"trace_context_source\":\"{:?}\",\"checksum\":\"{checksum:016x}\"}}",
+                if label == "disabled" {
+                    *disabled.last().unwrap()
+                } else {
+                    *enabled.last().unwrap()
+                },
+                ledger.enabled,
+                ledger.enabled_reason,
+                ledger.endpoint_source,
+                ledger.protocol,
+                ledger.trace_context_source
+            )
+            .expect("jsonl write failed");
+        }
+
+        fn percentile(samples: &mut [u64], p: f64) -> u64 {
+            samples.sort_unstable();
+            let idx = ((samples.len() as f64 - 1.0) * p).round() as usize;
+            samples[idx]
+        }
+
+        let mut disabled_samples = disabled.clone();
+        let mut enabled_samples = enabled.clone();
+        let p95_disabled = percentile(&mut disabled_samples, 0.95);
+        let p95_enabled = percentile(&mut enabled_samples, 0.95);
+        let p99_disabled = percentile(&mut disabled_samples, 0.99);
+        let p99_enabled = percentile(&mut enabled_samples, 0.99);
+
+        let (budget_disabled_ns, budget_enabled_ns) = if cfg!(debug_assertions) {
+            (200_000, 400_000)
+        } else {
+            (5_000, 20_000)
+        };
+
+        assert!(
+            p95_disabled <= budget_disabled_ns,
+            "p95 disabled {p95_disabled}ns exceeds {budget_disabled_ns}ns"
+        );
+        assert!(
+            p95_enabled <= budget_enabled_ns,
+            "p95 enabled {p95_enabled}ns exceeds {budget_enabled_ns}ns"
+        );
+        assert!(
+            p99_disabled <= budget_disabled_ns * 2,
+            "p99 disabled {p99_disabled}ns exceeds 2x budget"
+        );
+        assert!(
+            p99_enabled <= budget_enabled_ns * 2,
+            "p99 enabled {p99_enabled}ns exceeds 2x budget"
+        );
+
+        let text = String::from_utf8(jsonl).expect("jsonl utf8");
+        // Emit JSONL perf log for `--nocapture` runs.
+        print!("{text}");
+        assert_eq!(text.lines().count(), RUNS);
+    }
 }
 
 // =============================================================================
@@ -1437,6 +1604,28 @@ mod tests {
 #[cfg(test)]
 mod in_memory_exporter_tests {
     use super::*;
+    use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+    use std::collections::HashMap;
+    use tracing_subscriber::prelude::*;
+
+    type OtelLayer = tracing_opentelemetry::OpenTelemetryLayer<
+        tracing_subscriber::Registry,
+        opentelemetry_sdk::trace::Tracer,
+    >;
+
+    fn build_in_memory_provider() -> (InMemorySpanExporter, SdkTracerProvider) {
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        (exporter, provider)
+    }
+
+    fn build_in_memory_layer(provider: &SdkTracerProvider) -> OtelLayer {
+        use opentelemetry::trace::TracerProvider as _;
+        let tracer = provider.tracer("ftui-runtime-test");
+        tracing_opentelemetry::layer().with_tracer(tracer)
+    }
 
     // =========================================================================
     // Configuration Parsing Tests
@@ -1464,6 +1653,17 @@ mod in_memory_exporter_tests {
         let config = TelemetryConfig::disabled(EnabledReason::DefaultDisabled);
         assert!(!config.is_enabled());
         assert_eq!(config.enabled_reason, EnabledReason::DefaultDisabled);
+    }
+
+    #[test]
+    fn test_span_processor_env_simple() {
+        let env = HashMap::from([
+            ("OTEL_TRACES_EXPORTER".to_string(), "otlp".to_string()),
+            ("FTUI_OTEL_SPAN_PROCESSOR".to_string(), "simple".to_string()),
+        ]);
+
+        let config = TelemetryConfig::from_env_with(|key| env.get(key).cloned());
+        assert_eq!(config.processor, SpanProcessorKind::Simple);
     }
 
     // =========================================================================
@@ -1534,6 +1734,7 @@ mod in_memory_exporter_tests {
             endpoint: Some("http://localhost:4318".to_string()),
             endpoint_source: EndpointSource::ProtocolDefault,
             protocol: Protocol::HttpProtobuf,
+            processor: SpanProcessorKind::Batch,
             service_name: None,
             resource_attributes: vec![],
             trace_id: TraceId::parse("0123456789abcdef0123456789abcdef"),
@@ -1559,6 +1760,7 @@ mod in_memory_exporter_tests {
             endpoint: Some("http://localhost:4318".to_string()),
             endpoint_source: EndpointSource::ProtocolDefault,
             protocol: Protocol::HttpProtobuf,
+            processor: SpanProcessorKind::Batch,
             service_name: None,
             resource_attributes: vec![],
             trace_id: None,
@@ -1569,6 +1771,59 @@ mod in_memory_exporter_tests {
 
         assert_eq!(config_new.trace_context_source, TraceContextSource::New);
         assert!(config_new.trace_id.is_none());
+    }
+
+    // =========================================================================
+    // In-Memory Exporter Integration Tests
+    // =========================================================================
+
+    #[test]
+    fn test_in_memory_exporter_exports_spans_when_enabled() {
+        let env = HashMap::from([("OTEL_TRACES_EXPORTER".to_string(), "otlp".to_string())]);
+
+        let config = TelemetryConfig::from_env_with(|key| env.get(key).cloned());
+        assert!(config.is_enabled());
+
+        let (exporter, provider) = build_in_memory_provider();
+        let layer = build_in_memory_layer(&provider);
+        let subscriber = tracing_subscriber::registry().with(layer);
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info_span!("ftui.test.export").in_scope(|| {
+                tracing::info!("exported");
+            });
+        });
+
+        provider.force_flush().expect("force_flush failed");
+        let spans = exporter
+            .get_finished_spans()
+            .expect("failed to fetch spans");
+
+        assert!(spans.iter().any(|span| span.name == "ftui.test.export"));
+    }
+
+    #[test]
+    fn test_in_memory_exporter_silent_when_disabled() {
+        let env = HashMap::from([("OTEL_SDK_DISABLED".to_string(), "true".to_string())]);
+
+        let config = TelemetryConfig::from_env_with(|key| env.get(key).cloned());
+        assert!(!config.is_enabled());
+
+        let (exporter, provider) = build_in_memory_provider();
+        let subscriber = tracing_subscriber::registry();
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info_span!("ftui.test.disabled").in_scope(|| {
+                tracing::info!("not exported");
+            });
+        });
+
+        provider.force_flush().expect("force_flush failed");
+        let spans = exporter
+            .get_finished_spans()
+            .expect("failed to fetch spans");
+
+        assert!(spans.is_empty());
     }
 
     // =========================================================================
@@ -1583,6 +1838,7 @@ mod in_memory_exporter_tests {
             endpoint: Some("http://collector:4318".to_string()),
             endpoint_source: EndpointSource::BaseEndpoint,
             protocol: Protocol::HttpProtobuf,
+            processor: SpanProcessorKind::Batch,
             service_name: Some("ftui-test".to_string()),
             resource_attributes: vec![],
             trace_id: None,
@@ -1597,6 +1853,7 @@ mod in_memory_exporter_tests {
         assert_eq!(ledger.enabled_reason, EnabledReason::EndpointSet);
         assert_eq!(ledger.endpoint_source, EndpointSource::BaseEndpoint);
         assert_eq!(ledger.protocol, Protocol::HttpProtobuf);
+        assert_eq!(ledger.processor, SpanProcessorKind::Batch);
         assert_eq!(ledger.service_name, Some("ftui-test".to_string()));
     }
 

@@ -103,5 +103,6 @@ pub use schedule_trace::{
 #[cfg(feature = "telemetry")]
 pub use telemetry::{
     DecisionEvidence, EnabledReason, EndpointSource, EvidenceLedger, Protocol, SCHEMA_VERSION,
-    SpanId, TelemetryConfig, TelemetryError, TelemetryGuard, TraceContextSource, TraceId, redact,
+    SpanId, TelemetryConfig, TelemetryError, TelemetryGuard, TraceContextSource, TraceId,
+    is_safe_env_var, redact,
 };

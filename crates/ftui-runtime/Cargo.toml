@@ -44,7 +44,7 @@ unicode-width = "0.2.2"
 # Optional telemetry dependencies (feature-gated)
 opentelemetry = { version = "0.31", optional = true }
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"], optional = true }
-opentelemetry-otlp = { version = "0.31", features = ["http-proto", "reqwest-client"], optional = true }
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["http-proto", "reqwest-blocking-client"], optional = true }
 tracing-opentelemetry = { version = "0.32", optional = true }
 tracing-subscriber = { version = "0.3", features = ["registry", "env-filter"], optional = true }
 
@@ -54,6 +54,7 @@ serde_json = { version = "1", optional = true }
 base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1"
 tempfile = "3"
 serde = { version = "1", features = ["derive"] }
@@ -64,3 +65,8 @@ opentelemetry = "0.31"
 opentelemetry_sdk = { version = "0.31", features = ["testing"] }
 tracing-opentelemetry = "0.32"
 tracing-subscriber = { version = "0.3", features = ["registry", "env-filter"] }
+
+[[bench]]
+name = "telemetry_bench"
+harness = false
+required-features = ["telemetry"]

@@ -1136,4 +1136,235 @@ mod tests {
             "Must apply within hard deadline"
         );
     }
+
+    // =========================================================================
+    // Property tests (bd-1rz0.8)
+    // =========================================================================
+
+    mod property {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Strategy for generating resize dimensions.
+        fn dimension() -> impl Strategy<Value = u16> {
+            1u16..500
+        }
+
+        /// Strategy for generating resize event sequences.
+        fn resize_sequence(max_len: usize) -> impl Strategy<Value = Vec<(u16, u16, u64)>> {
+            proptest::collection::vec((dimension(), dimension(), 0u64..200), 0..max_len)
+        }
+
+        proptest! {
+            /// Property: identical sequences yield identical final results.
+            ///
+            /// The coalescer must be deterministic - same inputs → same outputs.
+            #[test]
+            fn determinism_across_sequences(
+                events in resize_sequence(50),
+                tick_offset in 100u64..500
+            ) {
+                let config = CoalescerConfig::default();
+
+                let results: Vec<_> = (0..2)
+                    .map(|_| {
+                        let mut c = ResizeCoalescer::new(config.clone(), (80, 24));
+                        let base = Instant::now();
+
+                        for (i, (w, h, delay)) in events.iter().enumerate() {
+                            let offset = events[..i].iter().map(|(_, _, d)| *d).sum::<u64>() + delay;
+                            c.handle_resize_at(*w, *h, base + Duration::from_millis(offset));
+                        }
+
+                        // Tick to trigger apply
+                        let total_time = events.iter().map(|(_, _, d)| d).sum::<u64>() + tick_offset;
+                        c.tick_at(base + Duration::from_millis(total_time))
+                    })
+                    .collect();
+
+                prop_assert_eq!(results[0], results[1], "Results must be deterministic");
+            }
+
+            /// Property: the latest resize is never lost (latest-wins semantics).
+            ///
+            /// When all coalescing completes, the applied size must match the
+            /// final requested size.
+            #[test]
+            fn latest_wins_never_drops(
+                events in resize_sequence(20),
+                final_w in dimension(),
+                final_h in dimension()
+            ) {
+                if events.is_empty() {
+                    // No events to test
+                    return Ok(());
+                }
+
+                let config = CoalescerConfig::default();
+                let mut c = ResizeCoalescer::new(config.clone(), (80, 24));
+                let base = Instant::now();
+
+                // Feed all events
+                let mut offset = 0u64;
+                for (w, h, delay) in &events {
+                    offset += delay;
+                    c.handle_resize_at(*w, *h, base + Duration::from_millis(offset));
+                }
+
+                // Add final event
+                offset += 50;
+                c.handle_resize_at(final_w, final_h, base + Duration::from_millis(offset));
+
+                // Tick until we get an apply
+                let mut final_applied = None;
+                for tick in 0..200 {
+                    let action = c.tick_at(base + Duration::from_millis(offset + 10 + tick * 20));
+                    if let CoalesceAction::ApplyResize { width, height, .. } = action {
+                        final_applied = Some((width, height));
+                    }
+                    if !c.has_pending() && final_applied.is_some() {
+                        break;
+                    }
+                }
+
+                // The final applied size must match the latest requested size
+                if let Some((applied_w, applied_h)) = final_applied {
+                    prop_assert_eq!(
+                        (applied_w, applied_h),
+                        (final_w, final_h),
+                        "Must apply the final size {} x {}",
+                        final_w,
+                        final_h
+                    );
+                }
+            }
+
+            /// Property: bounded latency is always maintained.
+            ///
+            /// A pending resize must be applied within hard_deadline_ms.
+            #[test]
+            fn bounded_latency_maintained(
+                w in dimension(),
+                h in dimension()
+            ) {
+                let config = CoalescerConfig::default();
+                let mut c = ResizeCoalescer::new(config.clone(), (80, 24));
+                let base = Instant::now();
+
+                c.handle_resize_at(w, h, base);
+
+                // Tick forward until applied
+                let mut applied_at = None;
+                for ms in 0..=config.hard_deadline_ms + 50 {
+                    let action = c.tick_at(base + Duration::from_millis(ms));
+                    if matches!(action, CoalesceAction::ApplyResize { .. }) {
+                        applied_at = Some(ms);
+                        break;
+                    }
+                }
+
+                prop_assert!(applied_at.is_some(), "Resize must be applied");
+                prop_assert!(
+                    applied_at.unwrap() <= config.hard_deadline_ms,
+                    "Must apply within hard deadline ({}ms), took {}ms",
+                    config.hard_deadline_ms,
+                    applied_at.unwrap()
+                );
+            }
+
+            /// Property: applied sizes are never corrupted.
+            ///
+            /// When a resize is applied, the dimensions must exactly match
+            /// what was requested (no off-by-one, no swapped axes).
+            #[test]
+            fn no_size_corruption(
+                w in dimension(),
+                h in dimension()
+            ) {
+                let config = CoalescerConfig::default();
+                let mut c = ResizeCoalescer::new(config.clone(), (80, 24));
+                let base = Instant::now();
+
+                c.handle_resize_at(w, h, base);
+
+                // Tick until applied
+                let mut result = None;
+                for ms in 0..200 {
+                    let action = c.tick_at(base + Duration::from_millis(ms));
+                    if let CoalesceAction::ApplyResize { width, height, .. } = action {
+                        result = Some((width, height));
+                        break;
+                    }
+                }
+
+                prop_assert!(result.is_some());
+                let (applied_w, applied_h) = result.unwrap();
+                prop_assert_eq!(applied_w, w, "Width must not be corrupted");
+                prop_assert_eq!(applied_h, h, "Height must not be corrupted");
+            }
+
+            /// Property: regime transitions are monotonic with event rate.
+            ///
+            /// Higher event rates should more reliably trigger burst mode.
+            #[test]
+            fn regime_follows_event_rate(
+                event_count in 1usize..30
+            ) {
+                let config = CoalescerConfig {
+                    burst_enter_rate: 10.0,
+                    burst_exit_rate: 5.0,
+                    ..CoalescerConfig::default()
+                };
+                let mut c = ResizeCoalescer::new(config.clone(), (80, 24));
+                let base = Instant::now();
+
+                // Very fast events (>10/sec) should trigger burst mode
+                for i in 0..event_count {
+                    c.handle_resize_at(
+                        80 + i as u16,
+                        24,
+                        base + Duration::from_millis(i as u64 * 50), // 20 events/sec
+                    );
+                }
+
+                // With enough fast events, should enter burst
+                if event_count >= 10 {
+                    prop_assert_eq!(
+                        c.regime(),
+                        Regime::Burst,
+                        "Many rapid events should trigger burst mode"
+                    );
+                }
+            }
+
+            /// Property: event count invariant - coalescer tracks all events.
+            #[test]
+            fn event_count_invariant(
+                events in resize_sequence(100)
+            ) {
+                let config = CoalescerConfig::default();
+                let mut c = ResizeCoalescer::new(config, (80, 24));
+                let base = Instant::now();
+
+                let mut same_size_count = 0u64;
+                let mut last_size = (80u16, 24u16);
+
+                for (w, h, delay) in &events {
+                    if *w == last_size.0 && *h == last_size.1 {
+                        same_size_count += 1;
+                    }
+                    last_size = (*w, *h);
+                    c.handle_resize_at(*w, *h, base + Duration::from_millis(*delay));
+                }
+
+                let stats = c.stats();
+                // Event count should not exceed distinct-size count.
+                let max_events = (events.len() as u64).saturating_sub(same_size_count);
+                prop_assert!(
+                    stats.event_count <= max_events,
+                    "Event count should not exceed distinct-size count"
+                );
+            }
+        }
+    }
 }
