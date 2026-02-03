@@ -33,12 +33,14 @@ SCREENS:
     6  Forms & Input      Interactive form widgets and text editing
     7  Data Viz           Charts, canvas, and structured data
     8  File Browser       File system navigation and preview
-    9  Markdown           Rich text and markdown rendering
-   10  Advanced           Mouse, clipboard, hyperlinks, export
-   11  Performance        Frame budget, caching, virtualization
+    9  Advanced           Mouse, clipboard, hyperlinks, export
+   10  Performance        Frame budget, caching, virtualization
+   11  Macro Recorder     Record/replay input macros and scenarios
+   12  Markdown           Rich text and markdown rendering
+   13  Visual Effects     Animated braille and canvas effects
 
 KEYBINDINGS:
-    Tab / 1-9, 0   Switch between screens
+    Tab / 1-9, 0   Switch between screens (first 10)
     ?               Toggle help overlay
     F12             Toggle debug overlay
     q / Ctrl+C      Quit

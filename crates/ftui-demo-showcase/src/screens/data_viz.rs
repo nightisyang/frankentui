@@ -21,6 +21,7 @@ use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::paragraph::Paragraph;
+use ftui_widgets::progress::{MiniBar, MiniBarColors};
 
 use super::{HelpEntry, Screen};
 use crate::data::ChartData;
@@ -83,12 +84,10 @@ impl DataViz {
     }
 
     fn render_sparkline_panel(&self, frame: &mut Frame, area: Rect) {
-        let focused = self.focus == ChartPanel::Sparkline;
-        let border_style = if focused {
-            Style::new().fg(theme::screen_accent::DATA_VIZ)
-        } else {
-            theme::content_border()
-        };
+        let border_style = theme::panel_border_style(
+            self.focus == ChartPanel::Sparkline,
+            theme::screen_accent::DATA_VIZ,
+        );
 
         let block = Block::new()
             .borders(Borders::ALL)
@@ -106,6 +105,7 @@ impl DataViz {
 
         let rows = Flex::vertical()
             .constraints([
+                Constraint::Fixed(1),
                 Constraint::Fixed(1),
                 Constraint::Fixed(1),
                 Constraint::Fixed(1),
@@ -155,15 +155,36 @@ impl DataViz {
                 .gradient(gradients[2].0, gradients[2].1)
                 .render(rows[5], frame);
         }
+        if !rows[6].is_empty() {
+            let mini_cols = Flex::horizontal()
+                .gap(theme::spacing::XS)
+                .constraints([
+                    Constraint::Percentage(33.0),
+                    Constraint::Percentage(33.0),
+                    Constraint::Percentage(34.0),
+                ])
+                .split(rows[6]);
+
+            let sine_value =
+                normalize_series_value(self.chart_data.sine_series.back().copied().unwrap_or(0.0));
+            let cos_value = normalize_series_value(
+                self.chart_data.cosine_series.back().copied().unwrap_or(0.0),
+            );
+            let rand_value = normalize_series_value(
+                self.chart_data.random_series.back().copied().unwrap_or(0.0),
+            );
+
+            render_mini_bar(frame, mini_cols[0], "SIN", sine_value, colors[0]);
+            render_mini_bar(frame, mini_cols[1], "COS", cos_value, colors[1]);
+            render_mini_bar(frame, mini_cols[2], "RND", rand_value, colors[2]);
+        }
     }
 
     fn render_barchart_panel(&self, frame: &mut Frame, area: Rect) {
-        let focused = self.focus == ChartPanel::BarChart;
-        let border_style = if focused {
-            Style::new().fg(theme::screen_accent::DATA_VIZ)
-        } else {
-            theme::content_border()
-        };
+        let border_style = theme::panel_border_style(
+            self.focus == ChartPanel::BarChart,
+            theme::screen_accent::DATA_VIZ,
+        );
 
         let dir_label = if self.bar_horizontal {
             "Horizontal"
@@ -210,12 +231,10 @@ impl DataViz {
     }
 
     fn render_linechart_panel(&self, frame: &mut Frame, area: Rect) {
-        let focused = self.focus == ChartPanel::LineChart;
-        let border_style = if focused {
-            Style::new().fg(theme::screen_accent::DATA_VIZ)
-        } else {
-            theme::content_border()
-        };
+        let border_style = theme::panel_border_style(
+            self.focus == ChartPanel::LineChart,
+            theme::screen_accent::DATA_VIZ,
+        );
 
         let block = Block::new()
             .borders(Borders::ALL)
@@ -263,12 +282,10 @@ impl DataViz {
     }
 
     fn render_canvas_panel(&self, frame: &mut Frame, area: Rect) {
-        let focused = self.focus == ChartPanel::Canvas;
-        let border_style = if focused {
-            Style::new().fg(theme::screen_accent::DATA_VIZ)
-        } else {
-            theme::content_border()
-        };
+        let border_style = theme::panel_border_style(
+            self.focus == ChartPanel::Canvas,
+            theme::screen_accent::DATA_VIZ,
+        );
 
         let block = Block::new()
             .borders(Borders::ALL)
@@ -347,6 +364,40 @@ fn line_palette() -> [PackedRgba; 2] {
         theme::accent::PRIMARY.into(),
         theme::accent::SECONDARY.into(),
     ]
+}
+
+fn normalize_series_value(value: f64) -> f64 {
+    if value.is_finite() {
+        ((value + 1.0) * 0.5).clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+fn render_mini_bar(frame: &mut Frame, area: Rect, label: &str, value: f64, color: PackedRgba) {
+    if area.is_empty() {
+        return;
+    }
+
+    let label_text = format!("{label} ");
+    let label_width = label_text.chars().count() as u16;
+    let cols = Flex::horizontal()
+        .constraints([Constraint::Fixed(label_width), Constraint::Min(1)])
+        .split(area);
+
+    if !cols[0].is_empty() {
+        Paragraph::new(label_text.as_str())
+            .style(Style::new().fg(theme::fg::SECONDARY))
+            .render(cols[0], frame);
+    }
+
+    if !cols[1].is_empty() {
+        let colors = MiniBarColors::new(color, color, color, color);
+        MiniBar::new(value, cols[1].width)
+            .colors(colors)
+            .style(Style::new().fg(theme::fg::MUTED))
+            .render(cols[1], frame);
+    }
 }
 
 impl Screen for DataViz {

@@ -309,19 +309,72 @@ impl MarkdownRichText {
     }
 
     /// Advance the streaming simulation by one tick.
+    ///
+    /// Uses variable typing speed: faster for whitespace, slower for headings.
     fn tick_stream(&mut self) {
         if self.stream_paused {
             return;
         }
         let max_len = STREAMING_MARKDOWN.len();
         if self.stream_position < max_len {
-            // Advance by a few characters, ensuring we land on a char boundary
-            let mut new_pos = self.stream_position.saturating_add(STREAM_CHARS_PER_TICK);
+            // Calculate variable speed based on content
+            let speed = self.calculate_typing_speed();
+
+            // Advance by calculated characters, ensuring we land on a char boundary
+            let mut new_pos = self.stream_position.saturating_add(speed);
             while new_pos < max_len && !STREAMING_MARKDOWN.is_char_boundary(new_pos) {
                 new_pos += 1;
             }
             self.stream_position = new_pos.min(max_len);
         }
+    }
+
+    /// Calculate typing speed based on upcoming content.
+    ///
+    /// - Fast (5-6 chars): whitespace, simple punctuation
+    /// - Medium (3 chars): regular text
+    /// - Slow (1-2 chars): headings, code blocks, new sections
+    fn calculate_typing_speed(&self) -> usize {
+        let remaining = &STREAMING_MARKDOWN[self.stream_position..];
+        if remaining.is_empty() {
+            return STREAM_CHARS_PER_TICK;
+        }
+
+        // Check what's coming up
+        let first_char = remaining.chars().next().unwrap_or(' ');
+
+        // Fast: whitespace sequences
+        if first_char.is_whitespace() {
+            // Count consecutive whitespace for burst typing
+            let ws_count = remaining.chars().take_while(|c| c.is_whitespace()).count();
+            return ws_count.clamp(1, 6);
+        }
+
+        // Check if we're at the start of a line
+        let at_line_start = self.stream_position == 0
+            || STREAMING_MARKDOWN.get(self.stream_position.saturating_sub(1)..self.stream_position)
+                == Some("\n");
+
+        if at_line_start {
+            // Slow: headings (lines starting with #)
+            if remaining.starts_with('#') {
+                return 1;
+            }
+            // Slow: code blocks
+            if remaining.starts_with("```") {
+                return 2;
+            }
+            // Slow: list items and blockquotes
+            if remaining.starts_with('-')
+                || remaining.starts_with('>')
+                || remaining.starts_with('|')
+            {
+                return 2;
+            }
+        }
+
+        // Medium: regular text
+        STREAM_CHARS_PER_TICK
     }
 
     /// Get the current streaming fragment.
@@ -331,10 +384,27 @@ impl MarkdownRichText {
     }
 
     /// Render the streaming fragment using streaming-aware rendering.
+    ///
+    /// Adds a visible blinking cursor at the end when still streaming.
     fn render_stream_fragment(&self) -> Text {
         let fragment = self.current_stream_fragment();
         let renderer = MarkdownRenderer::new(self.md_theme.clone());
-        renderer.render_streaming(fragment)
+        let mut text = renderer.render_streaming(fragment);
+
+        // Add blinking cursor at end if still streaming
+        if !self.stream_complete() {
+            // Create cursor span with accent color and blink
+            let cursor = Span::styled("▌", Style::new().fg(theme::accent::PRIMARY).blink());
+            let mut lines: Vec<Line> = text.lines().to_vec();
+            if let Some(last_line) = lines.last_mut() {
+                last_line.push_span(cursor);
+            } else {
+                lines.push(Line::from_spans([cursor]));
+            }
+            text = Text::from_lines(lines);
+        }
+
+        text
     }
 
     /// Check if streaming is complete.
@@ -558,9 +628,13 @@ impl MarkdownRichText {
             return;
         }
 
-        // Split into content area and detection info
+        // Split into content area, progress bar, and detection info
         let chunks = Flex::vertical()
-            .constraints([Constraint::Min(5), Constraint::Fixed(3)])
+            .constraints([
+                Constraint::Min(5),
+                Constraint::Fixed(1),
+                Constraint::Fixed(3),
+            ])
             .split(inner);
 
         // Render the streaming markdown fragment
@@ -569,6 +643,21 @@ impl MarkdownRichText {
             .wrap(WrapMode::Word)
             .scroll((self.stream_scroll, 0))
             .render(chunks[0], frame);
+
+        // Render mini progress bar
+        let progress = self.stream_position as f64 / STREAMING_MARKDOWN.len() as f64;
+        let bar_width = chunks[1].width.saturating_sub(4) as usize;
+        let filled = (progress * bar_width as f64) as usize;
+        let empty = bar_width.saturating_sub(filled);
+
+        let progress_bar = Line::from_spans([
+            Span::styled("  ", Style::new()),
+            Span::styled("[", theme::muted()),
+            Span::styled("█".repeat(filled), Style::new().fg(theme::accent::SUCCESS)),
+            Span::styled("░".repeat(empty), Style::new().fg(theme::fg::MUTED).dim()),
+            Span::styled("]", theme::muted()),
+        ]);
+        Paragraph::new(Text::from_lines([progress_bar])).render(chunks[1], frame);
 
         // Detection status panel
         let fragment = self.current_stream_fragment();
@@ -607,7 +696,7 @@ impl MarkdownRichText {
             ]),
         ]);
 
-        Paragraph::new(detection_text).render(chunks[1], frame);
+        Paragraph::new(detection_text).render(chunks[2], frame);
     }
 }
 

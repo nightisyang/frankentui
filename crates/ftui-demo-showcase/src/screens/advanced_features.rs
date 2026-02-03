@@ -16,7 +16,7 @@ use ftui_extras::timer::{DisplayFormat, Timer};
 use ftui_extras::traceback::{Traceback, TracebackFrame};
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
-use ftui_runtime::Cmd;
+use ftui_runtime::{Cmd, FilteredEventRecorder, InputMacro, RecordingFilter};
 use ftui_style::Style;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
@@ -32,6 +32,7 @@ use crate::theme;
 enum Panel {
     Traceback,
     Timers,
+    Macro,
     Info,
 }
 
@@ -39,7 +40,8 @@ impl Panel {
     fn next(self) -> Self {
         match self {
             Self::Traceback => Self::Timers,
-            Self::Timers => Self::Info,
+            Self::Timers => Self::Macro,
+            Self::Macro => Self::Info,
             Self::Info => Self::Traceback,
         }
     }
@@ -48,7 +50,38 @@ impl Panel {
         match self {
             Self::Traceback => Self::Info,
             Self::Timers => Self::Traceback,
-            Self::Info => Self::Timers,
+            Self::Macro => Self::Timers,
+            Self::Info => Self::Macro,
+        }
+    }
+}
+
+const MACRO_SPEED_MIN: f64 = 0.25;
+const MACRO_SPEED_MAX: f64 = 4.0;
+const MACRO_SPEED_STEP: f64 = 0.25;
+const MACRO_TICK: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Clone)]
+struct MacroPlayback {
+    playing: bool,
+    loop_enabled: bool,
+    speed: f64,
+    index: usize,
+    elapsed: Duration,
+    next_at: Duration,
+    error: Option<String>,
+}
+
+impl MacroPlayback {
+    fn new() -> Self {
+        Self {
+            playing: false,
+            loop_enabled: false,
+            speed: 1.0,
+            index: 0,
+            elapsed: Duration::ZERO,
+            next_at: Duration::ZERO,
+            error: None,
         }
     }
 }
@@ -59,6 +92,9 @@ pub struct AdvancedFeatures {
     timer_clock: Timer,
     spinner_tick: usize,
     tick_count: u64,
+    macro_recorder: Option<FilteredEventRecorder>,
+    macro_recording: Option<InputMacro>,
+    macro_playback: MacroPlayback,
 }
 
 impl Default for AdvancedFeatures {
@@ -83,16 +119,244 @@ impl AdvancedFeatures {
             timer_clock,
             spinner_tick: 0,
             tick_count: 0,
+            macro_recorder: None,
+            macro_recording: None,
+            macro_playback: MacroPlayback::new(),
+        }
+    }
+
+    fn is_macro_control(event: &Event) -> bool {
+        matches!(
+            event,
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('r')
+                    | KeyCode::Char('p')
+                    | KeyCode::Char('l')
+                    | KeyCode::Char('+')
+                    | KeyCode::Char('-')
+                    | KeyCode::Escape,
+                kind: KeyEventKind::Press,
+                ..
+            })
+        )
+    }
+
+    fn is_recording(&self) -> bool {
+        self.macro_recorder
+            .as_ref()
+            .is_some_and(FilteredEventRecorder::is_recording)
+    }
+
+    fn should_record_event(&self, event: &Event) -> bool {
+        if self.macro_playback.playing {
+            return false;
+        }
+        if self.focus == Panel::Macro && Self::is_macro_control(event) {
+            return false;
+        }
+        true
+    }
+
+    fn start_recording(&mut self) {
+        let name = format!("demo-macro-{}", self.tick_count);
+        let filter = RecordingFilter {
+            keys: true,
+            mouse: true,
+            resize: false,
+            paste: true,
+            focus: false,
+        };
+        let mut recorder = FilteredEventRecorder::new(name, filter);
+        recorder.start();
+        self.macro_recorder = Some(recorder);
+        self.macro_recording = None;
+        self.macro_playback.error = None;
+        self.macro_playback.playing = false;
+    }
+
+    fn stop_recording(&mut self) {
+        if let Some(recorder) = self.macro_recorder.take() {
+            self.macro_recording = Some(recorder.finish());
+        }
+    }
+
+    fn reset_playback(&mut self) {
+        self.macro_playback.index = 0;
+        self.macro_playback.elapsed = Duration::ZERO;
+        self.macro_playback.next_at = self
+            .macro_recording
+            .as_ref()
+            .and_then(|m| m.events().first())
+            .map(|e| e.delay)
+            .unwrap_or(Duration::ZERO);
+    }
+
+    fn stop_playback(&mut self) {
+        self.macro_playback.playing = false;
+        self.reset_playback();
+    }
+
+    fn toggle_playback(&mut self) {
+        if self.is_recording() {
+            self.macro_playback.error = Some("Stop recording before playback".to_string());
+            return;
+        }
+        let Some(macro_data) = self.macro_recording.as_ref() else {
+            self.macro_playback.error = Some("No macro recorded".to_string());
+            return;
+        };
+        if macro_data.is_empty() {
+            self.macro_playback.error = Some("Macro has no events".to_string());
+            return;
+        }
+        self.macro_playback.error = None;
+        self.macro_playback.playing = !self.macro_playback.playing;
+        if self.macro_playback.playing {
+            self.reset_playback();
+        }
+    }
+
+    fn adjust_speed(&mut self, delta: f64) {
+        self.macro_playback.speed =
+            (self.macro_playback.speed + delta).clamp(MACRO_SPEED_MIN, MACRO_SPEED_MAX);
+    }
+
+    fn handle_macro_controls(&mut self, event: &Event) -> bool {
+        if self.focus != Panel::Macro {
+            return false;
+        }
+        if let Event::Key(KeyEvent {
+            code,
+            kind: KeyEventKind::Press,
+            ..
+        }) = event
+        {
+            match code {
+                KeyCode::Char('r') => {
+                    if self.is_recording() {
+                        self.stop_recording();
+                    } else {
+                        self.start_recording();
+                    }
+                    return true;
+                }
+                KeyCode::Char('p') => {
+                    self.toggle_playback();
+                    return true;
+                }
+                KeyCode::Char('l') => {
+                    self.macro_playback.loop_enabled = !self.macro_playback.loop_enabled;
+                    return true;
+                }
+                KeyCode::Char('+') => {
+                    self.adjust_speed(MACRO_SPEED_STEP);
+                    return true;
+                }
+                KeyCode::Char('-') => {
+                    self.adjust_speed(-MACRO_SPEED_STEP);
+                    return true;
+                }
+                KeyCode::Escape => {
+                    if self.is_recording() {
+                        self.stop_recording();
+                        return true;
+                    }
+                    if self.macro_playback.playing {
+                        self.stop_playback();
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn apply_event(&mut self, event: &Event) {
+        // Reset timers
+        if let Event::Key(KeyEvent {
+            code: KeyCode::Char('r'),
+            kind: KeyEventKind::Press,
+            ..
+        }) = event
+        {
+            self.timer_compact.reset();
+            self.timer_clock.reset();
+        }
+
+        // Pause/resume
+        if let Event::Key(KeyEvent {
+            code: KeyCode::Char(' '),
+            kind: KeyEventKind::Press,
+            ..
+        }) = event
+        {
+            self.timer_compact.toggle();
+            self.timer_clock.toggle();
+        }
+    }
+
+    fn tick_macro(&mut self, tick_delta: Duration) {
+        if !self.macro_playback.playing {
+            return;
+        }
+        let events_len = match self.macro_recording.as_ref() {
+            Some(m) => m.events().len(),
+            None => {
+                self.macro_playback.playing = false;
+                self.macro_playback.error = Some("No macro recorded".to_string());
+                return;
+            }
+        };
+        if events_len == 0 {
+            self.macro_playback.playing = false;
+            self.macro_playback.error = Some("Macro has no events".to_string());
+            return;
+        }
+
+        let scaled = Duration::from_secs_f64(tick_delta.as_secs_f64() * self.macro_playback.speed);
+        self.macro_playback.elapsed += scaled;
+
+        while self.macro_playback.index < events_len {
+            let next_at = self.macro_playback.next_at;
+            if self.macro_playback.elapsed < next_at {
+                break;
+            }
+            let (event, next_delay) = {
+                let macro_data = self
+                    .macro_recording
+                    .as_ref()
+                    .expect("macro_recording missing");
+                let events = macro_data.events();
+                let event = events[self.macro_playback.index].event.clone();
+                let next_delay = if self.macro_playback.index + 1 < events_len {
+                    events[self.macro_playback.index + 1].delay
+                } else {
+                    Duration::ZERO
+                };
+                (event, next_delay)
+            };
+            self.apply_event(&event);
+            self.macro_playback.index += 1;
+            if self.macro_playback.index < events_len {
+                self.macro_playback.next_at += next_delay;
+            }
+        }
+
+        if self.macro_playback.index >= events_len {
+            if self.macro_playback.loop_enabled {
+                self.reset_playback();
+            } else {
+                self.macro_playback.playing = false;
+            }
         }
     }
 
     fn render_traceback_panel(&self, frame: &mut Frame, area: Rect) {
-        let focused = self.focus == Panel::Traceback;
-        let border_style = if focused {
-            Style::new().fg(theme::screen_accent::ADVANCED)
-        } else {
-            theme::content_border()
-        };
+        let border_style = theme::panel_border_style(
+            self.focus == Panel::Traceback,
+            theme::screen_accent::ADVANCED,
+        );
 
         let block = Block::new()
             .borders(Borders::ALL)
@@ -113,12 +377,8 @@ impl AdvancedFeatures {
     }
 
     fn render_timers_panel(&self, frame: &mut Frame, area: Rect) {
-        let focused = self.focus == Panel::Timers;
-        let border_style = if focused {
-            Style::new().fg(theme::screen_accent::ADVANCED)
-        } else {
-            theme::content_border()
-        };
+        let border_style =
+            theme::panel_border_style(self.focus == Panel::Timers, theme::screen_accent::ADVANCED);
 
         let block = Block::new()
             .borders(Borders::ALL)
@@ -224,13 +484,100 @@ impl AdvancedFeatures {
         }
     }
 
-    fn render_info_panel(&self, frame: &mut Frame, area: Rect) {
-        let focused = self.focus == Panel::Info;
-        let border_style = if focused {
-            Style::new().fg(theme::screen_accent::ADVANCED)
+    fn render_macro_panel(&self, frame: &mut Frame, area: Rect) {
+        let border_style =
+            theme::panel_border_style(self.focus == Panel::Macro, theme::screen_accent::ADVANCED);
+
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Macro Recorder")
+            .title_alignment(Alignment::Center)
+            .style(border_style);
+
+        let inner = block.inner(area);
+        block.render(area, frame);
+
+        if inner.is_empty() {
+            return;
+        }
+
+        let is_recording = self.is_recording();
+        let state = if is_recording {
+            "Recording"
+        } else if self.macro_playback.playing {
+            "Playing"
         } else {
-            theme::content_border()
+            "Idle"
         };
+
+        let (event_count, filtered) = if let Some(rec) = &self.macro_recorder {
+            (rec.event_count(), rec.filtered_count())
+        } else if let Some(m) = &self.macro_recording {
+            (m.len(), 0)
+        } else {
+            (0, 0)
+        };
+
+        let duration = self
+            .macro_recording
+            .as_ref()
+            .map(|m| format!("{:.2}s", m.total_duration().as_secs_f64()))
+            .unwrap_or_else(|| "-".to_string());
+
+        let name = self
+            .macro_recording
+            .as_ref()
+            .map(|m| m.metadata().name.as_str())
+            .unwrap_or("none");
+
+        let mut lines = vec![
+            format!("State: {state}"),
+            format!("Macro: {name}"),
+            format!("Events: {event_count}"),
+            format!("Duration: {duration}"),
+            format!("Speed: {:.2}x", self.macro_playback.speed),
+            format!(
+                "Loop: {}",
+                if self.macro_playback.loop_enabled {
+                    "On"
+                } else {
+                    "Off"
+                }
+            ),
+        ];
+
+        if is_recording && filtered > 0 {
+            lines.push(format!("Filtered: {filtered}"));
+        }
+
+        if let Some(err) = &self.macro_playback.error {
+            lines.push(format!("Error: {err}"));
+        }
+
+        lines.push("Controls: r/p/l +/- Esc".to_string());
+
+        for (i, line) in lines.iter().enumerate() {
+            if i >= inner.height as usize {
+                break;
+            }
+            let style = if line.starts_with("State:") {
+                Style::new().fg(theme::screen_accent::ADVANCED)
+            } else if line.starts_with("Error:") {
+                Style::new().fg(theme::accent::ERROR)
+            } else {
+                Style::new().fg(theme::fg::PRIMARY)
+            };
+            let row_area = Rect::new(inner.x, inner.y.saturating_add(i as u16), inner.width, 1);
+            Paragraph::new(line.clone())
+                .style(style)
+                .render(row_area, frame);
+        }
+    }
+
+    fn render_info_panel(&self, frame: &mut Frame, area: Rect) {
+        let border_style =
+            theme::panel_border_style(self.focus == Panel::Info, theme::screen_accent::ADVANCED);
 
         let block = Block::new()
             .borders(Borders::ALL)
@@ -259,6 +606,7 @@ impl AdvancedFeatures {
             "  - Countdown timers (compact/clock)",
             "  - Terminal spinners",
             "  - Progress bars",
+            "  - Macro recorder + playback",
             "",
             "Controls:",
             "  r - Reset timers",
@@ -338,27 +686,18 @@ impl Screen for AdvancedFeatures {
             return Cmd::None;
         }
 
-        // Reset timers
-        if let Event::Key(KeyEvent {
-            code: KeyCode::Char('r'),
-            kind: KeyEventKind::Press,
-            ..
-        }) = event
+        if self.is_recording()
+            && self.should_record_event(event)
+            && let Some(recorder) = &mut self.macro_recorder
         {
-            self.timer_compact.reset();
-            self.timer_clock.reset();
+            recorder.record(event);
         }
 
-        // Pause/resume
-        if let Event::Key(KeyEvent {
-            code: KeyCode::Char(' '),
-            kind: KeyEventKind::Press,
-            ..
-        }) = event
-        {
-            self.timer_compact.toggle();
-            self.timer_clock.toggle();
+        if self.handle_macro_controls(event) {
+            return Cmd::None;
         }
+
+        self.apply_event(event);
 
         Cmd::None
     }
@@ -366,8 +705,9 @@ impl Screen for AdvancedFeatures {
     fn tick(&mut self, tick_count: u64) {
         self.tick_count = tick_count;
         self.spinner_tick = tick_count as usize;
-        self.timer_compact.tick(Duration::from_millis(100));
-        self.timer_clock.tick(Duration::from_millis(100));
+        self.timer_compact.tick(MACRO_TICK);
+        self.timer_clock.tick(MACRO_TICK);
+        self.tick_macro(MACRO_TICK);
     }
 
     fn view(&self, frame: &mut Frame, area: Rect) {
@@ -386,17 +726,22 @@ impl Screen for AdvancedFeatures {
         // Left: traceback
         self.render_traceback_panel(frame, cols[0]);
 
-        // Right: split into timers and info
+        // Right: split into timers, macro, and info
         let right_rows = Flex::vertical()
-            .constraints([Constraint::Percentage(50.0), Constraint::Percentage(50.0)])
+            .constraints([
+                Constraint::Percentage(40.0),
+                Constraint::Percentage(30.0),
+                Constraint::Percentage(30.0),
+            ])
             .split(cols[1]);
 
         self.render_timers_panel(frame, right_rows[0]);
-        self.render_info_panel(frame, right_rows[1]);
+        self.render_macro_panel(frame, right_rows[1]);
+        self.render_info_panel(frame, right_rows[2]);
 
         // Status bar
         let status = format!(
-            "Tick: {} | Ctrl+\u{2190}/\u{2192}: panels | r: reset | Space: pause/resume",
+            "Tick: {} | Ctrl+\u{2190}/\u{2192}: panels | r: reset | Space: pause | Macro: r/p/l +/-",
             self.tick_count
         );
         Paragraph::new(&*status)
@@ -417,6 +762,10 @@ impl Screen for AdvancedFeatures {
             HelpEntry {
                 key: "Space",
                 action: "Pause/resume",
+            },
+            HelpEntry {
+                key: "Macro: r/p/l +/-",
+                action: "Record/play/loop/speed",
             },
         ]
     }
@@ -464,9 +813,11 @@ mod tests {
         screen.update(&ctrl_press(KeyCode::Right));
         assert_eq!(screen.focus, Panel::Timers);
         screen.update(&ctrl_press(KeyCode::Right));
+        assert_eq!(screen.focus, Panel::Macro);
+        screen.update(&ctrl_press(KeyCode::Right));
         assert_eq!(screen.focus, Panel::Info);
         screen.update(&ctrl_press(KeyCode::Left));
-        assert_eq!(screen.focus, Panel::Timers);
+        assert_eq!(screen.focus, Panel::Macro);
     }
 
     #[test]

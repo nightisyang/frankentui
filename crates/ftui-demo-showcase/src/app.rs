@@ -3,7 +3,7 @@
 //! Main application model, message routing, and screen navigation.
 //!
 //! This module contains the top-level [`AppModel`] that implements the Elm
-//! architecture via [`Model`]. It manages all 11 demo screens, routes events,
+//! architecture via [`Model`]. It manages all demo screens, routes events,
 //! handles global keybindings, and renders the chrome (tab bar, status bar,
 //! help/debug overlays).
 
@@ -51,6 +51,8 @@ pub enum ScreenId {
     FileBrowser,
     /// Diagnostics, timers, and spinners.
     AdvancedFeatures,
+    /// Input macro recorder and scenario runner.
+    MacroRecorder,
     /// Virtualized list and stress testing.
     Performance,
     /// Markdown rendering and typography.
@@ -72,6 +74,7 @@ impl ScreenId {
         Self::FileBrowser,
         Self::AdvancedFeatures,
         Self::Performance,
+        Self::MacroRecorder,
         Self::MarkdownRichText,
         Self::VisualEffects,
     ];
@@ -105,6 +108,7 @@ impl ScreenId {
             Self::DataViz => "Data Viz",
             Self::FileBrowser => "File Browser",
             Self::AdvancedFeatures => "Advanced",
+            Self::MacroRecorder => "Macro Recorder",
             Self::Performance => "Performance",
             Self::MarkdownRichText => "Markdown",
             Self::VisualEffects => "Visual Effects",
@@ -123,6 +127,7 @@ impl ScreenId {
             Self::DataViz => "DataViz",
             Self::FileBrowser => "Files",
             Self::AdvancedFeatures => "Adv",
+            Self::MacroRecorder => "Macro",
             Self::Performance => "Perf",
             Self::MarkdownRichText => "MD",
             Self::VisualEffects => "VFX",
@@ -141,6 +146,7 @@ impl ScreenId {
             Self::DataViz => "DataViz",
             Self::FileBrowser => "FileBrowser",
             Self::AdvancedFeatures => "AdvancedFeatures",
+            Self::MacroRecorder => "MacroRecorder",
             Self::Performance => "Performance",
             Self::MarkdownRichText => "MarkdownRichText",
             Self::VisualEffects => "VisualEffects",
@@ -183,6 +189,8 @@ pub struct ScreenStates {
     pub file_browser: screens::file_browser::FileBrowser,
     /// Advanced features screen state.
     pub advanced_features: screens::advanced_features::AdvancedFeatures,
+    /// Macro recorder screen state.
+    pub macro_recorder: screens::macro_recorder::MacroRecorderScreen,
     /// Performance stress test screen state.
     pub performance: screens::performance::Performance,
     /// Markdown and rich text screen state.
@@ -191,7 +199,7 @@ pub struct ScreenStates {
     pub visual_effects: screens::visual_effects::VisualEffectsScreen,
     /// Tracks whether each screen has errored during rendering.
     /// Indexed by `ScreenId::index()`.
-    screen_errors: [Option<String>; 12],
+    screen_errors: [Option<String>; 13],
 }
 
 impl ScreenStates {
@@ -226,6 +234,9 @@ impl ScreenStates {
             ScreenId::AdvancedFeatures => {
                 self.advanced_features.update(event);
             }
+            ScreenId::MacroRecorder => {
+                self.macro_recorder.update(event);
+            }
             ScreenId::Performance => {
                 self.performance.update(event);
             }
@@ -250,6 +261,7 @@ impl ScreenStates {
         self.data_viz.tick(tick_count);
         self.file_browser.tick(tick_count);
         self.advanced_features.tick(tick_count);
+        self.macro_recorder.tick(tick_count);
         self.performance.tick(tick_count);
         self.markdown_rich_text.tick(tick_count);
         self.visual_effects.tick(tick_count);
@@ -290,6 +302,7 @@ impl ScreenStates {
                 ScreenId::DataViz => self.data_viz.view(frame, area),
                 ScreenId::FileBrowser => self.file_browser.view(frame, area),
                 ScreenId::AdvancedFeatures => self.advanced_features.view(frame, area),
+                ScreenId::MacroRecorder => self.macro_recorder.view(frame, area),
                 ScreenId::Performance => self.performance.view(frame, area),
                 ScreenId::MarkdownRichText => self.markdown_rich_text.view(frame, area),
                 ScreenId::VisualEffects => self.visual_effects.view(frame, area),
@@ -355,47 +368,18 @@ pub enum AppMsg {
     Quit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EventSource {
+    User,
+    Playback,
+}
+
 impl From<Event> for AppMsg {
     fn from(event: Event) -> Self {
-        // Global key bindings are checked first.
-        if let Event::Key(KeyEvent {
-            code,
-            modifiers,
-            kind: KeyEventKind::Press,
-            ..
-        }) = &event
-        {
-            match (*code, *modifiers) {
-                // Quit
-                (KeyCode::Char('q'), Modifiers::NONE) => return Self::Quit,
-                (KeyCode::Char('c'), Modifiers::CTRL) => return Self::Quit,
-                // Help
-                (KeyCode::Char('?'), _) => return Self::ToggleHelp,
-                // Debug
-                (KeyCode::F(12), _) => return Self::ToggleDebug,
-                // Theme cycling
-                (KeyCode::Char('t'), Modifiers::CTRL) => return Self::CycleTheme,
-                // Tab cycling (Tab/BackTab, or Shift+H/Shift+L for Vim users)
-                (KeyCode::Tab, Modifiers::NONE) => return Self::NextScreen,
-                (KeyCode::BackTab, _) => return Self::PrevScreen,
-                (KeyCode::Char('L'), Modifiers::SHIFT) => return Self::NextScreen,
-                (KeyCode::Char('H'), Modifiers::SHIFT) => return Self::PrevScreen,
-                // Number keys for direct screen access
-                (KeyCode::Char(ch @ '0'..='9'), Modifiers::NONE) => {
-                    if let Some(id) = ScreenId::from_number_key(ch) {
-                        return Self::SwitchScreen(id);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Resize events
         if let Event::Resize { width, height } = event {
             return Self::Resize { width, height };
         }
 
-        // Everything else goes to the current screen.
         Self::ScreenEvent(event)
     }
 }
@@ -451,24 +435,8 @@ impl AppModel {
             exit_after_ms: 0,
         }
     }
-}
 
-impl Model for AppModel {
-    type Message = AppMsg;
-
-    fn init(&mut self) -> Cmd<Self::Message> {
-        if self.exit_after_ms > 0 {
-            let ms = self.exit_after_ms;
-            Cmd::Task(Box::new(move || {
-                std::thread::sleep(Duration::from_millis(ms));
-                AppMsg::Quit
-            }))
-        } else {
-            Cmd::None
-        }
-    }
-
-    fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+    fn handle_msg(&mut self, msg: AppMsg, source: EventSource) -> Cmd<AppMsg> {
         match msg {
             AppMsg::Quit => Cmd::Quit,
 
@@ -506,16 +474,86 @@ impl Model for AppModel {
             AppMsg::Tick => {
                 self.tick_count += 1;
                 self.screens.tick(self.tick_count);
+                let playback_events = self.screens.macro_recorder.drain_playback_events();
+                for event in playback_events {
+                    let cmd = self.handle_msg(AppMsg::from(event), EventSource::Playback);
+                    if matches!(cmd, Cmd::Quit) {
+                        return Cmd::Quit;
+                    }
+                }
                 Cmd::None
             }
 
             AppMsg::Resize { width, height } => {
                 self.terminal_width = width;
                 self.terminal_height = height;
+                self.screens.macro_recorder.set_terminal_size(width, height);
                 Cmd::None
             }
 
             AppMsg::ScreenEvent(event) => {
+                if source == EventSource::User {
+                    let filter_controls = self.current_screen == ScreenId::MacroRecorder;
+                    self.screens
+                        .macro_recorder
+                        .record_event(&event, filter_controls);
+                }
+
+                if let Event::Key(KeyEvent {
+                    code,
+                    modifiers,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) = &event
+                {
+                    match (*code, *modifiers) {
+                        // Quit
+                        (KeyCode::Char('q'), Modifiers::NONE) => return Cmd::Quit,
+                        (KeyCode::Char('c'), Modifiers::CTRL) => return Cmd::Quit,
+                        // Help
+                        (KeyCode::Char('?'), _) => {
+                            self.help_visible = !self.help_visible;
+                            return Cmd::None;
+                        }
+                        // Debug
+                        (KeyCode::F(12), _) => {
+                            self.debug_visible = !self.debug_visible;
+                            return Cmd::None;
+                        }
+                        // Theme cycling
+                        (KeyCode::Char('t'), Modifiers::CTRL) => {
+                            theme::cycle_theme();
+                            self.screens.apply_theme();
+                            return Cmd::None;
+                        }
+                        // Tab cycling (Tab/BackTab, or Shift+H/Shift+L for Vim users)
+                        (KeyCode::Tab, Modifiers::NONE) => {
+                            self.current_screen = self.current_screen.next();
+                            return Cmd::None;
+                        }
+                        (KeyCode::BackTab, _) => {
+                            self.current_screen = self.current_screen.prev();
+                            return Cmd::None;
+                        }
+                        (KeyCode::Char('L'), Modifiers::SHIFT) => {
+                            self.current_screen = self.current_screen.next();
+                            return Cmd::None;
+                        }
+                        (KeyCode::Char('H'), Modifiers::SHIFT) => {
+                            self.current_screen = self.current_screen.prev();
+                            return Cmd::None;
+                        }
+                        // Number keys for direct screen access
+                        (KeyCode::Char(ch @ '0'..='9'), Modifiers::NONE) => {
+                            if let Some(id) = ScreenId::from_number_key(ch) {
+                                self.current_screen = id;
+                                return Cmd::None;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
                 // Handle 'R' key to retry errored screens
                 if self.screens.has_error(self.current_screen)
                     && let Event::Key(KeyEvent {
@@ -531,6 +569,26 @@ impl Model for AppModel {
                 Cmd::None
             }
         }
+    }
+}
+
+impl Model for AppModel {
+    type Message = AppMsg;
+
+    fn init(&mut self) -> Cmd<Self::Message> {
+        if self.exit_after_ms > 0 {
+            let ms = self.exit_after_ms;
+            Cmd::Task(Box::new(move || {
+                std::thread::sleep(Duration::from_millis(ms));
+                AppMsg::Quit
+            }))
+        } else {
+            Cmd::None
+        }
+    }
+
+    fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+        self.handle_msg(msg, EventSource::User)
     }
 
     fn view(&self, frame: &mut Frame) {
@@ -612,6 +670,7 @@ impl AppModel {
             ScreenId::DataViz => self.screens.data_viz.keybindings(),
             ScreenId::FileBrowser => self.screens.file_browser.keybindings(),
             ScreenId::AdvancedFeatures => self.screens.advanced_features.keybindings(),
+            ScreenId::MacroRecorder => self.screens.macro_recorder.keybindings(),
             ScreenId::Performance => self.screens.performance.keybindings(),
             ScreenId::MarkdownRichText => self.screens.markdown_rich_text.keybindings(),
             ScreenId::VisualEffects => self.screens.visual_effects.keybindings(),
@@ -767,7 +826,7 @@ mod tests {
             Some(ScreenId::AdvancedFeatures)
         );
         assert_eq!(ScreenId::from_number_key('0'), Some(ScreenId::Performance));
-        // No direct key for 11th screen
+        // No direct key for screens after the first 10
         assert_eq!(ScreenId::from_number_key('a'), None);
     }
 
@@ -787,58 +846,64 @@ mod tests {
     }
 
     #[test]
-    fn event_conversion_quit_key() {
+    fn quit_key_triggers_quit() {
+        let mut app = AppModel::new();
         let event = Event::Key(KeyEvent {
             code: KeyCode::Char('q'),
             modifiers: Modifiers::NONE,
             kind: KeyEventKind::Press,
         });
-        let msg = AppMsg::from(event);
-        assert!(matches!(msg, AppMsg::Quit));
+        let cmd = app.update(AppMsg::from(event));
+        assert!(matches!(cmd, Cmd::Quit));
     }
 
     #[test]
-    fn event_conversion_help_key() {
+    fn help_key_toggles_help() {
+        let mut app = AppModel::new();
         let event = Event::Key(KeyEvent {
             code: KeyCode::Char('?'),
             modifiers: Modifiers::NONE,
             kind: KeyEventKind::Press,
         });
-        let msg = AppMsg::from(event);
-        assert!(matches!(msg, AppMsg::ToggleHelp));
+        app.update(AppMsg::from(event));
+        assert!(app.help_visible);
     }
 
     #[test]
-    fn event_conversion_tab_is_next_screen() {
+    fn tab_advances_screen() {
+        let mut app = AppModel::new();
         let event = Event::Key(KeyEvent {
             code: KeyCode::Tab,
             modifiers: Modifiers::NONE,
             kind: KeyEventKind::Press,
         });
-        let msg = AppMsg::from(event);
-        assert!(matches!(msg, AppMsg::NextScreen));
+        app.update(AppMsg::from(event));
+        assert_eq!(app.current_screen, ScreenId::Shakespeare);
     }
 
     #[test]
-    fn event_conversion_backtab_is_prev_screen() {
+    fn backtab_moves_previous_screen() {
+        let mut app = AppModel::new();
+        app.current_screen = ScreenId::Shakespeare;
         let event = Event::Key(KeyEvent {
             code: KeyCode::BackTab,
             modifiers: Modifiers::SHIFT,
             kind: KeyEventKind::Press,
         });
-        let msg = AppMsg::from(event);
-        assert!(matches!(msg, AppMsg::PrevScreen));
+        app.update(AppMsg::from(event));
+        assert_eq!(app.current_screen, ScreenId::Dashboard);
     }
 
     #[test]
-    fn event_conversion_number_key() {
+    fn number_key_switches_screen() {
+        let mut app = AppModel::new();
         let event = Event::Key(KeyEvent {
             code: KeyCode::Char('3'),
             modifiers: Modifiers::NONE,
             kind: KeyEventKind::Press,
         });
-        let msg = AppMsg::from(event);
-        assert!(matches!(msg, AppMsg::SwitchScreen(ScreenId::CodeExplorer)));
+        app.update(AppMsg::from(event));
+        assert_eq!(app.current_screen, ScreenId::CodeExplorer);
     }
 
     #[test]
@@ -886,7 +951,7 @@ mod tests {
         }
     }
 
-    /// Switch through all 11 screens and verify each renders.
+    /// Switch through all screens and verify each renders.
     #[test]
     fn integration_screen_cycle() {
         let mut app = AppModel::new();
@@ -948,6 +1013,6 @@ mod tests {
     /// Verify all screens have the expected count.
     #[test]
     fn all_screens_count() {
-        assert_eq!(ScreenId::ALL.len(), 12);
+        assert_eq!(ScreenId::ALL.len(), 13);
     }
 }

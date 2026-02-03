@@ -150,7 +150,7 @@ pub mod screen_accent {
 /// # Usage
 ///
 /// ```rust
-/// use crate::theme::icons;
+/// use ftui_demo_showcase::theme::icons;
 ///
 /// // Direct emoji use (for modern terminals)
 /// let status = icons::STATUS_OPEN; // "🟢"
@@ -380,7 +380,7 @@ pub mod icons {
 /// # Usage
 ///
 /// ```rust
-/// use crate::theme::{icons, supports_emoji_icons};
+/// use ftui_demo_showcase::theme::{icons, supports_emoji_icons};
 ///
 /// let status_icon = if supports_emoji_icons() {
 ///     icons::STATUS_OPEN
@@ -622,6 +622,76 @@ pub fn content_border() -> Style {
 /// Help overlay background.
 pub fn help_overlay() -> Style {
     Style::new().bg(alpha::OVERLAY).fg(fg::PRIMARY)
+}
+
+// ---------------------------------------------------------------------------
+// Focus Management
+// ---------------------------------------------------------------------------
+
+/// Selection indicators for list items.
+pub mod selection {
+    /// Unicode selection indicator (arrow) for focused/selected items.
+    pub const INDICATOR: &str = "▶ ";
+    /// Empty prefix to maintain alignment with non-selected items.
+    pub const EMPTY: &str = "  ";
+    /// Alternate selection indicator (bullet) for secondary selections.
+    pub const BULLET: &str = "● ";
+    /// Cursor indicator for edit mode.
+    pub const CURSOR: &str = "│ ";
+}
+
+/// Returns the border style for a panel based on its focus state.
+///
+/// When focused, uses the screen's accent color. When unfocused, uses muted styling.
+///
+/// # Arguments
+/// * `is_focused` - Whether this panel currently has focus
+/// * `accent` - The screen's accent color (from `screen_accent` module)
+///
+/// # Example
+/// ```ignore
+/// let border_style = panel_border_style(self.focus == Panel::Files, screen_accent::FILE_BROWSER);
+/// let block = Block::new().style(border_style);
+/// ```
+pub fn panel_border_style(is_focused: bool, accent: ColorToken) -> Style {
+    if is_focused {
+        Style::new().fg(accent)
+    } else {
+        content_border()
+    }
+}
+
+/// Returns the style for a list item based on selection and focus state.
+///
+/// Provides visual hierarchy:
+/// - Selected + focused: Primary foreground, highlight background, bold
+/// - Selected + unfocused: Secondary foreground, subtle surface background
+/// - Not selected: Primary foreground, no background
+///
+/// # Arguments
+/// * `is_selected` - Whether this item is the current selection
+/// * `is_focused` - Whether the containing panel has focus
+pub fn list_item_style(is_selected: bool, is_focused: bool) -> Style {
+    match (is_selected, is_focused) {
+        (true, true) => Style::new()
+            .fg(fg::PRIMARY)
+            .bg(alpha::HIGHLIGHT)
+            .attrs(StyleFlags::BOLD),
+        (true, false) => Style::new().fg(fg::SECONDARY).bg(alpha::SURFACE),
+        (false, _) => Style::new().fg(fg::PRIMARY),
+    }
+}
+
+/// Returns the selection indicator prefix for a list item.
+///
+/// Uses "▶ " for selected items and "  " (spaces) for non-selected items
+/// to maintain alignment.
+pub fn selection_indicator(is_selected: bool) -> &'static str {
+    if is_selected {
+        selection::INDICATOR
+    } else {
+        selection::EMPTY
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -908,5 +978,80 @@ mod tests {
         assert_eq!(priority_icon(false, 2), icons::ascii::PRIORITY_MEDIUM);
         assert_eq!(priority_icon(false, 3), icons::ascii::PRIORITY_LOW);
         assert_eq!(priority_icon(false, 4), icons::ascii::PRIORITY_MINIMAL);
+    }
+
+    // -------------------------------------------------------------------------
+    // Focus Management tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn focused_panel_has_accent_border() {
+        let accent = screen_accent::FILE_BROWSER;
+        let style = panel_border_style(true, accent);
+        // Focused panel should use the accent color
+        assert!(style.fg().is_some());
+        assert_eq!(style.fg(), Some(accent.into()));
+    }
+
+    #[test]
+    fn unfocused_panel_has_muted_border() {
+        let accent = screen_accent::FILE_BROWSER;
+        let style = panel_border_style(false, accent);
+        // Unfocused panel should use muted/content border styling
+        let expected = content_border();
+        assert_eq!(style.fg(), expected.fg());
+    }
+
+    #[test]
+    fn selected_focused_item_has_highlight() {
+        let style = list_item_style(true, true);
+        // Selected + focused should have highlight background and bold
+        assert!(style.bg().is_some());
+        assert!(style.attrs().contains(StyleFlags::BOLD));
+    }
+
+    #[test]
+    fn selected_unfocused_item_has_subtle_bg() {
+        let style = list_item_style(true, false);
+        // Selected + unfocused should have surface background (subtle)
+        assert!(style.bg().is_some());
+        // Should not be bold when unfocused
+        assert!(!style.attrs().contains(StyleFlags::BOLD));
+    }
+
+    #[test]
+    fn unselected_item_no_highlight() {
+        let style_focused = list_item_style(false, true);
+        let style_unfocused = list_item_style(false, false);
+        // Unselected items should not have background highlighting
+        assert!(style_focused.bg().is_none());
+        assert!(style_unfocused.bg().is_none());
+    }
+
+    #[test]
+    fn selection_indicator_present_when_selected() {
+        let indicator = selection_indicator(true);
+        assert!(indicator.contains('▶') || indicator.contains('>'));
+        // Should have the arrow indicator
+        assert_eq!(indicator, selection::INDICATOR);
+    }
+
+    #[test]
+    fn selection_indicator_empty_when_not_selected() {
+        let indicator = selection_indicator(false);
+        // Should be empty spaces for alignment
+        assert_eq!(indicator, selection::EMPTY);
+        // Should not contain any visible indicator
+        assert!(!indicator.contains('▶'));
+        assert!(!indicator.contains('>'));
+    }
+
+    #[test]
+    fn selection_indicators_have_same_width() {
+        use unicode_width::UnicodeWidthStr;
+        // Both indicators must have the same width for proper alignment
+        let selected_width = UnicodeWidthStr::width(selection::INDICATOR);
+        let empty_width = UnicodeWidthStr::width(selection::EMPTY);
+        assert_eq!(selected_width, empty_width);
     }
 }

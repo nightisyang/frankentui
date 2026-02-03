@@ -12,6 +12,7 @@ pub mod data_viz;
 pub mod file_browser;
 pub mod forms_input;
 pub mod layout_lab;
+pub mod macro_recorder;
 pub mod markdown_rich_text;
 pub mod performance;
 pub mod shakespeare;

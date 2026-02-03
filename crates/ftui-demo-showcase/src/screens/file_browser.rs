@@ -159,12 +159,10 @@ impl FileBrowser {
     }
 
     fn render_tree_panel(&self, frame: &mut Frame, area: Rect) {
-        let focused = self.focus == Panel::FileTree;
-        let border_style = if focused {
-            Style::new().fg(theme::screen_accent::FILE_BROWSER)
-        } else {
-            theme::content_border()
-        };
+        let border_style = theme::panel_border_style(
+            self.focus == Panel::FileTree,
+            theme::screen_accent::FILE_BROWSER,
+        );
 
         let block = Block::new()
             .borders(Borders::ALL)
@@ -192,12 +190,10 @@ impl FileBrowser {
     }
 
     fn render_picker_panel(&self, frame: &mut Frame, area: Rect) {
-        let focused = self.focus == Panel::FilePicker;
-        let border_style = if focused {
-            Style::new().fg(theme::screen_accent::FILE_BROWSER)
-        } else {
-            theme::content_border()
-        };
+        let border_style = theme::panel_border_style(
+            self.focus == Panel::FilePicker,
+            theme::screen_accent::FILE_BROWSER,
+        );
 
         let hidden_label = if self.show_hidden { "+hidden" } else { "" };
         let title = format!(
@@ -284,12 +280,10 @@ impl FileBrowser {
     }
 
     fn render_preview_panel(&self, frame: &mut Frame, area: Rect) {
-        let focused = self.focus == Panel::Preview;
-        let border_style = if focused {
-            Style::new().fg(theme::screen_accent::FILE_BROWSER)
-        } else {
-            theme::content_border()
-        };
+        let border_style = theme::panel_border_style(
+            self.focus == Panel::Preview,
+            theme::screen_accent::FILE_BROWSER,
+        );
 
         let entry_name = self
             .picker

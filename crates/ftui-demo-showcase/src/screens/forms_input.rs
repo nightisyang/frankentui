@@ -234,12 +234,10 @@ impl FormsInput {
     }
 
     fn render_form_panel(&self, frame: &mut Frame, area: Rect) {
-        let focused = self.focus == FocusPanel::Form;
-        let border_style = if focused {
-            Style::new().fg(theme::screen_accent::FORMS_INPUT)
-        } else {
-            theme::content_border()
-        };
+        let border_style = theme::panel_border_style(
+            self.focus == FocusPanel::Form,
+            theme::screen_accent::FORMS_INPUT,
+        );
 
         let block = Block::new()
             .borders(Borders::ALL)
@@ -284,11 +282,8 @@ impl FormsInput {
     fn render_input_panel(&self, frame: &mut Frame, area: Rect) {
         let input_focused =
             self.focus == FocusPanel::SearchInput || self.focus == FocusPanel::PasswordInput;
-        let border_style = if input_focused {
-            Style::new().fg(theme::screen_accent::FORMS_INPUT)
-        } else {
-            theme::content_border()
-        };
+        let border_style =
+            theme::panel_border_style(input_focused, theme::screen_accent::FORMS_INPUT);
 
         let block = Block::new()
             .borders(Borders::ALL)
@@ -332,12 +327,10 @@ impl FormsInput {
     }
 
     fn render_editor_panel(&self, frame: &mut Frame, area: Rect) {
-        let focused = self.focus == FocusPanel::TextEditor;
-        let border_style = if focused {
-            Style::new().fg(theme::screen_accent::FORMS_INPUT)
-        } else {
-            theme::content_border()
-        };
+        let border_style = theme::panel_border_style(
+            self.focus == FocusPanel::TextEditor,
+            theme::screen_accent::FORMS_INPUT,
+        );
 
         let block = Block::new()
             .borders(Borders::ALL)

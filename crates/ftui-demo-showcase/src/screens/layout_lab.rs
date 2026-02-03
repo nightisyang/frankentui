@@ -167,6 +167,10 @@ impl LayoutLab {
             Constraint::Min(v) => format!("Min({v})"),
             Constraint::Max(v) => format!("Max({v})"),
             Constraint::Ratio(n, d) => format!("Ratio({n}/{d})"),
+            Constraint::Fill => "Fill".to_string(),
+            Constraint::FitContent => "FitContent".to_string(),
+            Constraint::FitContentBounded { min, max } => format!("FitContent({min}..{max})"),
+            Constraint::FitMin => "FitMin".to_string(),
         }
     }
 
