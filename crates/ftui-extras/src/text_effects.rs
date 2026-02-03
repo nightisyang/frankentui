@@ -2662,6 +2662,197 @@ mod tests {
 
         assert_eq!(text.effect_count(), 1);
     }
+
+    // =========================================================================
+    // StyledMultiLine Tests (bd-2bzl)
+    // =========================================================================
+
+    #[test]
+    fn test_styled_multiline_from_lines() {
+        let lines = vec!["Hello".into(), "World".into()];
+        let multi = StyledMultiLine::new(lines);
+        assert_eq!(multi.height(), 2);
+        assert_eq!(multi.width(), 5);
+        assert_eq!(multi.total_height(), 2);
+    }
+
+    #[test]
+    fn test_styled_multiline_from_ascii_art() {
+        let art = AsciiArtText::new("AB", AsciiArtStyle::Block);
+        let multi = StyledMultiLine::from_ascii_art(art);
+        assert_eq!(multi.height(), 5); // Block style is 5 lines
+        assert_eq!(multi.width(), 12); // 2 chars × 6 width each
+    }
+
+    #[test]
+    fn test_styled_multiline_from_ascii_art_with_color() {
+        let art = AsciiArtText::new("X", AsciiArtStyle::Mini).color(PackedRgba::rgb(255, 0, 0));
+        let multi = StyledMultiLine::from_ascii_art(art);
+        assert_eq!(multi.base_color, PackedRgba::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn test_styled_multiline_effects_chain() {
+        let multi = StyledMultiLine::new(vec!["Test".into()])
+            .effect(TextEffect::FadeIn { progress: 0.5 })
+            .effect(TextEffect::HorizontalGradient {
+                gradient: ColorGradient::rainbow(),
+            })
+            .bold()
+            .italic()
+            .time(1.0)
+            .seed(42);
+        assert_eq!(multi.effects.len(), 2);
+        assert!(multi.bold);
+        assert!(multi.italic);
+    }
+
+    #[test]
+    fn test_styled_multiline_with_reflection() {
+        let lines = vec!["ABC".into(), "DEF".into(), "GHI".into()];
+        let multi = StyledMultiLine::new(lines).reflection(Reflection::default());
+        assert_eq!(multi.height(), 3);
+        assert_eq!(multi.total_height(), 6); // 3 lines + 3 reflection rows
+    }
+
+    #[test]
+    fn test_styled_multiline_reflection_custom() {
+        let refl = Reflection {
+            height: 2,
+            start_opacity: 0.5,
+            end_opacity: 0.0,
+        };
+        let multi = StyledMultiLine::new(vec!["Line".into()]).reflection(refl);
+        // Reflection height is min(refl.height, source lines)
+        assert_eq!(multi.total_height(), 3); // 1 line + 2 reflection
+    }
+
+    #[test]
+    fn test_styled_multiline_render_no_panic() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let art = AsciiArtText::new("HI", AsciiArtStyle::Block);
+        let multi = StyledMultiLine::from_ascii_art(art)
+            .effect(TextEffect::RainbowGradient { speed: 0.1 })
+            .time(0.5);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        let area = Rect::new(5, 3, 70, 10);
+        multi.render(area, &mut frame);
+    }
+
+    #[test]
+    fn test_styled_multiline_render_with_reflection() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let multi = StyledMultiLine::new(vec!["█████".into(), "█   █".into(), "█████".into()])
+            .base_color(PackedRgba::rgb(0, 255, 128))
+            .reflection(Reflection {
+                height: 2,
+                start_opacity: 0.4,
+                end_opacity: 0.1,
+            });
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(40, 20, &mut pool);
+        multi.render_at(0, 0, &mut frame);
+
+        // Primary text should be rendered at (0,0) through (0,2)
+        if let Some(cell) = frame.buffer.get(0, 0) {
+            assert_ne!(
+                cell.fg,
+                PackedRgba::default(),
+                "primary text should have color"
+            );
+        }
+    }
+
+    #[test]
+    fn test_styled_multiline_2d_gradient() {
+        let multi = StyledMultiLine::new(vec!["ABC".into(), "DEF".into()])
+            .effect(TextEffect::RainbowGradient { speed: 0.0 });
+
+        // Top-left and bottom-right should get different colors (due to 2D mapping)
+        let c00 = multi.char_color_2d(0, 0, 3, 2);
+        let c21 = multi.char_color_2d(2, 1, 3, 2);
+        // With speed=0, hue = t_x + t_y*0.3, so different positions → different hues
+        assert_ne!(
+            c00, c21,
+            "2D gradient should produce different colors at different positions"
+        );
+    }
+
+    #[test]
+    fn test_styled_multiline_empty_lines() {
+        let multi = StyledMultiLine::new(vec![]);
+        assert_eq!(multi.height(), 0);
+        assert_eq!(multi.width(), 0);
+        assert_eq!(multi.total_height(), 0);
+
+        // Render should not panic on empty
+        use ftui_render::grapheme_pool::GraphemePool;
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(40, 20, &mut pool);
+        multi.render_at(0, 0, &mut frame);
+    }
+
+    #[test]
+    fn test_styled_multiline_small_area() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let multi = StyledMultiLine::new(vec!["ABCDEF".into(), "GHIJKL".into()]).effect(
+            TextEffect::AnimatedGradient {
+                gradient: ColorGradient::cyberpunk(),
+                speed: 0.5,
+            },
+        );
+
+        // Render into tiny frame — should not panic, just clip
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(3, 1, &mut pool);
+        multi.render_at(0, 0, &mut frame);
+    }
+
+    #[test]
+    fn test_styled_multiline_widget_trait() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let multi = StyledMultiLine::new(vec!["Test".into()]);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        // Use Widget trait
+        Widget::render(&multi, Rect::new(0, 0, 80, 24), &mut frame);
+    }
+
+    #[test]
+    fn test_styled_multiline_widget_zero_area() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let multi = StyledMultiLine::new(vec!["Test".into()]);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        // Zero-size area should early return
+        Widget::render(&multi, Rect::new(0, 0, 0, 0), &mut frame);
+    }
+
+    #[test]
+    fn test_ascii_art_get_color() {
+        let art = AsciiArtText::new("X", AsciiArtStyle::Block);
+        assert_eq!(art.get_color(), None);
+
+        let art2 =
+            AsciiArtText::new("X", AsciiArtStyle::Block).color(PackedRgba::rgb(100, 200, 50));
+        assert_eq!(art2.get_color(), Some(PackedRgba::rgb(100, 200, 50)));
+    }
+
+    #[test]
+    fn test_reflection_default() {
+        let refl = Reflection::default();
+        assert_eq!(refl.height, 3);
+        assert!((refl.start_opacity - 0.4).abs() < 1e-10);
+        assert!((refl.end_opacity - 0.05).abs() < 1e-10);
+    }
 }
 
 // =============================================================================
@@ -2715,6 +2906,11 @@ impl AsciiArtText {
     pub fn gradient(mut self, gradient: ColorGradient) -> Self {
         self.gradient = Some(gradient);
         self
+    }
+
+    /// Get the solid color, if set.
+    pub fn get_color(&self) -> Option<PackedRgba> {
+        self.color
     }
 
     /// Get the height in lines for this style.
@@ -3078,6 +3274,403 @@ impl AsciiArtText {
                 }
             }
         }
+    }
+}
+
+// =============================================================================
+// StyledMultiLine — Multi-line text with 2D effects (AsciiArt integration)
+// =============================================================================
+
+/// Reflection configuration for mirrored text rendering below the primary block.
+#[derive(Debug, Clone)]
+pub struct Reflection {
+    /// Rows of reflected text (typically half the source height).
+    pub height: u16,
+    /// Starting opacity at the top of the reflection (0.0–1.0).
+    pub start_opacity: f64,
+    /// Ending opacity at the bottom of the reflection (0.0–1.0).
+    pub end_opacity: f64,
+}
+
+impl Default for Reflection {
+    fn default() -> Self {
+        Self {
+            height: 3,
+            start_opacity: 0.4,
+            end_opacity: 0.05,
+        }
+    }
+}
+
+/// Multi-line styled text with 2D effect application.
+///
+/// Integrates [`AsciiArtText`] (or any `Vec<String>`) with the text effect
+/// system, applying effects using 2D coordinates (x=char column, y=row) for
+/// proper gradient mapping and positional animations.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use ftui_extras::text_effects::{
+///     AsciiArtText, AsciiArtStyle, ColorGradient, StyledMultiLine, TextEffect,
+/// };
+///
+/// let art = AsciiArtText::new("HELLO", AsciiArtStyle::Block);
+/// let multi = StyledMultiLine::from_ascii_art(art)
+///     .effect(TextEffect::AnimatedGradient {
+///         gradient: ColorGradient::cyberpunk(),
+///         speed: 0.2,
+///     })
+///     .reflection(Reflection::default())
+///     .time(0.5);
+/// ```
+#[derive(Debug, Clone)]
+pub struct StyledMultiLine {
+    lines: Vec<String>,
+    effects: Vec<TextEffect>,
+    base_color: PackedRgba,
+    bg_color: Option<PackedRgba>,
+    bold: bool,
+    italic: bool,
+    time: f64,
+    seed: u64,
+    easing: Easing,
+    reflection: Option<Reflection>,
+}
+
+impl StyledMultiLine {
+    /// Create from pre-rendered lines (e.g. from `AsciiArtText::render_lines()`).
+    pub fn new(lines: Vec<String>) -> Self {
+        Self {
+            lines,
+            effects: Vec::new(),
+            base_color: PackedRgba::rgb(255, 255, 255),
+            bg_color: None,
+            bold: false,
+            italic: false,
+            time: 0.0,
+            seed: 0,
+            easing: Easing::Linear,
+            reflection: None,
+        }
+    }
+
+    /// Create from an [`AsciiArtText`], preserving its gradient as a base color source.
+    pub fn from_ascii_art(art: AsciiArtText) -> Self {
+        let lines = art.render_lines();
+        let mut styled = Self::new(lines);
+        if let Some(color) = art.get_color() {
+            styled.base_color = color;
+        }
+        styled
+    }
+
+    /// Add a text effect.
+    pub fn effect(mut self, effect: TextEffect) -> Self {
+        if self.effects.len() < MAX_EFFECTS {
+            self.effects.push(effect);
+        }
+        self
+    }
+
+    /// Add multiple effects.
+    pub fn effects(mut self, effects: impl IntoIterator<Item = TextEffect>) -> Self {
+        for e in effects {
+            if self.effects.len() >= MAX_EFFECTS {
+                break;
+            }
+            self.effects.push(e);
+        }
+        self
+    }
+
+    /// Set the base foreground color.
+    pub fn base_color(mut self, color: PackedRgba) -> Self {
+        self.base_color = color;
+        self
+    }
+
+    /// Set an optional background color.
+    pub fn bg_color(mut self, color: PackedRgba) -> Self {
+        self.bg_color = Some(color);
+        self
+    }
+
+    /// Enable bold style.
+    pub fn bold(mut self) -> Self {
+        self.bold = true;
+        self
+    }
+
+    /// Enable italic style.
+    pub fn italic(mut self) -> Self {
+        self.italic = true;
+        self
+    }
+
+    /// Set animation time.
+    pub fn time(mut self, time: f64) -> Self {
+        self.time = time;
+        self
+    }
+
+    /// Set deterministic seed for effects like Scramble/Glitch.
+    pub fn seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    /// Set easing function for effects.
+    pub fn easing(mut self, easing: Easing) -> Self {
+        self.easing = easing;
+        self
+    }
+
+    /// Enable reflection below the text block.
+    pub fn reflection(mut self, reflection: Reflection) -> Self {
+        self.reflection = Some(reflection);
+        self
+    }
+
+    /// Get the lines as a slice.
+    pub fn lines(&self) -> &[String] {
+        &self.lines
+    }
+
+    /// Get the height in lines (not including reflection).
+    pub fn height(&self) -> usize {
+        self.lines.len()
+    }
+
+    /// Get the maximum width across all lines.
+    pub fn width(&self) -> usize {
+        self.lines
+            .iter()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Total height including reflection.
+    pub fn total_height(&self) -> usize {
+        let base = self.lines.len();
+        match &self.reflection {
+            Some(r) => base + r.height as usize,
+            None => base,
+        }
+    }
+
+    /// Compute the color for a character at 2D position (col, row).
+    ///
+    /// Uses the full text block dimensions for proper gradient mapping:
+    /// - Horizontal gradients use `col / total_width`
+    /// - Vertical components use `row / total_height`
+    fn char_color_2d(
+        &self,
+        col: usize,
+        row: usize,
+        total_width: usize,
+        total_height: usize,
+    ) -> PackedRgba {
+        let mut color = self.base_color;
+
+        let t_x = if total_width > 1 {
+            col as f64 / (total_width - 1) as f64
+        } else {
+            0.5
+        };
+        let t_y = if total_height > 1 {
+            row as f64 / (total_height - 1) as f64
+        } else {
+            0.5
+        };
+
+        for effect in &self.effects {
+            match effect {
+                TextEffect::HorizontalGradient { gradient } => {
+                    color = gradient.sample(t_x);
+                }
+                TextEffect::AnimatedGradient { gradient, speed } => {
+                    let t = (t_x + self.time * speed).rem_euclid(1.0);
+                    color = gradient.sample(t);
+                }
+                TextEffect::RainbowGradient { speed } => {
+                    let hue = (t_x + t_y * 0.3 + self.time * speed).rem_euclid(1.0);
+                    color = hsv_to_rgb(hue, 0.9, 1.0);
+                }
+                TextEffect::ColorWave {
+                    color1,
+                    color2,
+                    speed,
+                    wavelength,
+                } => {
+                    let t = ((col as f64 + row as f64 * 0.5) / wavelength + self.time * speed)
+                        .sin()
+                        * 0.5
+                        + 0.5;
+                    color = lerp_color(*color1, *color2, t);
+                }
+                TextEffect::FadeIn { progress } => {
+                    color = apply_alpha(color, *progress);
+                }
+                TextEffect::FadeOut { progress } => {
+                    color = apply_alpha(color, 1.0 - *progress);
+                }
+                TextEffect::Pulse { speed, min_alpha } => {
+                    let alpha = min_alpha
+                        + (1.0 - min_alpha) * ((self.time * speed * TAU).sin() * 0.5 + 0.5);
+                    color = apply_alpha(color, alpha);
+                }
+                TextEffect::Glow {
+                    color: glow_color,
+                    intensity,
+                } => {
+                    color = lerp_color(color, *glow_color, *intensity);
+                }
+                TextEffect::PulsingGlow {
+                    color: glow_color,
+                    speed,
+                } => {
+                    let intensity = ((self.time * speed * TAU).sin() * 0.5 + 0.5) * 0.6;
+                    color = lerp_color(color, *glow_color, intensity);
+                }
+                TextEffect::ColorCycle { colors, speed } => {
+                    if !colors.is_empty() {
+                        let t = (self.time * speed).rem_euclid(colors.len() as f64);
+                        let idx = t as usize % colors.len();
+                        let next = (idx + 1) % colors.len();
+                        let frac = t.fract();
+                        color = lerp_color(colors[idx], colors[next], frac);
+                    }
+                }
+                _ => {} // Position/char effects handled separately
+            }
+        }
+
+        color
+    }
+
+    /// Render one line of the multi-line block.
+    fn render_line(
+        &self,
+        line: &str,
+        x: u16,
+        y: u16,
+        row: usize,
+        total_width: usize,
+        total_height: usize,
+        opacity: f64,
+        frame: &mut Frame,
+    ) {
+        let frame_width = frame.buffer.width();
+        let frame_height = frame.buffer.height();
+
+        let mut flags = CellStyleFlags::empty();
+        if self.bold {
+            flags = flags.union(CellStyleFlags::BOLD);
+        }
+        if self.italic {
+            flags = flags.union(CellStyleFlags::ITALIC);
+        }
+        let attrs = CellAttrs::new(flags, 0);
+
+        for (col, ch) in line.chars().enumerate() {
+            let px = x.saturating_add(col as u16);
+            let py = y;
+
+            if px >= frame_width || py >= frame_height {
+                continue;
+            }
+
+            let mut color = self.char_color_2d(col, row, total_width, total_height);
+            if opacity < 1.0 {
+                color = apply_alpha(color, opacity);
+            }
+
+            if let Some(cell) = frame.buffer.get_mut(px, py) {
+                // Only overwrite non-space characters for block art aesthetics
+                if ch != ' ' {
+                    cell.content = CellContent::from_char(ch);
+                    cell.fg = color;
+                    cell.attrs = attrs;
+                }
+                if let Some(bg) = self.bg_color {
+                    cell.bg = bg;
+                }
+            }
+        }
+    }
+
+    /// Render the reflection below the primary text block.
+    fn render_reflection(
+        &self,
+        x: u16,
+        y: u16,
+        total_width: usize,
+        reflection: &Reflection,
+        frame: &mut Frame,
+    ) {
+        let src_height = self.lines.len();
+        let refl_rows = (reflection.height as usize).min(src_height);
+
+        for refl_row in 0..refl_rows {
+            // Mirror: bottom line of source renders first
+            let src_row = src_height - 1 - refl_row;
+            let dest_y = y.saturating_add(refl_row as u16);
+
+            // Linear opacity interpolation from start to end
+            let t = if refl_rows > 1 {
+                refl_row as f64 / (refl_rows - 1) as f64
+            } else {
+                0.0
+            };
+            let opacity =
+                reflection.start_opacity + (reflection.end_opacity - reflection.start_opacity) * t;
+
+            if let Some(line) = self.lines.get(src_row) {
+                self.render_line(
+                    line,
+                    x,
+                    dest_y,
+                    src_row,
+                    total_width,
+                    src_height,
+                    opacity,
+                    frame,
+                );
+            }
+        }
+    }
+
+    /// Render the multi-line text at the given position.
+    pub fn render_at(&self, x: u16, y: u16, frame: &mut Frame) {
+        let total_width = self.width();
+        let total_height = self.lines.len();
+
+        if total_width == 0 || total_height == 0 {
+            return;
+        }
+
+        // Render primary lines
+        for (row, line) in self.lines.iter().enumerate() {
+            let py = y.saturating_add(row as u16);
+            self.render_line(line, x, py, row, total_width, total_height, 1.0, frame);
+        }
+
+        // Render reflection
+        if let Some(ref reflection) = self.reflection {
+            let refl_y = y.saturating_add(total_height as u16);
+            self.render_reflection(x, refl_y, total_width, reflection, frame);
+        }
+    }
+}
+
+impl Widget for StyledMultiLine {
+    fn render(&self, area: Rect, frame: &mut Frame) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        self.render_at(area.x, area.y, frame);
     }
 }
 
