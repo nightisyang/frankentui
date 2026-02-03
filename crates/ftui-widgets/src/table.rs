@@ -1162,21 +1162,34 @@ mod tests {
         let mut state = TableState::default().with_persistence_id("test");
         state.select(Some(5));
         state.offset = 3;
+        state.set_sort(Some(2), true);
+        state.set_filter("search term");
 
         let saved = state.save_state();
         assert_eq!(saved.selected, Some(5));
         assert_eq!(saved.offset, 3);
+        assert_eq!(saved.sort_column, Some(2));
+        assert!(saved.sort_ascending);
+        assert_eq!(saved.filter, "search term");
 
         // Reset state
         state.select(None);
         state.offset = 0;
+        state.set_sort(None, false);
+        state.set_filter("");
         assert_eq!(state.selected, None);
         assert_eq!(state.offset, 0);
+        assert_eq!(state.sort_column(), None);
+        assert!(!state.sort_ascending());
+        assert!(state.filter().is_empty());
 
         // Restore
         state.restore_state(saved);
         assert_eq!(state.selected, Some(5));
         assert_eq!(state.offset, 3);
+        assert_eq!(state.sort_column(), Some(2));
+        assert!(state.sort_ascending());
+        assert_eq!(state.filter(), "search term");
     }
 
     #[test]

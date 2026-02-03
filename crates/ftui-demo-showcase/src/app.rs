@@ -2531,7 +2531,7 @@ mod tests {
         let enabled = perf_hud_jsonl_enabled();
         // Note: This may be true if the env var is set in CI
         // The important thing is that the function doesn't panic
-        assert!(enabled || !enabled); // Always passes, but exercises the code path
+        let _ = enabled; // Exercise the code path
     }
 
     /// Test that emit_perf_hud_jsonl doesn't panic with various inputs.

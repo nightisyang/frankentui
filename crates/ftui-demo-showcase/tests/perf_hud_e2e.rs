@@ -94,14 +94,22 @@ fn frame_contains_text(app: &AppModel, width: u16, height: u16, needle: &str) ->
     let mut text = String::new();
     for y in 0..height {
         for x in 0..width {
-            if let Some(cell) = frame.buffer.get(x, y) {
-                if let Some(ch) = cell.content.as_char() {
-                    text.push(ch);
-                }
+            if let Some(cell) = frame.buffer.get(x, y)
+                && let Some(ch) = cell.content.as_char()
+            {
+                text.push(ch);
             }
         }
     }
     text.contains(needle)
+}
+
+const PERF_HUD_SNAPSHOT_SAMPLES_US: &[u64] = &[
+    10_000, 12_000, 14_000, 16_000, 18_000, 20_000, 22_000, 24_000, 26_000, 28_000, 30_000,
+];
+
+fn seed_perf_hud_snapshot_metrics(app: &mut AppModel) {
+    app.seed_perf_hud_metrics_for_test(42, 99, 1.2, PERF_HUD_SNAPSHOT_SAMPLES_US);
 }
 
 // ===========================================================================
@@ -122,7 +130,10 @@ fn e2e_perf_hud_toggle_on_off() {
     let mut app = AppModel::new();
 
     // Initially HUD should be off
-    log_jsonl("check", &[("hud_visible", &app.perf_hud_visible.to_string())]);
+    log_jsonl(
+        "check",
+        &[("hud_visible", &app.perf_hud_visible.to_string())],
+    );
     assert!(!app.perf_hud_visible, "HUD should be off initially");
 
     // Toggle on with Ctrl+P
@@ -133,7 +144,10 @@ fn e2e_perf_hud_toggle_on_off() {
     // Toggle off with another Ctrl+P
     let _ = app.update(AppMsg::ScreenEvent(ctrl_press('p')));
     log_jsonl("action", &[("event", "ctrl_p"), ("expected", "hud_off")]);
-    assert!(!app.perf_hud_visible, "HUD should be off after second Ctrl+P");
+    assert!(
+        !app.perf_hud_visible,
+        "HUD should be off after second Ctrl+P"
+    );
 
     log_jsonl("result", &[("status", "passed")]);
 }
@@ -161,7 +175,10 @@ fn e2e_perf_hud_toggle_idempotent() {
 
     // Frame should match initial state
     let hash_after = capture_frame_hash(&app, 120, 40);
-    log_jsonl("hash", &[("after_double_toggle", &format!("{hash_after:016x}"))]);
+    log_jsonl(
+        "hash",
+        &[("after_double_toggle", &format!("{hash_after:016x}"))],
+    );
 
     assert_eq!(
         hash_initial, hash_after,
@@ -401,7 +418,10 @@ fn e2e_perf_hud_ring_buffer_capacity() {
     let _area = Rect::new(0, 0, 120, 40);
     app.view(&mut frame);
 
-    log_jsonl("ring_buffer", &[("ticks_sent", "150"), ("no_overflow", "true")]);
+    log_jsonl(
+        "ring_buffer",
+        &[("ticks_sent", "150"), ("no_overflow", "true")],
+    );
     log_jsonl("result", &[("status", "passed")]);
 }
 
@@ -414,12 +434,8 @@ fn perf_hud_snapshot_120x40() {
     let mut app = AppModel::new();
     app.terminal_width = 120;
     app.terminal_height = 40;
-
-    // Enable HUD
-    let _ = app.update(AppMsg::ScreenEvent(ctrl_press('p')));
-
-    // No ticks - timing values will be 0.0 which is deterministic
-    // (Tick uses Instant::now() internally which is non-deterministic)
+    app.perf_hud_visible = true;
+    seed_perf_hud_snapshot_metrics(&mut app);
 
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(120, 40, &mut pool);
@@ -434,9 +450,8 @@ fn perf_hud_snapshot_80x24() {
     let mut app = AppModel::new();
     app.terminal_width = 80;
     app.terminal_height = 24;
-
-    // Enable HUD
-    let _ = app.update(AppMsg::ScreenEvent(ctrl_press('p')));
+    app.perf_hud_visible = true;
+    seed_perf_hud_snapshot_metrics(&mut app);
 
     let mut pool = GraphemePool::new();
     let mut frame = Frame::new(80, 24, &mut pool);

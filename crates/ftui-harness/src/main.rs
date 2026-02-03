@@ -1032,14 +1032,19 @@ impl AgentHarness {
         InspectorOverlay::new(&inspector).render(area, frame);
     }
 
-    fn populate_inspector_stress(&self, area: Rect, frame: &mut Frame, inspector: &mut InspectorState) {
+    fn populate_inspector_stress(
+        &self,
+        area: Rect,
+        frame: &mut Frame,
+        inspector: &mut InspectorState,
+    ) {
         let cols = self.inspector_grid_cols.max(1);
         let rows = self.inspector_grid_rows.max(1);
         let cell_width = (area.width / cols).max(1);
         let cell_height = (area.height / rows).max(1);
 
         let mut root = WidgetInfo::new("HarnessStress", area).with_depth(0);
-        let mut id_counter: u64 = 1;
+        let mut id_counter: u32 = 1;
         let mut selected_set = false;
 
         for row in 0..rows {
@@ -1071,7 +1076,12 @@ impl AgentHarness {
                 );
                 widget.hit_id = Some(HitId::new(id_counter));
 
-                frame.register_hit(rect, HitId::new(id_counter), HitRegion::Content, id_counter);
+                frame.register_hit(
+                    rect,
+                    HitId::new(id_counter),
+                    HitRegion::Content,
+                    u64::from(id_counter),
+                );
 
                 if !selected_set {
                     inspector.selected = Some(HitId::new(id_counter));

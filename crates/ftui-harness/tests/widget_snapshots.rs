@@ -23,6 +23,7 @@ use ftui_widgets::panel::Panel;
 use ftui_widgets::paragraph::Paragraph;
 use ftui_widgets::scrollbar::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 use ftui_widgets::{StatefulWidget, Widget};
+use std::time::{Duration, Instant};
 
 // ============================================================================
 // Block
@@ -443,4 +444,142 @@ fn snapshot_inspector_widget_bounds_tree() {
     InspectorOverlay::new(&state).render(area, &mut frame);
 
     assert_snapshot_ansi!("inspector_widget_bounds_tree", &frame.buffer);
+}
+
+#[test]
+fn inspector_overlay_stress_perf() {
+    let cols: u16 = 24;
+    let rows: u16 = 14;
+    let max_depth: u8 = 3;
+    let area = Rect::new(0, 0, 160, 56);
+
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::with_hit_grid(area.width, area.height, &mut pool);
+
+    let mut state = InspectorState::new();
+    state.mode = InspectorMode::Full;
+    state.show_detail_panel = true;
+
+    let cell_width = (area.width / cols).max(1);
+    let cell_height = (area.height / rows).max(1);
+    let mut root = WidgetInfo::new("StressRoot", area).with_depth(0);
+    let mut id_counter: u32 = 1;
+
+    for row in 0..rows {
+        let y = area.y.saturating_add(row.saturating_mul(cell_height));
+        if y >= area.bottom() {
+            break;
+        }
+        let height = area.bottom().saturating_sub(y).min(cell_height);
+        if height == 0 {
+            continue;
+        }
+
+        for col in 0..cols {
+            let x = area.x.saturating_add(col.saturating_mul(cell_width));
+            if x >= area.right() {
+                break;
+            }
+            let width = area.right().saturating_sub(x).min(cell_width);
+            if width == 0 {
+                continue;
+            }
+
+            let rect = Rect::new(x, y, width, height);
+            let mut widget = build_inspector_chain(format!("Cell {col},{row}"), rect, 1, max_depth);
+            widget.hit_id = Some(HitId::new(id_counter));
+
+            frame.register_hit(
+                rect,
+                HitId::new(id_counter),
+                HitRegion::Content,
+                u64::from(id_counter),
+            );
+
+            if id_counter == 1 {
+                state.selected = Some(HitId::new(id_counter));
+                state.hover_pos = Some((
+                    rect.x.saturating_add(rect.width / 2),
+                    rect.y.saturating_add(rect.height / 2),
+                ));
+            }
+
+            root.add_child(widget);
+            id_counter = id_counter.saturating_add(1);
+        }
+    }
+
+    state.register_widget(root);
+
+    let overlay = InspectorOverlay::new(&state);
+    let start = Instant::now();
+    overlay.render(area, &mut frame);
+    let duration = start.elapsed();
+
+    let budget_ms = std::env::var("INSPECTOR_PERF_BUDGET_MS")
+        .ok()
+        .and_then(|value| value.parse::<u128>().ok())
+        .unwrap_or(50);
+    let budget_ms = u64::try_from(budget_ms).unwrap_or(u64::MAX);
+    let budget = Duration::from_millis(budget_ms);
+
+    log_inspector_perf(
+        "inspector_overlay_stress",
+        cols,
+        rows,
+        max_depth,
+        duration,
+        budget,
+    );
+
+    assert!(
+        duration <= budget,
+        "Inspector overlay stress render took {:?}, budget {:?}",
+        duration,
+        budget
+    );
+}
+
+fn build_inspector_chain(name: String, area: Rect, depth: u8, max_depth: u8) -> WidgetInfo {
+    let mut widget = WidgetInfo::new(name, area).with_depth(depth);
+
+    if depth < max_depth {
+        let next_depth = depth.saturating_add(1);
+        let child_area = Rect::new(
+            area.x.saturating_add(1),
+            area.y.saturating_add(1),
+            area.width.saturating_sub(2),
+            area.height.saturating_sub(2),
+        );
+        if !child_area.is_empty() {
+            let child = build_inspector_chain(
+                format!("Depth {}", next_depth),
+                child_area,
+                next_depth,
+                max_depth,
+            );
+            widget.add_child(child);
+        }
+    }
+
+    widget
+}
+
+fn log_inspector_perf(
+    case: &str,
+    cols: u16,
+    rows: u16,
+    max_depth: u8,
+    duration: Duration,
+    budget: Duration,
+) {
+    if std::env::var("INSPECTOR_PERF_LOG").is_ok() || std::env::var("PERF_LOG").is_ok() {
+        let duration_us = duration.as_micros();
+        let budget_us = budget.as_micros();
+        let result = if duration <= budget { "pass" } else { "fail" };
+        println!(
+            r#"{{"event":"perf_test","case":"{}","cols":{},"rows":{},"depth":{},"duration_us":{},"budget_us":{},"result":"{}"}}"#,
+            case, cols, rows, max_depth, duration_us, budget_us, result
+        );
+    }
 }

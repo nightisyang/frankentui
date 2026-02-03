@@ -60,3 +60,9 @@ All tasks are complete. The codebase has been extensively refactored for Unicode
 **Fix:**
     - Updated rendering loops to skip drawing graphemes that are partially scrolled out to the left or partially overlapping the right edge.
     - This ensures correct clipping and prevents drawing outside the widget's allocated area.
+
+## 68. Buffer Dirty Initialization (Ghosting Fix)
+**File:** `crates/ftui-render/src/buffer.rs`
+**Issue:** `Buffer::new` initialized `dirty_rows` to `false`. When a new buffer (e.g. from resize) was diffed against an old buffer using `compute_dirty`, the diff algorithm would skip all rows (because they were "clean"), incorrectly assuming the new empty buffer matched the old populated buffer. This would cause "ghosting" where old content remained on screen after a resize or clear.
+**Fix:**
+    - Changed initialization of `dirty_rows` to `true` in `Buffer::new`. This ensures any fresh buffer is treated as fully changed relative to any previous state, forcing a correct full diff.

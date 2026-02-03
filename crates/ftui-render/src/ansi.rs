@@ -310,6 +310,20 @@ pub fn cub<W: Write>(w: &mut W, n: u16) -> io::Result<()> {
     }
 }
 
+/// Move cursor to start of line: `\r` (CR)
+#[inline]
+pub fn cr<W: Write>(w: &mut W) -> io::Result<()> {
+    w.write_all(b"\r")
+}
+
+/// Move cursor down one line: `\n` (LF)
+///
+/// Note: In raw mode (OPOST disabled), this moves y+1 but preserves x.
+#[inline]
+pub fn lf<W: Write>(w: &mut W) -> io::Result<()> {
+    w.write_all(b"\n")
+}
+
 /// DEC cursor save: `ESC 7` (DECSC)
 pub const CURSOR_SAVE: &[u8] = b"\x1b7";
 

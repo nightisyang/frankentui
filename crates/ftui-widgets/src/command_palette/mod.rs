@@ -1670,3 +1670,4 @@ mod widget_tests {
         assert!(exec_idx < close_idx);
     }
 }
+mod property_tests;

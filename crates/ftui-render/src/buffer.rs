@@ -98,8 +98,9 @@ impl Buffer {
             scissor_stack: vec![Rect::from_size(width, height)],
             opacity_stack: vec![1.0],
             degradation: DegradationLevel::Full,
-            // All rows start clean; mutations mark them dirty.
-            dirty_rows: vec![false; height as usize],
+            // All rows start dirty to ensure initial diffs against this buffer
+            // (e.g. from DoubleBuffer resize) correctly identify it as changed/empty.
+            dirty_rows: vec![true; height as usize],
         }
     }
 
