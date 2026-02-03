@@ -1,30 +1,52 @@
-//! Input Fairness Guard (stub implementation)
+//! Input fairness guard - stub module for compilation.
 //!
-//! Prevents render/resize events from starving keyboard/mouse input.
-//! This is a placeholder implementation - full implementation pending.
+//! TODO(bd-???): Implement full input fairness scheduling.
+//!
+//! This module provides placeholder types for input fairness scheduling
+//! to allow compilation while the full implementation is pending.
+
+#![forbid(unsafe_code)]
 
 use std::time::{Duration, Instant};
 
-/// Event type classification for fairness tracking.
+/// Event type for fairness classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FairnessEventType {
-    /// Keyboard or mouse input
+pub enum EventType {
+    /// User input events (keyboard, mouse).
     Input,
-    /// Terminal resize event
+    /// Terminal resize events.
     Resize,
-    /// Timer tick event
+    /// Timer tick events.
     Tick,
+}
+
+/// Configuration for input fairness.
+#[derive(Debug, Clone)]
+pub struct FairnessConfig {
+    /// Maximum latency for input events before they get priority.
+    pub input_priority_threshold: Duration,
+    /// Enable fairness scheduling.
+    pub enabled: bool,
+}
+
+impl Default for FairnessConfig {
+    fn default() -> Self {
+        Self {
+            input_priority_threshold: Duration::from_millis(50),
+            enabled: false, // Disabled by default until fully implemented
+        }
+    }
 }
 
 /// Fairness decision returned by the guard.
 #[derive(Debug, Clone)]
 pub struct FairnessDecision {
-    /// Whether to proceed with processing
+    /// Whether to proceed with the event.
     pub should_process: bool,
-    /// Time input has been pending (if any)
+    /// Pending input latency if any.
     pub pending_input_latency: Option<Duration>,
-    /// Suggested yield duration if not processing
-    pub suggested_yield: Option<Duration>,
+    /// Reason for the decision.
+    pub reason: &'static str,
 }
 
 impl Default for FairnessDecision {
@@ -32,48 +54,133 @@ impl Default for FairnessDecision {
         Self {
             should_process: true,
             pending_input_latency: None,
-            suggested_yield: None,
+            reason: "fairness_disabled",
         }
     }
 }
 
-/// Guard that ensures input events are not starved by render/resize.
-#[derive(Debug, Default)]
+/// Fairness log entry for telemetry.
+#[derive(Debug, Clone)]
+pub struct FairnessLogEntry {
+    /// Timestamp of the entry.
+    pub timestamp: Instant,
+    /// Event type processed.
+    pub event_type: EventType,
+    /// Duration of processing.
+    pub duration: Duration,
+}
+
+/// Statistics about fairness scheduling.
+#[derive(Debug, Clone, Default)]
+pub struct FairnessStats {
+    /// Total events processed.
+    pub events_processed: u64,
+    /// Input events processed.
+    pub input_events: u64,
+    /// Resize events processed.
+    pub resize_events: u64,
+    /// Tick events processed.
+    pub tick_events: u64,
+}
+
+/// Intervention reason for fairness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InterventionReason {
+    /// Input latency exceeded threshold.
+    InputLatency,
+    /// No intervention needed.
+    None,
+}
+
+/// Counts of interventions by type.
+#[derive(Debug, Clone, Default)]
+pub struct InterventionCounts {
+    /// Input latency interventions.
+    pub input_latency: u64,
+}
+
+/// Guard for input fairness scheduling.
+///
+/// Stub implementation - returns default decisions.
+#[derive(Debug)]
 pub struct InputFairnessGuard {
-    /// When input last arrived
-    pending_input_arrival: Option<Instant>,
+    config: FairnessConfig,
+    stats: FairnessStats,
 }
 
 impl InputFairnessGuard {
-    /// Create a new fairness guard.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Signal that input has arrived.
-    pub fn input_arrived(&mut self, _when: Instant) {
-        self.pending_input_arrival = Some(Instant::now());
-    }
-
-    /// Signal that an event has been processed.
-    pub fn event_processed(
-        &mut self,
-        event_type: FairnessEventType,
-        _processing_time: Duration,
-        _completed_at: Instant,
-    ) {
-        if event_type == FairnessEventType::Input {
-            self.pending_input_arrival = None;
+    /// Create a new fairness guard with the given configuration.
+    pub fn new(config: FairnessConfig) -> Self {
+        Self {
+            config,
+            stats: FairnessStats::default(),
         }
     }
 
-    /// Check if we should proceed or yield to input.
+    /// Check fairness and return a decision.
+    ///
+    /// Stub implementation - always returns default decision.
     pub fn check_fairness(&self, _now: Instant) -> FairnessDecision {
         FairnessDecision::default()
     }
 
-    /// Get pending input latency if any.
-    pub fn pending_input_latency(&self) -> Option<Duration> {
-        self.pending_input_arrival.map(|t| t.elapsed())
+    /// Record that an event was processed.
+    pub fn event_processed(&mut self, event_type: EventType, _duration: Duration, _now: Instant) {
+        self.stats.events_processed += 1;
+        match event_type {
+            EventType::Input => self.stats.input_events += 1,
+            EventType::Resize => self.stats.resize_events += 1,
+            EventType::Tick => self.stats.tick_events += 1,
+        }
+    }
+
+    /// Get current statistics.
+    pub fn stats(&self) -> &FairnessStats {
+        &self.stats
+    }
+
+    /// Check if fairness is enabled.
+    pub fn is_enabled(&self) -> bool {
+        self.config.enabled
+    }
+}
+
+impl Default for InputFairnessGuard {
+    fn default() -> Self {
+        Self::new(FairnessConfig::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_is_disabled() {
+        let config = FairnessConfig::default();
+        assert!(!config.enabled);
+    }
+
+    #[test]
+    fn default_decision_allows_processing() {
+        let guard = InputFairnessGuard::default();
+        let decision = guard.check_fairness(Instant::now());
+        assert!(decision.should_process);
+    }
+
+    #[test]
+    fn event_processing_updates_stats() {
+        let mut guard = InputFairnessGuard::default();
+        let now = Instant::now();
+
+        guard.event_processed(EventType::Input, Duration::from_millis(10), now);
+        guard.event_processed(EventType::Resize, Duration::from_millis(5), now);
+        guard.event_processed(EventType::Tick, Duration::from_millis(1), now);
+
+        let stats = guard.stats();
+        assert_eq!(stats.events_processed, 3);
+        assert_eq!(stats.input_events, 1);
+        assert_eq!(stats.resize_events, 1);
+        assert_eq!(stats.tick_events, 1);
     }
 }

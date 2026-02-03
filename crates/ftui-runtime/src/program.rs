@@ -52,6 +52,7 @@
 //! ```
 
 use crate::StorageResult;
+use crate::input_fairness::{EventType as FairnessEventType, FairnessConfig, InputFairnessGuard};
 use crate::input_macro::{EventRecorder, InputMacro};
 use crate::locale::LocaleContext;
 use crate::state_persistence::StateRegistry;
@@ -873,17 +874,9 @@ impl<M: Model, W: Write + Send> Program<M, W> {
     }
 
     fn handle_event(&mut self, event: Event) -> io::Result<()> {
-        let event_start = Instant::now();
-        let fairness_event_type = Self::classify_event_for_fairness(&event);
-
         // Record event before processing (no-op when recorder is None or idle).
         if let Some(recorder) = &mut self.event_recorder {
             recorder.record(&event);
-        }
-
-        // Signal input arrival for fairness tracking (non-resize input events).
-        if matches!(fairness_event_type, FairnessEventType::Input) {
-            self.fairness_guard.input_arrived(event_start);
         }
 
         let event = match event {
@@ -900,14 +893,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                         let width = width.max(1);
                         let height = height.max(1);
                         self.resize_debouncer.apply_immediate(width, height);
-                        let result = self.apply_resize(width, height, Duration::ZERO);
-                        // Track resize event processing for fairness.
-                        self.fairness_guard.event_processed(
-                            FairnessEventType::Resize,
-                            event_start.elapsed(),
-                            Instant::now(),
-                        );
-                        return result;
+                        return self.apply_resize(width, height, Duration::ZERO);
                     }
                     ResizeBehavior::Throttled | ResizeBehavior::Placeholder => {
                         let action = self.resize_debouncer.handle_resize(width, height);
@@ -929,12 +915,6 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                         } else if !self.resize_behavior.shows_placeholder() {
                             self.resizing = false;
                         }
-                        // Track resize event processing for fairness.
-                        self.fairness_guard.event_processed(
-                            FairnessEventType::Resize,
-                            event_start.elapsed(),
-                            Instant::now(),
-                        );
                         return Ok(());
                     }
                 }
