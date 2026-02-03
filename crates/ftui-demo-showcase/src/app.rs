@@ -1322,10 +1322,10 @@ impl AppModel {
                     screen_title,
                 );
 
-                if let Event::Mouse(mouse) = &event {
-                    if self.handle_mouse_tab_click(mouse) {
-                        return Cmd::None;
-                    }
+                if let Event::Mouse(mouse) = &event
+                    && self.handle_mouse_tab_click(mouse)
+                {
+                    return Cmd::None;
                 }
 
                 // When the command palette is visible, route events to it first.
