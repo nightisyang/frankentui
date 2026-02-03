@@ -50,6 +50,10 @@ pub struct FairnessDecision {
     pub pending_input_latency: Option<Duration>,
     /// Reason for the decision.
     pub reason: &'static str,
+    /// Whether to yield to input processing.
+    pub yield_to_input: bool,
+    /// Jain fairness index (0.0-1.0).
+    pub jain_index: f64,
 }
 
 impl Default for FairnessDecision {
@@ -58,6 +62,8 @@ impl Default for FairnessDecision {
             should_process: true,
             pending_input_latency: None,
             reason: "fairness_disabled",
+            yield_to_input: false,
+            jain_index: 1.0, // Perfect fairness when disabled
         }
     }
 }

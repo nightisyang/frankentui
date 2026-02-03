@@ -52,7 +52,7 @@
 //! ```
 
 use crate::StorageResult;
-use crate::input_fairness::{EventType as FairnessEventType, FairnessConfig, InputFairnessGuard};
+use crate::input_fairness::{FairnessEventType, InputFairnessGuard};
 use crate::input_macro::{EventRecorder, InputMacro};
 use crate::locale::LocaleContext;
 use crate::state_persistence::StateRegistry;
@@ -897,7 +897,13 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                         let width = width.max(1);
                         let height = height.max(1);
                         self.resize_debouncer.apply_immediate(width, height);
-                        return self.apply_resize(width, height, Duration::ZERO);
+                        let result = self.apply_resize(width, height, Duration::ZERO);
+                        self.fairness_guard.event_processed(
+                            fairness_event_type,
+                            event_start.elapsed(),
+                            Instant::now(),
+                        );
+                        return result;
                     }
                     ResizeBehavior::Throttled | ResizeBehavior::Placeholder => {
                         let action = self.resize_debouncer.handle_resize(width, height);
@@ -919,6 +925,11 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                         } else if !self.resize_behavior.shows_placeholder() {
                             self.resizing = false;
                         }
+                        self.fairness_guard.event_processed(
+                            fairness_event_type,
+                            event_start.elapsed(),
+                            Instant::now(),
+                        );
                         return Ok(());
                     }
                 }
@@ -947,8 +958,11 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         self.reconcile_subscriptions();
 
         // Track input event processing for fairness.
-        self.fairness_guard
-            .event_processed(fairness_event_type, event_start.elapsed(), Instant::now());
+        self.fairness_guard.event_processed(
+            fairness_event_type,
+            event_start.elapsed(),
+            Instant::now(),
+        );
 
         Ok(())
     }
@@ -1280,6 +1294,20 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         if !self.resize_behavior.uses_debounce() {
             return Ok(());
         }
+
+        // Check fairness: if input is starving, skip resize application this cycle.
+        // This ensures input events are processed before resize is finalized.
+        let fairness_decision = self.fairness_guard.check_fairness(Instant::now());
+        if !fairness_decision.should_process {
+            debug!(
+                reason = ?fairness_decision.reason,
+                pending_latency_ms = fairness_decision.pending_input_latency.map(|d| d.as_millis() as u64),
+                "Resize yielding to input for fairness"
+            );
+            // Skip resize application this cycle to allow input processing.
+            return Ok(());
+        }
+
         match self.resize_debouncer.tick() {
             ResizeAction::ApplyResize {
                 width,

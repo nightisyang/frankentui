@@ -290,7 +290,6 @@ pub struct ResizeCoalescer {
     logs: Vec<DecisionLog>,
 
     // --- Telemetry integration (bd-1rz0.7) ---
-
     /// Telemetry hooks for external observability.
     telemetry_hooks: Option<TelemetryHooks>,
 
@@ -1644,5 +1643,130 @@ mod tests {
                 );
             }
         }
+    }
+
+    // =========================================================================
+    // Telemetry Hooks Tests (bd-1rz0.7)
+    // =========================================================================
+
+    #[test]
+    fn telemetry_hooks_fire_on_resize_applied() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+
+        let applied_count = Arc::new(AtomicU32::new(0));
+        let applied_count_clone = applied_count.clone();
+
+        let hooks = TelemetryHooks::new()
+            .on_resize_applied(move |_entry| {
+                applied_count_clone.fetch_add(1, Ordering::SeqCst);
+            });
+
+        let mut config = test_config();
+        config.enable_logging = true;
+        let mut c = ResizeCoalescer::new(config, (80, 24)).with_telemetry_hooks(hooks);
+
+        let base = Instant::now();
+        c.handle_resize_at(100, 40, base);
+        c.tick_at(base + Duration::from_millis(50));
+
+        assert_eq!(applied_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn telemetry_hooks_fire_on_regime_change() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+
+        let regime_changes = Arc::new(AtomicU32::new(0));
+        let regime_changes_clone = regime_changes.clone();
+
+        let hooks = TelemetryHooks::new()
+            .on_regime_change(move |_from, _to| {
+                regime_changes_clone.fetch_add(1, Ordering::SeqCst);
+            });
+
+        let config = test_config();
+        let mut c = ResizeCoalescer::new(config, (80, 24)).with_telemetry_hooks(hooks);
+
+        let base = Instant::now();
+
+        // Rapid events to trigger burst mode
+        for i in 0..15 {
+            c.handle_resize_at(80 + i, 24 + i, base + Duration::from_millis(i as u64 * 10));
+        }
+
+        // Should have triggered at least one regime change (Steady -> Burst)
+        assert!(regime_changes.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[test]
+    fn regime_transition_count_tracks_changes() {
+        let config = test_config();
+        let mut c = ResizeCoalescer::new(config, (80, 24));
+
+        assert_eq!(c.regime_transition_count(), 0);
+
+        let base = Instant::now();
+
+        // Rapid events to trigger burst mode
+        for i in 0..15 {
+            c.handle_resize_at(80 + i, 24 + i, base + Duration::from_millis(i as u64 * 10));
+        }
+
+        // Should have transitioned to Burst at least once
+        assert!(c.regime_transition_count() >= 1);
+    }
+
+    #[test]
+    fn cycle_time_percentiles_calculated() {
+        let mut config = test_config();
+        config.enable_logging = true;
+        let mut c = ResizeCoalescer::new(config, (80, 24));
+
+        // Initially no percentiles
+        assert!(c.cycle_time_percentiles().is_none());
+
+        let base = Instant::now();
+
+        // Generate multiple applies to get cycle times
+        for i in 0..5 {
+            c.handle_resize_at(
+                80 + i,
+                24 + i,
+                base + Duration::from_millis(i as u64 * 100),
+            );
+            c.tick_at(base + Duration::from_millis(i as u64 * 100 + 50));
+        }
+
+        // Now should have percentiles
+        let percentiles = c.cycle_time_percentiles();
+        assert!(percentiles.is_some());
+
+        let p = percentiles.unwrap();
+        assert!(p.count >= 1);
+        assert!(p.mean_ms >= 0.0);
+        assert!(p.p50_ms >= 0.0);
+        assert!(p.p95_ms >= p.p50_ms);
+        assert!(p.p99_ms >= p.p95_ms);
+    }
+
+    #[test]
+    fn cycle_time_percentiles_jsonl_format() {
+        let percentiles = CycleTimePercentiles {
+            p50_ms: 10.5,
+            p95_ms: 25.3,
+            p99_ms: 42.1,
+            count: 100,
+            mean_ms: 15.2,
+        };
+
+        let jsonl = percentiles.to_jsonl();
+        assert!(jsonl.contains("\"event\":\"cycle_time_percentiles\""));
+        assert!(jsonl.contains("\"p50_ms\":10.500"));
+        assert!(jsonl.contains("\"p95_ms\":25.300"));
+        assert!(jsonl.contains("\"p99_ms\":42.100"));
+        assert!(jsonl.contains("\"mean_ms\":15.200"));
+        assert!(jsonl.contains("\"count\":100"));
     }
 }
