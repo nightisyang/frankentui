@@ -13,10 +13,11 @@
 //!
 //! Dynamically reflowable from 40x10 to 200x50+.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::time::Instant;
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind};
+use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEventKind};
 use ftui_core::geometry::Rect;
 use ftui_extras::canvas::{Canvas, Mode, Painter};
 use ftui_extras::charts::{
@@ -1391,6 +1392,18 @@ enum ChartMode {
     Heatmap,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DashboardFocus {
+    Plasma,
+    Charts,
+    Code,
+    Info,
+    TextFx,
+    Activity,
+    Markdown,
+    None,
+}
+
 impl ChartMode {
     fn next(self) -> Self {
         match self {
@@ -1452,6 +1465,16 @@ pub struct Dashboard {
 
     // Chart showcase state
     chart_mode: ChartMode,
+
+    // Focus + hit testing
+    focus: DashboardFocus,
+    layout_plasma: Cell<Rect>,
+    layout_charts: Cell<Rect>,
+    layout_code: Cell<Rect>,
+    layout_info: Cell<Rect>,
+    layout_text_fx: Cell<Rect>,
+    layout_activity: Cell<Rect>,
+    layout_markdown: Cell<Rect>,
 }
 
 impl Default for Dashboard {
@@ -1485,11 +1508,51 @@ impl Dashboard {
             md_stream_pos: 0,
             effect_index: 0,
             chart_mode: ChartMode::Pulse,
+            focus: DashboardFocus::Code,
+            layout_plasma: Cell::new(Rect::default()),
+            layout_charts: Cell::new(Rect::default()),
+            layout_code: Cell::new(Rect::default()),
+            layout_info: Cell::new(Rect::default()),
+            layout_text_fx: Cell::new(Rect::default()),
+            layout_activity: Cell::new(Rect::default()),
+            layout_markdown: Cell::new(Rect::default()),
         }
     }
 
     pub fn apply_theme(&mut self) {
         self.highlighter.set_theme(theme::syntax_theme());
+    }
+
+    fn is_focused(&self, panel: DashboardFocus) -> bool {
+        self.focus == panel
+    }
+
+    fn focus_from_point(&mut self, x: u16, y: u16) {
+        let plasma = self.layout_plasma.get();
+        let charts = self.layout_charts.get();
+        let code = self.layout_code.get();
+        let info = self.layout_info.get();
+        let text_fx = self.layout_text_fx.get();
+        let activity = self.layout_activity.get();
+        let markdown = self.layout_markdown.get();
+
+        self.focus = if plasma.contains(x, y) {
+            DashboardFocus::Plasma
+        } else if charts.contains(x, y) {
+            DashboardFocus::Charts
+        } else if code.contains(x, y) {
+            DashboardFocus::Code
+        } else if info.contains(x, y) {
+            DashboardFocus::Info
+        } else if text_fx.contains(x, y) {
+            DashboardFocus::TextFx
+        } else if activity.contains(x, y) {
+            DashboardFocus::Activity
+        } else if markdown.contains(x, y) {
+            DashboardFocus::Markdown
+        } else {
+            DashboardFocus::None
+        };
     }
 
     fn current_code_sample(&self) -> &'static CodeSample {
@@ -2988,6 +3051,10 @@ impl Dashboard {
             ])
             .split(content_rows[0]);
 
+        self.layout_plasma.set(top_cols[0]);
+        self.layout_charts.set(top_cols[1]);
+        self.layout_code.set(top_cols[2]);
+        self.layout_info.set(top_cols[3]);
         self.render_plasma(frame, top_cols[0]);
         self.render_charts(frame, top_cols[1]);
         self.render_code(frame, top_cols[2]);
@@ -3002,6 +3069,9 @@ impl Dashboard {
             ])
             .split(content_rows[1]);
 
+        self.layout_text_fx.set(bottom_cols[0]);
+        self.layout_activity.set(bottom_cols[1]);
+        self.layout_markdown.set(bottom_cols[2]);
         self.render_text_effects(frame, bottom_cols[0]);
         self.render_activity_feed(frame, bottom_cols[1]);
         self.render_markdown(frame, bottom_cols[2]);
@@ -3034,6 +3104,8 @@ impl Dashboard {
             ])
             .split(content_rows[0]);
 
+        self.layout_plasma.set(top_cols[0]);
+        self.layout_charts.set(top_cols[1]);
         self.render_plasma(frame, top_cols[0]);
         self.render_charts(frame, top_cols[1]);
 
@@ -3042,6 +3114,8 @@ impl Dashboard {
             .constraints([Constraint::Percentage(60.0), Constraint::Percentage(40.0)])
             .split(top_cols[2]);
 
+        self.layout_code.set(right_split[0]);
+        self.layout_info.set(right_split[1]);
         self.render_code(frame, right_split[0]);
         self.render_info(frame, right_split[1], (area.width, area.height));
 
@@ -3054,6 +3128,9 @@ impl Dashboard {
             ])
             .split(content_rows[1]);
 
+        self.layout_text_fx.set(bottom_cols[0]);
+        self.layout_activity.set(bottom_cols[1]);
+        self.layout_markdown.set(bottom_cols[2]);
         self.render_text_effects(frame, bottom_cols[0]);
         self.render_activity_feed(frame, bottom_cols[1]);
         self.render_markdown(frame, bottom_cols[2]);

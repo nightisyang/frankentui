@@ -24,8 +24,6 @@ use ftui_widgets::scrollbar::{Scrollbar, ScrollbarOrientation, ScrollbarState};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{HelpEntry, Screen};
-use crate::app::ScreenId;
-use crate::chrome;
 use crate::theme;
 
 /// Embedded complete works of Shakespeare.
@@ -319,7 +317,7 @@ impl Shakespeare {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShakespeareMode {
     Library,
     Spotlight,
@@ -362,6 +360,7 @@ impl ShakespeareMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FocusPanel {
     Search,
     Text,
@@ -562,23 +561,32 @@ impl Screen for Shakespeare {
             (v_chunks[0], v_chunks[1])
         };
 
-        // Body: left (text) + right (navigator/toc/insights)
+        // Body: left (text) + right (mode-specific)
         let h_chunks = Flex::horizontal()
             .constraints([Constraint::Percentage(66.0), Constraint::Percentage(34.0)])
             .split(body_area);
 
-        let right_rows = Flex::vertical()
-            .constraints([
-                Constraint::Percentage(40.0),
-                Constraint::Percentage(35.0),
-                Constraint::Percentage(25.0),
-            ])
-            .split(h_chunks[1]);
+        let right_rows = match self.mode {
+            ShakespeareMode::Library => Flex::vertical()
+                .constraints([
+                    Constraint::Percentage(40.0),
+                    Constraint::Percentage(35.0),
+                    Constraint::Percentage(25.0),
+                ])
+                .split(h_chunks[1]),
+            ShakespeareMode::Spotlight => Flex::vertical()
+                .constraints([Constraint::Percentage(55.0), Constraint::Percentage(45.0)])
+                .split(h_chunks[1]),
+            ShakespeareMode::Concordance => Flex::vertical()
+                .constraints([
+                    Constraint::Percentage(34.0),
+                    Constraint::Percentage(33.0),
+                    Constraint::Percentage(33.0),
+                ])
+                .split(h_chunks[1]),
+        };
 
         self.layout_text.set(h_chunks[0]);
-        self.layout_nav.set(right_rows[0]);
-        self.layout_toc.set(right_rows[1]);
-        self.layout_insights.set(right_rows[2]);
         self.layout_status.set(status_area);
         if self.search_active {
             self.layout_search.set(v_chunks[0]);
@@ -586,10 +594,50 @@ impl Screen for Shakespeare {
             self.layout_search.set(Rect::default());
         }
 
+        match self.mode {
+            ShakespeareMode::Library => {
+                self.layout_nav.set(right_rows[0]);
+                self.layout_toc.set(right_rows[1]);
+                self.layout_insights.set(right_rows[2]);
+            }
+            ShakespeareMode::Spotlight => {
+                self.layout_nav.set(right_rows[0]);
+                self.layout_toc.set(right_rows[1]);
+                self.layout_insights.set(Rect::default());
+            }
+            ShakespeareMode::Concordance => {
+                self.layout_nav.set(right_rows[0]);
+                self.layout_toc.set(right_rows[1]);
+                self.layout_insights.set(right_rows[2]);
+            }
+        }
+
+        chrome::register_pane_hit(frame, h_chunks[0], ScreenId::Shakespeare);
+        for &rect in &right_rows {
+            chrome::register_pane_hit(frame, rect, ScreenId::Shakespeare);
+        }
+        chrome::register_pane_hit(frame, status_area, ScreenId::Shakespeare);
+        if self.search_active {
+            chrome::register_pane_hit(frame, v_chunks[0], ScreenId::Shakespeare);
+        }
+
         self.render_text_panel(frame, h_chunks[0]);
-        self.render_match_panel(frame, right_rows[0]);
-        self.render_toc_panel(frame, right_rows[1]);
-        self.render_insights_panel(frame, right_rows[2]);
+        match self.mode {
+            ShakespeareMode::Library => {
+                self.render_match_panel(frame, right_rows[0]);
+                self.render_toc_panel(frame, right_rows[1]);
+                self.render_insights_panel(frame, right_rows[2]);
+            }
+            ShakespeareMode::Spotlight => {
+                self.render_spotlight_panel(frame, right_rows[0]);
+                self.render_stagecraft_panel(frame, right_rows[1]);
+            }
+            ShakespeareMode::Concordance => {
+                self.render_concordance_panel(frame, right_rows[0]);
+                self.render_toc_panel(frame, right_rows[1]);
+                self.render_insights_panel(frame, right_rows[2]);
+            }
+        }
         self.render_status_bar(frame, status_area);
     }
 
@@ -614,6 +662,10 @@ impl Screen for Shakespeare {
             HelpEntry {
                 key: "n/N",
                 action: "Next/prev match",
+            },
+            HelpEntry {
+                key: "m/M",
+                action: "Cycle view mode",
             },
             HelpEntry {
                 key: "j/k",
@@ -745,15 +797,15 @@ impl Shakespeare {
             .constraints([Constraint::Min(10), Constraint::Fixed(24)])
             .split(rows[2]);
         let status = if self.search_input.value().len() >= 2 {
-            "Instant highlight active"
+            format!("Mode: {} · Instant highlight active", self.mode.label())
         } else {
-            "Search updates as you type"
+            format!("Mode: {} · Search updates as you type", self.mode.label())
         };
         Paragraph::new(status)
             .style(theme::muted())
             .render(status_cols[0], frame);
 
-        let jump_hint = StyledText::new("n/N outside search")
+        let jump_hint = StyledText::new("M switches mode · n/N jumps")
             .effect(TextEffect::Reveal {
                 mode: RevealMode::CenterOut,
                 progress: ((self.time * 0.6).sin() * 0.5 + 0.5).clamp(0.0, 1.0),
