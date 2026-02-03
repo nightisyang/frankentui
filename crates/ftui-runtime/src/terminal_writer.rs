@@ -1064,6 +1064,20 @@ impl<W: Write> TerminalWriter<W> {
         self.writer.take()?.into_inner().ok()
     }
 
+    /// Perform garbage collection on the grapheme pool.
+    ///
+    /// Frees graphemes that are not referenced by the current front buffer (`prev_buffer`).
+    /// This should be called periodically (e.g. every N frames) to prevent memory leaks
+    /// in long-running applications with dynamic content (e.g. streaming logs with emoji).
+    pub fn gc(&mut self) {
+        let buffers = if let Some(ref buf) = self.prev_buffer {
+            vec![buf]
+        } else {
+            vec![]
+        };
+        self.pool.gc(&buffers);
+    }
+
     /// Internal cleanup on drop.
     fn cleanup(&mut self) {
         let Some(ref mut writer) = self.writer else {

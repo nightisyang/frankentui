@@ -925,11 +925,11 @@ impl ResizeCoalescer {
         let first = *self.event_times.front().unwrap();
         let window_duration = now.duration_since(first);
 
-        if window_duration.as_secs_f64() < 0.001 {
-            return 0.0;
-        }
+        // Enforce a minimum duration of 1ms to prevent divide-by-zero or instability
+        // and to correctly reflect high rates for near-instantaneous bursts.
+        let duration_secs = window_duration.as_secs_f64().max(0.001);
 
-        (self.event_times.len() as f64) / window_duration.as_secs_f64()
+        (self.event_times.len() as f64) / duration_secs
     }
 
     fn log_decision(
@@ -1373,6 +1373,26 @@ mod tests {
 
         let rate = c.calculate_event_rate(base + Duration::from_millis(1000));
         assert!(rate > 8.0 && rate < 12.0, "Rate should be ~10 events/sec");
+    }
+
+    #[test]
+    fn rapid_burst_triggers_high_rate() {
+        let config = test_config();
+        let mut c = ResizeCoalescer::new(config.clone(), (80, 24));
+        let base = Instant::now();
+
+        // Simulate 8 events arriving at the EXACT same time (or < 1ms)
+        for _ in 0..8 {
+            c.handle_resize_at(80, 24, base);
+        }
+
+        let rate = c.calculate_event_rate(base);
+        // 8 events / 0.001s = 8000 events/sec
+        assert!(
+            rate >= 1000.0,
+            "Rate should be high for instantaneous burst, got {}",
+            rate
+        );
     }
 
     #[test]

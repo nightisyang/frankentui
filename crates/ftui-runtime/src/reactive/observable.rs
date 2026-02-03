@@ -109,9 +109,7 @@ impl<T: Clone + PartialEq + 'static> Observable<T> {
     /// (by `PartialEq`), the version is incremented and all live subscribers
     /// are notified.
     ///
-    /// # Panics
-    ///
-    /// Panics if called re-entrantly from within a subscriber callback.
+    /// This method is safe to call re-entrantly from within subscriber callbacks.
     pub fn set(&self, value: T) {
         let changed = {
             let mut inner = self.inner.borrow_mut();
@@ -131,9 +129,7 @@ impl<T: Clone + PartialEq + 'static> Observable<T> {
     /// (compared by `PartialEq` against a snapshot), the version is
     /// incremented and subscribers are notified.
     ///
-    /// # Panics
-    ///
-    /// Panics if called re-entrantly from within a subscriber callback.
+    /// This method is safe to call re-entrantly from within subscriber callbacks.
     pub fn update(&self, f: impl FnOnce(&mut T)) {
         let changed = {
             let mut inner = self.inner.borrow_mut();

@@ -317,19 +317,27 @@ impl HistoryManager {
 
     /// Enforce depth and memory limits by evicting oldest commands.
     fn enforce_limits(&mut self) {
-        // Enforce depth limit
+        // Enforce depth limit (only applies to undo stack)
         while self.undo_stack.len() > self.config.max_depth {
             if let Some(cmd) = self.undo_stack.pop_front() {
                 self.total_bytes = self.total_bytes.saturating_sub(cmd.size_bytes());
             }
         }
 
-        // Enforce memory limit (if set)
+        // Enforce memory limit (if set) - applies to TOTAL history
         if self.config.max_bytes > 0 {
             while self.total_bytes > self.config.max_bytes {
+                // First try to drop from redo stack (future/speculative history)
+                if let Some(cmd) = self.redo_stack.pop_front() {
+                    self.total_bytes = self.total_bytes.saturating_sub(cmd.size_bytes());
+                    continue;
+                }
+
+                // Then drop from undo stack (oldest history)
                 if let Some(cmd) = self.undo_stack.pop_front() {
                     self.total_bytes = self.total_bytes.saturating_sub(cmd.size_bytes());
                 } else {
+                    // Both stacks empty, nothing to drop
                     break;
                 }
             }
