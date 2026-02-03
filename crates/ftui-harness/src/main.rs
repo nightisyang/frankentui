@@ -18,10 +18,18 @@
 //!
 //! - Type to enter text in the input field
 //! - Enter: Submit command (echoed to log)
-//! - Ctrl+C / Ctrl+Q: Quit
+//! - Escape: Clear input (if text present), cancel task (if running), or close overlay
+//! - Esc Esc: Toggle tree view overlay (double-tap within 250ms)
+//! - Ctrl+C: Clear input (if text present), cancel task (if running), or quit
+//! - Ctrl+D: Soft quit (cancel task if running, otherwise quit)
+//! - Ctrl+Q: Hard quit (immediate exit)
 //! - Ctrl+T: Cycle theme
 //! - Page Up/Down: Scroll log viewer
-//! - Escape: Clear input
+//!
+//! # Keybinding Policy
+//!
+//! This harness implements the Pi-style keybinding policy (bd-2vne.1) using the
+//! ActionMapper from ftui-core. See `docs/spec/keybinding-policy.md` for details.
 
 use std::cell::RefCell;
 use std::io::{self, Read, Write};
@@ -33,6 +41,7 @@ use ftui_core::event::{
 };
 use ftui_core::geometry::Rect;
 use ftui_core::input_parser::InputParser;
+use ftui_core::keybinding::{Action, ActionMapper, AppState};
 use ftui_core::terminal_session::{SessionOptions, TerminalSession};
 use ftui_extras::theme;
 use ftui_layout::{Constraint, Flex, Grid, GridArea};
@@ -79,6 +88,10 @@ struct AgentHarness {
     view_mode: HarnessView,
     /// Whether to log key events to the log viewer.
     log_keys: bool,
+    /// Keybinding action mapper (handles Esc sequences, Ctrl+C priority, etc).
+    action_mapper: ActionMapper,
+    /// Whether the tree view overlay is visible.
+    tree_view_open: bool,
 }
 
 /// Messages for the agent harness.
@@ -209,7 +222,18 @@ impl AgentHarness {
             auto_quit_ticks,
             view_mode,
             log_keys,
+            action_mapper: ActionMapper::from_env(),
+            tree_view_open: false,
         }
+    }
+
+    /// Get the current application state for keybinding resolution.
+    fn app_state(&self) -> AppState {
+        AppState::new()
+            .with_input(!self.input.value().is_empty())
+            .with_task(self.task_running)
+            .with_modal(false) // No modals in current harness
+            .with_overlay(self.tree_view_open)
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Cmd<Msg> {
@@ -226,19 +250,101 @@ impl AgentHarness {
             return Cmd::None;
         }
 
-        // Global shortcuts
-        if key.modifiers.contains(Modifiers::CTRL) {
-            match key.code {
-                KeyCode::Char('c') | KeyCode::Char('q') => return Cmd::Quit,
-                KeyCode::Char('t') => {
-                    let next = theme::cycle_theme();
-                    self.log_viewer.push(format!("Theme: {}", next.name()));
-                    return Cmd::None;
-                }
-                _ => {}
-            }
+        // Ctrl+T for theme cycling (harness-specific, not part of keybinding spec)
+        if key.modifiers.contains(Modifiers::CTRL)
+            && matches!(key.code, KeyCode::Char('t') | KeyCode::Char('T'))
+        {
+            let next = theme::cycle_theme();
+            self.log_viewer.push(format!("Theme: {}", next.name()));
+            return Cmd::None;
         }
 
+        // Use the ActionMapper for keybinding resolution
+        let state = self.app_state();
+        let now = Instant::now();
+        match self.action_mapper.map(&key, &state, now) {
+            Some(Action::PassThrough) => {
+                // Pass through to raw key handling
+                return self.handle_raw_key(key);
+            }
+            Some(action) => {
+                return self.handle_action(action);
+            }
+            None => {
+                // ActionMapper returned None (e.g., pending Esc or Noop)
+                // Nothing to do right now; timeout will be checked on tick
+            }
+        }
+        Cmd::None
+    }
+
+    /// Handle a resolved keybinding action.
+    fn handle_action(&mut self, action: Action) -> Cmd<Msg> {
+        match action {
+            Action::ClearInput => {
+                if !self.input.value().is_empty() {
+                    self.input.clear();
+                    self.log_viewer.push("(Input cleared)");
+                }
+                Cmd::None
+            }
+            Action::CancelTask => {
+                if self.task_running {
+                    self.task_running = false;
+                    self.current_tool = None;
+                    self.log_viewer.push("(Task cancelled)");
+                }
+                Cmd::None
+            }
+            Action::DismissModal => {
+                // No modals in current harness; treat as no-op
+                Cmd::None
+            }
+            Action::CloseOverlay => {
+                if self.tree_view_open {
+                    self.tree_view_open = false;
+                    self.log_viewer.push("(Tree view closed)");
+                }
+                Cmd::None
+            }
+            Action::ToggleTreeView => {
+                self.tree_view_open = !self.tree_view_open;
+                let status = if self.tree_view_open {
+                    "opened"
+                } else {
+                    "closed"
+                };
+                self.log_viewer.push(format!("(Tree view {})", status));
+                Cmd::None
+            }
+            Action::Quit | Action::HardQuit => Cmd::Quit,
+            Action::SoftQuit => {
+                // Soft quit: cancel task if running, otherwise quit
+                if self.task_running {
+                    self.task_running = false;
+                    self.current_tool = None;
+                    self.log_viewer.push("(Task cancelled via Ctrl+D)");
+                    Cmd::None
+                } else {
+                    Cmd::Quit
+                }
+            }
+            Action::Bell => {
+                // Emit terminal bell (BEL character)
+                // The runtime should handle this, but we can log it
+                self.log_viewer.push("(Bell)");
+                Cmd::None
+            }
+            Action::PassThrough => {
+                // PassThrough should be handled in handle_key, not here
+                // This case exists for exhaustive matching
+                Cmd::None
+            }
+        }
+    }
+
+    /// Handle raw key input for passthrough cases.
+    fn handle_raw_key(&mut self, key: KeyEvent) -> Cmd<Msg> {
         match key.code {
             KeyCode::Enter => {
                 let command = self.input.value().to_string();
@@ -256,13 +362,13 @@ impl AgentHarness {
                             self.log_viewer.push("  status    - Show current status");
                             self.log_viewer.push("  clear     - Clear the log");
                             self.log_viewer.push("  quit      - Exit the application");
+                            self.log_viewer.push("  tree      - Toggle tree view");
                         }
                         "search" => {
                             self.task_running = true;
                             self.task_tick_count = 0;
                             self.current_tool = Some("grep".to_string());
                             self.log_viewer.push("Starting search...");
-                            // Simulate async task
                             return Cmd::Batch(vec![
                                 Cmd::Msg(Msg::LogLine("Searching for patterns...".to_string())),
                                 Cmd::Tick(Duration::from_millis(500)),
@@ -270,15 +376,25 @@ impl AgentHarness {
                         }
                         "status" => {
                             self.log_viewer.push(format!(
-                                "Model: {} | Commands: {} | Task: {}",
+                                "Model: {} | Commands: {} | Task: {} | Tree: {}",
                                 self.model_name,
                                 self.command_count,
-                                if self.task_running { "Running" } else { "Idle" }
+                                if self.task_running { "Running" } else { "Idle" },
+                                if self.tree_view_open { "Open" } else { "Closed" }
                             ));
                         }
                         "clear" => {
                             self.log_viewer.clear();
                             self.log_viewer.push("Log cleared.");
+                        }
+                        "tree" => {
+                            self.tree_view_open = !self.tree_view_open;
+                            let status = if self.tree_view_open {
+                                "opened"
+                            } else {
+                                "closed"
+                            };
+                            self.log_viewer.push(format!("Tree view {}.", status));
                         }
                         "quit" => return Cmd::Quit,
                         _ => {
@@ -289,9 +405,6 @@ impl AgentHarness {
                         }
                     }
                 }
-            }
-            KeyCode::Escape => {
-                self.input.clear();
             }
             KeyCode::PageUp => {
                 let log_state = self.log_state.borrow();
@@ -306,7 +419,6 @@ impl AgentHarness {
                 self.input.handle_event(&Event::Key(key));
             }
         }
-
         Cmd::None
     }
 }
@@ -413,6 +525,16 @@ impl Model for AgentHarness {
             Msg::Key(key) => self.handle_key(key),
             Msg::SpinnerTick => {
                 self.spinner_state.tick();
+
+                // Check for pending Esc timeout (Esc Esc detection)
+                let state = self.app_state();
+                let now = Instant::now();
+                if let Some(action) = self.action_mapper.check_timeout(&state, now) {
+                    let cmd = self.handle_action(action);
+                    if !matches!(cmd, Cmd::None) {
+                        return cmd;
+                    }
+                }
 
                 if let Some(ticks) = self.auto_quit_ticks.as_mut() {
                     if *ticks > 0 {
