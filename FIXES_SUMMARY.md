@@ -66,3 +66,11 @@ All tasks are complete. The codebase has been extensively refactored for Unicode
 **Issue:** `Buffer::new` initialized `dirty_rows` to `false`. When a new buffer (e.g. from resize) was diffed against an old buffer using `compute_dirty`, the diff algorithm would skip all rows (because they were "clean"), incorrectly assuming the new empty buffer matched the old populated buffer. This would cause "ghosting" where old content remained on screen after a resize or clear.
 **Fix:**
     - Changed initialization of `dirty_rows` to `true` in `Buffer::new`. This ensures any fresh buffer is treated as fully changed relative to any previous state, forcing a correct full diff.
+
+## 69. Zero-Width Char Cursor Desync
+**File:** `crates/ftui-render/src/presenter.rs`
+**Issue:** `emit_cell` did not account for zero-width characters (like standalone combining marks) in the buffer. Because `emit_content` writes bytes but `CellContent::width()` returns 0, the `Presenter`'s internal cursor state (`cursor_x`) would desynchronize from the actual terminal cursor (which doesn't advance for zero-width chars). This caused subsequent characters in the same row to be drawn at the wrong position (shifted left).
+**Fix:**
+    - Updated `emit_cell` to detect non-empty, non-continuation cells with zero width.
+    - Replaced such content with `U+FFFD` (Replacement Character, width 1) to ensure the visual grid alignment is maintained and the cursor advances correctly.
+    - Added a regression test `zero_width_chars_replaced_with_placeholder`.
