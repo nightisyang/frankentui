@@ -162,7 +162,10 @@ mod choreo_timeline {
 
         let vx = tl.event_value("x").unwrap();
         let vy = tl.event_value("y").unwrap();
-        assert!((vx - vy).abs() < 0.01, "parallel animations should be in sync: {vx} vs {vy}");
+        assert!(
+            (vx - vy).abs() < 0.01,
+            "parallel animations should be in sync: {vx} vs {vy}"
+        );
     }
 
     #[test]
@@ -195,7 +198,11 @@ mod choreo_timeline {
 
         // Complete first play.
         tl.tick(MS_100);
-        assert_eq!(tl.state(), PlaybackState::Playing, "should loop, not finish");
+        assert_eq!(
+            tl.state(),
+            PlaybackState::Playing,
+            "should loop, not finish"
+        );
 
         // Complete second play.
         tl.tick(MS_100);
@@ -203,7 +210,11 @@ mod choreo_timeline {
 
         // Complete third play.
         tl.tick(MS_100);
-        assert_eq!(tl.state(), PlaybackState::Finished, "should finish after 3 plays");
+        assert_eq!(
+            tl.state(),
+            PlaybackState::Finished,
+            "should finish after 3 plays"
+        );
     }
 
     #[test]
@@ -219,7 +230,10 @@ mod choreo_timeline {
         assert_eq!(tl.state(), PlaybackState::Paused);
         tl.tick(MS_100); // Should not progress.
         let v_after = tl.event_value("a").unwrap();
-        assert!((v_before - v_after).abs() < 0.01, "paused timeline should not progress");
+        assert!(
+            (v_before - v_after).abs() < 0.01,
+            "paused timeline should not progress"
+        );
 
         tl.resume();
         assert_eq!(tl.state(), PlaybackState::Playing);
@@ -239,7 +253,10 @@ mod choreo_timeline {
         assert!(tl.seek_label("middle"));
         // After seeking, middle animation should have started.
         let v = tl.event_value("start").unwrap();
-        assert!((v - 1.0).abs() < 0.01, "start should be complete after seeking past it");
+        assert!(
+            (v - 1.0).abs() < 0.01,
+            "start should be complete after seeking past it"
+        );
     }
 
     #[test]
@@ -295,7 +312,10 @@ mod choreo_group {
         // At t=100ms: a is complete (1.0), b is halfway (~0.5).
         group.tick(MS_100);
         let progress = group.overall_progress();
-        assert!(progress > 0.5 && progress < 1.0, "overall progress should be between 0.5 and 1.0, got {progress}");
+        assert!(
+            progress > 0.5 && progress < 1.0,
+            "overall progress should be between 0.5 and 1.0, got {progress}"
+        );
     }
 
     #[test]
@@ -312,8 +332,7 @@ mod choreo_group {
 
     #[test]
     fn group_insert_replaces() {
-        let mut group = AnimationGroup::new()
-            .add("x", Fade::new(MS_100));
+        let mut group = AnimationGroup::new().add("x", Fade::new(MS_100));
         group.tick(MS_100);
         assert!(group.get("x").unwrap().is_complete());
 
@@ -332,7 +351,9 @@ mod choreo_group {
 
 mod choreo_stagger {
     use super::*;
-    use ftui_core::animation::stagger::{StaggerMode, stagger_offsets, stagger_offsets_with_jitter};
+    use ftui_core::animation::stagger::{
+        StaggerMode, stagger_offsets, stagger_offsets_with_jitter,
+    };
 
     #[test]
     fn linear_stagger_timing() {
@@ -348,7 +369,11 @@ mod choreo_stagger {
 
     #[test]
     fn eased_stagger_curves() {
-        for mode in [StaggerMode::EaseIn, StaggerMode::EaseOut, StaggerMode::EaseInOut] {
+        for mode in [
+            StaggerMode::EaseIn,
+            StaggerMode::EaseOut,
+            StaggerMode::EaseInOut,
+        ] {
             let offsets = stagger_offsets(10, Duration::from_millis(20), mode);
             assert_eq!(offsets.len(), 10);
             assert_eq!(offsets[0], Duration::ZERO);
@@ -369,12 +394,18 @@ mod choreo_stagger {
     #[test]
     fn jitter_deterministic() {
         let a = stagger_offsets_with_jitter(
-            5, Duration::from_millis(50), StaggerMode::Linear,
-            Duration::from_millis(10), 42,
+            5,
+            Duration::from_millis(50),
+            StaggerMode::Linear,
+            Duration::from_millis(10),
+            42,
         );
         let b = stagger_offsets_with_jitter(
-            5, Duration::from_millis(50), StaggerMode::Linear,
-            Duration::from_millis(10), 42,
+            5,
+            Duration::from_millis(50),
+            StaggerMode::Linear,
+            Duration::from_millis(10),
+            42,
         );
         assert_eq!(a, b, "same seed should produce identical offsets");
     }
@@ -382,12 +413,18 @@ mod choreo_stagger {
     #[test]
     fn jitter_different_seeds_differ() {
         let a = stagger_offsets_with_jitter(
-            5, Duration::from_millis(50), StaggerMode::Linear,
-            Duration::from_millis(10), 42,
+            5,
+            Duration::from_millis(50),
+            StaggerMode::Linear,
+            Duration::from_millis(10),
+            42,
         );
         let b = stagger_offsets_with_jitter(
-            5, Duration::from_millis(50), StaggerMode::Linear,
-            Duration::from_millis(10), 99,
+            5,
+            Duration::from_millis(50),
+            StaggerMode::Linear,
+            Duration::from_millis(10),
+            99,
         );
         // Very unlikely to be identical with different seeds and jitter.
         assert_ne!(a, b, "different seeds should produce different offsets");
@@ -414,8 +451,7 @@ mod choreo_callbacks {
 
     #[test]
     fn on_start_fires_once() {
-        let mut anim = Callbacks::new(Fade::new(Duration::from_millis(200)))
-            .on_start();
+        let mut anim = Callbacks::new(Fade::new(Duration::from_millis(200))).on_start();
 
         anim.tick(Duration::from_millis(10));
         let events: Vec<_> = anim.drain_events();
@@ -423,13 +459,15 @@ mod choreo_callbacks {
 
         anim.tick(Duration::from_millis(10));
         let events: Vec<_> = anim.drain_events();
-        assert!(!events.contains(&AnimationEvent::Started), "Started should fire only once");
+        assert!(
+            !events.contains(&AnimationEvent::Started),
+            "Started should fire only once"
+        );
     }
 
     #[test]
     fn on_complete_fires_once() {
-        let mut anim = Callbacks::new(Fade::new(MS_100))
-            .on_complete();
+        let mut anim = Callbacks::new(Fade::new(MS_100)).on_complete();
 
         anim.tick(MS_100);
         let events: Vec<_> = anim.drain_events();
@@ -437,19 +475,23 @@ mod choreo_callbacks {
 
         anim.tick(MS_100);
         let events: Vec<_> = anim.drain_events();
-        assert!(!events.contains(&AnimationEvent::Completed), "Completed should fire only once");
+        assert!(
+            !events.contains(&AnimationEvent::Completed),
+            "Completed should fire only once"
+        );
     }
 
     #[test]
     fn progress_threshold_fires() {
-        let mut anim = Callbacks::new(Fade::new(Duration::from_millis(200)))
-            .at_progress(0.5);
+        let mut anim = Callbacks::new(Fade::new(Duration::from_millis(200))).at_progress(0.5);
 
         // Tick to 40% — threshold not yet crossed.
         anim.tick(Duration::from_millis(80));
         let events: Vec<_> = anim.drain_events();
         assert!(
-            !events.iter().any(|e| matches!(e, AnimationEvent::Progress(_))),
+            !events
+                .iter()
+                .any(|e| matches!(e, AnimationEvent::Progress(_))),
             "50% threshold should not fire at 40%"
         );
 
@@ -457,7 +499,9 @@ mod choreo_callbacks {
         anim.tick(Duration::from_millis(40));
         let events: Vec<_> = anim.drain_events();
         assert!(
-            events.iter().any(|e| matches!(e, AnimationEvent::Progress(_))),
+            events
+                .iter()
+                .any(|e| matches!(e, AnimationEvent::Progress(_))),
             "50% threshold should fire by 60%"
         );
     }
@@ -484,15 +528,16 @@ mod choreo_callbacks {
         assert_eq!(progress_events.len(), 3, "should fire 3 progress events");
         // Should be in ascending order.
         for w in progress_events.windows(2) {
-            assert!(w[1] >= w[0], "progress events should be in order: {progress_events:?}");
+            assert!(
+                w[1] >= w[0],
+                "progress events should be in order: {progress_events:?}"
+            );
         }
     }
 
     #[test]
     fn reset_allows_events_to_fire_again() {
-        let mut anim = Callbacks::new(Fade::new(MS_100))
-            .on_start()
-            .on_complete();
+        let mut anim = Callbacks::new(Fade::new(MS_100)).on_start().on_complete();
 
         anim.tick(MS_100);
         let _ = anim.drain_events();
@@ -500,15 +545,19 @@ mod choreo_callbacks {
         anim.reset();
         anim.tick(MS_100);
         let events: Vec<_> = anim.drain_events();
-        assert!(events.contains(&AnimationEvent::Started), "Started should fire again after reset");
-        assert!(events.contains(&AnimationEvent::Completed), "Completed should fire again after reset");
+        assert!(
+            events.contains(&AnimationEvent::Started),
+            "Started should fire again after reset"
+        );
+        assert!(
+            events.contains(&AnimationEvent::Completed),
+            "Completed should fire again after reset"
+        );
     }
 
     #[test]
     fn drain_clears_queue() {
-        let mut anim = Callbacks::new(Fade::new(MS_100))
-            .on_start()
-            .on_complete();
+        let mut anim = Callbacks::new(Fade::new(MS_100)).on_start().on_complete();
         anim.tick(MS_100);
 
         let first: Vec<_> = anim.drain_events();
@@ -537,7 +586,7 @@ mod choreo_presets {
         let steps = [0.0, 0.25, 0.5, 0.75, 1.0];
         let mut prev_progress = 0.0;
         for &pct in &steps {
-            let target = total.mul_f64(pct as f64);
+            let target = total.mul_f64(pct);
             let tick_amount = target.saturating_sub(Duration::from_millis(
                 (prev_progress * total.as_millis() as f64) as u64,
             ));
@@ -568,7 +617,10 @@ mod choreo_presets {
         for step in 0..25 {
             tw.tick(Duration::from_millis(20));
             let chars = tw.visible_chars();
-            assert!(chars >= prev_chars, "visible chars should not decrease at step {step}");
+            assert!(
+                chars >= prev_chars,
+                "visible chars should not decrease at step {step}"
+            );
             prev_chars = chars;
         }
         assert!(tw.is_complete());
@@ -580,13 +632,13 @@ mod choreo_presets {
         let mut group = pulse_sequence(3, Duration::from_millis(200), Duration::from_millis(200));
 
         // Track that pulses peak sequentially.
-        let mut pulse_peaks = vec![0.0f32; 3];
+        let mut pulse_peaks = [0.0f32; 3];
         for _ in 0..40 {
             group.tick(Duration::from_millis(20));
-            for i in 0..3 {
+            for (i, peak) in pulse_peaks.iter_mut().enumerate() {
                 let v = group.get(&format!("pulse_{i}")).unwrap().value();
-                if v > pulse_peaks[i] {
-                    pulse_peaks[i] = v;
+                if v > *peak {
+                    *peak = v;
                 }
             }
         }

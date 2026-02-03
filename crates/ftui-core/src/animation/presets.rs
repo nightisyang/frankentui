@@ -72,7 +72,10 @@ pub fn cascade_out(
     let offsets = stagger_offsets(count, stagger_delay, mode);
     let mut group = AnimationGroup::new();
     for (i, offset) in offsets.into_iter().enumerate() {
-        let anim = delay(offset, InvertedFade(Fade::new(item_duration).easing(ease_in)));
+        let anim = delay(
+            offset,
+            InvertedFade(Fade::new(item_duration).easing(ease_in)),
+        );
         group.insert(&format!("item_{i}"), Box::new(anim));
     }
     group
@@ -89,11 +92,7 @@ pub fn cascade_out(
 ///
 /// Returns an [`AnimationGroup`] with labels `"item_0"` .. `"item_{count-1}"`.
 #[must_use]
-pub fn fan_out(
-    count: usize,
-    item_duration: Duration,
-    total_spread: Duration,
-) -> AnimationGroup {
+pub fn fan_out(count: usize, item_duration: Duration, total_spread: Duration) -> AnimationGroup {
     if count == 0 {
         return AnimationGroup::new();
     }
@@ -402,7 +401,10 @@ mod tests {
         // (zero delay) should be near 1.0.
         group.tick(Duration::from_nanos(1));
         let v0 = group.get("item_0").unwrap().value();
-        assert!((v0 - 1.0).abs() < 0.01, "cascade_out should start near 1.0, got {v0}");
+        assert!(
+            (v0 - 1.0).abs() < 0.01,
+            "cascade_out should start near 1.0, got {v0}"
+        );
     }
 
     #[test]
@@ -412,7 +414,10 @@ mod tests {
         group.tick(Duration::from_secs(1));
         for i in 0..3 {
             let v = group.get(&format!("item_{i}")).unwrap().value();
-            assert!(v < 0.01, "item_{i} should be near 0.0 after completion, got {v}");
+            assert!(
+                v < 0.01,
+                "item_{i} should be near 0.0 after completion, got {v}"
+            );
         }
     }
 
@@ -440,7 +445,10 @@ mod tests {
         group.tick(Duration::from_millis(10));
         let center = group.get("item_2").unwrap().value();
         let edge = group.get("item_0").unwrap().value();
-        assert!(center >= edge, "center ({center}) should start before edges ({edge})");
+        assert!(
+            center >= edge,
+            "center ({center}) should start before edges ({edge})"
+        );
     }
 
     #[test]
@@ -449,11 +457,17 @@ mod tests {
         // Items equidistant from center should have the same initial value.
         let v0 = group.get("item_0").unwrap().value();
         let v4 = group.get("item_4").unwrap().value();
-        assert!((v0 - v4).abs() < 0.01, "symmetric items should match: {v0} vs {v4}");
+        assert!(
+            (v0 - v4).abs() < 0.01,
+            "symmetric items should match: {v0} vs {v4}"
+        );
 
         let v1 = group.get("item_1").unwrap().value();
         let v3 = group.get("item_3").unwrap().value();
-        assert!((v1 - v3).abs() < 0.01, "symmetric items should match: {v1} vs {v3}");
+        assert!(
+            (v1 - v3).abs() < 0.01,
+            "symmetric items should match: {v1} vs {v3}"
+        );
     }
 
     // ---- typewriter -------------------------------------------------------
@@ -479,7 +493,10 @@ mod tests {
         for _ in 0..20 {
             tw.tick(Duration::from_millis(25));
             let chars = tw.visible_chars();
-            assert!(chars >= prev, "visible chars should not decrease: {prev} -> {chars}");
+            assert!(
+                chars >= prev,
+                "visible chars should not decrease: {prev} -> {chars}"
+            );
             prev = chars;
         }
     }
@@ -572,7 +589,11 @@ mod tests {
         ft.tick(MS200);
         // At half_duration, the first (inverted) fade is complete → value ≈ 0.
         // The second fade just started → value ≈ 0.
-        assert!(ft.value() < 0.1, "midpoint should be near 0.0, got {}", ft.value());
+        assert!(
+            ft.value() < 0.1,
+            "midpoint should be near 0.0, got {}",
+            ft.value()
+        );
     }
 
     #[test]
@@ -580,7 +601,11 @@ mod tests {
         let mut ft = fade_through(MS200);
         ft.tick(Duration::from_millis(400));
         assert!(ft.is_complete());
-        assert!((ft.value() - 1.0).abs() < 0.01, "should end at 1.0, got {}", ft.value());
+        assert!(
+            (ft.value() - 1.0).abs() < 0.01,
+            "should end at 1.0, got {}",
+            ft.value()
+        );
     }
 
     // ---- InvertedFade -----------------------------------------------------

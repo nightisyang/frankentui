@@ -288,19 +288,25 @@ pub mod presets {
     /// Gentle spring: low stiffness, high damping. Smooth and slow.
     #[must_use]
     pub fn gentle() -> Spring {
-        Spring::normalized().with_stiffness(120.0).with_damping(20.0)
+        Spring::normalized()
+            .with_stiffness(120.0)
+            .with_damping(20.0)
     }
 
     /// Bouncy spring: high stiffness, low damping. Visible oscillation.
     #[must_use]
     pub fn bouncy() -> Spring {
-        Spring::normalized().with_stiffness(300.0).with_damping(10.0)
+        Spring::normalized()
+            .with_stiffness(300.0)
+            .with_damping(10.0)
     }
 
     /// Stiff spring: high stiffness, near-critical damping. Snappy response.
     #[must_use]
     pub fn stiff() -> Spring {
-        Spring::normalized().with_stiffness(400.0).with_damping(38.0)
+        Spring::normalized()
+            .with_stiffness(400.0)
+            .with_damping(38.0)
     }
 
     /// Critically damped spring: fastest convergence without overshoot.

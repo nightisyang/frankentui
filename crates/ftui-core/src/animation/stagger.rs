@@ -226,11 +226,7 @@ mod tests {
         // Middle offset should be near half the total span
         let total = Duration::from_millis(400);
         let mid = offsets[2];
-        let diff = if mid > total / 2 {
-            mid - total / 2
-        } else {
-            total / 2 - mid
-        };
+        let diff = mid.abs_diff(total / 2);
         assert!(
             diff < Duration::from_millis(10),
             "middle should be near half"
