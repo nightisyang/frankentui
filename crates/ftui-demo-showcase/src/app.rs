@@ -144,23 +144,23 @@ fn emit_a11y_jsonl(event: &str, fields: &[(&str, &str)]) {
 
 /// Accessibility telemetry event types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum A11yEventKind {
-    PanelToggled,
-    HighContrastToggled,
-    ReducedMotionToggled,
-    LargeTextToggled,
+pub enum A11yEventKind {
+    Panel,
+    HighContrast,
+    ReducedMotion,
+    LargeText,
 }
 
 /// Telemetry payload for A11y events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct A11yTelemetryEvent {
-    kind: A11yEventKind,
-    tick: u64,
-    screen: &'static str,
-    panel_visible: bool,
-    high_contrast: bool,
-    reduced_motion: bool,
-    large_text: bool,
+pub struct A11yTelemetryEvent {
+    pub kind: A11yEventKind,
+    pub tick: u64,
+    pub screen: &'static str,
+    pub panel_visible: bool,
+    pub high_contrast: bool,
+    pub reduced_motion: bool,
+    pub large_text: bool,
 }
 
 type A11yTelemetryCallback = Box<dyn Fn(&A11yTelemetryEvent) + Send + Sync>;
@@ -904,10 +904,26 @@ impl AppModel {
             &[
                 ("tick", &event.tick.to_string()),
                 ("screen", event.screen),
-                ("panel_visible", if event.panel_visible { "true" } else { "false" }),
-                ("high_contrast", if event.high_contrast { "true" } else { "false" }),
-                ("reduced_motion", if event.reduced_motion { "true" } else { "false" }),
-                ("large_text", if event.large_text { "true" } else { "false" }),
+                (
+                    "panel_visible",
+                    if event.panel_visible { "true" } else { "false" },
+                ),
+                (
+                    "high_contrast",
+                    if event.high_contrast { "true" } else { "false" },
+                ),
+                (
+                    "reduced_motion",
+                    if event.reduced_motion {
+                        "true"
+                    } else {
+                        "false"
+                    },
+                ),
+                (
+                    "large_text",
+                    if event.large_text { "true" } else { "false" },
+                ),
             ],
         );
 
@@ -1930,6 +1946,7 @@ impl AppModel {
 mod tests {
     use super::*;
     use ftui_render::grapheme_pool::GraphemePool;
+    use std::sync::{Arc, Mutex};
 
     #[test]
     fn switch_screen_changes_current() {
@@ -2000,6 +2017,33 @@ mod tests {
 
         app.update(AppMsg::ToggleDebug);
         assert!(!app.debug_visible);
+    }
+
+    #[test]
+    fn a11y_telemetry_hooks_fire() {
+        let events: Arc<Mutex<Vec<A11yEventKind>>> = Arc::new(Mutex::new(Vec::new()));
+        let events_clone = Arc::clone(&events);
+
+        let hooks = A11yTelemetryHooks::new().on_any(move |event| {
+            events_clone.lock().unwrap().push(event.kind);
+        });
+
+        let mut app = AppModel::new().with_a11y_telemetry_hooks(hooks);
+        app.update(AppMsg::ToggleA11yPanel);
+        app.update(AppMsg::ToggleHighContrast);
+        app.update(AppMsg::ToggleReducedMotion);
+        app.update(AppMsg::ToggleLargeText);
+
+        let collected = events.lock().unwrap();
+        assert_eq!(
+            collected.as_slice(),
+            &[
+                A11yEventKind::PanelToggled,
+                A11yEventKind::HighContrastToggled,
+                A11yEventKind::ReducedMotionToggled,
+                A11yEventKind::LargeTextToggled,
+            ]
+        );
     }
 
     #[test]
