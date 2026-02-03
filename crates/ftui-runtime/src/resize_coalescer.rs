@@ -212,6 +212,137 @@ pub struct RegimeChangeEvent {
     pub event_idx: u64,
 }
 
+// =============================================================================
+// Evidence Ledger for Scheduler Decisions (bd-1rz0.27)
+// =============================================================================
+
+/// Evidence supporting a scheduler decision with Bayes factors.
+///
+/// This captures the mathematical reasoning behind coalesce/apply decisions,
+/// providing explainability for the regime-adaptive scheduler.
+///
+/// # Bayes Factor Interpretation
+///
+/// The `log_bayes_factor` represents log10(P(evidence|apply_now) / P(evidence|coalesce)):
+/// - Positive values favor immediate apply (respond quickly)
+/// - Negative values favor coalescing (wait for more events)
+/// - |LBF| > 1 is "strong" evidence, |LBF| > 2 is "decisive"
+///
+/// # Example
+///
+/// ```ignore
+/// let evidence = DecisionEvidence {
+///     log_bayes_factor: 1.5,  // Strong evidence to apply now
+///     regime_contribution: 0.8,
+///     timing_contribution: 0.5,
+///     rate_contribution: 0.2,
+///     explanation: "Steady regime with long idle interval".to_string(),
+/// };
+/// ```
+#[derive(Debug, Clone)]
+pub struct DecisionEvidence {
+    /// Log10 Bayes factor: positive favors apply, negative favors coalesce.
+    pub log_bayes_factor: f64,
+
+    /// Contribution from regime detection (Steady vs Burst).
+    pub regime_contribution: f64,
+
+    /// Contribution from timing (dt_ms, time since last render).
+    pub timing_contribution: f64,
+
+    /// Contribution from event rate.
+    pub rate_contribution: f64,
+
+    /// Human-readable explanation of the decision.
+    pub explanation: String,
+}
+
+impl DecisionEvidence {
+    /// Evidence strongly favoring immediate apply (Steady regime, long idle).
+    #[must_use]
+    pub fn favor_apply(regime: Regime, dt_ms: f64, event_rate: f64) -> Self {
+        let regime_contrib = if regime == Regime::Steady { 1.0 } else { -0.5 };
+        let timing_contrib = (dt_ms / 50.0).min(2.0); // Higher dt -> favor apply
+        let rate_contrib = if event_rate < 5.0 { 0.5 } else { -0.3 };
+
+        let lbf = regime_contrib + timing_contrib + rate_contrib;
+
+        Self {
+            log_bayes_factor: lbf,
+            regime_contribution: regime_contrib,
+            timing_contribution: timing_contrib,
+            rate_contribution: rate_contrib,
+            explanation: format!(
+                "Regime={:?} (contrib={:.2}), dt={:.1}ms (contrib={:.2}), rate={:.1}/s (contrib={:.2})",
+                regime, regime_contrib, dt_ms, timing_contrib, event_rate, rate_contrib
+            ),
+        }
+    }
+
+    /// Evidence favoring coalescing (Burst regime, high rate).
+    #[must_use]
+    pub fn favor_coalesce(regime: Regime, dt_ms: f64, event_rate: f64) -> Self {
+        let regime_contrib = if regime == Regime::Burst { 1.0 } else { -0.5 };
+        let timing_contrib = (20.0 / dt_ms.max(1.0)).min(2.0); // Lower dt -> favor coalesce
+        let rate_contrib = if event_rate > 10.0 { 0.5 } else { -0.3 };
+
+        let lbf = -(regime_contrib + timing_contrib + rate_contrib);
+
+        Self {
+            log_bayes_factor: lbf,
+            regime_contribution: regime_contrib,
+            timing_contribution: timing_contrib,
+            rate_contribution: rate_contrib,
+            explanation: format!(
+                "Regime={:?} (contrib={:.2}), dt={:.1}ms (contrib={:.2}), rate={:.1}/s (contrib={:.2})",
+                regime, regime_contrib, dt_ms, timing_contrib, event_rate, rate_contrib
+            ),
+        }
+    }
+
+    /// Evidence for a forced deadline decision.
+    #[must_use]
+    pub fn forced_deadline(deadline_ms: f64) -> Self {
+        Self {
+            log_bayes_factor: f64::INFINITY,
+            regime_contribution: 0.0,
+            timing_contribution: deadline_ms,
+            rate_contribution: 0.0,
+            explanation: format!("Forced by hard deadline ({:.1}ms)", deadline_ms),
+        }
+    }
+
+    /// Serialize to JSONL format.
+    #[must_use]
+    pub fn to_jsonl(&self) -> String {
+        let lbf_str = if self.log_bayes_factor.is_infinite() {
+            "\"inf\"".to_string()
+        } else {
+            format!("{:.3}", self.log_bayes_factor)
+        };
+        format!(
+            r#"{{"event":"decision_evidence","log_bayes_factor":{},"regime_contribution":{:.3},"timing_contribution":{:.3},"rate_contribution":{:.3},"explanation":"{}"}}"#,
+            lbf_str,
+            self.regime_contribution,
+            self.timing_contribution,
+            self.rate_contribution,
+            self.explanation.replace('"', "\\\"")
+        )
+    }
+
+    /// Check if evidence strongly supports the action (|LBF| > 1).
+    #[must_use]
+    pub fn is_strong(&self) -> bool {
+        self.log_bayes_factor.abs() > 1.0
+    }
+
+    /// Check if evidence decisively supports the action (|LBF| > 2).
+    #[must_use]
+    pub fn is_decisive(&self) -> bool {
+        self.log_bayes_factor.abs() > 2.0 || self.log_bayes_factor.is_infinite()
+    }
+}
+
 /// Decision log entry for observability.
 #[derive(Debug, Clone)]
 pub struct DecisionLog {
@@ -1018,6 +1149,21 @@ impl TelemetryHooks {
     pub fn with_tracing(mut self, enabled: bool) -> Self {
         self.emit_tracing = enabled;
         self
+    }
+
+    /// Check if a resize-applied hook is registered.
+    pub fn has_resize_applied(&self) -> bool {
+        self.on_resize_applied.is_some()
+    }
+
+    /// Check if a regime-change hook is registered.
+    pub fn has_regime_change(&self) -> bool {
+        self.on_regime_change.is_some()
+    }
+
+    /// Check if a decision hook is registered.
+    pub fn has_decision(&self) -> bool {
+        self.on_decision.is_some()
     }
 
     /// Invoke the resize applied callback if set.

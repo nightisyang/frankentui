@@ -70,6 +70,7 @@ fn hash_a11y_settings(settings: &theme::A11ySettings) -> u64 {
     hasher.finish()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn log_e2e(
     run_id: &str,
     case: &str,

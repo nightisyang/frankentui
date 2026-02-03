@@ -28,8 +28,7 @@ pub mod program;
 #[cfg(feature = "render-thread")]
 pub mod render_thread;
 pub mod resize_coalescer;
-// TODO: Temporarily disabled due to missing TelemetryHooks types
-// pub mod resize_sla;
+pub mod resize_sla;
 pub mod simulator;
 pub mod state_persistence;
 #[cfg(feature = "stdio-capture")]
@@ -84,10 +83,9 @@ pub use resize_coalescer::{
     CoalesceAction, CoalescerConfig, CoalescerStats, CycleTimePercentiles, DecisionLog,
     DecisionSummary, Regime, ResizeCoalescer,
 };
-// TODO: Temporarily disabled due to missing TelemetryHooks types
-// pub use resize_sla::{
-//     ResizeEvidence, ResizeSlaMonitor, SlaConfig, SlaLogEntry, SlaSummary, make_sla_hooks,
-// };
+pub use resize_sla::{
+    ResizeEvidence, ResizeSlaMonitor, SlaConfig, SlaLogEntry, SlaSummary, make_sla_hooks,
+};
 pub use undo::{
     CommandBatch, CommandError, CommandMetadata, CommandResult, CommandSource, HistoryConfig,
     HistoryManager, MergeConfig, TextDeleteCmd, TextInsertCmd, TextReplaceCmd, Transaction,

@@ -5,20 +5,20 @@
 │                                                                              │
 │                                                                              │
 │                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
-│                                                                              │
+│                     ╭────────Markdown Overlay─────────╮                      │
+│                     │FrankenTUI Visual FX             │                      │
+│                     │                                 │                      │
+│                     │This panel is real markdown      │                      │
+│                     │rendered on top of animated      │                      │
+│                     │backdrops.                       │                      │
+│                     │• deterministic output           │                      │
+│                     │• alpha-correct compositing      │                      │
+│                     │• crisp text over motion         │                      │
+│                     │                                 │                      │
+│                     ╰─────────────────────────────────╯                      │
 │                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Visual Effects [13/21]  Cyberpunk Aurora        tick:0 frm:0         0x0 00:00 
+ Visual Effects [13/24]  Cyberpunk Aurora        tick:0 frm:0         0x0 00:00 

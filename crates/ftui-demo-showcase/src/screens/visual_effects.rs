@@ -20,6 +20,7 @@ use std::time::Instant;
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ftui_core::geometry::Rect;
 use ftui_extras::canvas::{CanvasRef, Mode, Painter};
+use ftui_extras::markdown::render_markdown;
 use ftui_extras::text_effects::{
     AsciiArtStyle, AsciiArtText, ColorGradient, Direction, Easing, Reflection, StyledMultiLine,
     StyledText, TextEffect, TransitionState,
@@ -31,11 +32,26 @@ use ftui_render::cell::PackedRgba;
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::Style;
+use ftui_text::WrapMode;
+use ftui_text::text::Text;
 use ftui_widgets::Widget;
+use ftui_widgets::block::{Alignment, Block};
+use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::paragraph::Paragraph;
 
 use super::{HelpEntry, Screen};
 use crate::theme;
+
+const MARKDOWN_OVERLAY: &str = r#"# FrankenTUI Visual FX
+
+This panel is **real markdown** rendered on top of animated backdrops.
+
+- deterministic output
+- alpha-correct compositing
+- crisp text over motion
+
+`←/→` switch effects · `p` palette · `t` text mode
+"#;
 
 /// Visual effects demo screen.
 pub struct VisualEffectsScreen {
@@ -101,6 +117,8 @@ pub struct VisualEffectsScreen {
     demo_mode: DemoMode,
     /// Text effects demo state
     text_effects: TextEffectsDemo,
+    /// Markdown panel rendered over backdrop effects.
+    markdown_panel: Text,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2513,6 +2531,8 @@ impl Default for VisualEffectsScreen {
             Backdrop::new(Box::new(PlasmaFx::new(plasma_palette)), theme_inputs);
         plasma_backdrop.set_effect_opacity(0.6);
 
+        let markdown_panel = render_markdown(MARKDOWN_OVERLAY);
+
         Self {
             effect: EffectType::Metaballs,
             frame: 0,
@@ -2547,6 +2567,7 @@ impl Default for VisualEffectsScreen {
             // Text effects demo (bd-2b82)
             demo_mode: DemoMode::Canvas,
             text_effects: TextEffectsDemo::default(),
+            markdown_panel,
         }
     }
 }
@@ -2580,6 +2601,48 @@ impl VisualEffectsScreen {
             ColorGradient::rainbow(),
         );
         self.transition.set_speed(0.05);
+    }
+
+    fn render_markdown_overlay(&self, frame: &mut Frame, area: Rect) {
+        let min_width = 32u16;
+        let min_height = 10u16;
+        if area.width < min_width || area.height < min_height {
+            return;
+        }
+
+        let max_width = area.width.saturating_sub(4).max(min_width);
+        let max_height = area.height.saturating_sub(4).max(min_height);
+        let panel_width = ((area.width as f32) * 0.45).round() as u16;
+        let panel_height = ((area.height as f32) * 0.6).round() as u16;
+        let panel_width = panel_width.clamp(min_width, max_width);
+        let panel_height = panel_height.clamp(min_height, max_height);
+
+        let x = area.x + (area.width - panel_width) / 2;
+        let y = area.y + (area.height - panel_height) / 2;
+        let panel_area = Rect::new(x, y, panel_width, panel_height);
+
+        let border_style = Style::new().fg(PackedRgba::rgb(140, 190, 255));
+        let panel_style = Style::new()
+            .fg(PackedRgba::rgb(220, 230, 255))
+            .bg(PackedRgba::rgb(16, 18, 26));
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Markdown Overlay")
+            .title_alignment(Alignment::Center)
+            .border_style(border_style)
+            .style(panel_style);
+
+        let inner = block.inner(panel_area);
+        block.render(panel_area, frame);
+
+        if inner.is_empty() {
+            return;
+        }
+
+        Paragraph::new(self.markdown_panel.clone())
+            .wrap(WrapMode::Word)
+            .render(inner, frame);
     }
 
     /// Render text effects demo area
@@ -3048,6 +3111,7 @@ impl Screen for VisualEffectsScreen {
             backdrop.set_quality(quality);
             backdrop.set_time(self.frame, self.time);
             backdrop.render(canvas_area, frame);
+            self.render_markdown_overlay(frame, canvas_area);
         } else {
             // Reuse cached painter (grow-only) and render current effect.
             {

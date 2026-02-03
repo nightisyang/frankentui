@@ -877,7 +877,7 @@ impl MousePlayground {
 
     /// Move target focus left (previous column).
     fn move_target_left(&mut self) {
-        if self.focused_target_index % GRID_COLS > 0 {
+        if !self.focused_target_index.is_multiple_of(GRID_COLS) {
             self.focused_target_index -= 1;
         }
     }
@@ -1342,7 +1342,7 @@ impl MousePlayground {
             } else if keyboard_focused {
                 // Keyboard focused only
                 (
-                    Style::new().bg(theme::bg::ELEVATED),
+                    Style::new().bg(theme::bg::SURFACE),
                     Style::new()
                         .fg(theme::accent::PRIMARY.resolve())
                         .attrs(StyleFlags::BOLD),

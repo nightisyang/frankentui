@@ -43,7 +43,7 @@
 //! ```
 
 use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::conformal_alert::{AlertConfig, AlertDecision, AlertStats, ConformalAlert};
@@ -172,7 +172,6 @@ pub struct ResizeSlaMonitor {
     total_alerts: RefCell<u64>,
     last_alert: RefCell<Option<AlertDecision>>,
     logs: RefCell<Vec<SlaLogEntry>>,
-    pending_resize_start: RefCell<Option<Instant>>,
 }
 
 impl ResizeSlaMonitor {
@@ -195,20 +194,14 @@ impl ResizeSlaMonitor {
             total_alerts: RefCell::new(0),
             last_alert: RefCell::new(None),
             logs: RefCell::new(Vec::new()),
-            pending_resize_start: RefCell::new(None),
         }
-    }
-
-    /// Record a resize event start (for latency calculation).
-    pub fn on_resize_start(&self, _width: u16, _height: u16) {
-        *self.pending_resize_start.borrow_mut() = Some(Instant::now());
     }
 
     /// Process a resize apply decision log and return alert decision.
     pub fn on_decision(&self, entry: &DecisionLog) -> Option<AlertDecision> {
         // Extract latency from coalesce_ms or time_since_render_ms
         let latency_ms = entry.coalesce_ms.unwrap_or(entry.time_since_render_ms);
-        let applied_size = entry.applied_size.unwrap_or((80, 24));
+        let applied_size = entry.applied_size?;
         self.process_latency(latency_ms, applied_size, entry.forced)
     }
 
@@ -366,7 +359,6 @@ impl ResizeSlaMonitor {
         *self.total_alerts.borrow_mut() = 0;
         *self.last_alert.borrow_mut() = None;
         self.logs.borrow_mut().clear();
-        *self.pending_resize_start.borrow_mut() = None;
     }
 
     /// Current threshold in milliseconds.
@@ -392,15 +384,17 @@ impl ResizeSlaMonitor {
 ///
 /// Note: Uses Rc + RefCell internally since TelemetryHooks callbacks are
 /// `Fn` (not `FnMut`) but we need to mutate the monitor state.
-pub fn make_sla_hooks(config: SlaConfig) -> (TelemetryHooks, Rc<ResizeSlaMonitor>) {
-    let monitor = Rc::new(ResizeSlaMonitor::new(config));
-    let monitor_clone = Rc::clone(&monitor);
+pub fn make_sla_hooks(config: SlaConfig) -> (TelemetryHooks, Arc<Mutex<ResizeSlaMonitor>>) {
+    let monitor = Arc::new(Mutex::new(ResizeSlaMonitor::new(config)));
+    let monitor_clone = Arc::clone(&monitor);
 
     // Hook into on_resize_applied events to track latency
     let hooks = TelemetryHooks::new().on_resize_applied(move |entry: &DecisionLog| {
         // Only process apply events (not coalesce)
-        if entry.action == "apply" || entry.action == "apply_forced" {
-            monitor_clone.on_decision(entry);
+        if (entry.action == "apply" || entry.action == "apply_forced")
+            && let Ok(monitor) = monitor_clone.lock()
+        {
+            monitor.on_decision(entry);
         }
     });
 
@@ -414,7 +408,6 @@ pub fn make_sla_hooks(config: SlaConfig) -> (TelemetryHooks, Rc<ResizeSlaMonitor
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     fn test_config() -> SlaConfig {
         SlaConfig {
@@ -581,33 +574,51 @@ mod tests {
     }
 
     // =========================================================================
-    // Integration with ResizeAppliedEvent
+    // Integration with DecisionLog
     // =========================================================================
 
     #[test]
-    fn on_resize_applied_processes_event() {
+    fn on_decision_processes_entry() {
+        use crate::resize_coalescer::Regime;
+
         let monitor = ResizeSlaMonitor::new(test_config());
 
-        // Create a ResizeAppliedEvent
-        let event = ResizeAppliedEvent {
-            new_size: (100, 40),
-            old_size: (80, 24),
-            elapsed: Duration::from_millis(15),
+        // Create a DecisionLog entry representing an apply event
+        let entry = DecisionLog {
+            timestamp: std::time::Instant::now(),
+            elapsed_ms: 0.0,
+            event_idx: 1,
+            dt_ms: 0.0,
+            event_rate: 0.0,
+            regime: Regime::Steady,
+            action: "apply",
+            pending_size: None,
+            applied_size: Some((100, 40)),
+            time_since_render_ms: 15.0,
+            coalesce_ms: Some(15.0),
             forced: false,
         };
 
-        let result = monitor.on_resize_applied(&event);
+        let result = monitor.on_decision(&entry);
         assert!(result.is_none()); // Still in calibration
 
-        // Feed more events
+        // Feed more entries
         for i in 0..5 {
-            let event = ResizeAppliedEvent {
-                new_size: (100, 40),
-                old_size: (80, 24),
-                elapsed: Duration::from_millis(15 + i),
+            let entry = DecisionLog {
+                timestamp: std::time::Instant::now(),
+                elapsed_ms: 0.0,
+                event_idx: 2 + i,
+                dt_ms: 0.0,
+                event_rate: 0.0,
+                regime: Regime::Steady,
+                action: "apply",
+                pending_size: None,
+                applied_size: Some((100, 40)),
+                time_since_render_ms: 15.0 + i as f64,
+                coalesce_ms: Some(15.0 + i as f64),
                 forced: false,
             };
-            monitor.on_resize_applied(&event);
+            monitor.on_decision(&entry);
         }
 
         assert!(monitor.is_active());
@@ -619,14 +630,12 @@ mod tests {
 
     #[test]
     fn make_sla_hooks_creates_valid_hooks() {
-        let (hooks, monitor) = make_sla_hooks(test_config());
+        let (_hooks, monitor) = make_sla_hooks(test_config());
 
-        assert!(hooks.on_resize_applied.is_some());
-        assert!(hooks.on_regime_change.is_none());
-        assert!(hooks.on_decision.is_none());
-
-        // Verify monitor is accessible
+        // Verify monitor is accessible and not active initially
+        let monitor = monitor.lock().expect("sla monitor lock");
         assert!(!monitor.is_active());
+        assert_eq!(monitor.calibration_count(), 0);
     }
 
     // =========================================================================

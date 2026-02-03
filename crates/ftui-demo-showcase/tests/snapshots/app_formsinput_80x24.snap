@@ -1,12 +1,12 @@
  1: Dash │ 2: Shakes │ 3: Code │ 4: Widgets │ 5: Layout │ 6: Forms │ 7: DataViz 
 ╭────────────────────────────────Forms & Input─────────────────────────────────╮
 │╭──────────Registration Form──────────╮╭─────────────Text Inputs─────────────╮│
-││Name:         Enter your name...     ││Search:   Search...                  ││
-││Email:        user@example.com       ││Password: Password                   ││
-││Role:           Developer            ││                                     ││
-││Theme:        (1) Light              │╰─────────────────────────────────────╯│
-││Age:            25                   │╭─────────────Text Editor─────────────╮│
-││Accept Terms: [ ]                    ││1  Hello, world!                     ││
+││Name *:         Enter your name...   ││Search:   Search...                  ││
+││Email *:        user@example.com     ││Password: Password                   ││
+││Role:             Developer          ││                                     ││
+││Theme:          (1) Light            │╰─────────────────────────────────────╯│
+││Age:              25                 │╭─────────────Text Editor─────────────╮│
+││Accept Terms *: [ ]                  ││1  Hello, world!                     ││
 ││                                     ││2                                    ││
 ││                                     ││3  This is a multi-line text editor. ││
 ││                                     ││4  You can type, select, undo/redo, a││
@@ -17,8 +17,8 @@
 ││                                     ││                                     ││
 ││                                     ││                                     ││
 ││Tab: next | Enter: submit | Esc: canc││                                     ││
-││                                     ││                                     ││
+││Legend: * required | red=error | gree││                                     ││
 │╰─────────────────────────────────────╯╰─────────────────────────────────────╯│
-│Ctrl+←/→: switch panels | Form: Tab/↑/↓ navigate, Space toggle, Enter submit  │
+│Editing: Name (field 1/6) | Undo:0 Redo:0 | Errors: 0 | Ctrl+U: Show history  │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Forms & Input [6/21]  Cyberpunk Aurora         tick:0 frm:0          0x0 00:00 
+ Forms & Input [6/24]  Cyberpunk Aurora         tick:0 frm:0          0x0 00:00 

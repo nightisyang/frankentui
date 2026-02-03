@@ -1301,7 +1301,7 @@ mod proptests {
             (5u16..50).prop_map(Constraint::Max),
             (1u16..5, 2u16..6)
                 .prop_filter("denominator > numerator", |(n, d)| n < d)
-                .prop_map(|(n, d)| Constraint::Ratio(n, d)),
+                .prop_map(|(n, d)| Constraint::Ratio(u32::from(n), u32::from(d))),
         ]
     }
 
