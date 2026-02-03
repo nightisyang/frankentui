@@ -48,9 +48,9 @@ pub struct TextArea {
     /// Maximum height in lines (0 = unlimited / fill area).
     max_height: usize,
     /// Viewport scroll offset (first visible line).
-    scroll_top: usize,
+    scroll_top: std::cell::Cell<usize>,
     /// Horizontal scroll offset (visual columns).
-    scroll_left: usize,
+    scroll_left: std::cell::Cell<usize>,
 }
 
 impl Default for TextArea {
@@ -84,8 +84,8 @@ impl TextArea {
             line_number_style: Style::new().dim(),
             soft_wrap: false,
             max_height: 0,
-            scroll_top: usize::MAX, // sentinel: will be set on first render
-            scroll_left: 0,
+            scroll_top: std::cell::Cell::new(usize::MAX), // sentinel: will be set on first render
+            scroll_left: std::cell::Cell::new(0),
         }
     }
 
@@ -295,8 +295,8 @@ impl TextArea {
     /// Set the full text content (resets cursor and undo history).
     pub fn set_text(&mut self, text: &str) {
         self.editor.set_text(text);
-        self.scroll_top = 0;
-        self.scroll_left = 0;
+        self.scroll_top.set(0);
+        self.scroll_left.set(0);
     }
 
     /// Number of lines.
@@ -552,8 +552,8 @@ impl TextArea {
     fn ensure_cursor_visible(&mut self) {
         let cursor = self.editor.cursor();
         // Use a default viewport of 20 lines if we haven't rendered yet
-        let vp_height = if self.scroll_top == usize::MAX {
-            self.scroll_top = 0;
+        let vp_height = if self.scroll_top.get() == usize::MAX {
+            self.scroll_top.set(0);
             20usize
         } else {
             20usize // Will be overridden in render, but safe default
@@ -561,17 +561,22 @@ impl TextArea {
         self.ensure_cursor_visible_with_height(vp_height, cursor);
     }
 
-    fn ensure_cursor_visible_with_height(&mut self, _vp_height: usize, cursor: CursorPosition) {
-        // Vertical scroll: only adjust if cursor is above the top
-        if cursor.line < self.scroll_top {
-            self.scroll_top = cursor.line;
+    fn ensure_cursor_visible_with_height(&mut self, vp_height: usize, cursor: CursorPosition) {
+        let current_top = self.scroll_top.get();
+        // Vertical scroll
+        if cursor.line < current_top {
+            self.scroll_top.set(cursor.line);
+        } else if vp_height > 0 && cursor.line >= current_top + vp_height {
+            self.scroll_top
+                .set(cursor.line.saturating_sub(vp_height - 1));
         }
 
-        // Horizontal scroll: only adjust if cursor is to the left of the view
+        // Horizontal scroll
         if !self.soft_wrap {
+            let current_left = self.scroll_left.get();
             let visual_col = cursor.visual_col;
-            if visual_col < self.scroll_left {
-                self.scroll_left = visual_col;
+            if visual_col < current_left {
+                self.scroll_left.set(visual_col);
             }
         }
     }
@@ -595,10 +600,10 @@ impl Widget for TextArea {
 
         let cursor = self.editor.cursor();
         // Use a mutable copy for scroll adjustment
-        let mut scroll_top = if self.scroll_top == usize::MAX {
+        let mut scroll_top = if self.scroll_top.get() == usize::MAX {
             0
         } else {
-            self.scroll_top
+            self.scroll_top.get()
         };
         if vp_height > 0 {
             if cursor.line < scroll_top {
@@ -607,8 +612,9 @@ impl Widget for TextArea {
                 scroll_top = cursor.line.saturating_sub(vp_height - 1);
             }
         }
+        self.scroll_top.set(scroll_top);
 
-        let mut scroll_left = self.scroll_left;
+        let mut scroll_left = self.scroll_left.get();
         if !self.soft_wrap && text_area_w > 0 {
             let visual_col = cursor.visual_col;
             if visual_col < scroll_left {
@@ -617,6 +623,7 @@ impl Widget for TextArea {
                 scroll_left = visual_col.saturating_sub(text_area_w - 1);
             }
         }
+        self.scroll_left.set(scroll_left);
 
         let rope = self.editor.rope();
         let nav = CursorNavigator::new(rope);
@@ -873,12 +880,12 @@ mod tests {
             ta.insert_text(&format!("line {}\n", i));
         }
         // Cursor should be at the bottom, scroll_top adjusted
-        assert!(ta.scroll_top > 0);
+        assert!(ta.scroll_top.get() > 0);
         assert!(ta.cursor().line >= 49);
 
         // Move to top
         ta.move_to_document_start();
-        assert_eq!(ta.scroll_top, 0);
+        assert_eq!(ta.scroll_top.get(), 0);
     }
 
     #[test]

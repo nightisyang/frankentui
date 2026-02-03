@@ -5001,6 +5001,217 @@ mod tests {
     }
 
     // =========================================================================
+    // Vertical, Diagonal, Radial Gradient Tests (bd-2j71)
+    // =========================================================================
+
+    /// Helper: Create a simple two-stop gradient for testing.
+    fn test_gradient() -> ColorGradient {
+        ColorGradient::new(vec![
+            (0.0, PackedRgba::rgb(255, 0, 0)),   // Red at start
+            (1.0, PackedRgba::rgb(0, 0, 255)),   // Blue at end
+        ])
+    }
+
+    #[test]
+    fn test_vertical_multiline_top_is_start() {
+        // Row 0 of a multi-line text should get sample(0) - red
+        let gradient = test_gradient();
+
+        // Simulate multi-line: row 0 of 10 rows
+        let t_y = 0.0 / 9.0; // Row 0 of 10 rows (0-indexed)
+        let color = gradient.sample(t_y);
+
+        // Should be red (start of gradient)
+        assert!(color.r() > 200, "Top row should be red, got r={}", color.r());
+        assert!(color.b() < 50, "Top row should have minimal blue, got b={}", color.b());
+    }
+
+    #[test]
+    fn test_vertical_multiline_bottom_is_end() {
+        // Last row of a multi-line text should get sample(1) - blue
+        let gradient = test_gradient();
+
+        // Simulate multi-line: row 9 of 10 rows
+        let t_y = 9.0 / 9.0; // Last row (t=1.0)
+        let color = gradient.sample(t_y);
+
+        // Should be blue (end of gradient)
+        assert!(color.b() > 200, "Bottom row should be blue, got b={}", color.b());
+        assert!(color.r() < 50, "Bottom row should have minimal red, got r={}", color.r());
+    }
+
+    #[test]
+    fn test_vertical_singleline_is_middle() {
+        // Single-line text should return center color (sample(0.5))
+        let gradient = test_gradient();
+
+        let color = gradient.sample(0.5);
+
+        // Should be purple (mix of red and blue)
+        assert!(color.r() > 100 && color.r() < 180, "Middle should have some red, got r={}", color.r());
+        assert!(color.b() > 100 && color.b() < 180, "Middle should have some blue, got b={}", color.b());
+    }
+
+    #[test]
+    fn test_diagonal_0_is_horizontal() {
+        // Diagonal at 0° should match horizontal gradient behavior
+        // At angle 0, cos=1, sin=0, so projected = x * 1 + y * 0 = x
+        let angle = 0.0_f64.to_radians();
+        let cos_a = angle.cos();
+        let sin_a = angle.sin();
+
+        // Two points at same x but different y should have same projection
+        let t_x = 0.5;
+        let projected1 = t_x * cos_a + 0.0 * sin_a;
+        let projected2 = t_x * cos_a + 1.0 * sin_a;
+
+        // Both should be approximately equal since sin(0)=0
+        assert!((projected1 - projected2).abs() < 0.001,
+            "At 0°, diagonal should be horizontal: {} vs {}", projected1, projected2);
+    }
+
+    #[test]
+    fn test_diagonal_90_is_vertical() {
+        // Diagonal at 90° should be top-to-bottom (vertical)
+        let angle = 90.0_f64.to_radians();
+        let cos_a = angle.cos();
+        let sin_a = angle.sin();
+
+        // Two points at same y but different x should have same projection
+        let t_y = 0.5;
+        let projected1 = 0.0 * cos_a + t_y * sin_a;
+        let projected2 = 1.0 * cos_a + t_y * sin_a;
+
+        // Both should be approximately equal since cos(90°)≈0
+        assert!((projected1 - projected2).abs() < 0.01,
+            "At 90°, diagonal should be vertical: {} vs {}", projected1, projected2);
+    }
+
+    #[test]
+    fn test_diagonal_angle_wraps() {
+        // 450° should be equivalent to 90°
+        let angle_90 = 90.0_f64.to_radians();
+        let angle_450 = 450.0_f64.to_radians();
+
+        let cos_90 = angle_90.cos();
+        let sin_90 = angle_90.sin();
+        let cos_450 = angle_450.cos();
+        let sin_450 = angle_450.sin();
+
+        // Trig functions naturally wrap, verify this
+        assert!((cos_90 - cos_450).abs() < 0.0001,
+            "cos(90°) should equal cos(450°): {} vs {}", cos_90, cos_450);
+        assert!((sin_90 - sin_450).abs() < 0.0001,
+            "sin(90°) should equal sin(450°): {} vs {}", sin_90, sin_450);
+    }
+
+    #[test]
+    fn test_radial_center_is_start() {
+        // Center of radial gradient should get sample(0) - red
+        let gradient = test_gradient();
+        let center = (0.5, 0.5);
+        let aspect = 1.0;
+
+        // Point exactly at center
+        let t_x = 0.5;
+        let t_y = 0.5;
+
+        let dx: f64 = (t_x - center.0) * aspect;
+        let dy: f64 = t_y - center.1;
+        let distance = (dx * dx + dy * dy).sqrt();
+        let max_distance = (0.5_f64.powi(2) * aspect * aspect + 0.5_f64.powi(2)).sqrt();
+        let t = (distance / max_distance).clamp(0.0, 1.0);
+
+        let color = gradient.sample(t);
+
+        // Should be red (start of gradient, distance=0)
+        assert!(color.r() > 200, "Center should be red, got r={}", color.r());
+        assert!(t < 0.01, "Center t should be ~0, got {}", t);
+    }
+
+    #[test]
+    fn test_radial_corner_is_end() {
+        // Corner of radial gradient should get sample(1) or close - blue
+        let gradient = test_gradient();
+        let center = (0.5, 0.5);
+        let aspect = 1.0;
+
+        // Point at corner (0, 0)
+        let t_x = 0.0;
+        let t_y = 0.0;
+
+        let dx: f64 = (t_x - center.0) * aspect;
+        let dy: f64 = t_y - center.1;
+        let distance = (dx * dx + dy * dy).sqrt();
+        let max_distance = (0.5_f64.powi(2) * aspect * aspect + 0.5_f64.powi(2)).sqrt();
+        let t = (distance / max_distance).clamp(0.0, 1.0);
+
+        let color = gradient.sample(t);
+
+        // Should be blue (end of gradient, distance=max)
+        assert!(color.b() > 200, "Corner should be blue, got b={}", color.b());
+        assert!(t > 0.99, "Corner t should be ~1, got {}", t);
+    }
+
+    #[test]
+    fn test_radial_aspect_stretches() {
+        // With aspect=2, horizontal distance counts twice as much
+        let center = (0.5, 0.5);
+
+        // Point to the right of center
+        let point_right = (1.0, 0.5); // dx=0.5, dy=0
+        // Point below center
+        let point_below = (0.5, 1.0); // dx=0, dy=0.5
+
+        // With aspect=1 (circular), both should have same distance
+        let dx_r_1: f64 = (point_right.0 - center.0) * 1.0;
+        let dy_r_1: f64 = point_right.1 - center.1;
+        let dist_right_1 = (dx_r_1 * dx_r_1 + dy_r_1 * dy_r_1).sqrt();
+
+        let dx_b_1: f64 = (point_below.0 - center.0) * 1.0;
+        let dy_b_1: f64 = point_below.1 - center.1;
+        let dist_below_1 = (dx_b_1 * dx_b_1 + dy_b_1 * dy_b_1).sqrt();
+
+        assert!((dist_right_1 - dist_below_1).abs() < 0.001,
+            "With aspect=1, right and below should be equidistant");
+
+        // With aspect=2, horizontal distance is doubled
+        let dx_r_2: f64 = (point_right.0 - center.0) * 2.0;
+        let dy_r_2: f64 = point_right.1 - center.1;
+        let dist_right_2 = (dx_r_2 * dx_r_2 + dy_r_2 * dy_r_2).sqrt();
+
+        let dx_b_2: f64 = (point_below.0 - center.0) * 2.0;
+        let dy_b_2: f64 = point_below.1 - center.1;
+        let dist_below_2 = (dx_b_2 * dx_b_2 + dy_b_2 * dy_b_2).sqrt();
+
+        // Right should now be farther than below
+        assert!(dist_right_2 > dist_below_2,
+            "With aspect=2, right should be farther: {} vs {}", dist_right_2, dist_below_2);
+    }
+
+    #[test]
+    fn test_gradient_animated_time_offset() {
+        // Verify that time offset moves the gradient
+        let gradient = test_gradient();
+
+        // Sample at t=0.0 and t=0.5 should give different colors
+        let at_0 = gradient.sample(0.0);
+        let at_05 = gradient.sample(0.5);
+
+        // With animation, sampling at t=0 with time offset 0.5
+        // should give same result as sampling at t=0.5
+        let animated_t = (0.0 + 0.5).rem_euclid(1.0);
+        let animated = gradient.sample(animated_t);
+
+        assert_eq!(animated.r(), at_05.r());
+        assert_eq!(animated.g(), at_05.g());
+        assert_eq!(animated.b(), at_05.b());
+
+        // Verify original values are different
+        assert_ne!(at_0.r(), at_05.r(), "Gradient should have different colors at different t");
+    }
+
+    // =========================================================================
     // OkLab Perceptual Color Space Tests (bd-36k2)
     // =========================================================================
 
@@ -10161,5 +10372,175 @@ mod matrix_rain_tests {
         assert!(state.column_count() > 0);
         // Count might vary slightly due to spawn/despawn logic
         assert!(state.column_count() >= initial_count / 2);
+    }
+}
+
+// =============================================================================
+// ParticleDissolve Tests
+// =============================================================================
+
+#[cfg(test)]
+mod particle_dissolve_tests {
+    use super::*;
+
+    #[test]
+    fn test_dissolve_progress_0_solid() {
+        let text = StyledText::new("HELLO")
+            .effect(TextEffect::ParticleDissolve {
+                progress: 0.0,
+                mode: DissolveMode::Dissolve,
+                speed: 1.0,
+                gravity: 0.5,
+                seed: 42,
+            })
+            .time(0.0);
+
+        for (idx, ch) in "HELLO".chars().enumerate() {
+            let displayed = text.char_at(idx, ch);
+            assert_eq!(displayed, ch, "At progress 0, char {} should be '{}'", idx, ch);
+        }
+    }
+
+    #[test]
+    fn test_dissolve_progress_1_scattered() {
+        let text = StyledText::new("HELLO")
+            .effect(TextEffect::ParticleDissolve {
+                progress: 1.0,
+                mode: DissolveMode::Dissolve,
+                speed: 1.0,
+                gravity: 0.5,
+                seed: 42,
+            })
+            .time(0.0);
+
+        let particle_chars = ['·', '∙', '•', '*'];
+        for (idx, original) in "HELLO".chars().enumerate() {
+            let displayed = text.char_at(idx, original);
+            assert!(particle_chars.contains(&displayed), "At progress 1, should be particle");
+        }
+    }
+
+    #[test]
+    fn test_materialize_reverses() {
+        let text_start = StyledText::new("HI")
+            .effect(TextEffect::ParticleDissolve {
+                progress: 0.0,
+                mode: DissolveMode::Materialize,
+                speed: 1.0,
+                gravity: 0.5,
+                seed: 42,
+            })
+            .time(0.0);
+
+        let text_end = StyledText::new("HI")
+            .effect(TextEffect::ParticleDissolve {
+                progress: 1.0,
+                mode: DissolveMode::Materialize,
+                speed: 1.0,
+                gravity: 0.5,
+                seed: 42,
+            })
+            .time(0.0);
+
+        let particle_chars = ['·', '∙', '•', '*'];
+        // progress 0 should be particles
+        for (idx, original) in "HI".chars().enumerate() {
+            let displayed = text_start.char_at(idx, original);
+            assert!(particle_chars.contains(&displayed), "Materialize progress 0 = particles");
+        }
+        // progress 1 should be solid
+        for (idx, ch) in "HI".chars().enumerate() {
+            let displayed = text_end.char_at(idx, ch);
+            assert_eq!(displayed, ch, "Materialize progress 1 = solid");
+        }
+    }
+
+    #[test]
+    fn test_gravity_affects_y() {
+        let text_no_g = StyledText::new("A")
+            .effect(TextEffect::ParticleDissolve {
+                progress: 1.0,
+                mode: DissolveMode::Dissolve,
+                speed: 1.0,
+                gravity: 0.0,
+                seed: 42,
+            })
+            .time(0.0);
+
+        let text_hi_g = StyledText::new("A")
+            .effect(TextEffect::ParticleDissolve {
+                progress: 1.0,
+                mode: DissolveMode::Dissolve,
+                speed: 1.0,
+                gravity: 2.0,
+                seed: 42,
+            })
+            .time(0.0);
+
+        let offset_no_g = text_no_g.char_offset(0, 1);
+        let offset_hi_g = text_hi_g.char_offset(0, 1);
+        assert!(offset_hi_g.dy >= offset_no_g.dy, "Higher gravity = higher dy");
+    }
+
+    #[test]
+    fn test_seed_deterministic() {
+        let text1 = StyledText::new("AB")
+            .effect(TextEffect::ParticleDissolve {
+                progress: 0.5,
+                mode: DissolveMode::Dissolve,
+                speed: 1.0,
+                gravity: 0.5,
+                seed: 12345,
+            })
+            .time(0.0);
+
+        let text2 = StyledText::new("AB")
+            .effect(TextEffect::ParticleDissolve {
+                progress: 0.5,
+                mode: DissolveMode::Dissolve,
+                speed: 1.0,
+                gravity: 0.5,
+                seed: 12345,
+            })
+            .time(0.0);
+
+        for idx in 0..2 {
+            assert_eq!(text1.char_at(idx, 'X'), text2.char_at(idx, 'X'));
+            assert_eq!(text1.char_offset(idx, 2), text2.char_offset(idx, 2));
+        }
+    }
+
+    #[test]
+    fn test_dissolve_mode_is_outward() {
+        assert!(DissolveMode::Dissolve.is_outward());
+        assert!(DissolveMode::Explode.is_outward());
+        assert!(!DissolveMode::Materialize.is_outward());
+        assert!(!DissolveMode::Implode.is_outward());
+    }
+
+    #[test]
+    fn test_dissolve_mode_is_centered() {
+        assert!(!DissolveMode::Dissolve.is_centered());
+        assert!(DissolveMode::Explode.is_centered());
+        assert!(!DissolveMode::Materialize.is_centered());
+        assert!(DissolveMode::Implode.is_centered());
+    }
+
+    #[test]
+    fn test_particle_char_by_distance() {
+        assert_eq!(DissolveMode::particle_char(0.0), '·');
+        assert_eq!(DissolveMode::particle_char(1.0), '*');
+    }
+
+    #[test]
+    fn test_has_position_effects_with_dissolve() {
+        let text = StyledText::new("T").effect(TextEffect::ParticleDissolve {
+            progress: 0.5,
+            mode: DissolveMode::Dissolve,
+            speed: 1.0,
+            gravity: 0.0,
+            seed: 42,
+        });
+        assert!(text.has_position_effects());
     }
 }
