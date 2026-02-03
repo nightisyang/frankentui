@@ -21,6 +21,478 @@ use ftui_widgets::paragraph::Paragraph;
 
 use super::{HelpEntry, Screen};
 use crate::theme::{self, ThemeId};
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::Instant;
+
+// =============================================================================
+// Diagnostics + Telemetry (bd-vu0o.5)
+// =============================================================================
+
+/// Global diagnostic enable flag (checked once at startup).
+static THEME_STUDIO_DIAGNOSTICS_ENABLED: AtomicBool = AtomicBool::new(false);
+/// Global monotonic event counter for deterministic ordering.
+static THEME_STUDIO_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Initialize diagnostic settings from environment.
+pub fn init_diagnostics() {
+    let enabled = std::env::var("FTUI_THEME_STUDIO_DIAGNOSTICS")
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    THEME_STUDIO_DIAGNOSTICS_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Check if diagnostics are enabled.
+#[inline]
+pub fn diagnostics_enabled() -> bool {
+    THEME_STUDIO_DIAGNOSTICS_ENABLED.load(Ordering::Relaxed)
+}
+
+/// Set diagnostics enabled state (for testing).
+pub fn set_diagnostics_enabled(enabled: bool) {
+    THEME_STUDIO_DIAGNOSTICS_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+/// Get next monotonic event sequence number.
+#[inline]
+fn next_event_seq() -> u64 {
+    THEME_STUDIO_EVENT_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Reset event counter (for testing determinism).
+pub fn reset_event_counter() {
+    THEME_STUDIO_EVENT_COUNTER.store(0, Ordering::Relaxed);
+}
+
+/// Check if deterministic mode is enabled.
+pub fn is_deterministic_mode() -> bool {
+    std::env::var("FTUI_THEME_STUDIO_DETERMINISTIC")
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Diagnostic event types for JSONL logging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticEventKind {
+    /// Focus panel changed.
+    FocusChanged,
+    /// Preset selection changed.
+    PresetChanged,
+    /// Token selection changed.
+    TokenChanged,
+    /// Theme applied from preset list.
+    ThemeApplied,
+    /// Theme cycled globally.
+    ThemeCycled,
+    /// Theme export performed.
+    ThemeExported,
+    /// Tick processed.
+    Tick,
+}
+
+impl DiagnosticEventKind {
+    /// Get the JSONL event type string.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FocusChanged => "focus_changed",
+            Self::PresetChanged => "preset_changed",
+            Self::TokenChanged => "token_changed",
+            Self::ThemeApplied => "theme_applied",
+            Self::ThemeCycled => "theme_cycled",
+            Self::ThemeExported => "theme_exported",
+            Self::Tick => "tick",
+        }
+    }
+}
+
+/// JSONL diagnostic log entry.
+#[derive(Debug, Clone)]
+pub struct DiagnosticEntry {
+    /// Monotonic sequence number.
+    pub seq: u64,
+    /// Timestamp in microseconds.
+    pub timestamp_us: u64,
+    /// Event kind.
+    pub kind: DiagnosticEventKind,
+    /// Current focus panel.
+    pub focus: Option<String>,
+    /// Selected preset name.
+    pub preset: Option<String>,
+    /// Selected preset index.
+    pub preset_index: Option<usize>,
+    /// Selected token name.
+    pub token: Option<String>,
+    /// Selected token index.
+    pub token_index: Option<usize>,
+    /// Exported payload size.
+    pub export_bytes: Option<usize>,
+    /// Current tick count.
+    pub tick: u64,
+    /// Additional context.
+    pub context: Option<String>,
+    /// Checksum for determinism verification.
+    pub checksum: u64,
+}
+
+impl DiagnosticEntry {
+    /// Create a new diagnostic entry with current timestamp.
+    pub fn new(kind: DiagnosticEventKind, tick: u64) -> Self {
+        let timestamp_us = if is_deterministic_mode() {
+            tick * 1000
+        } else {
+            static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+            let start = START.get_or_init(Instant::now);
+            start.elapsed().as_micros() as u64
+        };
+
+        Self {
+            seq: next_event_seq(),
+            timestamp_us,
+            kind,
+            focus: None,
+            preset: None,
+            preset_index: None,
+            token: None,
+            token_index: None,
+            export_bytes: None,
+            tick,
+            context: None,
+            checksum: 0,
+        }
+    }
+
+    /// Set focus panel name.
+    #[must_use]
+    pub fn with_focus(mut self, focus: impl Into<String>) -> Self {
+        self.focus = Some(focus.into());
+        self
+    }
+
+    /// Set preset name.
+    #[must_use]
+    pub fn with_preset(mut self, preset: impl Into<String>) -> Self {
+        self.preset = Some(preset.into());
+        self
+    }
+
+    /// Set preset index.
+    #[must_use]
+    pub fn with_preset_index(mut self, preset_index: usize) -> Self {
+        self.preset_index = Some(preset_index);
+        self
+    }
+
+    /// Set token name.
+    #[must_use]
+    pub fn with_token(mut self, token: impl Into<String>) -> Self {
+        self.token = Some(token.into());
+        self
+    }
+
+    /// Set token index.
+    #[must_use]
+    pub fn with_token_index(mut self, token_index: usize) -> Self {
+        self.token_index = Some(token_index);
+        self
+    }
+
+    /// Set export payload size.
+    #[must_use]
+    pub fn with_export_bytes(mut self, export_bytes: usize) -> Self {
+        self.export_bytes = Some(export_bytes);
+        self
+    }
+
+    /// Set context string.
+    #[must_use]
+    pub fn with_context(mut self, context: impl Into<String>) -> Self {
+        self.context = Some(context.into());
+        self
+    }
+
+    /// Compute and set checksum.
+    #[must_use]
+    pub fn with_checksum(mut self) -> Self {
+        self.checksum = self.compute_checksum();
+        self
+    }
+
+    /// Compute FNV-1a hash of entry fields.
+    fn compute_checksum(&self) -> u64 {
+        let mut hash: u64 = 0xcbf29ce484222325;
+        let payload = format!(
+            "{:?}{}{}{}{}{}{}{}",
+            self.kind,
+            self.focus.as_deref().unwrap_or(""),
+            self.preset.as_deref().unwrap_or(""),
+            self.preset_index.unwrap_or(0),
+            self.token.as_deref().unwrap_or(""),
+            self.token_index.unwrap_or(0),
+            self.export_bytes.unwrap_or(0),
+            self.tick
+        );
+        for &b in payload.as_bytes() {
+            hash ^= b as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash
+    }
+
+    /// Format as JSONL string.
+    pub fn to_jsonl(&self) -> String {
+        let mut parts = vec![
+            format!("\"seq\":{}", self.seq),
+            format!("\"ts_us\":{}", self.timestamp_us),
+            format!("\"kind\":\"{}\"", self.kind.as_str()),
+            format!("\"tick\":{}", self.tick),
+        ];
+
+        if let Some(ref focus) = self.focus {
+            let escaped = focus.replace('\\', "\\\\").replace('"', "\\\"");
+            parts.push(format!("\"focus\":\"{escaped}\""));
+        }
+        if let Some(ref preset) = self.preset {
+            let escaped = preset.replace('\\', "\\\\").replace('"', "\\\"");
+            parts.push(format!("\"preset\":\"{escaped}\""));
+        }
+        if let Some(index) = self.preset_index {
+            parts.push(format!("\"preset_index\":{index}"));
+        }
+        if let Some(ref token) = self.token {
+            let escaped = token.replace('\\', "\\\\").replace('"', "\\\"");
+            parts.push(format!("\"token\":\"{escaped}\""));
+        }
+        if let Some(index) = self.token_index {
+            parts.push(format!("\"token_index\":{index}"));
+        }
+        if let Some(bytes) = self.export_bytes {
+            parts.push(format!("\"export_bytes\":{bytes}"));
+        }
+        if let Some(ref ctx) = self.context {
+            let escaped = ctx.replace('\\', "\\\\").replace('"', "\\\"");
+            parts.push(format!("\"context\":\"{escaped}\""));
+        }
+        parts.push(format!("\"checksum\":\"{:016x}\"", self.checksum));
+
+        format!("{{{}}}", parts.join(","))
+    }
+}
+
+/// Diagnostic log collector.
+#[derive(Debug, Default)]
+pub struct DiagnosticLog {
+    entries: Vec<DiagnosticEntry>,
+    max_entries: usize,
+    write_stderr: bool,
+}
+
+impl DiagnosticLog {
+    /// Create a new diagnostic log.
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            max_entries: 5000,
+            write_stderr: false,
+        }
+    }
+
+    /// Create a log that writes to stderr.
+    pub fn with_stderr(mut self) -> Self {
+        self.write_stderr = true;
+        self
+    }
+
+    /// Set maximum entries to keep.
+    pub fn with_max_entries(mut self, max: usize) -> Self {
+        self.max_entries = max;
+        self
+    }
+
+    /// Record a diagnostic entry.
+    pub fn record(&mut self, entry: DiagnosticEntry) {
+        if self.write_stderr {
+            let _ = writeln!(std::io::stderr(), "{}", entry.to_jsonl());
+        }
+        if self.max_entries > 0 && self.entries.len() >= self.max_entries {
+            self.entries.remove(0);
+        }
+        self.entries.push(entry);
+    }
+
+    /// Get all entries.
+    pub fn entries(&self) -> &[DiagnosticEntry] {
+        &self.entries
+    }
+
+    /// Get entries of a specific kind.
+    pub fn entries_of_kind(&self, kind: DiagnosticEventKind) -> Vec<&DiagnosticEntry> {
+        self.entries.iter().filter(|e| e.kind == kind).collect()
+    }
+
+    /// Clear all entries.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Export all entries as JSONL string.
+    pub fn to_jsonl(&self) -> String {
+        self.entries
+            .iter()
+            .map(DiagnosticEntry::to_jsonl)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Get summary statistics.
+    pub fn summary(&self) -> DiagnosticSummary {
+        let mut summary = DiagnosticSummary::default();
+        for entry in &self.entries {
+            match entry.kind {
+                DiagnosticEventKind::FocusChanged => summary.focus_changed_count += 1,
+                DiagnosticEventKind::PresetChanged => summary.preset_changed_count += 1,
+                DiagnosticEventKind::TokenChanged => summary.token_changed_count += 1,
+                DiagnosticEventKind::ThemeApplied => summary.theme_applied_count += 1,
+                DiagnosticEventKind::ThemeCycled => summary.theme_cycled_count += 1,
+                DiagnosticEventKind::ThemeExported => summary.theme_exported_count += 1,
+                DiagnosticEventKind::Tick => summary.tick_count += 1,
+            }
+        }
+        summary
+    }
+}
+
+/// Diagnostic summary counts.
+#[derive(Debug, Default)]
+pub struct DiagnosticSummary {
+    pub focus_changed_count: usize,
+    pub preset_changed_count: usize,
+    pub token_changed_count: usize,
+    pub theme_applied_count: usize,
+    pub theme_cycled_count: usize,
+    pub theme_exported_count: usize,
+    pub tick_count: usize,
+}
+
+/// Callback type for telemetry hooks.
+pub type TelemetryCallback = Box<dyn Fn(&DiagnosticEntry) + Send + Sync>;
+
+/// Telemetry hooks for observing theme studio events.
+pub struct TelemetryHooks {
+    on_focus_change: Option<TelemetryCallback>,
+    on_preset_change: Option<TelemetryCallback>,
+    on_token_change: Option<TelemetryCallback>,
+    on_theme_applied: Option<TelemetryCallback>,
+    on_theme_cycled: Option<TelemetryCallback>,
+    on_theme_exported: Option<TelemetryCallback>,
+    on_any_event: Option<TelemetryCallback>,
+}
+
+impl TelemetryHooks {
+    pub fn new() -> Self {
+        Self {
+            on_focus_change: None,
+            on_preset_change: None,
+            on_token_change: None,
+            on_theme_applied: None,
+            on_theme_cycled: None,
+            on_theme_exported: None,
+            on_any_event: None,
+        }
+    }
+
+    pub fn on_focus_change(
+        mut self,
+        callback: impl Fn(&DiagnosticEntry) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_focus_change = Some(Box::new(callback));
+        self
+    }
+
+    pub fn on_preset_change(
+        mut self,
+        callback: impl Fn(&DiagnosticEntry) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_preset_change = Some(Box::new(callback));
+        self
+    }
+
+    pub fn on_token_change(
+        mut self,
+        callback: impl Fn(&DiagnosticEntry) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_token_change = Some(Box::new(callback));
+        self
+    }
+
+    pub fn on_theme_applied(
+        mut self,
+        callback: impl Fn(&DiagnosticEntry) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_theme_applied = Some(Box::new(callback));
+        self
+    }
+
+    pub fn on_theme_cycled(
+        mut self,
+        callback: impl Fn(&DiagnosticEntry) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_theme_cycled = Some(Box::new(callback));
+        self
+    }
+
+    pub fn on_theme_exported(
+        mut self,
+        callback: impl Fn(&DiagnosticEntry) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_theme_exported = Some(Box::new(callback));
+        self
+    }
+
+    pub fn on_any(mut self, callback: impl Fn(&DiagnosticEntry) + Send + Sync + 'static) -> Self {
+        self.on_any_event = Some(Box::new(callback));
+        self
+    }
+
+    fn dispatch(&self, entry: &DiagnosticEntry) {
+        match entry.kind {
+            DiagnosticEventKind::FocusChanged => {
+                if let Some(ref cb) = self.on_focus_change {
+                    cb(entry);
+                }
+            }
+            DiagnosticEventKind::PresetChanged => {
+                if let Some(ref cb) = self.on_preset_change {
+                    cb(entry);
+                }
+            }
+            DiagnosticEventKind::TokenChanged => {
+                if let Some(ref cb) = self.on_token_change {
+                    cb(entry);
+                }
+            }
+            DiagnosticEventKind::ThemeApplied => {
+                if let Some(ref cb) = self.on_theme_applied {
+                    cb(entry);
+                }
+            }
+            DiagnosticEventKind::ThemeCycled => {
+                if let Some(ref cb) = self.on_theme_cycled {
+                    cb(entry);
+                }
+            }
+            DiagnosticEventKind::ThemeExported => {
+                if let Some(ref cb) = self.on_theme_exported {
+                    cb(entry);
+                }
+            }
+            DiagnosticEventKind::Tick => {}
+        }
+
+        if let Some(ref cb) = self.on_any_event {
+            cb(entry);
+        }
+    }
+}
 
 /// Focus panel in the Theme Studio.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -37,6 +509,13 @@ impl Focus {
         match self {
             Self::Presets => Self::TokenInspector,
             Self::TokenInspector => Self::Presets,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Presets => "presets",
+            Self::TokenInspector => "token_inspector",
         }
     }
 }
@@ -77,6 +556,10 @@ pub struct ThemeStudioDemo {
     pub tick_count: u64,
     /// Export status message.
     pub export_status: Option<String>,
+    /// Diagnostic log for telemetry (bd-vu0o.5).
+    diagnostic_log: Option<DiagnosticLog>,
+    /// Telemetry hooks for external observers (bd-vu0o.5).
+    telemetry_hooks: Option<TelemetryHooks>,
 }
 
 impl Default for ThemeStudioDemo {
@@ -89,6 +572,11 @@ impl ThemeStudioDemo {
     /// Create a new theme studio demo.
     pub fn new() -> Self {
         let tokens = Self::build_token_list();
+        let diagnostic_log = if diagnostics_enabled() {
+            Some(DiagnosticLog::new().with_stderr())
+        } else {
+            None
+        };
         Self {
             focus: Focus::default(),
             preset_index: theme::current_theme().index(),
@@ -96,7 +584,51 @@ impl ThemeStudioDemo {
             tokens,
             tick_count: 0,
             export_status: None,
+            diagnostic_log,
+            telemetry_hooks: None,
         }
+    }
+
+    /// Create with diagnostic log enabled (for testing).
+    pub fn with_diagnostics(mut self) -> Self {
+        self.diagnostic_log = Some(DiagnosticLog::new());
+        self
+    }
+
+    /// Create with telemetry hooks.
+    pub fn with_telemetry_hooks(mut self, hooks: TelemetryHooks) -> Self {
+        self.telemetry_hooks = Some(hooks);
+        self
+    }
+
+    /// Get the diagnostic log (for testing).
+    pub fn diagnostic_log(&self) -> Option<&DiagnosticLog> {
+        self.diagnostic_log.as_ref()
+    }
+
+    /// Get mutable diagnostic log (for testing).
+    pub fn diagnostic_log_mut(&mut self) -> Option<&mut DiagnosticLog> {
+        self.diagnostic_log.as_mut()
+    }
+
+    fn record_diagnostic(&mut self, entry: DiagnosticEntry) {
+        let entry = entry.with_checksum();
+
+        if let Some(ref hooks) = self.telemetry_hooks {
+            hooks.dispatch(&entry);
+        }
+
+        if let Some(ref mut log) = self.diagnostic_log {
+            log.record(entry);
+        }
+    }
+
+    fn current_preset_name(&self) -> &'static str {
+        ThemeId::from_index(self.preset_index).name()
+    }
+
+    fn current_token_name(&self) -> Option<&'static str> {
+        self.tokens.get(self.token_index).map(|token| token.name)
     }
 
     /// Build the list of inspectable color tokens.
@@ -477,6 +1009,9 @@ impl Screen for ThemeStudioDemo {
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
         // Clear export status on any key
         self.export_status = None;
+        let prev_focus = self.focus;
+        let prev_preset = self.preset_index;
+        let prev_token = self.token_index;
 
         if let Event::Key(KeyEvent {
             code,
@@ -550,30 +1085,108 @@ impl Screen for ThemeStudioDemo {
                 KeyCode::Enter => {
                     if self.focus == Focus::Presets {
                         self.apply_preset();
-                        self.export_status =
-                            Some(format!("Applied theme: {}", theme::current_theme().name()));
+                        let theme_name = theme::current_theme().name();
+                        self.export_status = Some(format!("Applied theme: {theme_name}"));
+                        self.record_diagnostic(
+                            DiagnosticEntry::new(DiagnosticEventKind::ThemeApplied, self.tick_count)
+                                .with_focus(self.focus.as_str())
+                                .with_preset(theme_name)
+                                .with_preset_index(self.preset_index),
+                        );
                     }
                 }
                 // Cycle theme globally (Ctrl+T)
                 KeyCode::Char('t') if modifiers.contains(Modifiers::CTRL) => {
                     theme::cycle_theme();
                     self.preset_index = theme::current_theme().index();
-                    self.export_status =
-                        Some(format!("Switched to: {}", theme::current_theme().name()));
+                    let theme_name = theme::current_theme().name();
+                    self.export_status = Some(format!("Switched to: {theme_name}"));
+                    self.record_diagnostic(
+                        DiagnosticEntry::new(DiagnosticEventKind::ThemeCycled, self.tick_count)
+                            .with_focus(self.focus.as_str())
+                            .with_preset(theme_name)
+                            .with_preset_index(self.preset_index),
+                    );
                 }
-                // Export
-                KeyCode::Char('e') | KeyCode::Char('E') => {
+                // Export JSON (e)
+                KeyCode::Char('e') => {
                     let json = self.export_json();
-                    // In a real app, we'd write to clipboard or file
-                    // For demo, just show status
+                    let theme_name = theme::current_theme().name();
                     self.export_status = Some(format!(
-                        "Exported {} ({} bytes)",
-                        theme::current_theme().name(),
+                        "Exported JSON: {} ({} bytes)",
+                        theme_name,
                         json.len()
                     ));
+                    self.record_diagnostic(
+                        DiagnosticEntry::new(
+                            DiagnosticEventKind::ThemeExported,
+                            self.tick_count,
+                        )
+                        .with_focus(self.focus.as_str())
+                        .with_preset(theme_name)
+                        .with_preset_index(self.preset_index)
+                        .with_export_bytes(json.len())
+                        .with_context("json"),
+                    );
+                }
+                // Export Ghostty (Shift+E)
+                KeyCode::Char('E') => {
+                    let ghostty = self.export_ghostty();
+                    let theme_name = theme::current_theme().name();
+                    self.export_status = Some(format!(
+                        "Exported Ghostty: {} ({} bytes)",
+                        theme_name,
+                        ghostty.len()
+                    ));
+                    self.record_diagnostic(
+                        DiagnosticEntry::new(
+                            DiagnosticEventKind::ThemeExported,
+                            self.tick_count,
+                        )
+                        .with_focus(self.focus.as_str())
+                        .with_preset(theme_name)
+                        .with_preset_index(self.preset_index)
+                        .with_export_bytes(ghostty.len())
+                        .with_context("ghostty"),
+                    );
                 }
                 _ => {}
             }
+        }
+
+        if self.focus != prev_focus {
+            let mut entry =
+                DiagnosticEntry::new(DiagnosticEventKind::FocusChanged, self.tick_count)
+                    .with_focus(self.focus.as_str())
+                    .with_preset(self.current_preset_name())
+                    .with_preset_index(self.preset_index)
+                    .with_token_index(self.token_index);
+            if let Some(name) = self.current_token_name() {
+                entry = entry.with_token(name);
+            }
+            self.record_diagnostic(entry);
+        }
+
+        if self.preset_index != prev_preset {
+            self.record_diagnostic(
+                DiagnosticEntry::new(DiagnosticEventKind::PresetChanged, self.tick_count)
+                    .with_focus(self.focus.as_str())
+                    .with_preset(self.current_preset_name())
+                    .with_preset_index(self.preset_index),
+            );
+        }
+
+        if self.token_index != prev_token {
+            let mut entry =
+                DiagnosticEntry::new(DiagnosticEventKind::TokenChanged, self.tick_count)
+                    .with_focus(self.focus.as_str())
+                    .with_preset(self.current_preset_name())
+                    .with_preset_index(self.preset_index)
+                    .with_token_index(self.token_index);
+            if let Some(name) = self.current_token_name() {
+                entry = entry.with_token(name);
+            }
+            self.record_diagnostic(entry);
         }
 
         Cmd::none()
@@ -617,8 +1230,16 @@ impl Screen for ThemeStudioDemo {
                 action: "Switch panel",
             },
             HelpEntry {
-                key: "j/k",
+                key: "j/k/↑/↓",
                 action: "Navigate",
+            },
+            HelpEntry {
+                key: "g/G",
+                action: "First/Last",
+            },
+            HelpEntry {
+                key: "PgUp/Dn",
+                action: "Page scroll",
             },
             HelpEntry {
                 key: "Enter",
@@ -629,14 +1250,26 @@ impl Screen for ThemeStudioDemo {
                 action: "Cycle theme",
             },
             HelpEntry {
+                key: "e",
+                action: "Export JSON",
+            },
+            HelpEntry {
                 key: "E",
-                action: "Export theme",
+                action: "Export Ghostty",
             },
         ]
     }
 
     fn tick(&mut self, tick_count: u64) {
         self.tick_count = tick_count;
+        if self.diagnostic_log.is_some() || self.telemetry_hooks.is_some() {
+            self.record_diagnostic(
+                DiagnosticEntry::new(DiagnosticEventKind::Tick, tick_count)
+                    .with_focus(self.focus.as_str())
+                    .with_preset(self.current_preset_name())
+                    .with_preset_index(self.preset_index),
+            );
+        }
     }
 
     fn title(&self) -> &'static str {
@@ -886,6 +1519,85 @@ mod tests {
         assert_eq!(demo.preset_index, 1);
     }
 
+    #[test]
+    fn home_jumps_to_first() {
+        let mut demo = ThemeStudioDemo::new();
+        demo.preset_index = 5;
+        demo.update(&press(KeyCode::Home));
+        assert_eq!(demo.preset_index, 0);
+    }
+
+    #[test]
+    fn end_jumps_to_last() {
+        let mut demo = ThemeStudioDemo::new();
+        demo.preset_index = 0;
+        demo.update(&press(KeyCode::End));
+        assert_eq!(demo.preset_index, ThemeId::ALL.len() - 1);
+    }
+
+    #[test]
+    fn vim_g_jumps_to_first() {
+        let mut demo = ThemeStudioDemo::new();
+        demo.preset_index = 3;
+        demo.update(&press(KeyCode::Char('g')));
+        assert_eq!(demo.preset_index, 0);
+    }
+
+    #[test]
+    fn vim_shift_g_jumps_to_last() {
+        let mut demo = ThemeStudioDemo::new();
+        demo.preset_index = 0;
+        demo.update(&press(KeyCode::Char('G')));
+        assert_eq!(demo.preset_index, ThemeId::ALL.len() - 1);
+    }
+
+    #[test]
+    fn page_up_moves_by_10() {
+        let mut demo = ThemeStudioDemo::new();
+        // Switch to token inspector which has more items
+        demo.update(&press(KeyCode::Tab));
+        demo.token_index = 15;
+        demo.update(&press(KeyCode::PageUp));
+        assert_eq!(demo.token_index, 5);
+    }
+
+    #[test]
+    fn page_up_saturates_at_zero() {
+        let mut demo = ThemeStudioDemo::new();
+        demo.preset_index = 3;
+        demo.update(&press(KeyCode::PageUp));
+        assert_eq!(demo.preset_index, 0);
+    }
+
+    #[test]
+    fn page_down_moves_by_10() {
+        let mut demo = ThemeStudioDemo::new();
+        // Switch to token inspector which has more items
+        demo.update(&press(KeyCode::Tab));
+        demo.token_index = 0;
+        demo.update(&press(KeyCode::PageDown));
+        assert_eq!(demo.token_index, 10.min(demo.tokens.len() - 1));
+    }
+
+    #[test]
+    fn page_down_saturates_at_max() {
+        let mut demo = ThemeStudioDemo::new();
+        demo.preset_index = ThemeId::ALL.len() - 2;
+        demo.update(&press(KeyCode::PageDown));
+        assert_eq!(demo.preset_index, ThemeId::ALL.len() - 1);
+    }
+
+    #[test]
+    fn home_end_work_in_token_inspector() {
+        let mut demo = ThemeStudioDemo::new();
+        demo.update(&press(KeyCode::Tab)); // Switch to TokenInspector
+        demo.token_index = 5;
+        demo.update(&press(KeyCode::Home));
+        assert_eq!(demo.token_index, 0);
+        demo.update(&press(KeyCode::End));
+        assert_eq!(demo.token_index, demo.tokens.len() - 1);
+    }
+
     // -----------------------------------------------------------------------
     // Theme Application Tests
     // -----------------------------------------------------------------------
@@ -912,18 +1624,34 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn e_key_triggers_export() {
+    fn e_key_exports_json() {
         let mut demo = ThemeStudioDemo::new();
         demo.update(&press(KeyCode::Char('e')));
         assert!(demo.export_status.is_some());
-        assert!(demo.export_status.as_ref().unwrap().contains("Exported"));
+        assert!(
+            demo.export_status.as_ref().unwrap().contains("JSON"),
+            "Should export JSON format"
+        );
     }
 
     #[test]
-    fn shift_e_key_triggers_export() {
+    fn shift_e_key_exports_ghostty() {
         let mut demo = ThemeStudioDemo::new();
         demo.update(&press(KeyCode::Char('E')));
         assert!(demo.export_status.is_some());
+        assert!(
+            demo.export_status.as_ref().unwrap().contains("Ghostty"),
+            "Should export Ghostty format"
+        );
+    }
+
+    #[test]
+    fn export_ghostty_produces_valid_output() {
+        let demo = ThemeStudioDemo::new();
+        let ghostty = demo.export_ghostty();
+        assert!(ghostty.contains("background ="));
+        assert!(ghostty.contains("foreground ="));
+        assert!(ghostty.contains("palette ="));
     }
 
     #[test]

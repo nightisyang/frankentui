@@ -15,8 +15,8 @@
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
 use ftui_core::geometry::Rect;
-use ftui_demo_showcase::screens::theme_studio::ThemeStudioDemo;
 use ftui_demo_showcase::screens::Screen;
+use ftui_demo_showcase::screens::theme_studio::ThemeStudioDemo;
 use ftui_demo_showcase::theme::{self, ThemeId};
 use ftui_render::cell::PackedRgba;
 use ftui_render::frame::Frame;
