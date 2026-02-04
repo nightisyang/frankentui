@@ -1,8 +1,10 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ftui_harness::determinism::{JsonValue, TestJsonlLogger};
 use ftui_harness::trace_replay::replay_trace;
 
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
@@ -115,11 +117,22 @@ fn unique_temp_dir() -> PathBuf {
     std::env::temp_dir().join(format!("ftui_trace_replay_{nanos}"))
 }
 
+fn logger() -> &'static TestJsonlLogger {
+    static LOGGER: OnceLock<TestJsonlLogger> = OnceLock::new();
+    LOGGER.get_or_init(|| {
+        let mut logger = TestJsonlLogger::new("trace_replay", 1337);
+        logger.add_context_str("suite", "trace_replay");
+        logger
+    })
+}
+
 #[test]
 fn replay_trace_success_and_mismatch() {
     let base_dir = unique_temp_dir();
     let frames_dir = base_dir.join("frames");
     fs::create_dir_all(&frames_dir).expect("create temp dirs");
+
+    logger().log_env();
 
     let width = 2u16;
     let height = 2u16;
@@ -155,6 +168,25 @@ fn replay_trace_success_and_mismatch() {
     assert_eq!(
         checksum1, EXPECTED_CHECKSUM_AB_2X2,
         "checksum stability regression for frame 1"
+    );
+
+    logger().log(
+        "trace_replay_frame",
+        &[
+            ("frame_idx", JsonValue::u64(0)),
+            ("cols", JsonValue::u64(width as u64)),
+            ("rows", JsonValue::u64(height as u64)),
+            ("checksum", JsonValue::str(format!("{checksum0:016x}"))),
+        ],
+    );
+    logger().log(
+        "trace_replay_frame",
+        &[
+            ("frame_idx", JsonValue::u64(1)),
+            ("cols", JsonValue::u64(width as u64)),
+            ("rows", JsonValue::u64(height as u64)),
+            ("checksum", JsonValue::str(format!("{checksum1:016x}"))),
+        ],
     );
 
     let run0 = Run {

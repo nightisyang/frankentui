@@ -24,7 +24,6 @@
 //! Flamegraph: cargo flamegraph --bench resize_storm_bench -- --bench
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use ftui_harness::resize_storm::{ResizeStorm, StormConfig, StormPattern};
 use ftui_render::buffer::AdaptiveDoubleBuffer;
 use std::hint::black_box;
 
@@ -105,6 +104,271 @@ fn log_perf_summary(bench: &str, p50_ns: u64, p95_ns: u64, p99_ns: u64, mean_ns:
             bench, p50_ns, p95_ns, p99_ns, mean_ns
         );
     }
+}
+
+// =============================================================================
+// Local Resize Storm Generator (no ftui-harness dependency)
+// =============================================================================
+
+#[derive(Debug, Clone, Copy)]
+struct ResizeEvent {
+    width: u16,
+    height: u16,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SizeBounds {
+    min_w: u16,
+    max_w: u16,
+    min_h: u16,
+    max_h: u16,
+}
+
+impl SizeBounds {
+    fn clamp(self, width: u16, height: u16) -> ResizeEvent {
+        ResizeEvent {
+            width: width.clamp(self.min_w, self.max_w),
+            height: height.clamp(self.min_h, self.max_h),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StormConfig {
+    seed: u64,
+    pattern: StormPattern,
+    initial: (u16, u16),
+    bounds: SizeBounds,
+}
+
+impl Default for StormConfig {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            pattern: StormPattern::Burst { count: 10 },
+            initial: (80, 24),
+            bounds: SizeBounds {
+                min_w: 20,
+                max_w: 240,
+                min_h: 8,
+                max_h: 80,
+            },
+        }
+    }
+}
+
+impl StormConfig {
+    fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    fn with_pattern(mut self, pattern: StormPattern) -> Self {
+        self.pattern = pattern;
+        self
+    }
+
+    fn with_initial_size(mut self, width: u16, height: u16) -> Self {
+        self.initial = (width, height);
+        self
+    }
+
+    fn with_size_bounds(mut self, min_w: u16, max_w: u16, min_h: u16, max_h: u16) -> Self {
+        self.bounds = SizeBounds {
+            min_w,
+            max_w,
+            min_h,
+            max_h,
+        };
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+enum StormPattern {
+    Burst {
+        count: usize,
+    },
+    Oscillate {
+        size_a: (u16, u16),
+        size_b: (u16, u16),
+        cycles: usize,
+    },
+    Sweep {
+        start_width: u16,
+        start_height: u16,
+        end_width: u16,
+        end_height: u16,
+        steps: usize,
+    },
+    Pathological {
+        count: usize,
+    },
+    Mixed {
+        count: usize,
+    },
+}
+
+struct ResizeStorm {
+    config: StormConfig,
+}
+
+impl ResizeStorm {
+    fn new(config: StormConfig) -> Self {
+        Self { config }
+    }
+
+    fn events(&self) -> Vec<ResizeEvent> {
+        match self.config.pattern {
+            StormPattern::Burst { count } => self.burst_events(count),
+            StormPattern::Oscillate {
+                size_a,
+                size_b,
+                cycles,
+            } => self.oscillate_events(size_a, size_b, cycles),
+            StormPattern::Sweep {
+                start_width,
+                start_height,
+                end_width,
+                end_height,
+                steps,
+            } => self.sweep_events(start_width, start_height, end_width, end_height, steps),
+            StormPattern::Pathological { count } => self.pathological_events(count),
+            StormPattern::Mixed { count } => self.mixed_events(count),
+        }
+    }
+
+    fn sequence_checksum(&self) -> u64 {
+        let mut hash = 0xcbf29ce484222325u64;
+        for event in self.events() {
+            let packed = ((event.width as u64) << 32) | event.height as u64;
+            hash ^= packed;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash
+    }
+
+    fn burst_events(&self, count: usize) -> Vec<ResizeEvent> {
+        let mut lcg = Lcg::new(self.config.seed);
+        (0..count)
+            .map(|_| {
+                let width = lcg.next_range(self.config.bounds.min_w, self.config.bounds.max_w);
+                let height = lcg.next_range(self.config.bounds.min_h, self.config.bounds.max_h);
+                self.config.bounds.clamp(width, height)
+            })
+            .collect()
+    }
+
+    fn oscillate_events(
+        &self,
+        size_a: (u16, u16),
+        size_b: (u16, u16),
+        cycles: usize,
+    ) -> Vec<ResizeEvent> {
+        let mut events = Vec::with_capacity(cycles * 2);
+        for _ in 0..cycles {
+            events.push(self.config.bounds.clamp(size_a.0, size_a.1));
+            events.push(self.config.bounds.clamp(size_b.0, size_b.1));
+        }
+        events
+    }
+
+    fn sweep_events(
+        &self,
+        start_width: u16,
+        start_height: u16,
+        end_width: u16,
+        end_height: u16,
+        steps: usize,
+    ) -> Vec<ResizeEvent> {
+        if steps == 0 {
+            return Vec::new();
+        }
+        let denom = (steps.saturating_sub(1)).max(1) as f32;
+        (0..steps)
+            .map(|i| {
+                let t = i as f32 / denom;
+                let width = lerp_u16(start_width, end_width, t);
+                let height = lerp_u16(start_height, end_height, t);
+                self.config.bounds.clamp(width, height)
+            })
+            .collect()
+    }
+
+    fn pathological_events(&self, count: usize) -> Vec<ResizeEvent> {
+        let min = self
+            .config
+            .bounds
+            .clamp(self.config.bounds.min_w, self.config.bounds.min_h);
+        let max = self
+            .config
+            .bounds
+            .clamp(self.config.bounds.max_w, self.config.bounds.max_h);
+        let base = self
+            .config
+            .bounds
+            .clamp(self.config.initial.0, self.config.initial.1);
+        let pattern = [min, max, base];
+        (0..count).map(|i| pattern[i % pattern.len()]).collect()
+    }
+
+    fn mixed_events(&self, count: usize) -> Vec<ResizeEvent> {
+        let mut lcg = Lcg::new(self.config.seed);
+        let min = self
+            .config
+            .bounds
+            .clamp(self.config.bounds.min_w, self.config.bounds.min_h);
+        let max = self
+            .config
+            .bounds
+            .clamp(self.config.bounds.max_w, self.config.bounds.max_h);
+        (0..count)
+            .map(|i| {
+                if i % 7 == 0 {
+                    max
+                } else if i % 5 == 0 {
+                    min
+                } else {
+                    let width = lcg.next_range(self.config.bounds.min_w, self.config.bounds.max_w);
+                    let height = lcg.next_range(self.config.bounds.min_h, self.config.bounds.max_h);
+                    self.config.bounds.clamp(width, height)
+                }
+            })
+            .collect()
+    }
+}
+
+struct Lcg {
+    state: u64,
+}
+
+impl Lcg {
+    fn new(seed: u64) -> Self {
+        let seed = if seed == 0 { 0x9e3779b97f4a7c15 } else { seed };
+        Self { state: seed }
+    }
+
+    fn next_u32(&mut self) -> u32 {
+        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        (self.state >> 32) as u32
+    }
+
+    fn next_range(&mut self, min: u16, max: u16) -> u16 {
+        if min >= max {
+            return min;
+        }
+        let span = (max - min) as u32;
+        let value = self.next_u32() % (span + 1);
+        min + value as u16
+    }
+}
+
+fn lerp_u16(start: u16, end: u16, t: f32) -> u16 {
+    let start = start as f32;
+    let end = end as f32;
+    (start + (end - start) * t)
+        .round()
+        .clamp(0.0, u16::MAX as f32) as u16
 }
 
 // =============================================================================

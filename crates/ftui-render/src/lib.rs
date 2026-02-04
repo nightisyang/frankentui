@@ -201,3 +201,54 @@ mod text_width {
 }
 
 pub(crate) use text_width::{char_width, display_width, grapheme_width};
+
+#[cfg(test)]
+mod tests {
+    use super::{display_width, grapheme_width};
+
+    #[test]
+    fn display_width_matches_expected_samples() {
+        // Avoid CJK samples to keep results independent of locale/CJK width flags.
+        let samples = [
+            ("hello", 5usize),
+            ("😀", 2usize),
+            ("👩‍💻", 2usize),
+            ("🇺🇸", 2usize),
+            ("❤️", 2usize),
+            ("⌨️", 2usize),
+            ("⚠️", 2usize),
+            ("⭐", 2usize),
+            ("A😀B", 4usize),
+            ("ok ✅", 5usize),
+        ];
+        for (sample, expected) in samples {
+            assert_eq!(
+                display_width(sample),
+                expected,
+                "display width mismatch for {sample:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn grapheme_width_matches_expected_samples() {
+        let samples = [
+            ("a", 1usize),
+            ("😀", 2usize),
+            ("👩‍💻", 2usize),
+            ("🇺🇸", 2usize),
+            ("👍🏽", 2usize),
+            ("❤️", 2usize),
+            ("⌨️", 2usize),
+            ("⚠️", 2usize),
+            ("⭐", 2usize),
+        ];
+        for (grapheme, expected) in samples {
+            assert_eq!(
+                grapheme_width(grapheme),
+                expected,
+                "grapheme width mismatch for {grapheme:?}"
+            );
+        }
+    }
+}
