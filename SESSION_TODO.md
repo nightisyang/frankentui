@@ -11,13 +11,14 @@
 - [x] Attempt file reservations for `crates/ftui-runtime/src/terminal_writer.rs`, `crates/ftui-render/src/diff_strategy.rs`, `crates/ftui-runtime/src/program.rs`
 - [x] Notify overlapping holders (FoggyBridge, NavyWolf, BrownMarsh, CyanGrove) and wait for coordination
 - [ ] Receive confirmation or wait for conflicts to clear before editing reserved files
-- [ ] Code investigation: map diff strategy flow (TerminalWriter → DiffStrategySelector → BufferDiff) and evidence log schema
-- [ ] Code investigation: confirm span/tile stats integration and scan-cost estimation path
+- [x] Code investigation: map diff strategy flow (TerminalWriter → DiffStrategySelector → BufferDiff) and evidence log schema
+- [x] Code investigation: confirm span/tile stats integration and scan-cost estimation path
 - [ ] Document architecture findings for strategy selection + evidence log (paths + key invariants)
 - [ ] Extreme optimization loop (per skill):
 - [x] Baseline: `hyperfine --warmup 3 --runs 10 '/data/tmp/cargo-target/release/deps/diff_bench-898d498d962d95ae diff/full_vs_dirty'` → mean 24.1 ms ± 1.1 ms
 - [ ] Profile: obtain symbol-rich hotspot view (current perf/flamegraph still dominated by gnuplot/loader)
-- [ ] Try `--noplot`/GNUPLOT=: and direct perf on debuginfo bench to isolate ftui symbols
+- [x] Try `--noplot` + GNUPLOT=: (still dominated by gnuplot/loader; no ftui symbols)
+- [ ] Find profiling path that isolates ftui symbols (e.g., custom microbench or stripped criterion output)
 - [ ] Build opportunity matrix (top 3 hotspots, score ≥ 2.0)
 - [ ] Capture golden outputs + checksums (`sha256sum` → `golden_checksums.txt`)
 - [ ] Implement one optimization lever (single change) for bd-3e1t.8.3
@@ -33,21 +34,31 @@
 - [x] `br update bd-3e1t.6.8 --status=in_progress`
 - [x] Register Agent Mail session as `NavyWolf`
 - [x] Notify `PearlMoose` about bd-3e1t.6.8 scope (span config) and planned changes
-- [ ] Coordinate file reservations for `crates/ftui-render/src/buffer.rs` and `crates/ftui-runtime/src/terminal_writer.rs` (resolve conflicts with FoggyBridge/BoldFinch)
-- [ ] Implement `DirtySpanConfig` (enabled/max_spans/merge_gap/guard_band) in `crates/ftui-render/src/buffer.rs`
-- [ ] Store span config in `Buffer`; add `set_dirty_span_config` + accessor
-- [ ] Apply span config in `mark_dirty_span` (guard band, merge gap, max spans); preserve dirty bits for tile path
-- [ ] Update `dirty_span_row` to return `None` when spans disabled
-- [ ] Update `dirty_span_stats` to use config values (and return zeros when spans disabled)
-- [ ] Update `mark_dirty_row_full`/`mark_all_dirty` to respect span-enabled flag
-- [ ] Add unit tests in `crates/ftui-render/src/buffer.rs` for span config:
-- [ ] Test: disabled spans -> no row spans + zero stats
-- [ ] Test: guard band expands span bounds
-- [ ] Test: max_spans_per_row overflow -> full row fallback
-- [ ] Extend `RuntimeDiffConfig` with `dirty_span_config` (default + builder methods)
-- [ ] Wire `RuntimeDiffConfig` span config into `TerminalWriter::take_render_buffer`
-- [ ] Update runtime config tests to assert span config defaults and builder behavior
-- [ ] Run quality gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo check --all-targets`
+- [x] Coordinate file reservations for `crates/ftui-runtime/src/terminal_writer.rs` (StormyEagle notified)
+- [x] Implement `DirtySpanConfig` (enabled/max_spans/merge_gap/guard_band) in `crates/ftui-render/src/buffer.rs`
+- [x] Store span config in `Buffer`; add `set_dirty_span_config` + accessor
+- [x] Apply span config in `mark_dirty_span` (guard band, merge gap, max spans); preserve dirty bits for tile path
+- [x] Update `dirty_span_row` to return `None` when spans disabled
+- [x] Update `dirty_span_stats` to use config values (and return zeros when spans disabled)
+- [x] Update `mark_dirty_row_full`/`mark_all_dirty` to respect span-enabled flag
+- [x] Add unit tests in `crates/ftui-render/src/buffer.rs` for span config:
+- [x] Test: disabled spans -> no row spans + zero stats
+- [x] Test: guard band expands span bounds
+- [x] Test: max_spans_per_row overflow -> full row fallback
+- [x] Extend `RuntimeDiffConfig` with `dirty_span_config` (default + builder methods)
+- [x] Wire `RuntimeDiffConfig` span config into `TerminalWriter::take_render_buffer`
+- [x] Update runtime config tests to assert span config defaults and builder behavior
+- [x] Run quality gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo check --all-targets`
+- [x] Resolve `cargo fmt --check` failures (manual line-wrap fixes):
+- [x] `crates/ftui-demo-showcase/src/screens/hyperlink_playground.rs`
+- [x] `crates/ftui-demo-showcase/src/screens/visual_effects.rs`
+- [x] `crates/ftui-demo-showcase/tests/screen_snapshots.rs`
+- [x] `crates/ftui-extras/src/traceback.rs`
+- [x] Resolve `cargo check` errors:
+- [x] `crates/ftui-demo-showcase/src/screens/hyperlink_playground.rs`: public `link_layouts()` returns private `LinkLayout`
+- [x] `crates/ftui-demo-showcase/tests/screen_snapshots.rs`: tests access private `LinkLayout.rect`
+- [x] Resolve `cargo check` warning:
+- [x] `crates/ftui-text/src/wrap.rs`: unused `UnicodeWidthStr` import
 - [ ] Post Agent Mail update in thread `bd-3e1t.6.8` with summary + next steps
 - [ ] Release file reservations for touched files
 
@@ -64,7 +75,11 @@
 - [x] Add test `sanitize_config_clamps_invalid_values` in `crates/ftui-render/src/diff_strategy.rs`
 - [x] Clamp `cells_changed` to `cells_scanned` in estimator `observe()`
 - [x] Fix Visual Effects compile errors (float RGB → `u8`, ensure `fps_input` init)
+- [x] Add selector regret + switching stability tests in `crates/ftui-render/src/diff_strategy.rs`
+- [x] Add selector overhead + selector-vs-fixed benches; ensure bench buffers start clean in `crates/ftui-render/benches/diff_bench.rs`
 - [x] Run quality gates: `cargo fmt`, `cargo test -p ftui-render sanitize_config_clamps_invalid_values`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`
+- [x] Run selector tests: `cargo test -p ftui-render selector_`
+- [x] Re-run quality gates after selector tests/bench changes: `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`
 - [ ] Re-profile with a symbol-rich, longer-running workload (avoid loader dominance; consider Criterion profile-time)
 - [ ] Build opportunity matrix (top 3 hotspots) and pick score ≥ 2.0
 - [ ] Capture golden outputs + checksums for any perf change
