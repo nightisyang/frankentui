@@ -1248,7 +1248,7 @@ impl AppModel {
         let event = A11yTelemetryEvent {
             kind,
             tick: self.tick_count,
-            screen: self.current_screen.title(),
+            screen: self.display_screen().title(),
             panel_visible: self.a11y_panel_visible,
             high_contrast: self.a11y.high_contrast,
             reduced_motion: self.a11y.reduced_motion,
@@ -1525,7 +1525,7 @@ impl AppModel {
                     &[
                         ("state", state),
                         ("tick", &self.tick_count.to_string()),
-                        ("screen", self.current_screen.title()),
+                        ("screen", self.display_screen().title()),
                     ],
                 );
                 tracing::info!(
@@ -2149,16 +2149,16 @@ impl Model for AppModel {
             let nav_chunks = Flex::vertical()
                 .constraints([Constraint::Fixed(1), Constraint::Fixed(1)])
                 .split(chunks[0]);
-            let current_category = screens::screen_category(self.current_screen);
-            crate::chrome::render_category_tabs(self.current_screen, frame, nav_chunks[0]);
+            let current_category = screens::screen_category(display_screen);
+            crate::chrome::render_category_tabs(display_screen, frame, nav_chunks[0]);
             crate::chrome::render_screen_tabs_for_category(
-                self.current_screen,
+                display_screen,
                 current_category,
                 frame,
                 nav_chunks[1],
             );
         } else {
-            crate::chrome::render_tab_bar(self.current_screen, frame, chunks[0]);
+            crate::chrome::render_tab_bar(display_screen, frame, chunks[0]);
         }
 
         // Content area with border
@@ -2635,7 +2635,7 @@ impl AppModel {
             &[
                 ("since_ms", &since_ms),
                 ("tick", &tick),
-                ("screen", self.current_screen.title()),
+                ("screen", self.display_screen().title()),
                 ("reduced_motion", reduced_motion),
             ],
         );
@@ -2809,7 +2809,7 @@ impl AppModel {
         lines.push((format!(" Views:      {views}"), value_style));
         lines.push((format!(" Ticks:      {}", self.tick_count), value_style));
         lines.push((
-            format!(" Screen:     {}", self.current_screen.title()),
+            format!(" Screen:     {}", self.display_screen().title()),
             accent_style,
         ));
         lines.push((
