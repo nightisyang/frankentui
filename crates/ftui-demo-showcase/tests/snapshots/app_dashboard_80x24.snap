@@ -1,4 +1,4 @@
- 1: Dash │ 2: Shakes │ 3: Code │ 4: Widgets │ 5: Layout │ 6: Forms │ 7: DataViz 
+ 1: Tour │ 2: Dash │ 3: Shakes │ 4: Code │ 5: Widgets │ 6: Layout │ 7: Forms │  
 ╭──────────────────────────────────Dashboard───────────────────────────────────╮
 │FRANKENTUI DASHBOARD                                                          │
 │╭──────Plasma──────╮╭───────Charts · Pulse────────╮╭───Code · Rust (1/28)────╮│
@@ -13,12 +13,12 @@
 ││Click → Visual Eff││Click → Data Viz             ││Click → Performance      ││
 │╰──────────────────╯╰─────────────────────────────╯╰─────────────────────────╯│
 │╭Text FX · 2-Up (1/28)╮╭──────────Activity───────────╮╭Markdown · Streaming…╮ │
-││Sample 1 of 3 · 2-Up ││● INFO 00:02 · CPU spike dete││▌                    │ │
-││1 · None · S1        ││                             ││                     │ │
+││Sample 1 of 3 · 2-Up ││SEV TIME  COMP  MESSAGE      ││▌                    │ │
+││1 · None · S1        ││ INFO  00:02   CPU spike dete││                     │ │
 ││2 · FadeIn · S2      ││                             ││                     │ │
-││## GFM Stress        ││                             ││                     │ │
+││## GFM Stress · Ledge││                             ││                     │ │
 ││e: next set · click →││Click → Action Timeline      ││Click → Markdown     │ │
 │╰─────────────────────╯╰─────────────────────────────╯╰─────────────────────╯ │
 │g:charts c:code e:fx m:md | 1-9:screens | Tab:next | t:theme | ?:help | q:quit│
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Dashboard [1/34]  Cyberpunk Aurora           tick:0 frm:0            0x0 00:00 
+ Dashboard [2/38]  Cyberpunk Aurora     Tab/Shift+Tab: next/prev      0x0 00:00 

@@ -1,24 +1,24 @@
- 1: Dash │ 2: Shakes │ 3: Code │ 4: Widgets │ 5: Layout │ 6: Forms │ 7: DataViz 
+ 1: Tour │ 2: Dash │ 3: Shakes │ 4: Code │ 5: Widgets │ 6: Layout │ 7: Forms │  
 ╭───────────────────────────────────Markdown───────────────────────────────────╮
 │╭────Markdown Renderer────╮ ╭LLM Streaming Simulation ╮ ╭───Style Sampler────╮│
 ││GitHub-Flavored Markdown │ │▌                        │ │Bold  Dim  Italic  U││
-││                         │ │                         │ │Strikethrough  Rever││
-││Math & LaTeX Support     │ │                         │ │Dbl-Underline  Curly││
-││                         │ │                         │ │                    ││
-││Inline math like E = mc² │ │                         │ │Error  Success  Warn││
-││and α + β = γ renders to │ │                         │ │                    ││
-││Unicode.                 │ │                         │ ╰────────────────────╯│
+││(Rich Demo)              │ │                         │ │Strikethrough  Rever││
+││                         │ │                         │ │Dbl-Underline  Curly││
+││LaTeX + Symbols          │ │                         │ │                    ││
+││                         │ │                         │ │Error  Success  Warn││
+││Inline math: E = mc², α  │ │                         │ │                    ││
+││+ β = γ, Δ x ≈ 0.001.    │ │                         │ ╰────────────────────╯│
 ││                         │ │                         │                       │
-││Display math for complex │ │                         │ ╭──Unicode Showcase──╮│
-││equations:               │ │                         │ │Text         Type   ││
-││                         │ │                         │ │Hello        ASCII  ││
-││  ∑ᵢ₌₁ⁿ xᵢ = n(n+1)/2    │ │                         │ │????     CJK    ││
-││                         │ │                         │ │?????   Hiraga ││
-││  f(x) = ∫_{−∞}^{∞}      │ │                         │ │???       Emoji  ││
-││e^{−x²} dx = √{π}        │ │  [░░░░░░░░░░░░░░░░░░░░░]│ │café         Latin+ ││
-││                         │ │  Detection: 0 indicators│ │α β γ δ      Greek  ││
-││Greek letters: α, β, γ, δ│ │  Confidence: 0% | Chars:│ │→ ← ↑ ↓      Arrows ││
-││, ε                      │ │  Space: play/pause | r: │ ╰────────────────────╯│
+││Block math:              │ │                         │ ╭──Unicode Showcase──╮│
+││                         │ │                         │ │Text        │Type  │││
+││  ∑ᵢ₌₁ⁿ xᵢ = n(n+1)/2    │ │                         │ │Hello       │ASCII │││
+││                         │ │                         │ │????    │CJK   │││
+││  ∫_{−∞}^{∞} e^{−x²} dx  │ │                         │ │?????  │Hiraga│││
+││= √{π}                   │ │                         │ │???      │Emoji │││
+││                         │ │  [░░░░░░░░░░░░░░░░░░░░░]│ │café        │Latin+│││
+││Admonitions              │ │  Detection: 0 indicators│ │α β γ δ     │Greek │││
+││                         │ │  Confidence: 0% | Chars:│ │→ ← ↑ ↓     │Arrows│││
+││?  NOTE                 │ │  Space: play/pause | r: │ ╰────────────────────╯│
 │╰─────────────────────────╯ ╰─────────────────────────╯                       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Markdown [13/34]  Cyberpunk Aurora           tick:0 frm:0            0x0 00:00 
+ Markdown [15/38]  Cyberpunk Aurora     Tab/Shift+Tab: next/prev      0x0 00:00 

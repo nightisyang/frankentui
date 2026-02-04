@@ -19,6 +19,7 @@
 //! - Non-deterministic frame progression (timing issues)
 //! - Marker state corruption after clear
 
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
@@ -27,6 +28,7 @@ use ftui_demo_showcase::screens::Screen;
 use ftui_demo_showcase::screens::snapshot_player::{
     PlaybackState, SnapshotPlayer, SnapshotPlayerConfig,
 };
+use ftui_demo_showcase::test_logging::JsonlLogger;
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
 
@@ -34,33 +36,36 @@ use ftui_render::grapheme_pool::GraphemePool;
 // JSONL Logging Helpers
 // ---------------------------------------------------------------------------
 
-/// Test case log entry for JSONL output.
-#[derive(Debug)]
-struct TestLog {
-    run_id: &'static str,
-    case: &'static str,
-    outcome: &'static str,
+fn jsonl_logger() -> &'static JsonlLogger {
+    static LOGGER: OnceLock<JsonlLogger> = OnceLock::new();
+    LOGGER.get_or_init(|| JsonlLogger::new("snapshot_player_e2e").with_context("suite", "snapshot"))
+}
+
+fn log_case(
+    case: &str,
+    outcome: &str,
     frame_count: usize,
     final_frame: usize,
     checksum_chain: u64,
     elapsed_ms: u128,
-    notes: String,
-}
-
-impl TestLog {
-    fn to_jsonl(&self) -> String {
-        format!(
-            r#"{{"run_id":"{}","case":"{}","outcome":"{}","frame_count":{},"final_frame":{},"checksum_chain":"0x{:016x}","elapsed_ms":{},"notes":"{}"}}"#,
-            self.run_id,
-            self.case,
-            self.outcome,
-            self.frame_count,
-            self.final_frame,
-            self.checksum_chain,
-            self.elapsed_ms,
-            self.notes.replace('"', r#"\""#)
-        )
-    }
+    notes: &str,
+) {
+    let frame_count = frame_count.to_string();
+    let final_frame = final_frame.to_string();
+    let checksum_chain = format!("0x{:016x}", checksum_chain);
+    let elapsed_ms = elapsed_ms.to_string();
+    jsonl_logger().log(
+        "case_complete",
+        &[
+            ("case", case),
+            ("outcome", outcome),
+            ("frame_count", &frame_count),
+            ("final_frame", &final_frame),
+            ("checksum_chain", &checksum_chain),
+            ("elapsed_ms", &elapsed_ms),
+            ("notes", notes),
+        ],
+    );
 }
 
 fn press(code: KeyCode) -> Event {
@@ -110,20 +115,19 @@ fn playback_determinism_same_ticks() {
     // Verify determinism
     assert_eq!(frames1, frames2, "Frame sequences must be identical");
 
-    let log = TestLog {
-        run_id: "determinism-001",
-        case: "playback_determinism_same_ticks",
-        outcome: "pass",
-        frame_count: player1.frame_count(),
-        final_frame: player1.current_frame(),
-        checksum_chain: player1.checksum_chain(),
-        elapsed_ms: start.elapsed().as_millis(),
-        notes: format!(
-            "Verified {} ticks produce identical sequence",
-            frames1.len()
-        ),
-    };
-    eprintln!("{}", log.to_jsonl());
+    let notes = format!(
+        "Verified {} ticks produce identical sequence",
+        frames1.len()
+    );
+    log_case(
+        "playback_determinism_same_ticks",
+        "pass",
+        player1.frame_count(),
+        player1.current_frame(),
+        player1.checksum_chain(),
+        start.elapsed().as_millis(),
+        &notes,
+    );
 }
 
 /// Invariant: Replay from same state produces same checksums.
@@ -159,17 +163,16 @@ fn checksum_chain_determinism() {
         );
     }
 
-    let log = TestLog {
-        run_id: "checksum-001",
-        case: "checksum_chain_determinism",
-        outcome: "pass",
-        frame_count: player1.frame_count(),
-        final_frame: player1.current_frame(),
-        checksum_chain: player1.checksum_chain(),
-        elapsed_ms: start.elapsed().as_millis(),
-        notes: format!("Verified {} frame checksums match", player1.frame_count()),
-    };
-    eprintln!("{}", log.to_jsonl());
+    let notes = format!("Verified {} frame checksums match", player1.frame_count());
+    log_case(
+        "checksum_chain_determinism",
+        "pass",
+        player1.frame_count(),
+        player1.current_frame(),
+        player1.checksum_chain(),
+        start.elapsed().as_millis(),
+        &notes,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -211,17 +214,15 @@ fn frame_index_bounds_invariant() {
     player.go_to_start();
     assert_eq!(player.current_frame(), 0);
 
-    let log = TestLog {
-        run_id: "bounds-001",
-        case: "frame_index_bounds_invariant",
-        outcome: "pass",
+    log_case(
+        "frame_index_bounds_invariant",
+        "pass",
         frame_count,
-        final_frame: player.current_frame(),
-        checksum_chain: player.checksum_chain(),
-        elapsed_ms: start.elapsed().as_millis(),
-        notes: "Verified 2000+ navigation ops maintain bounds".to_string(),
-    };
-    eprintln!("{}", log.to_jsonl());
+        player.current_frame(),
+        player.checksum_chain(),
+        start.elapsed().as_millis(),
+        "Verified 2000+ navigation ops maintain bounds",
+    );
 }
 
 /// Invariant: Empty player handles navigation gracefully.
@@ -249,17 +250,15 @@ fn empty_player_navigation_safety() {
 
     assert_eq!(player.current_frame(), 0);
 
-    let log = TestLog {
-        run_id: "empty-001",
-        case: "empty_player_navigation_safety",
-        outcome: "pass",
-        frame_count: 0,
-        final_frame: 0,
-        checksum_chain: 0,
-        elapsed_ms: start.elapsed().as_millis(),
-        notes: "Empty player handles all navigation safely".to_string(),
-    };
-    eprintln!("{}", log.to_jsonl());
+    log_case(
+        "empty_player_navigation_safety",
+        "pass",
+        0,
+        0,
+        0,
+        start.elapsed().as_millis(),
+        "Empty player handles all navigation safely",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -301,17 +300,16 @@ fn playback_loop_regression() {
         "Should advance to frame 1 after loop"
     );
 
-    let log = TestLog {
-        run_id: "loop-001",
-        case: "playback_loop_regression",
-        outcome: "pass",
-        frame_count: player.frame_count(),
-        final_frame: player.current_frame(),
-        checksum_chain: player.checksum_chain(),
-        elapsed_ms: start.elapsed().as_millis(),
-        notes: format!("Verified loop from frame {} to 0", last_frame),
-    };
-    eprintln!("{}", log.to_jsonl());
+    let notes = format!("Verified loop from frame {} to 0", last_frame);
+    log_case(
+        "playback_loop_regression",
+        "pass",
+        player.frame_count(),
+        player.current_frame(),
+        player.checksum_chain(),
+        start.elapsed().as_millis(),
+        &notes,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -339,17 +337,15 @@ fn pause_stability_regression() {
         "Paused player should not advance"
     );
 
-    let log = TestLog {
-        run_id: "pause-001",
-        case: "pause_stability_regression",
-        outcome: "pass",
-        frame_count: player.frame_count(),
-        final_frame: player.current_frame(),
-        checksum_chain: player.checksum_chain(),
-        elapsed_ms: start.elapsed().as_millis(),
-        notes: "Verified 100 ticks while paused don't advance".to_string(),
-    };
-    eprintln!("{}", log.to_jsonl());
+    log_case(
+        "pause_stability_regression",
+        "pass",
+        player.frame_count(),
+        player.current_frame(),
+        player.checksum_chain(),
+        start.elapsed().as_millis(),
+        "Verified 100 ticks while paused don't advance",
+    );
 }
 
 /// Invariant: Manual step pauses playback.
@@ -377,17 +373,15 @@ fn manual_step_pauses_playback() {
         "Manual step backward should pause"
     );
 
-    let log = TestLog {
-        run_id: "pause-002",
-        case: "manual_step_pauses_playback",
-        outcome: "pass",
-        frame_count: player.frame_count(),
-        final_frame: player.current_frame(),
-        checksum_chain: player.checksum_chain(),
-        elapsed_ms: start.elapsed().as_millis(),
-        notes: "Manual navigation correctly pauses playback".to_string(),
-    };
-    eprintln!("{}", log.to_jsonl());
+    log_case(
+        "manual_step_pauses_playback",
+        "pass",
+        player.frame_count(),
+        player.current_frame(),
+        player.checksum_chain(),
+        start.elapsed().as_millis(),
+        "Manual navigation correctly pauses playback",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -426,17 +420,16 @@ fn marker_persistence_regression() {
         );
     }
 
-    let log = TestLog {
-        run_id: "marker-001",
-        case: "marker_persistence_regression",
-        outcome: "pass",
-        frame_count: player.frame_count(),
-        final_frame: player.current_frame(),
-        checksum_chain: player.checksum_chain(),
-        elapsed_ms: start.elapsed().as_millis(),
-        notes: format!("Verified {} markers persist", marker_positions.len()),
-    };
-    eprintln!("{}", log.to_jsonl());
+    let notes = format!("Verified {} markers persist", marker_positions.len());
+    log_case(
+        "marker_persistence_regression",
+        "pass",
+        player.frame_count(),
+        player.current_frame(),
+        player.checksum_chain(),
+        start.elapsed().as_millis(),
+        &notes,
+    );
 }
 
 /// Invariant: Clear removes all markers.
@@ -463,17 +456,16 @@ fn clear_removes_markers_regression() {
     assert_eq!(player.frame_count(), 0);
     assert_eq!(player.current_frame(), 0);
 
-    let log = TestLog {
-        run_id: "marker-002",
-        case: "clear_removes_markers_regression",
-        outcome: "pass",
-        frame_count: 0,
-        final_frame: 0,
-        checksum_chain: player.checksum_chain(),
-        elapsed_ms: start.elapsed().as_millis(),
-        notes: format!("Cleared {} markers", markers_before),
-    };
-    eprintln!("{}", log.to_jsonl());
+    let notes = format!("Cleared {} markers", markers_before);
+    log_case(
+        "clear_removes_markers_regression",
+        "pass",
+        0,
+        0,
+        player.checksum_chain(),
+        start.elapsed().as_millis(),
+        &notes,
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -517,17 +509,15 @@ fn recording_metadata_regression() {
         assert!(info.checksum != 0, "Frame {} should have valid checksum", i);
     }
 
-    let log = TestLog {
-        run_id: "record-001",
-        case: "recording_metadata_regression",
-        outcome: "pass",
-        frame_count: player.frame_count(),
-        final_frame: player.current_frame(),
-        checksum_chain: player.checksum_chain(),
-        elapsed_ms: start.elapsed().as_millis(),
-        notes: "Recording produces correct metadata".to_string(),
-    };
-    eprintln!("{}", log.to_jsonl());
+    log_case(
+        "recording_metadata_regression",
+        "pass",
+        player.frame_count(),
+        player.current_frame(),
+        player.checksum_chain(),
+        start.elapsed().as_millis(),
+        "Recording produces correct metadata",
+    );
 }
 
 /// Invariant: Recording respects max_frames limit.
@@ -558,17 +548,15 @@ fn recording_max_frames_regression() {
         assert_eq!(info.index, i, "Frame {} should have correct index", i);
     }
 
-    let log = TestLog {
-        run_id: "record-002",
-        case: "recording_max_frames_regression",
-        outcome: "pass",
-        frame_count: player.frame_count(),
-        final_frame: player.current_frame(),
-        checksum_chain: player.checksum_chain(),
-        elapsed_ms: start.elapsed().as_millis(),
-        notes: "Max frames limit enforced correctly".to_string(),
-    };
-    eprintln!("{}", log.to_jsonl());
+    log_case(
+        "recording_max_frames_regression",
+        "pass",
+        player.frame_count(),
+        player.current_frame(),
+        player.checksum_chain(),
+        start.elapsed().as_millis(),
+        "Max frames limit enforced correctly",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -597,17 +585,16 @@ fn render_stress_regression() {
         player.view(&mut frame, Rect::new(0, 0, w, h));
     }
 
-    let log = TestLog {
-        run_id: "render-001",
-        case: "render_stress_regression",
-        outcome: "pass",
-        frame_count: player.frame_count(),
-        final_frame: player.current_frame(),
-        checksum_chain: player.checksum_chain(),
-        elapsed_ms: start.elapsed().as_millis(),
-        notes: format!("Rendered at {} different sizes without panic", sizes.len()),
-    };
-    eprintln!("{}", log.to_jsonl());
+    let notes = format!("Rendered at {} different sizes without panic", sizes.len());
+    log_case(
+        "render_stress_regression",
+        "pass",
+        player.frame_count(),
+        player.current_frame(),
+        player.checksum_chain(),
+        start.elapsed().as_millis(),
+        &notes,
+    );
 }
 
 /// Invariant: Rendering during playback is stable.
@@ -626,17 +613,15 @@ fn render_during_playback_regression() {
         player.view(&mut frame, Rect::new(0, 0, 80, 24));
     }
 
-    let log = TestLog {
-        run_id: "render-002",
-        case: "render_during_playback_regression",
-        outcome: "pass",
-        frame_count: player.frame_count(),
-        final_frame: player.current_frame(),
-        checksum_chain: player.checksum_chain(),
-        elapsed_ms: start.elapsed().as_millis(),
-        notes: "100 render cycles during playback succeeded".to_string(),
-    };
-    eprintln!("{}", log.to_jsonl());
+    log_case(
+        "render_during_playback_regression",
+        "pass",
+        player.frame_count(),
+        player.current_frame(),
+        player.checksum_chain(),
+        start.elapsed().as_millis(),
+        "100 render cycles during playback succeeded",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -674,15 +659,13 @@ fn playback_state_machine_regression() {
     player.toggle_playback();
     assert_eq!(player.playback_state(), PlaybackState::Playing);
 
-    let log = TestLog {
-        run_id: "state-001",
-        case: "playback_state_machine_regression",
-        outcome: "pass",
-        frame_count: player.frame_count(),
-        final_frame: player.current_frame(),
-        checksum_chain: player.checksum_chain(),
-        elapsed_ms: start.elapsed().as_millis(),
-        notes: "All state transitions verified".to_string(),
-    };
-    eprintln!("{}", log.to_jsonl());
+    log_case(
+        "playback_state_machine_regression",
+        "pass",
+        player.frame_count(),
+        player.current_frame(),
+        player.checksum_chain(),
+        start.elapsed().as_millis(),
+        "All state transitions verified",
+    );
 }

@@ -243,7 +243,7 @@ mod tests {
     use super::*;
     use ftui_core::terminal_capabilities::TerminalCapabilities;
     use ftui_runtime::terminal_writer::{ScreenMode, TerminalWriter, UiAnchor};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     fn create_writer() -> TerminalWriter<Vec<u8>> {
         TerminalWriter::new(
@@ -296,5 +296,139 @@ mod tests {
 
         assert!(output_str.contains("ok red"));
         assert!(!output_str.contains("\x1b[31m"));
+    }
+
+    fn fnv1a_64(bytes: &[u8]) -> u64 {
+        let mut hash = 0xcbf29ce484222325u64;
+        for byte in bytes {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash
+    }
+
+    fn normalize_output(output: &[u8]) -> String {
+        String::from_utf8_lossy(output).replace("\r\n", "\n")
+    }
+
+    fn jsonl_line(run_id: &str, seed: u64, checksum: u64, env: &[(&str, &str)]) -> String {
+        let mut env_pairs = String::new();
+        for (idx, (key, value)) in env.iter().enumerate() {
+            if idx > 0 {
+                env_pairs.push(',');
+            }
+            env_pairs.push('"');
+            env_pairs.push_str(key);
+            env_pairs.push_str("\":\"");
+            env_pairs.push_str(value);
+            env_pairs.push('"');
+        }
+
+        format!(
+            "{{\"run_id\":\"{run_id}\",\"seed\":{seed},\"checksum\":{checksum},\"env\":{{{env_pairs}}}}}\n"
+        )
+    }
+
+    fn drain_until_eof(capture: &mut PtyCapture, deadline: Duration) -> io::Result<Vec<u8>> {
+        let start = Instant::now();
+        let mut output = Vec::new();
+        while start.elapsed() < deadline {
+            let chunk = capture.read_available_with_timeout(Duration::from_millis(50))?;
+            if !chunk.is_empty() {
+                output.extend_from_slice(&chunk);
+            } else if capture.is_eof() {
+                break;
+            } else {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+        Ok(output)
+    }
+
+    #[test]
+    fn pty_capture_timeout_boundary_returns_empty_until_output() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "sleep 0.15; printf late-output"]);
+        let mut capture = PtyCapture::spawn(PtyCaptureConfig::default(), cmd).unwrap();
+
+        let early = capture
+            .read_available_with_timeout(Duration::from_millis(20))
+            .unwrap();
+        assert!(early.is_empty(), "expected no output before child writes");
+
+        let later = capture
+            .read_available_with_timeout(Duration::from_secs(2))
+            .unwrap();
+        assert!(
+            later
+                .windows(b"late-output".len())
+                .any(|w| w == b"late-output")
+        );
+    }
+
+    #[test]
+    fn pty_capture_partial_reads_across_calls() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "printf part-1; sleep 0.2; printf part-2"]);
+        let mut capture = PtyCapture::spawn(PtyCaptureConfig::default(), cmd).unwrap();
+
+        let first = capture
+            .read_available_with_timeout(Duration::from_millis(50))
+            .unwrap();
+        assert!(!first.is_empty(), "expected first chunk");
+
+        std::thread::sleep(Duration::from_millis(250));
+        let second = capture
+            .read_available_with_timeout(Duration::from_millis(200))
+            .unwrap();
+        assert!(!second.is_empty(), "expected second chunk");
+
+        let mut combined = Vec::new();
+        combined.extend_from_slice(&first);
+        combined.extend_from_slice(&second);
+
+        assert!(combined.windows(b"part-1".len()).any(|w| w == b"part-1"));
+        assert!(combined.windows(b"part-2".len()).any(|w| w == b"part-2"));
+    }
+
+    #[test]
+    fn pty_capture_deterministic_checksum() {
+        let run_id = "pty-capture-test-1";
+        let seed = 4242u64;
+        let seed_str = seed.to_string();
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "printf \"run=$FTUI_RUN_ID\\nseed=$FTUI_SEED\\n\""]);
+        let config = PtyCaptureConfig::default()
+            .with_env("FTUI_RUN_ID", run_id)
+            .with_env("FTUI_SEED", seed_str.clone());
+        let mut capture = PtyCapture::spawn(config, cmd).unwrap();
+
+        let output = drain_until_eof(&mut capture, Duration::from_secs(2)).unwrap();
+        let normalized = normalize_output(&output);
+        let expected_payload = format!("run={run_id}\nseed={seed}\n");
+        assert!(
+            normalized.contains(&expected_payload),
+            "expected payload in output"
+        );
+
+        let checksum = fnv1a_64(normalized.as_bytes());
+        let expected_checksum = fnv1a_64(expected_payload.as_bytes());
+        assert_eq!(checksum, expected_checksum);
+
+        let log_line = jsonl_line(
+            run_id,
+            seed,
+            checksum,
+            &[
+                ("TERM", "xterm-256color"),
+                ("FTUI_RUN_ID", run_id),
+                ("FTUI_SEED", seed_str.as_str()),
+            ],
+        );
+        assert!(log_line.contains("\"run_id\":\"pty-capture-test-1\""));
+        assert!(log_line.contains("\"seed\":4242"));
+        assert!(log_line.contains("\"env\""));
+        assert!(log_line.contains("\"FTUI_RUN_ID\""));
+        assert!(log_line.contains("\"FTUI_SEED\""));
     }
 }

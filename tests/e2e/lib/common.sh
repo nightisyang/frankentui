@@ -1,6 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
+# Common helpers for E2E scripts.
+#
+# Usage:
+#   source "$LIB_DIR/common.sh"
+#   source "$LIB_DIR/logging.sh"   # optional JSONL helpers
+#   e2e_fixture_init "my_suite"    # sets E2E_RUN_ID, E2E_SEED, E2E_TIME_STEP_MS
+#   env_json="$(e2e_env_json)"     # JSON-friendly env snapshot
+#
+# Conventions:
+# - Deterministic mode uses E2E_DETERMINISTIC=1 (default) with E2E_SEED (default 0).
+# - Non-deterministic mode uses a random seed unless E2E_SEED is explicitly set.
+# - Exports FTUI_* seed/determinism vars for demo/harness/test binaries.
+
 E2E_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT_ROOT="$(cd "$E2E_ROOT/../.." && pwd)"
 
@@ -29,3 +42,119 @@ E2E_PYTHON="${E2E_PYTHON:-}"
 if [[ -z "$E2E_PYTHON" ]]; then
     E2E_PYTHON="$(resolve_python)" || true
 fi
+
+e2e_random_seed() {
+    od -An -N4 -tu4 /dev/urandom 2>/dev/null | tr -d ' ' || date +%s
+}
+
+e2e_seed_init() {
+    if [[ -z "${E2E_SEED:-}" ]]; then
+        if [[ "${E2E_DETERMINISTIC:-1}" == "1" ]]; then
+            E2E_SEED="${E2E_DEFAULT_SEED:-0}"
+        else
+            E2E_SEED="$(e2e_random_seed)"
+        fi
+    fi
+    export E2E_SEED
+    printf '%s' "$E2E_SEED"
+}
+
+e2e_run_id_init() {
+    local prefix="${1:-run}"
+    if [[ -z "${E2E_RUN_ID:-}" ]]; then
+        if declare -f e2e_run_id >/dev/null 2>&1; then
+            E2E_RUN_ID="$(e2e_run_id)"
+        elif [[ "${E2E_DETERMINISTIC:-1}" == "1" ]]; then
+            local seed="${E2E_SEED:-0}"
+            local seq="${E2E_RUN_SEQ:-0}"
+            seq=$((seq + 1))
+            export E2E_RUN_SEQ="$seq"
+            E2E_RUN_ID="${prefix}_det_${seed}_${seq}"
+        else
+            E2E_RUN_ID="${prefix}_$(date +%Y%m%d_%H%M%S)_$$"
+        fi
+    fi
+    export E2E_RUN_ID
+    printf '%s' "$E2E_RUN_ID"
+}
+
+e2e_tick_init() {
+    local step="${1:-${E2E_TIME_STEP_MS:-}}"
+    if [[ -n "$step" ]]; then
+        export E2E_TIME_STEP_MS="$step"
+    fi
+    if [[ -n "${E2E_TIME_STEP_MS:-}" && -z "${FTUI_TEST_TIME_STEP_MS:-}" ]]; then
+        export FTUI_TEST_TIME_STEP_MS="$E2E_TIME_STEP_MS"
+    fi
+}
+
+e2e_export_deterministic_env() {
+    local seed="${E2E_SEED:-0}"
+    if [[ "${E2E_DETERMINISTIC:-1}" == "1" ]]; then
+        export FTUI_TEST_DETERMINISTIC="${FTUI_TEST_DETERMINISTIC:-1}"
+        export FTUI_DEMO_DETERMINISTIC="${FTUI_DEMO_DETERMINISTIC:-1}"
+        export FTUI_SEED="${FTUI_SEED:-$seed}"
+        export FTUI_HARNESS_SEED="${FTUI_HARNESS_SEED:-$seed}"
+        export FTUI_DEMO_SEED="${FTUI_DEMO_SEED:-$seed}"
+        export FTUI_TEST_SEED="${FTUI_TEST_SEED:-$seed}"
+    fi
+}
+
+e2e_json_escape() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+e2e_env_json() {
+    local term="${TERM:-}"
+    local colorterm="${COLORTERM:-}"
+    local no_color="${NO_COLOR:-}"
+    local tmux="${TMUX:-}"
+    local zellij="${ZELLIJ:-}"
+    local kitty="${KITTY_WINDOW_ID:-}"
+    local ci="${CI:-}"
+    local run_id="${E2E_RUN_ID:-}"
+    local seed="${E2E_SEED:-}"
+    local deterministic="${E2E_DETERMINISTIC:-0}"
+
+    if command -v jq >/dev/null 2>&1; then
+        jq -nc \
+            --arg term "$term" \
+            --arg colorterm "$colorterm" \
+            --arg no_color "$no_color" \
+            --arg tmux "$tmux" \
+            --arg zellij "$zellij" \
+            --arg kitty "$kitty" \
+            --arg ci "$ci" \
+            --arg run_id "$run_id" \
+            --arg seed "$seed" \
+            --arg deterministic "$deterministic" \
+            '{term:$term,colorterm:$colorterm,no_color:$no_color,tmux:$tmux,zellij:$zellij,kitty_window_id:$kitty,ci:$ci,run_id:$run_id,seed:$seed,deterministic:$deterministic}'
+        return 0
+    fi
+
+    printf '{"term":"%s","colorterm":"%s","no_color":"%s","tmux":"%s","zellij":"%s","kitty_window_id":"%s","ci":"%s","run_id":"%s","seed":"%s","deterministic":"%s"}' \
+        "$(e2e_json_escape "$term")" \
+        "$(e2e_json_escape "$colorterm")" \
+        "$(e2e_json_escape "$no_color")" \
+        "$(e2e_json_escape "$tmux")" \
+        "$(e2e_json_escape "$zellij")" \
+        "$(e2e_json_escape "$kitty")" \
+        "$(e2e_json_escape "$ci")" \
+        "$(e2e_json_escape "$run_id")" \
+        "$(e2e_json_escape "$seed")" \
+        "$(e2e_json_escape "$deterministic")"
+}
+
+e2e_fixture_init() {
+    local prefix="${1:-run}"
+    local seed_override="${2:-}"
+    local tick_override="${3:-}"
+    if [[ -n "$seed_override" ]]; then
+        export E2E_SEED="$seed_override"
+    fi
+    e2e_seed_init >/dev/null
+    e2e_run_id_init "$prefix" >/dev/null
+    e2e_tick_init "$tick_override"
+    e2e_export_deterministic_env
+    export E2E_ENV_JSON="${E2E_ENV_JSON:-$(e2e_env_json)}"
+}

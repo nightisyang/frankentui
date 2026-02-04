@@ -411,6 +411,51 @@ mod tests {
     }
 
     #[test]
+    fn grid_span_clamps_out_of_bounds() {
+        let grid = Grid::new()
+            .rows([Constraint::Fixed(4), Constraint::Fixed(6)])
+            .columns([Constraint::Fixed(8), Constraint::Fixed(12)]);
+
+        let layout = grid.split(Rect::new(0, 0, 40, 20));
+        let span = layout.span(1, 1, 5, 5);
+
+        assert_eq!(span, Rect::new(8, 4, 12, 6));
+    }
+
+    #[test]
+    fn grid_span_includes_gaps_between_tracks() {
+        let grid = Grid::new()
+            .rows([Constraint::Fixed(3)])
+            .columns([
+                Constraint::Fixed(2),
+                Constraint::Fixed(2),
+                Constraint::Fixed(2),
+            ])
+            .col_gap(1);
+
+        let layout = grid.split(Rect::new(0, 0, 20, 10));
+        let span = layout.span(0, 0, 1, 3);
+
+        assert_eq!(span.width, 8); // 2 + 1 + 2 + 1 + 2
+        assert_eq!(span.height, 3);
+    }
+
+    #[test]
+    fn grid_tiny_area_with_gaps_produces_zero_tracks() {
+        let grid = Grid::new()
+            .rows([Constraint::Fixed(1), Constraint::Fixed(1)])
+            .columns([Constraint::Fixed(1), Constraint::Fixed(1)])
+            .row_gap(2)
+            .col_gap(2);
+
+        let layout = grid.split(Rect::new(0, 0, 1, 1));
+        assert_eq!(layout.row_height(0), 0);
+        assert_eq!(layout.row_height(1), 0);
+        assert_eq!(layout.col_width(0), 0);
+        assert_eq!(layout.col_width(1), 0);
+    }
+
+    #[test]
     fn cell_spanning() {
         let grid = Grid::new()
             .rows([

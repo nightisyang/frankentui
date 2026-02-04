@@ -917,6 +917,88 @@ mod tests {
     }
 
     #[test]
+    fn hit_grid_edge_and_corner_cells() {
+        let mut grid = HitGrid::new(4, 4);
+        grid.register(Rect::new(3, 0, 1, 4), HitId::new(7), HitRegion::Border, 11);
+
+        // Right-most column corners
+        assert_eq!(
+            grid.hit_test(3, 0),
+            Some((HitId::new(7), HitRegion::Border, 11))
+        );
+        assert_eq!(
+            grid.hit_test(3, 3),
+            Some((HitId::new(7), HitRegion::Border, 11))
+        );
+
+        // Neighboring cells remain empty
+        assert!(grid.hit_test(2, 0).is_none());
+        assert!(grid.hit_test(4, 0).is_none());
+        assert!(grid.hit_test(3, 4).is_none());
+
+        let mut grid = HitGrid::new(4, 4);
+        grid.register(Rect::new(0, 3, 4, 1), HitId::new(9), HitRegion::Content, 21);
+
+        // Bottom row corners
+        assert_eq!(
+            grid.hit_test(0, 3),
+            Some((HitId::new(9), HitRegion::Content, 21))
+        );
+        assert_eq!(
+            grid.hit_test(3, 3),
+            Some((HitId::new(9), HitRegion::Content, 21))
+        );
+
+        // Outside bottom row
+        assert!(grid.hit_test(0, 2).is_none());
+        assert!(grid.hit_test(0, 4).is_none());
+    }
+
+    #[test]
+    fn frame_register_hit_respects_nested_scissor() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(10, 10, &mut pool);
+
+        let outer = Rect::new(1, 1, 8, 8);
+        frame.buffer.push_scissor(outer);
+        assert_eq!(frame.buffer.current_scissor(), outer);
+
+        let inner = Rect::new(4, 4, 10, 10);
+        frame.buffer.push_scissor(inner);
+        let clipped = outer.intersection(&inner);
+        let current = frame.buffer.current_scissor();
+        assert_eq!(current, clipped);
+
+        // Monotonic intersection: inner scissor must stay within outer.
+        assert!(outer.contains(current.x, current.y));
+        assert!(outer.contains(
+            current.right().saturating_sub(1),
+            current.bottom().saturating_sub(1)
+        ));
+
+        frame.register_hit(
+            Rect::new(0, 0, 10, 10),
+            HitId::new(3),
+            HitRegion::Button,
+            99,
+        );
+
+        assert_eq!(
+            frame.hit_test(4, 4),
+            Some((HitId::new(3), HitRegion::Button, 99))
+        );
+        assert_eq!(
+            frame.hit_test(8, 8),
+            Some((HitId::new(3), HitRegion::Button, 99))
+        );
+        assert!(frame.hit_test(3, 3).is_none()); // inside outer, outside inner
+        assert!(frame.hit_test(0, 0).is_none()); // outside all scissor
+
+        frame.buffer.pop_scissor();
+        assert_eq!(frame.buffer.current_scissor(), outer);
+    }
+
+    #[test]
     fn hit_grid_hits_in_area() {
         let mut grid = HitGrid::new(5, 5);
         grid.register(Rect::new(0, 0, 2, 2), HitId::new(1), HitRegion::Content, 10);

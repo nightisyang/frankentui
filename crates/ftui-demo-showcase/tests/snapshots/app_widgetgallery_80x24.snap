@@ -1,24 +1,24 @@
- 1: Dash │ 2: Shakes │ 3: Code │ 4: Widgets │ 5: Layout │ 6: Forms │ 7: DataViz 
+ 1: Tour │ 2: Dash │ 3: Shakes │ 4: Code │ 5: Widgets │ 6: Layout │ 7: Forms │  
 ╭────────────────────────────────Widget Gallery────────────────────────────────╮
-│  A: Inputs │ ▸ B: Display │   C: Status │   D: Data Viz │   E: Navigation │  │
-│+ASCII------+┌──Square───┐╭────Rounded╮╭Text Style Flags─────────────────────╮│
-│|Border: ASC|│Border: Squ││Border: Rou││Bold            Dim                  ││
-│|Align: Left|│Align: Cent││Align: Righ││Italic          Underline            ││
-│+-----------+└───────────┘╰───────────╯│DblUnder        CurlyUL              ││
-│╔Double═════╗┏━━━Heavy━━━┓╭─────Custom╮│Blink           Reverse              ││
-│║Border: Dou║┃Border: Hea┃│Border: Cus││Hidden          Strike               ││
-│║Align: Left║┃Align: Cent┃│Align: Righ││Bold+Italic     Bold+Under           ││
-│╚═══════════╝┗━━━━━━━━━━━┛╰───────────╯╰─────────────────────────────────────╯│
-│╭Paragraph Wrap───────────╮╭Lists───────────────────╮╭Code Block─────────────╮│
-││Word: The quick brown fox││• Bullet item           ││fn main() {            ││
-││jumps over the lazy dog. ││• Second item           ││    println!("hello"); ││
-││                         ││  ◦ Nested item         ││}                      ││
-││Char: The quick brown fox│╰────────────────────────╯│                       ││
-││ jumps over the lazy dog.│╭Table───────────────────╮╰───────────────────────╯│
-││                         ││Name       Type  Size   │╭Blockquote + Rule──────╮│
-││None: The quick brown fox││main.rs    Rust  4.2 KB ││> Deterministic output ││
-││                         ││README.md  MD    3.4 KB ││───────────────────────││
-│╰─────────────────────────╯╰────────────────────────╯╰───────────────────────╯│
-│.*......                                                                      │
+│▸ A: Inputs │   B: Display │   C: Status │   D: Data Viz │   E: Navigation │  │
+│╭TextInput────╮╭Masked Input─╮╭Command Palette────────╮╭Log Viewer───────────╮│
+││@example.com ││••••••       ││                       ││INFO  boot:          ││
+││             ││             ││                       ││FrankenTUI demo      ││
+│╰─────────────╯╰─────────────╯│                       ││started              ││
+│╭TextArea────────────────────╮│                       ││DEBUG layout:        ││
+││1  FrankenTUI text area     │╰───────────────────────╯│resolved 6         1 ││
+││2  - Multi-line editing     │╭File Picker────────────╮╰─────────────────────╯│
+││3  - Soft wrap enabled      ││.                      │╭ProgressBar──────────╮│
+││4  - Line numbers           ││> ? benches           ││         0%          ││
+││                            ││  ? data              ││         25%         ││
+││                            ││  ? proptest-regressio││         50%         ││
+│╰────────────────────────────╯╰───────────────────────╯╰─────────────────────╯│
+│╭Checkbo╮╭Select╮╭Validation ╮╭Notifications──────────╮╭Spinners─────────────╮│
+││[ ] Ena││Select││! Invalid …││                       ││⠋ Loading (DOTS)     ││
+││[x] Syn││Number││ETA  00:59 ││                       │╰─────────────────────╯│
+││( ) Lig││Slider││? …       ││                       │╭Toast────────────────╮│
+││(*) Dar││      ││           │╰───────────────────────╯│                     ││
+│╰───────╯╰──────╯╰───────────╯                         ╰─────────────────────╯│
+│*.......                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Widget Gallery [4/34]  Cyberpunk Aurora         tick:0 frm:0         0x0 00:00 
+ Widget Gallery [5/38]  Cyberpunk Aurora   Tab/Shift+Tab: next/prev   0x0 00:00 

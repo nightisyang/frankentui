@@ -518,16 +518,26 @@ fn file_permissions(entry: &FileEntry) -> &'static str {
     }
 }
 
-fn format_entry_header(width: u16) -> String {
-    // Fixed widths: Icon(2) + 1 + Name(?) + 1 + Perms(10) + 2 + Size(10)
-    // Total fixed = 2 + 1 + 1 + 10 + 2 + 10 = 26
-    let reserved = 26;
-    let name_width = width.saturating_sub(reserved).saturating_sub(1) as usize; // Extra safety buffer
+const ICON_COL_WIDTH: usize = 2;
+const PERMS_COL_WIDTH: usize = 10;
+const SIZE_COL_WIDTH: usize = 10;
+const GAP_ICON_NAME: usize = 1;
+const GAP_NAME_PERMS: usize = 1;
+const GAP_PERMS_SIZE: usize = 2;
 
-    let h_icon = "  "; // 2 chars
+fn format_entry_header(width: u16) -> String {
+    let reserved = ICON_COL_WIDTH
+        + PERMS_COL_WIDTH
+        + SIZE_COL_WIDTH
+        + GAP_ICON_NAME
+        + GAP_NAME_PERMS
+        + GAP_PERMS_SIZE;
+    let name_width = width.saturating_sub(reserved as u16).saturating_sub(1) as usize;
+
+    let h_icon = " ".repeat(ICON_COL_WIDTH);
     let h_name = pad_to_width("Name", name_width);
-    let h_perms = pad_to_width("Perms", 10);
-    let h_size = format!("{:>10}", "Size");
+    let h_perms = pad_to_width("Perms", PERMS_COL_WIDTH);
+    let h_size = format!("{:>width$}", "Size", width = SIZE_COL_WIDTH);
 
     let line = format!("{h_icon} {h_name} {h_perms}  {h_size}");
     fit_to_width(&line, width)
@@ -541,14 +551,17 @@ fn format_entry_line(entry: &FileEntry, width: u16) -> String {
         .map(filesize::decimal)
         .unwrap_or_else(|| "--".into());
 
-    let icon_padded = pad_to_width(icon, 2);
-    let perms_padded = pad_to_width(perms, 10);
-    // Right-align size
-    let size_padded = format!("{:>10}", size_str);
+    let icon_padded = pad_to_width(icon, ICON_COL_WIDTH);
+    let perms_padded = pad_to_width(perms, PERMS_COL_WIDTH);
+    let size_padded = format!("{:>width$}", size_str, width = SIZE_COL_WIDTH);
 
-    // Matches header calculation: 2 + 1 + name + 1 + 10 + 2 + 10
-    let reserved = 26;
-    let name_width = width.saturating_sub(reserved).saturating_sub(1) as usize;
+    let reserved = ICON_COL_WIDTH
+        + PERMS_COL_WIDTH
+        + SIZE_COL_WIDTH
+        + GAP_ICON_NAME
+        + GAP_NAME_PERMS
+        + GAP_PERMS_SIZE;
+    let name_width = width.saturating_sub(reserved as u16).saturating_sub(1) as usize;
     let name = pad_to_width(&entry.name, name_width);
 
     let line = format!("{icon_padded} {name} {perms_padded}  {size_padded}");
@@ -669,26 +682,30 @@ mod icons {
     use super::{FileEntry, FileKind};
 
     pub fn directory_icon() -> &'static str {
-        "📁"
+        "DR"
     }
 
     pub fn symlink_icon() -> &'static str {
-        "🔗"
+        "SY"
     }
 
     pub fn file_icon(name: &str) -> &'static str {
         let ext = name.rsplit('.').next().unwrap_or("").to_lowercase();
         match ext.as_str() {
-            "rs" => "🦀",
-            "py" => "🐍",
-            "js" | "ts" => "📜",
-            "md" => "📝",
-            "json" | "toml" | "yaml" | "yml" | "env" | "gitignore" => "⚙️",
-            "png" | "jpg" | "jpeg" | "gif" | "svg" => "🖼️",
-            "mp3" | "wav" | "flac" => "🎵",
-            "mp4" | "mov" | "mkv" => "🎬",
-            "sh" | "bash" => "⚡️",
-            _ => "📄",
+            "rs" => "RS",
+            "py" => "PY",
+            "js" => "JS",
+            "ts" => "TS",
+            "md" => "MD",
+            "json" => "JS",
+            "toml" => "TM",
+            "yaml" | "yml" => "YM",
+            "env" | "gitignore" => "CF",
+            "png" | "jpg" | "jpeg" | "gif" | "svg" => "IM",
+            "mp3" | "wav" | "flac" => "AU",
+            "mp4" | "mov" | "mkv" => "VI",
+            "sh" | "bash" => "SH",
+            _ => "FI",
         }
     }
 

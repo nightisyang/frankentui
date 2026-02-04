@@ -1,7 +1,7 @@
- 1: Dash │ 2: Shakes │ 3: Code │ 4: Widgets │ 5: Layout │ 6: Forms │ 7: DataViz 
-╭───────────────────────────────Snapshot Player────────────────────────────────╮
+ 1: Tour │ 2: Dash │ 3: Shakes │ 4: Code │ 5: Widgets │ 6: Layout │ 7: Forms │  
+╭──────────────────────────────Time-Travel Studio──────────────────────────────╮
 │╭───────────────Timeline (1/50)───────────────╮╭─────────Frame Info──────────╮│
-││░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░││Status: ⏸ Paused             ││
+││░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░││Status: ? Paused            ││
 │╰─────────────────────────────────────────────╯│                             ││
 │╭────────────────Frame Preview────────────────╮│Frame: 1/50                  ││
 ││Frame 1/50                                   ││Size: 40x15                  ││
@@ -14,11 +14,11 @@
 ││                                             ││Markers: 0                   ││
 ││                                             ││Marked: No                   ││
 ││                                             ││                             ││
-││                                             ││── Controls ──               ││
-││                                             ││Space: Play/Pause            ││
-││                                             ││←/→ or h/l: Step             ││
-││█                                            ││Home/End or g/G: First/Last  ││
-││                                             ││M: Toggle marker             ││
+││                                             ││── Compare ──                ││
+││                                             ││View: Single                 ││
+││                                             ││Heatmap: Off                 ││
+││█                                            ││A: #1  d824a111a221fa16      ││
+││                                             ││B: #2  7be607118e6aadca      ││
 │╰─────────────────────────────────────────────╯╰─────────────────────────────╯│
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Snapshot Player [27/34]  Cyberpunk Aurora        tick:0 frm:0        0x0 00:00 
+ Time-Travel Studio [29/38]  Cyberpunk AuroraTab/Shift+Tab: next/prev 0x0 00:00 

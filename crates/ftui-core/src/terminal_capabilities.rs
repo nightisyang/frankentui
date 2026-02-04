@@ -1330,6 +1330,17 @@ mod tests {
     }
 
     #[test]
+    fn detect_dumb_overrides_truecolor_env() {
+        let env = make_env("dumb", "WezTerm", "truecolor");
+        let caps = TerminalCapabilities::detect_from_inputs(&env);
+        assert!(!caps.true_color, "dumb should override COLORTERM");
+        assert!(!caps.colors_256);
+        assert!(!caps.bracketed_paste);
+        assert!(!caps.mouse_sgr);
+        assert!(!caps.osc8_hyperlinks);
+    }
+
+    #[test]
     fn detect_empty_term_is_dumb() {
         let env = make_env("", "", "");
         let caps = TerminalCapabilities::detect_from_inputs(&env);

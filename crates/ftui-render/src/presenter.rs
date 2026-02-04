@@ -872,6 +872,8 @@ impl<W: Write> Presenter<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cell::CellAttrs;
+    use crate::link_registry::LinkRegistry;
 
     fn test_presenter() -> Presenter<Vec<u8>> {
         let caps = TerminalCapabilities::basic();
@@ -983,6 +985,66 @@ mod tests {
 
         // Should only have SGR reset
         assert!(output.starts_with(b"\x1b[0m"));
+    }
+
+    #[test]
+    fn sync_output_wraps_frame() {
+        let mut presenter = test_presenter_with_sync();
+        let mut buffer = Buffer::new(3, 1);
+        buffer.set_raw(0, 0, Cell::from_char('X'));
+
+        let old = Buffer::new(3, 1);
+        let diff = BufferDiff::compute(&old, &buffer);
+
+        presenter.present(&buffer, &diff).unwrap();
+        let output = get_output(presenter);
+
+        assert!(
+            output.starts_with(ansi::SYNC_BEGIN),
+            "sync output should begin with DEC 2026 begin"
+        );
+        assert!(
+            output.ends_with(ansi::SYNC_END),
+            "sync output should end with DEC 2026 end"
+        );
+    }
+
+    #[test]
+    fn hyperlink_sequences_emitted_and_closed() {
+        let mut presenter = test_presenter();
+        let mut buffer = Buffer::new(3, 1);
+
+        let mut registry = LinkRegistry::new();
+        let link_id = registry.register("https://example.com");
+        let linked = Cell::from_char('L').with_attrs(CellAttrs::new(StyleFlags::empty(), link_id));
+        buffer.set_raw(0, 0, linked);
+
+        let old = Buffer::new(3, 1);
+        let diff = BufferDiff::compute(&old, &buffer);
+
+        presenter
+            .present_with_pool(&buffer, &diff, None, Some(&registry))
+            .unwrap();
+        let output = get_output(presenter);
+
+        let start = b"\x1b]8;;https://example.com\x1b\\";
+        let end = b"\x1b]8;;\x1b\\";
+
+        let start_pos = output
+            .windows(start.len())
+            .position(|w| w == start)
+            .expect("hyperlink start not found");
+        let end_pos = output
+            .windows(end.len())
+            .position(|w| w == end)
+            .expect("hyperlink end not found");
+        let char_pos = output
+            .iter()
+            .position(|&b| b == b'L')
+            .expect("linked character not found");
+
+        assert!(start_pos < char_pos, "link start should precede text");
+        assert!(char_pos < end_pos, "link end should follow text");
     }
 
     #[test]
@@ -1274,6 +1336,32 @@ mod tests {
             "OSC 8 should not appear without registry, got: {:?}",
             output_str
         );
+    }
+
+    #[test]
+    fn hyperlink_not_emitted_for_unknown_id() {
+        let mut presenter = test_presenter();
+        let mut buffer = Buffer::new(10, 1);
+        let links = LinkRegistry::new();
+
+        let cell = Cell::from_char('L').with_attrs(CellAttrs::new(StyleFlags::empty(), 42));
+        buffer.set_raw(0, 0, cell);
+
+        let old = Buffer::new(10, 1);
+        let diff = BufferDiff::compute(&old, &buffer);
+
+        presenter
+            .present_with_pool(&buffer, &diff, None, Some(&links))
+            .unwrap();
+        let output = get_output(presenter);
+        let output_str = String::from_utf8_lossy(&output);
+
+        assert!(
+            !output_str.contains("\x1b]8;"),
+            "OSC 8 should not appear for unknown link IDs, got: {:?}",
+            output_str
+        );
+        assert!(output_str.contains('L'));
     }
 
     #[test]
@@ -2344,6 +2432,41 @@ mod tests {
         let output = presenter.into_inner().unwrap();
         // CUF(1) = "\x1b[C"
         assert_eq!(&output, b"\x1b[C", "Should use CUF for +1 column move");
+    }
+
+    #[test]
+    fn cost_model_optimal_cursor_uses_cha_on_same_row_backward() {
+        let mut presenter = test_presenter();
+        presenter.cursor_x = Some(10);
+        presenter.cursor_y = Some(3);
+
+        let target_x = 2;
+        let target_y = 3;
+        let cha_cost = cost_model::cha_cost(target_x);
+        let cup_cost = cost_model::cup_cost(target_y, target_x);
+        assert!(
+            cha_cost <= cup_cost,
+            "Expected CHA to be cheaper for backward move (cha={cha_cost}, cup={cup_cost})"
+        );
+
+        presenter.move_cursor_optimal(target_x, target_y).unwrap();
+        let output = presenter.into_inner().unwrap();
+        let mut expected = Vec::new();
+        ansi::cha(&mut expected, target_x).unwrap();
+        assert_eq!(output, expected, "Should use CHA for backward move");
+    }
+
+    #[test]
+    fn cost_model_optimal_cursor_uses_cup_on_row_change() {
+        let mut presenter = test_presenter();
+        presenter.cursor_x = Some(4);
+        presenter.cursor_y = Some(1);
+
+        presenter.move_cursor_optimal(7, 4).unwrap();
+        let output = presenter.into_inner().unwrap();
+        let mut expected = Vec::new();
+        ansi::cup(&mut expected, 4, 7).unwrap();
+        assert_eq!(output, expected, "Should use CUP when row changes");
     }
 
     #[test]

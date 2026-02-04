@@ -48,33 +48,34 @@ SCREENS:
     8  Data Viz           Charts, canvas, and structured data
     9  File Browser       File system navigation and preview
    10  Advanced           Mouse, clipboard, hyperlinks, export
-   11  Terminal Caps      Terminal capability detection and probing
-   12  Macro Recorder     Record/replay input macros and scenarios
-   13  Performance        Frame budget, caching, virtualization
-   14  Markdown           Rich text and markdown rendering
-   15  Visual Effects     Animated braille and canvas effects
-   16  Responsive         Breakpoint-driven responsive layout demo
-   17  Log Search         Live log search and filter demo
-   18  Notifications      Toast notification system demo
-   19  Action Timeline    Event timeline with filtering and severity
-   20  Sizing             Content-aware intrinsic sizing demo
-   21  Layout Inspector   Constraint solver visual inspector
-   22  Text Editor        Advanced multi-line text editor with search
-   23  Mouse Playground   Mouse hit-testing and interaction demo
-   24  Form Validation    Comprehensive form validation demo
-   25  Virtualized Search Fuzzy search in 100K+ items demo
-   26  Async Tasks        Async task manager and queue diagnostics
-   27  Theme Studio       Live palette editor and theme inspector
-   28  Time-Travel Studio A/B compare + diff heatmap of recorded snapshots
-   29  Performance HUD    Real-time render budget and frame diagnostics
-   30  i18n Stress Lab    Unicode width, RTL, emoji, and truncation
-   31  VOI Overlay        Galaxy-Brain VOI debug overlay
-   32  Inline Mode        Inline scrollback + chrome story
-   33  Accessibility      Accessibility control panel + contrast checks
-   34  Widget Builder     Interactive widget composition sandbox
-   35  Palette Evidence   Command palette evidence lab
-   36  Determinism Lab    Checksum equivalence + determinism proofs
-   37  Links              OSC-8 hyperlink playground + hit regions
+   11  Table Themes       TableTheme preset gallery + markdown parity
+   12  Terminal Caps      Terminal capability detection and probing
+   13  Macro Recorder     Record/replay input macros and scenarios
+   14  Performance        Frame budget, caching, virtualization
+   15  Markdown           Rich text and markdown rendering
+   16  Visual Effects     Animated braille and canvas effects
+   17  Responsive         Breakpoint-driven responsive layout demo
+   18  Log Search         Live log search and filter demo
+   19  Notifications      Toast notification system demo
+   20  Action Timeline    Event timeline with filtering and severity
+   21  Sizing             Content-aware intrinsic sizing demo
+   22  Layout Inspector   Constraint solver visual inspector
+   23  Text Editor        Advanced multi-line text editor with search
+   24  Mouse Playground   Mouse hit-testing and interaction demo
+   25  Form Validation    Comprehensive form validation demo
+   26  Virtualized Search Fuzzy search in 100K+ items demo
+   27  Async Tasks        Async task manager and queue diagnostics
+   28  Theme Studio       Live palette editor and theme inspector
+   29  Time-Travel Studio A/B compare + diff heatmap of recorded snapshots
+   30  Performance HUD    Real-time render budget and frame diagnostics
+   31  i18n Stress Lab    Unicode width, RTL, emoji, and truncation
+   32  VOI Overlay        Galaxy-Brain VOI debug overlay
+   33  Inline Mode        Inline scrollback + chrome story
+   34  Accessibility      Accessibility control panel + contrast checks
+   35  Widget Builder     Interactive widget composition sandbox
+   36  Palette Evidence   Command palette evidence lab
+   37  Determinism Lab    Checksum equivalence + determinism proofs
+   38  Links              OSC-8 hyperlink playground + hit regions
 
 KEYBINDINGS:
     1-9, 0          Switch to screens 1-10 by number
@@ -84,12 +85,19 @@ KEYBINDINGS:
     q / Ctrl+C      Quit
 
 ENVIRONMENT VARIABLES:
+    FTUI_DEMO_DETERMINISTIC  Force deterministic fixtures (seed/time)
+    FTUI_DEMO_SEED           Deterministic seed for demo fixtures
+    FTUI_DEMO_TICK_MS        Override demo tick interval in ms
+    FTUI_DEMO_EXIT_AFTER_TICKS Auto-quit after N ticks (deterministic)
     FTUI_DEMO_SCREEN_MODE     Override --screen-mode (alt|inline|inline-auto)
     FTUI_DEMO_UI_HEIGHT       Override --ui-height
     FTUI_DEMO_UI_MIN_HEIGHT   Override --ui-min-height
     FTUI_DEMO_UI_MAX_HEIGHT   Override --ui-max-height
     FTUI_DEMO_SCREEN          Override --screen
+    FTUI_TABLE_THEME_REPORT_PATH JSONL log path for Table Theme gallery (E2E)
     FTUI_DEMO_EXIT_AFTER_MS   Auto-quit after N milliseconds (for testing)
+    FTUI_DEMO_DETERMINISTIC   Enable deterministic mode across demo screens
+    FTUI_DEMO_SEED            Global deterministic seed (fallback for screens)
     FTUI_DEMO_TOUR            Override --tour (1/true to enable)
     FTUI_DEMO_TOUR_SPEED      Override --tour-speed
     FTUI_DEMO_TOUR_START_STEP Override --tour-start-step
@@ -101,6 +109,7 @@ ENVIRONMENT VARIABLES:
     FTUI_DEMO_VFX_SIZE        Fixed render size (e.g., 120x40)
     FTUI_DEMO_VFX_COLS        Fixed render cols (if size not set)
     FTUI_DEMO_VFX_ROWS        Fixed render rows (if size not set)
+    FTUI_DEMO_VFX_SEED        Deterministic seed for VFX harness logs
     FTUI_DEMO_VFX_RUN_ID      Run id for VFX JSONL logs
     FTUI_DEMO_VFX_JSONL       Path for VFX JSONL logs (or '-' for stderr)";
 
@@ -486,8 +495,8 @@ mod tests {
     }
 
     #[test]
-    fn help_text_contains_visual_effects_as_screen_15() {
-        assert!(HELP_TEXT.contains("15  Visual Effects"));
+    fn help_text_contains_visual_effects_as_screen_16() {
+        assert!(HELP_TEXT.contains("16  Visual Effects"));
     }
 
     #[test]
@@ -496,6 +505,7 @@ mod tests {
         assert!(HELP_TEXT.contains("FTUI_DEMO_EXIT_AFTER_MS"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_UI_MIN_HEIGHT"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_UI_MAX_HEIGHT"));
+        assert!(HELP_TEXT.contains("FTUI_TABLE_THEME_REPORT_PATH"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_TOUR"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_TOUR_SPEED"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_TOUR_START_STEP"));

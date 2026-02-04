@@ -3012,10 +3012,17 @@ impl Default for BatchController {
 mod tests {
     use super::*;
     use ftui_core::terminal_capabilities::TerminalCapabilities;
+    use ftui_core::terminal_session::{SessionOptions, TerminalSession};
     use ftui_render::buffer::Buffer;
     use ftui_render::cell::Cell;
     use ftui_render::diff_strategy::DiffStrategy;
     use ftui_render::frame::CostEstimateSource;
+    use std::collections::HashMap;
+    use std::sync::mpsc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     // Simple test model
     struct TestModel {
@@ -3559,6 +3566,128 @@ mod tests {
         });
         assert!(config.conformal_config.is_some());
         assert!((config.conformal_config.as_ref().unwrap().alpha - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn program_config_forced_size_clamps_minimums() {
+        let config = ProgramConfig::default().with_forced_size(0, 0);
+        assert_eq!(config.forced_size, Some((1, 1)));
+
+        let cleared = config.without_forced_size();
+        assert!(cleared.forced_size.is_none());
+    }
+
+    #[test]
+    fn effect_queue_config_defaults_are_safe() {
+        let config = EffectQueueConfig::default();
+        assert!(!config.enabled);
+        assert!(config.scheduler.smith_enabled);
+        assert!(!config.scheduler.preemptive);
+        assert_eq!(config.scheduler.aging_factor, 0.0);
+        assert_eq!(config.scheduler.wait_starve_ms, 0.0);
+    }
+
+    #[test]
+    fn handle_effect_command_enqueues_or_executes_inline() {
+        let (result_tx, result_rx) = mpsc::channel::<u32>();
+        let mut scheduler = QueueingScheduler::new(EffectQueueConfig::default().scheduler);
+        let mut tasks: HashMap<u64, Box<dyn FnOnce() -> u32 + Send>> = HashMap::new();
+
+        let ran = Arc::new(AtomicUsize::new(0));
+        let ran_task = ran.clone();
+        let cmd = EffectCommand::Enqueue(
+            TaskSpec::default(),
+            Box::new(move || {
+                ran_task.fetch_add(1, Ordering::SeqCst);
+                7
+            }),
+        );
+
+        let shutdown = handle_effect_command(cmd, &mut scheduler, &mut tasks, &result_tx);
+        assert!(!shutdown);
+        assert_eq!(ran.load(Ordering::SeqCst), 0);
+        assert_eq!(tasks.len(), 1);
+        assert!(result_rx.try_recv().is_err());
+
+        let mut full_scheduler = QueueingScheduler::new(SchedulerConfig {
+            max_queue_size: 0,
+            ..Default::default()
+        });
+        let mut full_tasks: HashMap<u64, Box<dyn FnOnce() -> u32 + Send>> = HashMap::new();
+        let ran_full = Arc::new(AtomicUsize::new(0));
+        let ran_full_task = ran_full.clone();
+        let cmd_full = EffectCommand::Enqueue(
+            TaskSpec::default(),
+            Box::new(move || {
+                ran_full_task.fetch_add(1, Ordering::SeqCst);
+                42
+            }),
+        );
+
+        let shutdown_full =
+            handle_effect_command(cmd_full, &mut full_scheduler, &mut full_tasks, &result_tx);
+        assert!(!shutdown_full);
+        assert!(full_tasks.is_empty());
+        assert_eq!(ran_full.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            result_rx.recv_timeout(Duration::from_millis(200)).unwrap(),
+            42
+        );
+
+        let shutdown = handle_effect_command(
+            EffectCommand::Shutdown,
+            &mut full_scheduler,
+            &mut full_tasks,
+            &result_tx,
+        );
+        assert!(shutdown);
+    }
+
+    #[test]
+    fn effect_queue_loop_executes_tasks_and_shutdowns() {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<EffectCommand<u32>>();
+        let (result_tx, result_rx) = mpsc::channel::<u32>();
+        let config = EffectQueueConfig {
+            enabled: true,
+            scheduler: SchedulerConfig {
+                preemptive: false,
+                ..Default::default()
+            },
+        };
+
+        let handle = std::thread::spawn(move || {
+            effect_queue_loop(config, cmd_rx, result_tx, None);
+        });
+
+        cmd_tx
+            .send(EffectCommand::Enqueue(TaskSpec::default(), Box::new(|| 10)))
+            .unwrap();
+        cmd_tx
+            .send(EffectCommand::Enqueue(
+                TaskSpec::new(2.0, 5.0).with_name("second"),
+                Box::new(|| 20),
+            ))
+            .unwrap();
+
+        let mut results = vec![
+            result_rx.recv_timeout(Duration::from_millis(500)).unwrap(),
+            result_rx.recv_timeout(Duration::from_millis(500)).unwrap(),
+        ];
+        results.sort_unstable();
+        assert_eq!(results, vec![10, 20]);
+
+        cmd_tx.send(EffectCommand::Shutdown).unwrap();
+        let _ = handle.join();
+    }
+
+    #[test]
+    fn inline_auto_remeasure_reset_clears_decision() {
+        let mut state = InlineAutoRemeasureState::new(InlineAutoRemeasureConfig::default());
+        state.sampler.decide(Instant::now());
+        assert!(state.sampler.last_decision().is_some());
+
+        state.reset();
+        assert!(state.sampler.last_decision().is_none());
     }
 
     #[test]
@@ -4623,6 +4752,478 @@ mod tests {
 
         assert_eq!(sim.model().ticks, 3);
         assert_eq!(sim.model().keys, 2);
+    }
+
+    // =========================================================================
+    // HEADLESS PROGRAM TESTS (bd-1av4o.2)
+    // =========================================================================
+
+    fn headless_program_with_config<M: Model>(
+        model: M,
+        config: ProgramConfig,
+    ) -> Program<M, Vec<u8>>
+    where
+        M::Message: Send + 'static,
+    {
+        let capabilities = TerminalCapabilities::basic();
+        let mut writer = TerminalWriter::with_diff_config(
+            Vec::new(),
+            config.screen_mode,
+            config.ui_anchor,
+            capabilities,
+            config.diff_config.clone(),
+        );
+
+        let (width, height) = config.forced_size.unwrap_or((80, 24));
+        let width = width.max(1);
+        let height = height.max(1);
+        writer.set_size(width, height);
+
+        let session = TerminalSession::new_for_tests(SessionOptions {
+            alternate_screen: matches!(config.screen_mode, ScreenMode::AltScreen),
+            mouse_capture: config.mouse,
+            bracketed_paste: config.bracketed_paste,
+            focus_events: config.focus_reporting,
+            kitty_keyboard: config.kitty_keyboard,
+        })
+        .expect("headless test session");
+
+        let budget = RenderBudget::from_config(&config.budget);
+        let conformal_predictor = config.conformal_config.clone().map(ConformalPredictor::new);
+        let locale_context = config.locale_context.clone();
+        let locale_version = locale_context.version();
+        let resize_coalescer =
+            ResizeCoalescer::new(config.resize_coalescer.clone(), (width, height));
+        let subscriptions = SubscriptionManager::new();
+        let (task_sender, task_receiver) = std::sync::mpsc::channel();
+        let inline_auto_remeasure = config
+            .inline_auto_remeasure
+            .clone()
+            .map(InlineAutoRemeasureState::new);
+
+        Program {
+            model,
+            writer,
+            session,
+            running: true,
+            tick_rate: None,
+            last_tick: Instant::now(),
+            dirty: true,
+            frame_idx: 0,
+            widget_signals: Vec::new(),
+            widget_refresh_config: config.widget_refresh,
+            widget_refresh_plan: WidgetRefreshPlan::new(),
+            width,
+            height,
+            forced_size: config.forced_size,
+            poll_timeout: config.poll_timeout,
+            budget,
+            conformal_predictor,
+            last_frame_time_us: None,
+            locale_context,
+            locale_version,
+            resize_coalescer,
+            evidence_sink: None,
+            fairness_config_logged: false,
+            resize_behavior: config.resize_behavior,
+            fairness_guard: InputFairnessGuard::new(),
+            event_recorder: None,
+            subscriptions,
+            task_sender,
+            task_receiver,
+            task_handles: Vec::new(),
+            effect_queue: None,
+            state_registry: config.persistence.registry.clone(),
+            persistence_config: config.persistence,
+            last_checkpoint: Instant::now(),
+            inline_auto_remeasure,
+        }
+    }
+
+    #[test]
+    fn headless_apply_resize_updates_model_and_dimensions() {
+        struct ResizeModel {
+            last_size: Option<(u16, u16)>,
+        }
+
+        #[derive(Debug)]
+        enum ResizeMsg {
+            Resize(u16, u16),
+            Other,
+        }
+
+        impl From<Event> for ResizeMsg {
+            fn from(event: Event) -> Self {
+                match event {
+                    Event::Resize { width, height } => ResizeMsg::Resize(width, height),
+                    _ => ResizeMsg::Other,
+                }
+            }
+        }
+
+        impl Model for ResizeModel {
+            type Message = ResizeMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                if let ResizeMsg::Resize(w, h) = msg {
+                    self.last_size = Some((w, h));
+                }
+                Cmd::none()
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut program =
+            headless_program_with_config(ResizeModel { last_size: None }, ProgramConfig::default());
+        program.dirty = false;
+
+        program
+            .apply_resize(0, 0, Duration::ZERO, false)
+            .expect("resize");
+
+        assert_eq!(program.width, 1);
+        assert_eq!(program.height, 1);
+        assert_eq!(program.model().last_size, Some((1, 1)));
+        assert!(program.dirty);
+    }
+
+    #[test]
+    fn headless_execute_cmd_log_writes_output() {
+        let mut program =
+            headless_program_with_config(TestModel { value: 0 }, ProgramConfig::default());
+        program.execute_cmd(Cmd::log("hello world")).expect("log");
+
+        let bytes = program.writer.into_inner().expect("writer output");
+        let output = String::from_utf8_lossy(&bytes);
+        assert!(output.contains("hello world"));
+    }
+
+    #[test]
+    fn headless_process_task_results_updates_model() {
+        struct TaskModel {
+            updates: usize,
+        }
+
+        #[derive(Debug)]
+        enum TaskMsg {
+            Done,
+        }
+
+        impl From<Event> for TaskMsg {
+            fn from(_: Event) -> Self {
+                TaskMsg::Done
+            }
+        }
+
+        impl Model for TaskModel {
+            type Message = TaskMsg;
+
+            fn update(&mut self, _msg: Self::Message) -> Cmd<Self::Message> {
+                self.updates += 1;
+                Cmd::none()
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut program =
+            headless_program_with_config(TaskModel { updates: 0 }, ProgramConfig::default());
+        program.dirty = false;
+        program.task_sender.send(TaskMsg::Done).unwrap();
+
+        program
+            .process_task_results()
+            .expect("process task results");
+        assert_eq!(program.model().updates, 1);
+        assert!(program.dirty);
+    }
+
+    #[test]
+    fn headless_should_tick_and_timeout_behaviors() {
+        let mut program =
+            headless_program_with_config(TestModel { value: 0 }, ProgramConfig::default());
+        program.tick_rate = Some(Duration::from_millis(5));
+        program.last_tick = Instant::now() - Duration::from_millis(10);
+
+        assert!(program.should_tick());
+        assert!(!program.should_tick());
+
+        let timeout = program.effective_timeout();
+        assert!(timeout <= Duration::from_millis(5));
+
+        program.tick_rate = None;
+        program.poll_timeout = Duration::from_millis(33);
+        assert_eq!(program.effective_timeout(), Duration::from_millis(33));
+    }
+
+    #[test]
+    fn headless_ui_height_remeasure_clears_auto_height() {
+        let mut config = ProgramConfig::inline_auto(2, 6);
+        config.inline_auto_remeasure = Some(InlineAutoRemeasureConfig::default());
+
+        let mut program = headless_program_with_config(TestModel { value: 0 }, config);
+        program.dirty = false;
+        program.writer.set_auto_ui_height(5);
+
+        assert_eq!(program.writer.auto_ui_height(), Some(5));
+        program.request_ui_height_remeasure();
+
+        assert_eq!(program.writer.auto_ui_height(), None);
+        assert!(program.dirty);
+    }
+
+    #[test]
+    fn headless_recording_lifecycle_and_locale_change() {
+        let mut program =
+            headless_program_with_config(TestModel { value: 0 }, ProgramConfig::default());
+        program.dirty = false;
+
+        program.start_recording("demo");
+        assert!(program.is_recording());
+        let recorded = program.stop_recording();
+        assert!(recorded.is_some());
+        assert!(!program.is_recording());
+
+        let prev_dirty = program.dirty;
+        program.locale_context.set_locale("fr");
+        program.check_locale_change();
+        assert!(program.dirty || prev_dirty);
+    }
+
+    #[test]
+    fn headless_render_frame_marks_clean_and_sets_diff() {
+        struct RenderModel;
+
+        #[derive(Debug)]
+        enum RenderMsg {
+            Noop,
+        }
+
+        impl From<Event> for RenderMsg {
+            fn from(_: Event) -> Self {
+                RenderMsg::Noop
+            }
+        }
+
+        impl Model for RenderModel {
+            type Message = RenderMsg;
+
+            fn update(&mut self, _msg: Self::Message) -> Cmd<Self::Message> {
+                Cmd::none()
+            }
+
+            fn view(&self, frame: &mut Frame) {
+                frame.buffer.set_raw(0, 0, Cell::from_char('X'));
+            }
+        }
+
+        let mut program = headless_program_with_config(RenderModel, ProgramConfig::default());
+        program.render_frame().expect("render frame");
+
+        assert!(!program.dirty);
+        assert!(program.writer.last_diff_strategy().is_some());
+        assert_eq!(program.frame_idx, 1);
+    }
+
+    #[test]
+    fn headless_render_frame_skips_when_budget_exhausted() {
+        let config = ProgramConfig {
+            budget: FrameBudgetConfig::with_total(Duration::ZERO),
+            ..Default::default()
+        };
+
+        let mut program = headless_program_with_config(TestModel { value: 0 }, config);
+        program.render_frame().expect("render frame");
+
+        assert!(!program.dirty);
+        assert_eq!(program.frame_idx, 1);
+    }
+
+    #[test]
+    fn headless_handle_event_updates_model() {
+        struct EventModel {
+            events: usize,
+            last_resize: Option<(u16, u16)>,
+        }
+
+        #[derive(Debug)]
+        enum EventMsg {
+            Resize(u16, u16),
+            Other,
+        }
+
+        impl From<Event> for EventMsg {
+            fn from(event: Event) -> Self {
+                match event {
+                    Event::Resize { width, height } => EventMsg::Resize(width, height),
+                    _ => EventMsg::Other,
+                }
+            }
+        }
+
+        impl Model for EventModel {
+            type Message = EventMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                self.events += 1;
+                if let EventMsg::Resize(w, h) = msg {
+                    self.last_resize = Some((w, h));
+                }
+                Cmd::none()
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut program = headless_program_with_config(
+            EventModel {
+                events: 0,
+                last_resize: None,
+            },
+            ProgramConfig::default().with_resize_behavior(ResizeBehavior::Immediate),
+        );
+
+        program
+            .handle_event(Event::Key(ftui_core::event::KeyEvent::new(
+                ftui_core::event::KeyCode::Char('x'),
+            )))
+            .expect("handle key");
+        assert_eq!(program.model().events, 1);
+
+        program
+            .handle_event(Event::Resize {
+                width: 10,
+                height: 5,
+            })
+            .expect("handle resize");
+        assert_eq!(program.model().events, 2);
+        assert_eq!(program.model().last_resize, Some((10, 5)));
+        assert_eq!(program.width, 10);
+        assert_eq!(program.height, 5);
+    }
+
+    #[test]
+    fn headless_execute_cmd_batch_sequence_and_quit() {
+        struct BatchModel {
+            count: usize,
+        }
+
+        #[derive(Debug)]
+        enum BatchMsg {
+            Inc,
+        }
+
+        impl From<Event> for BatchMsg {
+            fn from(_: Event) -> Self {
+                BatchMsg::Inc
+            }
+        }
+
+        impl Model for BatchModel {
+            type Message = BatchMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    BatchMsg::Inc => {
+                        self.count += 1;
+                        Cmd::none()
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut program =
+            headless_program_with_config(BatchModel { count: 0 }, ProgramConfig::default());
+
+        program
+            .execute_cmd(Cmd::Batch(vec![
+                Cmd::msg(BatchMsg::Inc),
+                Cmd::Sequence(vec![
+                    Cmd::msg(BatchMsg::Inc),
+                    Cmd::quit(),
+                    Cmd::msg(BatchMsg::Inc),
+                ]),
+            ]))
+            .expect("batch cmd");
+
+        assert_eq!(program.model().count, 2);
+        assert!(!program.running);
+    }
+
+    #[test]
+    fn headless_execute_cmd_task_spawns_and_reaps() {
+        struct TaskModel {
+            done: bool,
+        }
+
+        #[derive(Debug)]
+        enum TaskMsg {
+            Done,
+        }
+
+        impl From<Event> for TaskMsg {
+            fn from(_: Event) -> Self {
+                TaskMsg::Done
+            }
+        }
+
+        impl Model for TaskModel {
+            type Message = TaskMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                match msg {
+                    TaskMsg::Done => {
+                        self.done = true;
+                        Cmd::none()
+                    }
+                }
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut program =
+            headless_program_with_config(TaskModel { done: false }, ProgramConfig::default());
+        program
+            .execute_cmd(Cmd::task(|| TaskMsg::Done))
+            .expect("task cmd");
+
+        let deadline = Instant::now() + Duration::from_millis(200);
+        while !program.model().done {
+            program
+                .process_task_results()
+                .expect("process task results");
+            program.reap_finished_tasks();
+            if Instant::now() > deadline {
+                panic!("task result did not arrive in time");
+            }
+        }
+
+        assert!(program.model().done);
+    }
+
+    #[test]
+    fn headless_persistence_commands_with_registry() {
+        use crate::state_persistence::{MemoryStorage, StateRegistry};
+        use std::sync::Arc;
+
+        let registry = Arc::new(StateRegistry::new(Box::new(MemoryStorage::new())));
+        let config = ProgramConfig::default().with_registry(registry.clone());
+        let mut program = headless_program_with_config(TestModel { value: 0 }, config);
+
+        assert!(program.has_persistence());
+        assert!(program.state_registry().is_some());
+
+        program.execute_cmd(Cmd::save_state()).expect("save");
+        program.execute_cmd(Cmd::restore_state()).expect("restore");
+
+        let saved = program.trigger_save().expect("trigger save");
+        let loaded = program.trigger_load().expect("trigger load");
+        assert!(!saved);
+        assert_eq!(loaded, 0);
     }
 
     // =========================================================================

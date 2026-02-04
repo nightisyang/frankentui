@@ -65,6 +65,11 @@ if $QUICK; then
     RUN_TILE=false
 fi
 
+export E2E_DETERMINISTIC="${E2E_DETERMINISTIC:-1}"
+export E2E_SEED="${E2E_SEED:-0}"
+export E2E_TIME_STEP_MS="${E2E_TIME_STEP_MS:-100}"
+e2e_seed >/dev/null 2>&1 || true
+
 TIMESTAMP="$(e2e_log_stamp)"
 E2E_LOG_DIR="${E2E_LOG_DIR:-/tmp/ftui_e2e_${TIMESTAMP}}"
 if [[ -e "$E2E_LOG_DIR" ]]; then
@@ -129,7 +134,7 @@ write_large_env() {
     local seed="$2"
     local run_id="$3"
     cat >> "$jsonl" <<EOF
-{"event":"large_screen_env","run_id":"$run_id","timestamp":"$(e2e_timestamp)","seed":$seed,"term":"${TERM:-}","colorterm":"${COLORTERM:-}","no_color":"${NO_COLOR:-}","tmux":"${TMUX:-}","zellij":"${ZELLIJ:-}","kitty_window_id":"${KITTY_WINDOW_ID:-}","term_program":"${TERM_PROGRAM:-}"}
+{"schema_version":"${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}","type":"large_screen_env","event":"large_screen_env","run_id":"$run_id","timestamp":"$(e2e_timestamp)","seed":$seed,"term":"${TERM:-}","colorterm":"${COLORTERM:-}","no_color":"${NO_COLOR:-}","tmux":"${TMUX:-}","zellij":"${ZELLIJ:-}","kitty_window_id":"${KITTY_WINDOW_ID:-}","term_program":"${TERM_PROGRAM:-}"}
 EOF
 }
 
@@ -153,6 +158,7 @@ write_large_case_meta() {
 
     if command -v jq >/dev/null 2>&1; then
         jq -nc \
+            --arg schema_version "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}" \
             --arg case "$case_name" \
             --arg status "$status" \
             --arg timestamp "$(e2e_timestamp)" \
@@ -169,10 +175,11 @@ write_large_case_meta() {
             --arg pty_output "$pty_out" \
             --arg caps_file "$caps_file" \
             --argjson duration_ms "$duration_ms" \
-            '{event:"large_screen_case",case:$case,status:$status,timestamp:$timestamp,run_id:$run_id,seed:$seed,screen_mode:$screen_mode,cols:$cols,rows:$rows,ui_height:$ui_height,diff_bayesian:$diff_bayesian,bocpd:$bocpd,conformal:$conformal,evidence_jsonl:$evidence_jsonl,pty_output:$pty_output,caps_file:$caps_file,duration_ms:$duration_ms}' \
+            '{schema_version:$schema_version,type:"large_screen_case",event:"large_screen_case",case:$case,status:$status,timestamp:$timestamp,run_id:$run_id,seed:$seed,screen_mode:$screen_mode,cols:$cols,rows:$rows,ui_height:$ui_height,diff_bayesian:$diff_bayesian,bocpd:$bocpd,conformal:$conformal,evidence_jsonl:$evidence_jsonl,pty_output:$pty_output,caps_file:$caps_file,duration_ms:$duration_ms}' \
             >> "$jsonl"
     else
-        printf '{"event":"large_screen_case","case":"%s","status":"%s","timestamp":"%s","run_id":"%s","seed":%s,"screen_mode":"%s","cols":%s,"rows":%s,"ui_height":%s,"diff_bayesian":%s,"bocpd":%s,"conformal":%s,"evidence_jsonl":"%s","pty_output":"%s","caps_file":"%s","duration_ms":%s}\n' \
+        printf '{"schema_version":"%s","type":"large_screen_case","event":"large_screen_case","case":"%s","status":"%s","timestamp":"%s","run_id":"%s","seed":%s,"screen_mode":"%s","cols":%s,"rows":%s,"ui_height":%s,"diff_bayesian":%s,"bocpd":%s,"conformal":%s,"evidence_jsonl":"%s","pty_output":"%s","caps_file":"%s","duration_ms":%s}\n' \
+            "$(escape_json "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}")" \
             "$(escape_json "$case_name")" "$(escape_json "$status")" "$(e2e_timestamp)" "$(escape_json "$run_id")" \
             "$seed" "$(escape_json "$screen_mode")" "$cols" "$rows" "$ui_height" \
             "$diff_bayes" "$bocpd" "$conformal" \

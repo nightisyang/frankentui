@@ -37,10 +37,11 @@
 //! STORM_SEED=42 cargo test -p ftui-harness --test resize_storm_e2e  # deterministic
 //! ```
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use ftui_core::geometry::Rect;
+use ftui_harness::determinism::{JsonValue, TestJsonlLogger};
 use ftui_harness::golden::compute_buffer_checksum;
 use ftui_harness::resize_storm::{
     ResizeStorm, StormConfig, StormPattern, TerminalCapabilities as StormCapabilities,
@@ -64,13 +65,20 @@ use ftui_widgets::paragraph::Paragraph;
 // ============================================================================
 
 fn log_jsonl(event: &str, fields: &[(&str, &str)]) {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let parts: Vec<String> = std::iter::once(format!("\"seq\":{seq}"))
-        .chain(std::iter::once(format!("\"event\":\"{event}\"")))
-        .chain(fields.iter().map(|(k, v)| format!("\"{k}\":{v}")))
+    let fields: Vec<(&str, JsonValue)> = fields
+        .iter()
+        .map(|(k, v)| (*k, JsonValue::raw(*v)))
         .collect();
-    eprintln!("{{{}}}", parts.join(","));
+    logger().log(event, &fields);
+}
+
+fn logger() -> &'static TestJsonlLogger {
+    static LOGGER: OnceLock<TestJsonlLogger> = OnceLock::new();
+    LOGGER.get_or_init(|| {
+        let mut logger = TestJsonlLogger::new("resize_storm_e2e", get_storm_seed());
+        logger.add_context_str("suite", "resize_storm_e2e");
+        logger
+    })
 }
 
 fn escape_json(s: &str) -> String {

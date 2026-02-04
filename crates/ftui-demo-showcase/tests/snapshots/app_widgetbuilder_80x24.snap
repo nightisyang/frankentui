@@ -1,4 +1,4 @@
- 1: Dash │ 2: Shakes │ 3: Code │ 4: Widgets │ 5: Layout │ 6: Forms │ 7: DataViz 
+ 1: Tour │ 2: Dash │ 3: Shakes │ 4: Code │ 5: Widgets │ 6: Layout │ 7: Forms │  
 ╭────────────────────────────────Widget Builder────────────────────────────────╮
 │╭Widget Builder Sandbox──────────────────────────────────────────────────────╮│
 ││Preset: Starter Kit  |  Widgets: 4  |  [P] cycle  [S] save  [X] export      ││
@@ -21,4 +21,4 @@
 ││╰──────────────────────────────────────────────────────────────────────────╯││
 │╰────────────────────────────────────────────────────────────────────────────╯│
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Widget Builder [33/34]  Cyberpunk Aurora        tick:0 frm:0         0x0 00:00 
+ Widget Builder [35/38]  Cyberpunk Aurora  Tab/Shift+Tab: next/prev   0x0 00:00 

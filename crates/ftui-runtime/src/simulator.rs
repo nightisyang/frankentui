@@ -20,10 +20,12 @@
 //! ```
 
 use crate::program::{Cmd, Model};
+use crate::state_persistence::StateRegistry;
 use ftui_core::event::Event;
 use ftui_render::buffer::Buffer;
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Record of a command that was executed during simulation.
@@ -66,6 +68,8 @@ pub struct ProgramSimulator<M: Model> {
     tick_rate: Option<Duration>,
     /// Log messages emitted via Cmd::Log.
     logs: Vec<String>,
+    /// Optional state registry for persistence integration.
+    state_registry: Option<Arc<StateRegistry>>,
 }
 
 impl<M: Model> ProgramSimulator<M> {
@@ -81,7 +85,18 @@ impl<M: Model> ProgramSimulator<M> {
             running: true,
             tick_rate: None,
             logs: Vec::new(),
+            state_registry: None,
         }
+    }
+
+    /// Create a new simulator with the given model and persistence registry.
+    ///
+    /// When provided, `Cmd::SaveState`/`Cmd::RestoreState` will flush/load
+    /// through the registry, mirroring runtime behavior.
+    pub fn with_registry(model: M, registry: Arc<StateRegistry>) -> Self {
+        let mut sim = Self::new(model);
+        sim.state_registry = Some(registry);
+        sim
     }
 
     /// Initialize the model by calling `Model::init()` and executing returned commands.
@@ -199,6 +214,7 @@ impl<M: Model> ProgramSimulator<M> {
     ///
     /// Cmd::Msg recurses through update; Cmd::Log records the text;
     /// IO-dependent operations are simulated (no real terminal writes).
+    /// Save/Restore use the configured registry when present.
     fn execute_cmd(&mut self, cmd: Cmd<M::Message>) {
         match cmd {
             Cmd::None => {
@@ -247,9 +263,15 @@ impl<M: Model> ProgramSimulator<M> {
                 let cmd = self.model.update(msg);
                 self.execute_cmd(cmd);
             }
-            Cmd::SaveState | Cmd::RestoreState => {
-                // State persistence commands are no-ops in simulation
-                // (no persistent storage in headless mode)
+            Cmd::SaveState => {
+                if let Some(registry) = &self.state_registry {
+                    let _ = registry.flush();
+                }
+            }
+            Cmd::RestoreState => {
+                if let Some(registry) = &self.state_registry {
+                    let _ = registry.load();
+                }
             }
         }
     }
@@ -259,6 +281,8 @@ impl<M: Model> ProgramSimulator<M> {
 mod tests {
     use super::*;
     use ftui_core::event::{KeyCode, KeyEvent, KeyEventKind, Modifiers};
+    use std::cell::RefCell;
+    use std::sync::Arc;
 
     // ---------- Test model ----------
 
@@ -340,6 +364,85 @@ mod tests {
         })
     }
 
+    fn resize_event(width: u16, height: u16) -> Event {
+        Event::Resize { width, height }
+    }
+
+    #[derive(Default)]
+    struct ResizeTracker {
+        last: Option<(u16, u16)>,
+        history: Vec<(u16, u16)>,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum ResizeMsg {
+        Resize(u16, u16),
+        Quit,
+        Noop,
+    }
+
+    impl From<Event> for ResizeMsg {
+        fn from(event: Event) -> Self {
+            match event {
+                Event::Resize { width, height } => Self::Resize(width, height),
+                Event::Key(k) if k.code == KeyCode::Char('q') => Self::Quit,
+                _ => Self::Noop,
+            }
+        }
+    }
+
+    impl Model for ResizeTracker {
+        type Message = ResizeMsg;
+
+        fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+            match msg {
+                ResizeMsg::Resize(width, height) => {
+                    self.last = Some((width, height));
+                    self.history.push((width, height));
+                    Cmd::none()
+                }
+                ResizeMsg::Quit => Cmd::quit(),
+                ResizeMsg::Noop => Cmd::none(),
+            }
+        }
+
+        fn view(&self, _frame: &mut Frame) {}
+    }
+
+    #[derive(Default)]
+    struct PersistModel;
+
+    #[derive(Debug, Clone, Copy)]
+    enum PersistMsg {
+        Save,
+        Restore,
+        Noop,
+    }
+
+    impl From<Event> for PersistMsg {
+        fn from(event: Event) -> Self {
+            match event {
+                Event::Key(k) if k.code == KeyCode::Char('s') => Self::Save,
+                Event::Key(k) if k.code == KeyCode::Char('r') => Self::Restore,
+                _ => Self::Noop,
+            }
+        }
+    }
+
+    impl Model for PersistModel {
+        type Message = PersistMsg;
+
+        fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+            match msg {
+                PersistMsg::Save => Cmd::save_state(),
+                PersistMsg::Restore => Cmd::restore_state(),
+                PersistMsg::Noop => Cmd::none(),
+            }
+        }
+
+        fn view(&self, _frame: &mut Frame) {}
+    }
+
     // ---------- Tests ----------
 
     #[test]
@@ -393,6 +496,72 @@ mod tests {
 
         assert_eq!(sim.model().value, 1);
         assert!(!sim.is_running());
+    }
+
+    #[test]
+    fn save_state_flushes_registry() {
+        use crate::state_persistence::StateRegistry;
+
+        let registry = Arc::new(StateRegistry::in_memory());
+        registry.set("viewer", 1, vec![1, 2, 3]);
+        assert!(registry.is_dirty());
+
+        let mut sim = ProgramSimulator::with_registry(PersistModel, Arc::clone(&registry));
+        sim.send(PersistMsg::Save);
+
+        assert!(!registry.is_dirty());
+        let stored = registry.get("viewer").expect("entry present");
+        assert_eq!(stored.version, 1);
+        assert_eq!(stored.data, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn restore_state_round_trips_cache() {
+        use crate::state_persistence::StateRegistry;
+
+        let registry = Arc::new(StateRegistry::in_memory());
+        registry.set("viewer", 7, vec![9, 8, 7]);
+
+        let mut sim = ProgramSimulator::with_registry(PersistModel, Arc::clone(&registry));
+        sim.send(PersistMsg::Save);
+
+        let removed = registry.remove("viewer");
+        assert!(removed.is_some());
+        assert!(registry.get("viewer").is_none());
+
+        sim.send(PersistMsg::Restore);
+        let restored = registry.get("viewer").expect("restored entry");
+        assert_eq!(restored.version, 7);
+        assert_eq!(restored.data, vec![9, 8, 7]);
+    }
+
+    #[test]
+    fn resize_events_apply_in_order() {
+        let mut sim = ProgramSimulator::new(ResizeTracker::default());
+        sim.init();
+
+        let events = vec![
+            resize_event(80, 24),
+            resize_event(100, 40),
+            resize_event(120, 50),
+        ];
+        sim.inject_events(&events);
+
+        assert_eq!(sim.model().history, vec![(80, 24), (100, 40), (120, 50)]);
+        assert_eq!(sim.model().last, Some((120, 50)));
+    }
+
+    #[test]
+    fn resize_events_after_quit_are_ignored() {
+        let mut sim = ProgramSimulator::new(ResizeTracker::default());
+        sim.init();
+
+        let events = vec![resize_event(80, 24), key_event('q'), resize_event(120, 50)];
+        sim.inject_events(&events);
+
+        assert!(!sim.is_running());
+        assert_eq!(sim.model().history, vec![(80, 24)]);
+        assert_eq!(sim.model().last, Some((80, 24)));
     }
 
     #[test]
@@ -742,6 +911,87 @@ mod tests {
         assert_eq!(sim.model().value, 5);
     }
 
+    struct OrderingModel {
+        trace: RefCell<Vec<&'static str>>,
+    }
+
+    impl OrderingModel {
+        fn new() -> Self {
+            Self {
+                trace: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn trace(&self) -> Vec<&'static str> {
+            self.trace.borrow().clone()
+        }
+    }
+
+    #[derive(Debug)]
+    enum OrderingMsg {
+        Step(&'static str),
+        StartSequence,
+        StartBatch,
+    }
+
+    impl From<Event> for OrderingMsg {
+        fn from(_: Event) -> Self {
+            OrderingMsg::StartSequence
+        }
+    }
+
+    impl Model for OrderingModel {
+        type Message = OrderingMsg;
+
+        fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+            match msg {
+                OrderingMsg::Step(tag) => {
+                    self.trace.borrow_mut().push(tag);
+                    Cmd::none()
+                }
+                OrderingMsg::StartSequence => Cmd::sequence(vec![
+                    Cmd::msg(OrderingMsg::Step("seq-1")),
+                    Cmd::msg(OrderingMsg::Step("seq-2")),
+                    Cmd::msg(OrderingMsg::Step("seq-3")),
+                ]),
+                OrderingMsg::StartBatch => Cmd::batch(vec![
+                    Cmd::msg(OrderingMsg::Step("batch-1")),
+                    Cmd::msg(OrderingMsg::Step("batch-2")),
+                    Cmd::msg(OrderingMsg::Step("batch-3")),
+                ]),
+            }
+        }
+
+        fn view(&self, _frame: &mut Frame) {
+            self.trace.borrow_mut().push("view");
+        }
+    }
+
+    #[test]
+    fn sequence_preserves_update_order_before_view() {
+        let mut sim = ProgramSimulator::new(OrderingModel::new());
+        sim.init();
+
+        sim.send(OrderingMsg::StartSequence);
+        sim.capture_frame(1, 1);
+
+        assert_eq!(sim.model().trace(), vec!["seq-1", "seq-2", "seq-3", "view"]);
+    }
+
+    #[test]
+    fn batch_preserves_update_order_before_view() {
+        let mut sim = ProgramSimulator::new(OrderingModel::new());
+        sim.init();
+
+        sim.send(OrderingMsg::StartBatch);
+        sim.capture_frame(1, 1);
+
+        assert_eq!(
+            sim.model().trace(),
+            vec!["batch-1", "batch-2", "batch-3", "view"]
+        );
+    }
+
     #[test]
     fn frame_dimensions_match_request() {
         let mut sim = ProgramSimulator::new(Counter {
@@ -1044,6 +1294,27 @@ mod tests {
 
         assert_eq!(sim.logs(), &["direct log"]);
         assert_eq!(sim.tick_rate(), Some(std::time::Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn save_restore_are_noops_in_simulator() {
+        let mut sim = ProgramSimulator::new(Counter {
+            value: 7,
+            initialized: false,
+        });
+        sim.init();
+
+        let log_len = sim.command_log().len();
+        let tick_rate = sim.tick_rate();
+        let value_before = sim.model().value;
+
+        sim.execute_cmd(Cmd::save_state());
+        sim.execute_cmd(Cmd::restore_state());
+
+        assert_eq!(sim.command_log().len(), log_len);
+        assert_eq!(sim.tick_rate(), tick_rate);
+        assert_eq!(sim.model().value, value_before);
+        assert!(sim.is_running());
     }
 
     #[test]

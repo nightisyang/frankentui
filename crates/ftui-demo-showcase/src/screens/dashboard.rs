@@ -47,6 +47,7 @@ use super::{HelpEntry, Screen};
 use crate::app::ScreenId;
 use crate::chrome;
 use crate::data::{AlertSeverity, SimulatedData};
+use crate::determinism;
 use crate::theme;
 
 struct CodeSample {
@@ -3533,6 +3534,22 @@ impl Dashboard {
 
     /// Update FPS calculation.
     fn update_fps(&mut self) {
+        if determinism::is_demo_deterministic() {
+            let dt_us = determinism::demo_tick_ms(100).max(1) * 1000;
+            self.frame_times.push_back(dt_us);
+            if self.frame_times.len() > 30 {
+                self.frame_times.pop_front();
+            }
+            if !self.frame_times.is_empty() {
+                let avg_us: u64 =
+                    self.frame_times.iter().sum::<u64>() / self.frame_times.len() as u64;
+                if avg_us > 0 {
+                    self.fps = 1_000_000.0 / avg_us as f64;
+                }
+            }
+            self.last_frame = None;
+            return;
+        }
         let now = Instant::now();
         if let Some(last) = self.last_frame {
             let elapsed_us = now.duration_since(last).as_micros() as u64;

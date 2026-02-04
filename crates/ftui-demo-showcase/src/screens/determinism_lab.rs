@@ -30,6 +30,7 @@ use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::paragraph::Paragraph;
 
 use super::{HelpEntry, Screen};
+use crate::determinism;
 use crate::theme;
 
 const SCENE_WIDTH: u16 = 60;
@@ -159,7 +160,7 @@ impl DeterminismLab {
     pub fn new() -> Self {
         let base = Buffer::new(SCENE_WIDTH, SCENE_HEIGHT);
         let mut lab = Self {
-            seed: DEFAULT_SEED,
+            seed: determinism::demo_seed(DEFAULT_SEED),
             frame_index: 0,
             paused: false,
             active_strategy: StrategyKind::DirtyRows,
@@ -331,6 +332,10 @@ impl DeterminismLab {
         self.results = self.compute_results(&self.prev_buffer, &self.current_buffer);
     }
 
+    fn json_escape(value: &str) -> String {
+        value.replace('\\', "\\\\").replace('"', "\\\"")
+    }
+
     fn export_report(&mut self) {
         let path = self.export_path.clone();
         let mut message = String::new();
@@ -338,14 +343,46 @@ impl DeterminismLab {
 
         match OpenOptions::new().create(true).append(true).open(&path) {
             Ok(mut file) => {
+                let env_json = determinism::demo_env_json();
+                let hash_key = determinism::demo_hash_key(
+                    self.current_buffer.width(),
+                    self.current_buffer.height(),
+                );
+                let run_id = determinism::demo_run_id();
+                let run_id_json = run_id
+                    .as_ref()
+                    .map(|value| format!("\"{}\"", Self::json_escape(value)))
+                    .unwrap_or_else(|| "null".to_string());
+                let env_line = format!(
+                    "{{\"event\":\"determinism_env\",\"timestamp\":\"{}\",\"run_id\":{},\"hash_key\":\"{}\",\"seed\":{},\"width\":{},\"height\":{},\"env\":{}}}\n",
+                    determinism::chrono_like_timestamp(),
+                    run_id_json,
+                    Self::json_escape(&hash_key),
+                    self.seed,
+                    self.current_buffer.width(),
+                    self.current_buffer.height(),
+                    env_json
+                );
+                if let Err(err) = file.write_all(env_line.as_bytes()) {
+                    ok = false;
+                    message = format!("env write failed: {err}");
+                }
+                if !ok {
+                    self.last_export = Some(ExportStatus { path, ok, message });
+                    return;
+                }
                 for strategy in StrategyKind::ALL {
                     let result = self.results.get(strategy);
                     let (mismatch_x, mismatch_y, mismatch_count) = match result.mismatch {
                         Some(info) => (info.x as i64, info.y as i64, info.count as i64),
                         None => (-1, -1, 0),
                     };
+                    let timestamp = determinism::chrono_like_timestamp();
                     let line = format!(
-                        "{{\"event\":\"determinism_report\",\"frame\":{},\"seed\":{},\"width\":{},\"height\":{},\"strategy\":\"{}\",\"checksum\":\"0x{:016x}\",\"changes\":{},\"mismatch_count\":{},\"mismatch_x\":{},\"mismatch_y\":{}}}\n",
+                        "{{\"event\":\"determinism_report\",\"timestamp\":\"{}\",\"run_id\":{},\"hash_key\":\"{}\",\"frame\":{},\"seed\":{},\"width\":{},\"height\":{},\"strategy\":\"{}\",\"checksum\":\"0x{:016x}\",\"changes\":{},\"mismatch_count\":{},\"mismatch_x\":{},\"mismatch_y\":{}}}\n",
+                        timestamp,
+                        run_id_json,
+                        Self::json_escape(&hash_key),
                         self.frame_index,
                         self.seed,
                         self.current_buffer.width(),

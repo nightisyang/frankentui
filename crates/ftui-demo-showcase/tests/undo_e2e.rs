@@ -37,8 +37,10 @@
 //!
 //! Run: `cargo test -p ftui-demo-showcase --test undo_e2e -- --nocapture`
 
+use std::sync::OnceLock;
 use std::time::Instant;
 
+use ftui_harness::determinism::DeterminismFixture;
 use ftui_runtime::undo::{
     CommandBatch, HistoryConfig, HistoryManager, TextDeleteCmd, TextInsertCmd, Transaction,
     TransactionScope, UndoableCmd, WidgetId,
@@ -49,21 +51,13 @@ use ftui_runtime::undo::{
 // ---------------------------------------------------------------------------
 
 /// Generate a unique run ID for this test execution.
-fn run_id() -> String {
-    use std::sync::OnceLock;
-    static RUN_ID: OnceLock<String> = OnceLock::new();
-    RUN_ID
-        .get_or_init(|| {
-            format!(
-                "undo_test_{}_{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()
-            )
-        })
-        .clone()
+fn run_id() -> &'static str {
+    fixture().run_id()
+}
+
+fn fixture() -> &'static DeterminismFixture {
+    static FIXTURE: OnceLock<DeterminismFixture> = OnceLock::new();
+    FIXTURE.get_or_init(|| DeterminismFixture::new("undo_test", 42))
 }
 
 /// Emit a JSONL log entry.

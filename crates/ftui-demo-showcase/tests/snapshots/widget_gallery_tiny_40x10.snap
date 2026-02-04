@@ -1,10 +1,10 @@
-  A: Inputs │ ▸ B: Display │   C: Status
-+ASCII+┌Squar┐╭Roun╮╭Text Style Flags──╮
-+-----+└─────┘╰────╯│Bold              │
-╔Doubl╗┏Heavy┓╭Cust╮│Dim               │
-╚═════╝┗━━━━━┛╰────╯╰──────────────────╯
-╭Paragraph Wr╮╭Lists──────╮╭Code Block─╮
-│Word: The   │╰───────────╯╰───────────╯
-│Char: The qu│╭Table──────╮╭Blockquote ╮
-╰────────────╯╰───────────╯╰───────────╯
-.*......                                
+▸ A: Inputs │   B: Display │   C: Status
+╭TextIn╮╭Maske╮╭Command Pal╮╭Log Viewer╮
+╰──────╯╰─────╯│           ││INFO    5 │
+╭TextArea─────╮╰───────────╯╰──────────╯
+│1  FrankenTUI│╭File Picker╮╭ProgressBa╮
+│    text area││.          │╰──────────╯
+╰─────────────╯╰───────────╯╭Spinners──╮
+╭Ch╮╭Se╮╭Valid╮╭Notificatio╮│⠋ Loading │
+╰──╯╰──╯╰─────╯╰───────────╯╰──────────╯
+*.......                                

@@ -1362,6 +1362,20 @@ mod tests {
     }
 
     #[test]
+    fn test_visible_range_variable_height_default_for_unmeasured() {
+        let cache = HeightCache::new(2, 16);
+        let mut virt: Virtualized<i32> =
+            Virtualized::new(10).with_item_height(ItemHeight::Variable(cache));
+        for i in 0..3 {
+            virt.push(i);
+        }
+
+        // Default height = 2, viewport 5 fits 2 items (2 + 2) but not the third.
+        let range = virt.visible_range(5);
+        assert_eq!(range, 0..2);
+    }
+
+    #[test]
     fn test_render_range_with_overscan() {
         let mut virt: Virtualized<i32> =
             Virtualized::new(100).with_fixed_height(1).with_overscan(2);
@@ -1789,6 +1803,81 @@ mod tests {
         // Row 0 should be '1' (from Item 1), NOT '0' (from Item 0 ghosting)
         let cell = frame.buffer.get(0, 0).unwrap();
         assert_eq!(cell.content.as_char(), Some('1'));
+    }
+
+    #[test]
+    fn render_bottom_boundary_clips_partial_item() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        struct IndexedItem(u16);
+        impl RenderItem for IndexedItem {
+            fn render(&self, area: Rect, frame: &mut Frame, _selected: bool) {
+                let ch = char::from_digit(self.0 as u32, 10).unwrap();
+                for y in area.y..area.bottom() {
+                    frame.buffer.set(area.x, y, Cell::from_char(ch));
+                }
+            }
+            fn height(&self) -> u16 {
+                2
+            }
+        }
+
+        let items = vec![IndexedItem(0), IndexedItem(1), IndexedItem(2)];
+        let list = VirtualizedList::new(&items)
+            .fixed_height(2)
+            .show_scrollbar(false);
+        let mut state = VirtualizedListState::new();
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(4, 4, &mut pool);
+
+        // Viewport height 3 means the second item is only partially visible.
+        list.render(Rect::new(0, 0, 4, 3), &mut frame, &mut state);
+
+        assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some('0'));
+        assert_eq!(frame.buffer.get(0, 1).unwrap().content.as_char(), Some('0'));
+        assert_eq!(frame.buffer.get(0, 2).unwrap().content.as_char(), Some('1'));
+        // Row outside the viewport should remain empty.
+        assert_eq!(frame.buffer.get(0, 3).unwrap().content.as_char(), None);
+    }
+
+    #[test]
+    fn render_after_fling_advances_visible_rows() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        struct IndexedItem(u16);
+        impl RenderItem for IndexedItem {
+            fn render(&self, area: Rect, frame: &mut Frame, _selected: bool) {
+                let ch = char::from_digit(self.0 as u32, 10).unwrap();
+                for y in area.y..area.bottom() {
+                    frame.buffer.set(area.x, y, Cell::from_char(ch));
+                }
+            }
+        }
+
+        let items: Vec<IndexedItem> = (0..10).map(IndexedItem).collect();
+        let list = VirtualizedList::new(&items)
+            .fixed_height(1)
+            .show_scrollbar(false);
+        let mut state = VirtualizedListState::new();
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(4, 3, &mut pool);
+        let area = Rect::new(0, 0, 4, 3);
+
+        // Initial render establishes visible_count and baseline top row.
+        list.render(area, &mut frame, &mut state);
+        assert_eq!(state.scroll_offset(), 0);
+        assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some('0'));
+
+        // Momentum scroll: 40.0 * 0.1s = 4 rows.
+        state.fling(40.0);
+        state.tick(Duration::from_millis(100), items.len());
+        assert_eq!(state.scroll_offset(), 4);
+
+        frame.buffer.clear();
+        list.render(area, &mut frame, &mut state);
+        assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some('4'));
     }
 
     #[test]

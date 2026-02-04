@@ -798,20 +798,16 @@ mod tests {
     fn cleanup_expectations_match_sequences() {
         let output =
             b"\x1b[0m\x1b[?25h\x1b[?1049l\x1b[?1000;1002;1006l\x1b[?2004l\x1b[?1004l\x1b[<u";
-        assert!(
-            assert_terminal_restored(output, &CleanupExpectations::strict()).is_ok(),
-            "terminal cleanup assertions failed"
-        );
+        assert_terminal_restored(output, &CleanupExpectations::strict())
+            .expect("terminal cleanup assertions failed");
     }
 
     #[test]
     #[should_panic]
     fn cleanup_expectations_fail_when_missing() {
         let output = b"\x1b[?25h";
-        assert!(
-            assert_terminal_restored(output, &CleanupExpectations::strict()).is_ok(),
-            "terminal cleanup assertions failed"
-        );
+        assert_terminal_restored(output, &CleanupExpectations::strict())
+            .expect("terminal cleanup assertions failed");
     }
 
     #[cfg(unix)]
@@ -1094,10 +1090,8 @@ mod tests {
             kitty_keyboard: true,
         };
         let expectations = CleanupExpectations::for_session(&options);
-        assert!(
-            assert_terminal_restored(&output, &expectations).is_ok(),
-            "terminal cleanup assertions failed"
-        );
+        assert_terminal_restored(&output, &expectations)
+            .expect("terminal cleanup assertions failed");
     }
 
     #[cfg(unix)]
@@ -1152,10 +1146,8 @@ mod tests {
             kitty_keyboard: true,
         };
         let expectations = CleanupExpectations::for_session(&options);
-        assert!(
-            assert_terminal_restored(&output, &expectations).is_ok(),
-            "terminal cleanup assertions failed"
-        );
+        assert_terminal_restored(&output, &expectations)
+            .expect("terminal cleanup assertions failed");
     }
 
     #[cfg(unix)]
@@ -1208,10 +1200,8 @@ mod tests {
             kitty_keyboard: true,
         };
         let expectations = CleanupExpectations::for_session(&options);
-        assert!(
-            assert_terminal_restored(&output, &expectations).is_ok(),
-            "terminal cleanup assertions failed"
-        );
+        assert_terminal_restored(&output, &expectations)
+            .expect("terminal cleanup assertions failed");
     }
 
     #[cfg(unix)]
@@ -1552,26 +1542,20 @@ mod tests {
     fn assert_restored_with_alt_sequence_variants() {
         // Both alt-screen exit sequences should be accepted
         let output1 = b"\x1b[0m\x1b[?25h\x1b[?1049l\x1b[?1000l\x1b[?2004l\x1b[?1004l\x1b[<u";
-        assert!(
-            assert_terminal_restored(output1, &CleanupExpectations::strict()).is_ok(),
-            "terminal cleanup assertions failed"
-        );
+        assert_terminal_restored(output1, &CleanupExpectations::strict())
+            .expect("terminal cleanup assertions failed");
 
         let output2 = b"\x1b[0m\x1b[?25h\x1b[?1047l\x1b[?1000;1002l\x1b[?2004l\x1b[?1004l\x1b[<u";
-        assert!(
-            assert_terminal_restored(output2, &CleanupExpectations::strict()).is_ok(),
-            "terminal cleanup assertions failed"
-        );
+        assert_terminal_restored(output2, &CleanupExpectations::strict())
+            .expect("terminal cleanup assertions failed");
     }
 
     #[test]
     fn assert_restored_sgr_reset_variant() {
         // Both \x1b[0m and \x1b[m should be accepted for sgr_reset
         let output = b"\x1b[m\x1b[?25h\x1b[?1049l\x1b[?1000l\x1b[?2004l\x1b[?1004l\x1b[<u";
-        assert!(
-            assert_terminal_restored(output, &CleanupExpectations::strict()).is_ok(),
-            "terminal cleanup assertions failed"
-        );
+        assert_terminal_restored(output, &CleanupExpectations::strict())
+            .expect("terminal cleanup assertions failed");
     }
 
     #[test]
@@ -1586,10 +1570,8 @@ mod tests {
             focus_events: false,
             kitty_keyboard: false,
         };
-        assert!(
-            assert_terminal_restored(b"\x1b[?25h", &expectations).is_ok(),
-            "terminal cleanup assertions failed"
-        );
+        assert_terminal_restored(b"\x1b[?25h", &expectations)
+            .expect("terminal cleanup assertions failed");
     }
 
     // --- sequence constant tests ---

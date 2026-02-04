@@ -96,6 +96,9 @@ done
 mkdir -p "$LOG_DIR" "$RESULTS_DIR"
 export E2E_DETERMINISTIC="$DETERMINISTIC"
 export E2E_SEED="$SEED"
+if declare -f e2e_seed >/dev/null 2>&1; then
+    e2e_seed >/dev/null 2>&1 || true
+fi
 
 emit_jsonl() {
     local line="$1"

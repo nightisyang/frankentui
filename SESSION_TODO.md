@@ -1,5 +1,29 @@
 # Session TODO List
 
+## Current Session (RedSpring) — bd-3isi7 Determinism Fixtures + Deep Review + Optimization (2026-02-04)
+- [x] Re-read `AGENTS.md` + `README.md` end-to-end (fresh constraints + architecture)
+- [x] Load skills: `codebase-archaeology`, `extreme-software-optimization`, `agent-mail`, `ubs`
+- [x] Run `bv --robot-triage` (top pick: `bd-3isi7`)
+- [x] Inspect bead: `br show bd-3isi7 --json`
+- [ ] Confirm current owner of `bd-3isi7`; coordinate and avoid conflicting claim
+- [ ] If unclaimed: `br update bd-3isi7 --status in_progress --json`
+- [ ] Agent Mail: retry `send_message` to active agents (connection errors on first attempts)
+- [ ] Agent Mail: retry `file_reservation_paths` (connection errors blocking edits)
+- [x] Survey determinism hooks: `ftui-demo-showcase/src/app.rs`, `ftui-demo-showcase/src/cli.rs`
+- [x] Survey harness determinism: `ftui-harness/src/resize_storm.rs` + `tests/resize_storm_e2e.rs`
+- [x] Survey E2E scripts: `scripts/e2e_test.sh`, `scripts/demo_showcase_e2e.sh`, `scripts/e2e_demo_tour.sh`, `scripts/demo_text_effects_e2e.sh`
+- [x] Perf baseline: `hyperfine --warmup 3 --runs 10 "cargo test -p ftui-render perf_block_scan_vs_scalar_baseline -- --nocapture"` (mean ~347.6ms)
+- [ ] Perf profile: `perf record` or `cargo flamegraph` for `perf_block_scan_vs_scalar_baseline`
+- [ ] Perf opportunity matrix (impact/confidence/effort) for top hotspot
+- [ ] Define deterministic fixture utilities scope (seed control, fixed tick cadence, env capture)
+- [ ] Choose implementation location (prefer existing module; avoid new files unless necessary)
+- [ ] Implement fixture utilities with deterministic tests + rich assertion context
+- [ ] Wire fixtures into demo + E2E paths to produce stable hashes
+- [ ] Document reproduction steps for CI and local runs
+- [ ] Run UBS scan on touched files and triage findings
+- [ ] Run quality gates after code edits (`cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`)
+- [ ] Update bead notes + send Agent Mail summary (once tool recovers)
+
 ## Current Session (RedSpring) — bd-2me70 Perf Budget + Deep Review + Architecture (2026-02-04)
 - [x] Re-read `AGENTS.md` + `README.md` end-to-end
 - [x] Load skills: `codebase-archaeology`, `extreme-software-optimization`, `agent-mail`, `ubs`
@@ -222,9 +246,11 @@
 - [x] Isomorphism proof drafted (note FP reciprocal; behavior preserved)
 - [x] `sha256sum -c golden_checksums.txt` (failed due to existing snapshot drift)
 - [x] Fix grapheme-width fallback in `Buffer::print_text_clipped` (avoid border gaps)
-- [ ] Fix visual FX crash for effect #14/#15 (repro + guard)
+- [x] Add stride bounding guard for WaveInterference/Spiral to prevent heavy-frame hangs (effect #14/#15 reports)
 - [ ] File browser: verify border alignment for long/emoji rows (adjust if still off)
 - [ ] Markdown screen: verify border alignment after grapheme fix
+- [x] File browser: fix row alignment by using fixed-width ASCII icon column + stable column widths
+- [x] Markdown screen: add 1-cell gutter for tables to prevent border bleed
 - [ ] Mouse: click-to-focus per-pane within screens (not just whole screen)
 - [ ] Global: ensure arrow-key navigation for every screen (widgets + forms + others)
 - [ ] Dashboard: upgrade info/activity/charts/code/markdown/text-effects panels per spec
@@ -232,6 +258,7 @@
 - [ ] Code Explorer (SQLite): more dynamic panels + features
 - [ ] Data Viz: fill blank space with additional panes/visuals
 - [ ] Macro recorder: improve UX + ctrl+arrow behavior + hints
+- [x] Macro recorder: make Ctrl/Alt+Arrows always jump focus (↑ Controls, ← Timeline, → Scenarios) + clearer hints
 - [x] Re-run quality gates after fixes: `cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`
 - [x] Re-run UBS on diff after fixes (`UBS_MAX_DIR_SIZE_MB=0 ubs --diff`)
 - [ ] Update bead `bd-112f` with progress notes

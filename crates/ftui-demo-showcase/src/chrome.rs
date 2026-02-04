@@ -499,14 +499,14 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
     if state.a11y_large_text {
         a11y_flags.push("LT");
     }
-    let a11y_label = if a11y_flags.is_empty() {
+    let mut a11y_label = if a11y_flags.is_empty() {
         String::new()
     } else {
         format!(" A11y:{}", a11y_flags.join(" "))
     };
 
     // Build undo/redo indicator
-    let undo_label = if state.can_undo || state.can_redo {
+    let mut undo_label = if state.can_undo || state.can_redo {
         let undo_icon = if state.can_undo { "↶" } else { "-" };
         let redo_icon = if state.can_redo { "↷" } else { "-" };
         format!(" [{}|{}]", undo_icon, redo_icon)
@@ -535,7 +535,7 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
 
     // Build content strings
     let position_str = format!("[{}/{}]", state.screen_index + 1, state.screen_count);
-    let theme_str = format!("  {}", state.theme_name);
+    let mut theme_str = format!("  {}", state.theme_name);
     let nav_hint_full = "Tab: next screen · Shift+Tab: prev";
     let nav_hint_compact = "Tab/Shift+Tab: next/prev";
     let metrics_str = format!("tick:{} frm:{}", state.tick_count, state.frame_count);
@@ -554,21 +554,44 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
     );
 
     // Calculate lengths for padding
-    let left_content_len = 1
+    let available = area.width as usize;
+    let right_content_len = display_width(&dims_str) + 1 + display_width(&time_str) + 1;
+    let mut center_content_len = display_width(&center_str);
+    let mut left_content_len = 1
         + display_width(state.screen_title)
         + 1
         + display_width(&position_str)
         + display_width(&theme_str)
         + display_width(&a11y_label)
         + display_width(&undo_label);
-    let mut center_content_len = display_width(&center_str);
-    let right_content_len = display_width(&dims_str) + 1 + display_width(&time_str) + 1;
-
-    let available = area.width as usize;
     let mut total_content = left_content_len + center_content_len + right_content_len;
+
     if total_content > available {
         center_str = center_compact;
         center_content_len = display_width(&center_str);
+        total_content = left_content_len + center_content_len + right_content_len;
+    }
+    if total_content > available && !theme_str.is_empty() {
+        theme_str.clear();
+        left_content_len = 1
+            + display_width(state.screen_title)
+            + 1
+            + display_width(&position_str)
+            + display_width(&theme_str)
+            + display_width(&a11y_label)
+            + display_width(&undo_label);
+        total_content = left_content_len + center_content_len + right_content_len;
+    }
+    if total_content > available && (!a11y_label.is_empty() || !undo_label.is_empty()) {
+        a11y_label.clear();
+        undo_label.clear();
+        left_content_len = 1
+            + display_width(state.screen_title)
+            + 1
+            + display_width(&position_str)
+            + display_width(&theme_str)
+            + display_width(&a11y_label)
+            + display_width(&undo_label);
         total_content = left_content_len + center_content_len + right_content_len;
     }
 
@@ -588,7 +611,7 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
         spans.push(Span::styled(undo_label, undo_style));
     }
 
-    if total_content < available {
+    if total_content <= available {
         // Full layout with centered metrics
         let total_padding = available - total_content;
         let left_pad = total_padding / 2;
@@ -949,6 +972,7 @@ pub fn accent_for(id: ScreenId) -> theme::ColorToken {
         ScreenId::CommandPaletteLab => theme::screen_accent::ADVANCED,
         ScreenId::HyperlinkPlayground => theme::screen_accent::ADVANCED,
         ScreenId::DeterminismLab => theme::screen_accent::PERFORMANCE,
+        ScreenId::TableThemeGallery => theme::screen_accent::DATA_VIZ,
     }
 }
 

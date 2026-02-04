@@ -56,6 +56,7 @@ use ftui_core::geometry::Rect;
 use ftui_demo_showcase::screens::Screen;
 use ftui_demo_showcase::screens::async_tasks::{AsyncTaskManager, SchedulerPolicy, TaskState};
 use ftui_harness::assert_snapshot;
+use ftui_harness::determinism::DeterminismFixture;
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
 
@@ -64,29 +65,30 @@ use ftui_render::grapheme_pool::GraphemePool;
 // ---------------------------------------------------------------------------
 
 /// Generate a unique run ID for this test execution.
-fn run_id() -> String {
+fn fixture() -> &'static DeterminismFixture {
     use std::sync::OnceLock;
-    static RUN_ID: OnceLock<String> = OnceLock::new();
-    RUN_ID
-        .get_or_init(|| {
-            format!(
-                "asynctasks_test_{}_{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()
-            )
-        })
-        .clone()
+    static FIXTURE: OnceLock<DeterminismFixture> = OnceLock::new();
+    FIXTURE.get_or_init(|| DeterminismFixture::new("asynctasks_test", 42))
 }
 
-/// Deterministic seed for reproducible tests.
-const SEED: &str = "42";
+fn run_id() -> &'static str {
+    fixture().run_id()
+}
+
+fn seed() -> u64 {
+    fixture().seed()
+}
 
 /// Default test environment configuration.
 fn default_env() -> String {
-    r#"{"cols":120,"rows":40,"term":"test","colorterm":"","capabilities":"harness"}"#.to_string()
+    fixture()
+        .env_snapshot()
+        .with_u64("cols", 120)
+        .with_u64("rows", 40)
+        .with_str("term", "test")
+        .with_str("colorterm", "")
+        .with_str("capabilities", "harness")
+        .to_json()
 }
 
 /// Emit a JSONL log entry with the full bd-13pq.4 schema.
@@ -99,16 +101,15 @@ fn log_jsonl_full(
     outcome: Option<(&str, Option<&str>)>,
     data: &[(&str, &str)],
 ) {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let ts = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let ts = fixture().timestamp();
     let duration_us = end_us.saturating_sub(start_us);
 
     let mut fields = vec![
-        format!("\"ts\":\"T{ts:06}\""),
+        format!("\"ts\":\"{ts}\""),
         format!("\"run_id\":\"{}\"", run_id()),
         format!("\"case\":\"{case}\""),
         format!("\"step\":\"{step}\""),
-        format!("\"seed\":\"{SEED}\""),
+        format!("\"seed\":{}", seed()),
         format!("\"env\":{}", default_env()),
         format!(
             "\"timings\":{{\"start_us\":{start_us},\"end_us\":{end_us},\"duration_us\":{duration_us}}}"

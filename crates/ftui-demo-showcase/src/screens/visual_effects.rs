@@ -2550,16 +2550,9 @@ impl WaveInterferenceState {
             return;
         }
 
-        let mut stride = fx_stride(quality);
+        let stride = fx_stride_for_area(quality, width, height, 12_000);
         if stride == 0 {
             return;
-        }
-        let area_cells = width as usize * height as usize;
-        if area_cells > 12_000 {
-            stride = stride.max(2);
-        }
-        if area_cells > 20_000 {
-            stride = stride.max(3);
         }
 
         let w = width as f64;
@@ -2650,16 +2643,9 @@ impl SpiralState {
             return;
         }
 
-        let mut step = fx_stride(quality);
+        let step = fx_stride_for_area(quality, width, height, 12_000);
         if step == 0 {
             return;
-        }
-        let area_cells = width as usize * height as usize;
-        if area_cells > 12_000 {
-            step = step.max(2);
-        }
-        if area_cells > 20_000 {
-            step = step.max(3);
         }
 
         let w = width as f64;
@@ -2932,6 +2918,7 @@ const DOOM_MOVE_STEP: f32 = 2.8;
 const DOOM_STRAFE_STEP: f32 = 2.4;
 const DOOM_TURN_RATE: f32 = 0.07;
 const DOOM_SUBSTEP: f32 = 1.2;
+const DOOM_GRID_CELL: f32 = 64.0;
 
 #[derive(Debug, Clone, Copy)]
 struct DoomLine {
@@ -2978,6 +2965,89 @@ impl DoomLine {
     }
 }
 
+#[derive(Debug, Clone)]
+struct DoomGrid {
+    origin_x: f32,
+    origin_y: f32,
+    cols: i32,
+    rows: i32,
+    cell_size: f32,
+    cells: Vec<Vec<usize>>,
+}
+
+impl DoomGrid {
+    fn new(lines: &[DoomLine], cell_size: f32) -> Self {
+        let mut min_x = f32::INFINITY;
+        let mut min_y = f32::INFINITY;
+        let mut max_x = f32::NEG_INFINITY;
+        let mut max_y = f32::NEG_INFINITY;
+        for line in lines {
+            min_x = min_x.min(line.x1.min(line.x2));
+            min_y = min_y.min(line.y1.min(line.y2));
+            max_x = max_x.max(line.x1.max(line.x2));
+            max_y = max_y.max(line.y1.max(line.y2));
+        }
+        if !min_x.is_finite() || !min_y.is_finite() {
+            return Self {
+                origin_x: 0.0,
+                origin_y: 0.0,
+                cols: 0,
+                rows: 0,
+                cell_size,
+                cells: Vec::new(),
+            };
+        }
+
+        let span_x = (max_x - min_x).max(1.0);
+        let span_y = (max_y - min_y).max(1.0);
+        let cols = ((span_x / cell_size).ceil() as i32).max(1) + 1;
+        let rows = ((span_y / cell_size).ceil() as i32).max(1) + 1;
+        let mut cells = vec![Vec::new(); (cols * rows) as usize];
+
+        for (idx, line) in lines.iter().enumerate() {
+            let min_lx = line.x1.min(line.x2);
+            let max_lx = line.x1.max(line.x2);
+            let min_ly = line.y1.min(line.y2);
+            let max_ly = line.y1.max(line.y2);
+
+            let min_cx = ((min_lx - min_x) / cell_size).floor() as i32;
+            let max_cx = ((max_lx - min_x) / cell_size).floor() as i32;
+            let min_cy = ((min_ly - min_y) / cell_size).floor() as i32;
+            let max_cy = ((max_ly - min_y) / cell_size).floor() as i32;
+
+            let min_cx = min_cx.clamp(0, cols - 1);
+            let max_cx = max_cx.clamp(0, cols - 1);
+            let min_cy = min_cy.clamp(0, rows - 1);
+            let max_cy = max_cy.clamp(0, rows - 1);
+
+            for cy in min_cy..=max_cy {
+                for cx in min_cx..=max_cx {
+                    let idx_cell = (cy * cols + cx) as usize;
+                    cells[idx_cell].push(idx);
+                }
+            }
+        }
+
+        Self {
+            origin_x: min_x,
+            origin_y: min_y,
+            cols,
+            rows,
+            cell_size,
+            cells,
+        }
+    }
+
+    fn in_bounds(&self, cx: i32, cy: i32) -> bool {
+        cx >= 0 && cy >= 0 && cx < self.cols && cy < self.rows
+    }
+
+    fn cell_indices(&self, cx: i32, cy: i32) -> &[usize] {
+        let idx = (cy * self.cols + cx) as usize;
+        &self.cells[idx]
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct DoomRay {
     sin_t: f32,
@@ -3018,21 +3088,30 @@ struct DoomE1M1State {
     walk_phase: f32,
     walk_intensity: f32,
     lines: Vec<DoomLine>,
+    grid: DoomGrid,
     ray_cache: RefCell<Vec<DoomRay>>,
     ray_width: Cell<u16>,
+    ray_marks: RefCell<Vec<u32>>,
+    ray_stamp: Cell<u32>,
 }
 
 impl Default for DoomE1M1State {
     fn default() -> Self {
+        let lines = build_doom_lines();
+        let grid = DoomGrid::new(&lines, DOOM_GRID_CELL);
+        let marks = vec![0; lines.len()];
         Self {
             time: 0.0,
             fire_flash: 0.0,
             player: DoomPlayer::default(),
             walk_phase: 0.0,
             walk_intensity: 0.0,
-            lines: build_doom_lines(),
+            lines,
+            grid,
             ray_cache: RefCell::new(Vec::new()),
             ray_width: Cell::new(0),
+            ray_marks: RefCell::new(marks),
+            ray_stamp: Cell::new(1),
         }
     }
 }
@@ -3160,22 +3239,108 @@ impl DoomE1M1State {
         let mut best_idx = 0usize;
         let mut best_side = 0.0f32;
         let mut best_u = 0.0f32;
-        for (idx, line) in self.lines.iter().enumerate() {
-            let denom = cross2(dx, dy, line.vx, line.vy);
-            if denom.abs() < 1e-5 {
-                continue;
+
+        let grid = &self.grid;
+        if grid.cols == 0 || grid.rows == 0 {
+            return None;
+        }
+
+        let mut stamp = self.ray_stamp.get().wrapping_add(1);
+        let mut marks = self.ray_marks.borrow_mut();
+        if stamp == 0 {
+            marks.fill(0);
+            stamp = 1;
+        }
+        self.ray_stamp.set(stamp);
+
+        let eps = 1e-6;
+        let cell_size = grid.cell_size;
+        let mut cell_x = ((ox - grid.origin_x) / cell_size).floor() as i32;
+        let mut cell_y = ((oy - grid.origin_y) / cell_size).floor() as i32;
+        if !grid.in_bounds(cell_x, cell_y) {
+            return None;
+        }
+
+        let step_x = if dx >= 0.0 { 1 } else { -1 };
+        let step_y = if dy >= 0.0 { 1 } else { -1 };
+        let next_x = if dx >= 0.0 {
+            grid.origin_x + (cell_x as f32 + 1.0) * cell_size
+        } else {
+            grid.origin_x + (cell_x as f32) * cell_size
+        };
+        let next_y = if dy >= 0.0 {
+            grid.origin_y + (cell_y as f32 + 1.0) * cell_size
+        } else {
+            grid.origin_y + (cell_y as f32) * cell_size
+        };
+
+        let mut t_max_x = if dx.abs() < eps {
+            f32::INFINITY
+        } else {
+            (next_x - ox) / dx
+        };
+        let mut t_max_y = if dy.abs() < eps {
+            f32::INFINITY
+        } else {
+            (next_y - oy) / dy
+        };
+        let t_delta_x = if dx.abs() < eps {
+            f32::INFINITY
+        } else {
+            cell_size / dx.abs()
+        };
+        let t_delta_y = if dy.abs() < eps {
+            f32::INFINITY
+        } else {
+            cell_size / dy.abs()
+        };
+
+        let mut t_min = 0.0f32;
+        loop {
+            if !grid.in_bounds(cell_x, cell_y) {
+                break;
             }
-            let px = line.x1 - ox;
-            let py = line.y1 - oy;
-            let t = cross2(px, py, line.vx, line.vy) / denom;
-            let u = cross2(px, py, dx, dy) / denom;
-            if t > 0.0 && (0.0..=1.0).contains(&u) && t < best_t {
-                best_t = t;
-                best_idx = idx;
-                best_side = if denom > 0.0 { 1.0 } else { -1.0 };
-                best_u = u;
+
+            for &idx in grid.cell_indices(cell_x, cell_y) {
+                if marks[idx] == stamp {
+                    continue;
+                }
+                marks[idx] = stamp;
+                let line = &self.lines[idx];
+                let denom = cross2(dx, dy, line.vx, line.vy);
+                if denom.abs() < 1e-5 {
+                    continue;
+                }
+                let px = line.x1 - ox;
+                let py = line.y1 - oy;
+                let t = cross2(px, py, line.vx, line.vy) / denom;
+                let u = cross2(px, py, dx, dy) / denom;
+                if t > 0.0
+                    && (0.0..=1.0).contains(&u)
+                    && (t < best_t || (t == best_t && idx < best_idx))
+                {
+                    best_t = t;
+                    best_idx = idx;
+                    best_side = if denom > 0.0 { 1.0 } else { -1.0 };
+                    best_u = u;
+                }
+            }
+
+            if t_min > best_t {
+                break;
+            }
+
+            if t_max_x < t_max_y {
+                cell_x += step_x;
+                t_min = t_max_x;
+                t_max_x += t_delta_x;
+            } else {
+                cell_y += step_y;
+                t_min = t_max_y;
+                t_max_y += t_delta_y;
             }
         }
+
         if best_t.is_finite() {
             Some((best_t, best_idx, best_side, best_u))
         } else {
@@ -4362,6 +4527,25 @@ fn fx_stride(quality: FxQuality) -> usize {
     }
 }
 
+fn fx_stride_for_area(quality: FxQuality, width: u16, height: u16, max_samples: usize) -> usize {
+    let mut stride = fx_stride(quality);
+    if stride == 0 {
+        return 0;
+    }
+    if width == 0 || height == 0 || max_samples == 0 {
+        return stride;
+    }
+
+    let area = width as usize * height as usize;
+    if area <= max_samples {
+        return stride;
+    }
+
+    let desired = ((area as f64 / max_samples as f64).sqrt().ceil() as usize).max(1);
+    stride = stride.max(desired);
+    stride
+}
+
 // =============================================================================
 // Screen implementation
 // =============================================================================
@@ -4456,8 +4640,8 @@ impl VisualEffectsScreen {
 
     fn canvas_mode_for_effect(&self, _quality: FxQuality, _area_cells: usize) -> Mode {
         match self.effect {
-            // FPS effects use half blocks for stronger contrast and visibility.
-            EffectType::DoomE1M1 | EffectType::QuakeE1M1 => Mode::HalfBlock,
+            // FPS effects render in full braille resolution.
+            EffectType::DoomE1M1 | EffectType::QuakeE1M1 => Mode::Braille,
             _ => Mode::Braille,
         }
     }
@@ -4484,8 +4668,12 @@ impl VisualEffectsScreen {
     }
 
     pub(crate) fn enable_deterministic_mode(&mut self, tick_ms: u64) {
+        let tick_ms = tick_ms.max(1);
+        if self.deterministic_mode && self.deterministic_tick_ms == tick_ms {
+            return;
+        }
         self.deterministic_mode = true;
-        self.deterministic_tick_ms = tick_ms.max(1);
+        self.deterministic_tick_ms = tick_ms;
         self.frame_times.clear();
         self.last_frame = None;
     }

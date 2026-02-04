@@ -21,6 +21,7 @@ use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::paragraph::Paragraph;
 
 use super::{HelpEntry, Screen};
+use crate::determinism;
 #[cfg(test)]
 use crate::theme::ScopedThemeLock;
 use crate::theme::{self, ThemeId};
@@ -69,9 +70,7 @@ pub fn reset_event_counter() {
 
 /// Check if deterministic mode is enabled.
 pub fn is_deterministic_mode() -> bool {
-    std::env::var("FTUI_THEME_STUDIO_DETERMINISTIC")
-        .map(|v| v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    determinism::env_flag("FTUI_THEME_STUDIO_DETERMINISTIC") || determinism::is_demo_deterministic()
 }
 
 /// Diagnostic event types for JSONL logging.

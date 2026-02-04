@@ -2,8 +2,8 @@
 
 //! TableTheme core types and preset definitions.
 
-use crate::Style;
 use crate::color::{Ansi16, Color, ColorProfile};
+use crate::{Style, StyleFlags};
 use ftui_render::cell::PackedRgba;
 use std::hash::{Hash, Hasher};
 
@@ -28,39 +28,50 @@ fn lerp_color(a: PackedRgba, b: PackedRgba, t: f32) -> PackedRgba {
 /// Built-in TableTheme preset identifiers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum TablePresetId {
+    /// Luminous header with cool zebra rows.
     Aurora,
+    /// High-contrast graphite palette for dense data.
     Graphite,
+    /// Neon accent palette on dark base.
     Neon,
+    /// Muted slate tones with soft dividers.
     Slate,
+    /// Warm solar tones with bright header.
     Solar,
+    /// Orchard-inspired greens and warm highlights.
     Orchard,
+    /// Paper-like light theme with crisp borders.
     Paper,
+    /// Midnight palette for dark terminals.
     Midnight,
+    /// Classic terminal styling (ANSI-friendly).
     TerminalClassic,
 }
 
 /// Semantic table sections.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum TableSection {
+    /// Header row section.
     Header,
+    /// Body rows section.
     Body,
+    /// Footer rows section.
     Footer,
 }
 
 /// Target selection for a table effect.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum TableEffectTarget {
+    /// Apply to an entire section (header/body/footer).
     Section(TableSection),
+    /// Apply to a specific row index.
     Row(usize),
-    RowRange {
-        start: usize,
-        end: usize,
-    },
+    /// Apply to a row range (inclusive bounds).
+    RowRange { start: usize, end: usize },
+    /// Apply to a specific column index.
     Column(usize),
-    ColumnRange {
-        start: usize,
-        end: usize,
-    },
+    /// Apply to a column range (inclusive bounds).
+    ColumnRange { start: usize, end: usize },
     /// Body rows only.
     AllRows,
     /// Header + body.
@@ -70,8 +81,11 @@ pub enum TableEffectTarget {
 /// Scope used to resolve table effects without per-cell work.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct TableEffectScope {
+    /// Section being rendered.
     pub section: TableSection,
+    /// Optional row index within the section.
     pub row: Option<usize>,
+    /// Optional column index within the section.
     pub column: Option<usize>,
 }
 
@@ -189,6 +203,7 @@ impl Gradient {
 /// Effect definitions applied to table styles.
 #[derive(Clone, Debug)]
 pub enum TableEffect {
+    /// Pulse between two foreground/background colors.
     Pulse {
         fg_a: PackedRgba,
         fg_b: PackedRgba,
@@ -197,6 +212,7 @@ pub enum TableEffect {
         speed: f32,
         phase_offset: f32,
     },
+    /// Breathing glow that brightens/dims around a base color.
     BreathingGlow {
         fg: PackedRgba,
         bg: PackedRgba,
@@ -205,6 +221,7 @@ pub enum TableEffect {
         phase_offset: f32,
         asymmetry: f32,
     },
+    /// Sweep a multi-stop gradient across the target.
     GradientSweep {
         gradient: Gradient,
         speed: f32,
@@ -271,10 +288,15 @@ impl Default for StyleMask {
 /// A single effect rule applied to a table target.
 #[derive(Clone, Debug)]
 pub struct TableEffectRule {
+    /// Target selection (section/row/column/range).
     pub target: TableEffectTarget,
+    /// Effect definition to apply.
     pub effect: TableEffect,
+    /// Rule priority (higher applies later).
     pub priority: u8,
+    /// Blend mode for effect vs base style.
     pub blend_mode: BlendMode,
+    /// Mask of style channels the effect can override.
     pub style_mask: StyleMask,
 }
 
@@ -335,19 +357,80 @@ impl<'a> TableEffectResolver<'a> {
 }
 
 /// Shared theme for all table render paths.
+///
+/// This controls base styles (border/header/rows), spacing, and optional
+/// effect rules that can animate or accent specific rows/columns.
+///
+/// Determinism guidance: always supply an explicit phase from the caller
+/// (e.g., tick count or frame index). Avoid implicit clocks inside themes.
+///
+/// # Examples
+///
+/// Apply a preset and add an animated row highlight:
+///
+/// ```rust,no_run
+/// use crate::{
+///     TableEffect, TableEffectRule, TableEffectScope, TableEffectTarget, TableSection, TableTheme,
+///     Style,
+/// };
+/// use ftui_render::cell::PackedRgba;
+///
+/// let theme = TableTheme::aurora().with_effect(TableEffectRule::new(
+///     TableEffectTarget::Row(0),
+///     TableEffect::Pulse {
+///         fg_a: PackedRgba::rgb(240, 245, 255),
+///         fg_b: PackedRgba::rgb(255, 255, 255),
+///         bg_a: PackedRgba::rgb(28, 36, 54),
+///         bg_b: PackedRgba::rgb(60, 90, 140),
+///         speed: 1.0,
+///         phase_offset: 0.0,
+///     },
+/// ));
+///
+/// let resolver = theme.effect_resolver();
+/// let phase = 0.25; // caller-supplied (e.g., tick * 0.02)
+/// let scope = TableEffectScope::row(TableSection::Body, 0);
+/// let _animated = resolver.resolve(theme.row, scope, phase);
+/// ```
+///
+/// Override a preset for custom header + zebra rows:
+///
+/// ```rust,no_run
+/// use crate::{TableTheme, Style};
+/// use ftui_render::cell::PackedRgba;
+///
+/// let theme = TableTheme::terminal_classic()
+///     .with_header(Style::new().fg(PackedRgba::rgb(240, 240, 240)).bold())
+///     .with_row_alt(Style::new().bg(PackedRgba::rgb(20, 20, 20)))
+///     .with_divider(Style::new().fg(PackedRgba::rgb(60, 60, 60)))
+///     .with_padding(1)
+///     .with_column_gap(2);
+/// ```
 #[derive(Clone, Debug)]
 pub struct TableTheme {
+    /// Border style (table outline).
     pub border: Style,
+    /// Header row style.
     pub header: Style,
+    /// Base body row style.
     pub row: Style,
+    /// Alternate row style for zebra striping.
     pub row_alt: Style,
+    /// Selected row style.
     pub row_selected: Style,
+    /// Hover row style.
     pub row_hover: Style,
+    /// Divider/column separator style.
     pub divider: Style,
+    /// Cell padding inside each column (in cells).
     pub padding: u8,
+    /// Gap between columns (in cells).
     pub column_gap: u8,
+    /// Row height in terminal lines.
     pub row_height: u8,
+    /// Effect rules resolved per row/column/section.
     pub effects: Vec<TableEffectRule>,
+    /// Optional preset identifier for diagnostics.
     pub preset_id: Option<TablePresetId>,
 }
 
@@ -361,6 +444,406 @@ pub struct TableThemeDiagnostics {
     pub padding: u8,
     pub column_gap: u8,
     pub row_height: u8,
+}
+
+/// Serializable spec for exporting/importing table themes.
+///
+/// This is a pure data representation (no rendering logic) that preserves
+/// the full TableTheme surface, including effects.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableThemeSpec {
+    /// Schema version for forward-compatible parsing.
+    pub version: u8,
+    /// Optional human-readable name.
+    pub name: Option<String>,
+    /// Original preset identifier, if derived from a preset.
+    pub preset_id: Option<TablePresetId>,
+    /// Layout parameters.
+    pub padding: u8,
+    pub column_gap: u8,
+    pub row_height: u8,
+    /// Style buckets.
+    pub styles: TableThemeStyleSpec,
+    /// Effects applied to the theme.
+    pub effects: Vec<TableEffectRuleSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableThemeStyleSpec {
+    pub border: StyleSpec,
+    pub header: StyleSpec,
+    pub row: StyleSpec,
+    pub row_alt: StyleSpec,
+    pub row_selected: StyleSpec,
+    pub row_hover: StyleSpec,
+    pub divider: StyleSpec,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StyleSpec {
+    pub fg: Option<RgbaSpec>,
+    pub bg: Option<RgbaSpec>,
+    pub underline: Option<RgbaSpec>,
+    pub attrs: Vec<StyleAttr>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StyleAttr {
+    Bold,
+    Dim,
+    Italic,
+    Underline,
+    Blink,
+    Reverse,
+    Hidden,
+    Strikethrough,
+    DoubleUnderline,
+    CurlyUnderline,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct RgbaSpec {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+
+impl RgbaSpec {
+    #[must_use]
+    pub const fn new(r: u8, g: u8, b: u8, a: u8) -> Self {
+        Self { r, g, b, a }
+    }
+}
+
+impl From<PackedRgba> for RgbaSpec {
+    fn from(color: PackedRgba) -> Self {
+        Self::new(color.r(), color.g(), color.b(), color.a())
+    }
+}
+
+impl From<RgbaSpec> for PackedRgba {
+    fn from(color: RgbaSpec) -> Self {
+        PackedRgba::rgba(color.r, color.g, color.b, color.a)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GradientSpec {
+    pub stops: Vec<GradientStopSpec>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GradientStopSpec {
+    pub pos: f32,
+    pub color: RgbaSpec,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TableEffectSpec {
+    Pulse {
+        fg_a: RgbaSpec,
+        fg_b: RgbaSpec,
+        bg_a: RgbaSpec,
+        bg_b: RgbaSpec,
+        speed: f32,
+        phase_offset: f32,
+    },
+    BreathingGlow {
+        fg: RgbaSpec,
+        bg: RgbaSpec,
+        intensity: f32,
+        speed: f32,
+        phase_offset: f32,
+        asymmetry: f32,
+    },
+    GradientSweep {
+        gradient: GradientSpec,
+        speed: f32,
+        phase_offset: f32,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableEffectRuleSpec {
+    pub target: TableEffectTarget,
+    pub effect: TableEffectSpec,
+    pub priority: u8,
+    pub blend_mode: BlendMode,
+    pub style_mask: StyleMask,
+}
+
+impl TableThemeSpec {
+    /// Create a spec snapshot from a TableTheme.
+    #[must_use]
+    pub fn from_theme(theme: &TableTheme) -> Self {
+        Self {
+            version: 1,
+            name: None,
+            preset_id: theme.preset_id,
+            padding: theme.padding,
+            column_gap: theme.column_gap,
+            row_height: theme.row_height,
+            styles: TableThemeStyleSpec {
+                border: StyleSpec::from_style(&theme.border),
+                header: StyleSpec::from_style(&theme.header),
+                row: StyleSpec::from_style(&theme.row),
+                row_alt: StyleSpec::from_style(&theme.row_alt),
+                row_selected: StyleSpec::from_style(&theme.row_selected),
+                row_hover: StyleSpec::from_style(&theme.row_hover),
+                divider: StyleSpec::from_style(&theme.divider),
+            },
+            effects: theme
+                .effects
+                .iter()
+                .map(TableEffectRuleSpec::from_rule)
+                .collect(),
+        }
+    }
+
+    /// Convert this spec into a TableTheme.
+    #[must_use]
+    pub fn into_theme(self) -> TableTheme {
+        TableTheme {
+            border: self.styles.border.to_style(),
+            header: self.styles.header.to_style(),
+            row: self.styles.row.to_style(),
+            row_alt: self.styles.row_alt.to_style(),
+            row_selected: self.styles.row_selected.to_style(),
+            row_hover: self.styles.row_hover.to_style(),
+            divider: self.styles.divider.to_style(),
+            padding: self.padding,
+            column_gap: self.column_gap,
+            row_height: self.row_height,
+            effects: self
+                .effects
+                .into_iter()
+                .map(|spec| spec.to_rule())
+                .collect(),
+            preset_id: self.preset_id,
+        }
+    }
+}
+
+impl StyleSpec {
+    #[must_use]
+    pub fn from_style(style: &Style) -> Self {
+        Self {
+            fg: style.fg.map(RgbaSpec::from),
+            bg: style.bg.map(RgbaSpec::from),
+            underline: style.underline_color.map(RgbaSpec::from),
+            attrs: style.attrs.map(attrs_from_flags).unwrap_or_default(),
+        }
+    }
+
+    #[must_use]
+    pub fn to_style(&self) -> Style {
+        let mut style = Style::new();
+        style.fg = self.fg.map(PackedRgba::from);
+        style.bg = self.bg.map(PackedRgba::from);
+        style.underline_color = self.underline.map(PackedRgba::from);
+        style.attrs = flags_from_attrs(&self.attrs);
+        style
+    }
+}
+
+impl GradientSpec {
+    #[must_use]
+    pub fn from_gradient(gradient: &Gradient) -> Self {
+        Self {
+            stops: gradient
+                .stops()
+                .iter()
+                .map(|(pos, color)| GradientStopSpec {
+                    pos: *pos,
+                    color: RgbaSpec::from(*color),
+                })
+                .collect(),
+        }
+    }
+
+    #[must_use]
+    pub fn to_gradient(&self) -> Gradient {
+        Gradient::new(
+            self.stops
+                .iter()
+                .map(|stop| (stop.pos, PackedRgba::from(stop.color)))
+                .collect(),
+        )
+    }
+}
+
+impl TableEffectSpec {
+    #[must_use]
+    pub fn from_effect(effect: &TableEffect) -> Self {
+        match effect {
+            TableEffect::Pulse {
+                fg_a,
+                fg_b,
+                bg_a,
+                bg_b,
+                speed,
+                phase_offset,
+            } => Self::Pulse {
+                fg_a: (*fg_a).into(),
+                fg_b: (*fg_b).into(),
+                bg_a: (*bg_a).into(),
+                bg_b: (*bg_b).into(),
+                speed: *speed,
+                phase_offset: *phase_offset,
+            },
+            TableEffect::BreathingGlow {
+                fg,
+                bg,
+                intensity,
+                speed,
+                phase_offset,
+                asymmetry,
+            } => Self::BreathingGlow {
+                fg: (*fg).into(),
+                bg: (*bg).into(),
+                intensity: *intensity,
+                speed: *speed,
+                phase_offset: *phase_offset,
+                asymmetry: *asymmetry,
+            },
+            TableEffect::GradientSweep {
+                gradient,
+                speed,
+                phase_offset,
+            } => Self::GradientSweep {
+                gradient: GradientSpec::from_gradient(gradient),
+                speed: *speed,
+                phase_offset: *phase_offset,
+            },
+        }
+    }
+
+    #[must_use]
+    pub fn to_effect(&self) -> TableEffect {
+        match self {
+            TableEffectSpec::Pulse {
+                fg_a,
+                fg_b,
+                bg_a,
+                bg_b,
+                speed,
+                phase_offset,
+            } => TableEffect::Pulse {
+                fg_a: (*fg_a).into(),
+                fg_b: (*fg_b).into(),
+                bg_a: (*bg_a).into(),
+                bg_b: (*bg_b).into(),
+                speed: *speed,
+                phase_offset: *phase_offset,
+            },
+            TableEffectSpec::BreathingGlow {
+                fg,
+                bg,
+                intensity,
+                speed,
+                phase_offset,
+                asymmetry,
+            } => TableEffect::BreathingGlow {
+                fg: (*fg).into(),
+                bg: (*bg).into(),
+                intensity: *intensity,
+                speed: *speed,
+                phase_offset: *phase_offset,
+                asymmetry: *asymmetry,
+            },
+            TableEffectSpec::GradientSweep {
+                gradient,
+                speed,
+                phase_offset,
+            } => TableEffect::GradientSweep {
+                gradient: gradient.to_gradient(),
+                speed: *speed,
+                phase_offset: *phase_offset,
+            },
+        }
+    }
+}
+
+impl TableEffectRuleSpec {
+    #[must_use]
+    pub fn from_rule(rule: &TableEffectRule) -> Self {
+        Self {
+            target: rule.target,
+            effect: TableEffectSpec::from_effect(&rule.effect),
+            priority: rule.priority,
+            blend_mode: rule.blend_mode,
+            style_mask: rule.style_mask,
+        }
+    }
+
+    #[must_use]
+    pub fn to_rule(&self) -> TableEffectRule {
+        TableEffectRule {
+            target: self.target,
+            effect: self.effect.to_effect(),
+            priority: self.priority,
+            blend_mode: self.blend_mode,
+            style_mask: self.style_mask,
+        }
+    }
+}
+
+fn attrs_from_flags(flags: StyleFlags) -> Vec<StyleAttr> {
+    let mut attrs = Vec::new();
+    if flags.contains(StyleFlags::BOLD) {
+        attrs.push(StyleAttr::Bold);
+    }
+    if flags.contains(StyleFlags::DIM) {
+        attrs.push(StyleAttr::Dim);
+    }
+    if flags.contains(StyleFlags::ITALIC) {
+        attrs.push(StyleAttr::Italic);
+    }
+    if flags.contains(StyleFlags::UNDERLINE) {
+        attrs.push(StyleAttr::Underline);
+    }
+    if flags.contains(StyleFlags::BLINK) {
+        attrs.push(StyleAttr::Blink);
+    }
+    if flags.contains(StyleFlags::REVERSE) {
+        attrs.push(StyleAttr::Reverse);
+    }
+    if flags.contains(StyleFlags::HIDDEN) {
+        attrs.push(StyleAttr::Hidden);
+    }
+    if flags.contains(StyleFlags::STRIKETHROUGH) {
+        attrs.push(StyleAttr::Strikethrough);
+    }
+    if flags.contains(StyleFlags::DOUBLE_UNDERLINE) {
+        attrs.push(StyleAttr::DoubleUnderline);
+    }
+    if flags.contains(StyleFlags::CURLY_UNDERLINE) {
+        attrs.push(StyleAttr::CurlyUnderline);
+    }
+    attrs
+}
+
+fn flags_from_attrs(attrs: &[StyleAttr]) -> Option<StyleFlags> {
+    if attrs.is_empty() {
+        return None;
+    }
+    let mut flags = StyleFlags::NONE;
+    for attr in attrs {
+        match attr {
+            StyleAttr::Bold => flags.insert(StyleFlags::BOLD),
+            StyleAttr::Dim => flags.insert(StyleFlags::DIM),
+            StyleAttr::Italic => flags.insert(StyleFlags::ITALIC),
+            StyleAttr::Underline => flags.insert(StyleFlags::UNDERLINE),
+            StyleAttr::Blink => flags.insert(StyleFlags::BLINK),
+            StyleAttr::Reverse => flags.insert(StyleFlags::REVERSE),
+            StyleAttr::Hidden => flags.insert(StyleFlags::HIDDEN),
+            StyleAttr::Strikethrough => flags.insert(StyleFlags::STRIKETHROUGH),
+            StyleAttr::DoubleUnderline => flags.insert(StyleFlags::DOUBLE_UNDERLINE),
+            StyleAttr::CurlyUnderline => flags.insert(StyleFlags::CURLY_UNDERLINE),
+        }
+    }
+    if flags.is_empty() { None } else { Some(flags) }
 }
 
 struct ThemeStyles {
@@ -394,6 +877,104 @@ impl TableTheme {
             TablePresetId::Midnight => Self::midnight(),
             TablePresetId::TerminalClassic => Self::terminal_classic(),
         }
+    }
+
+    /// Set the border style.
+    #[must_use]
+    pub fn with_border(mut self, border: Style) -> Self {
+        self.border = border;
+        self
+    }
+
+    /// Set the header style.
+    #[must_use]
+    pub fn with_header(mut self, header: Style) -> Self {
+        self.header = header;
+        self
+    }
+
+    /// Set the base row style.
+    #[must_use]
+    pub fn with_row(mut self, row: Style) -> Self {
+        self.row = row;
+        self
+    }
+
+    /// Set the alternate row style.
+    #[must_use]
+    pub fn with_row_alt(mut self, row_alt: Style) -> Self {
+        self.row_alt = row_alt;
+        self
+    }
+
+    /// Set the selected row style.
+    #[must_use]
+    pub fn with_row_selected(mut self, row_selected: Style) -> Self {
+        self.row_selected = row_selected;
+        self
+    }
+
+    /// Set the hover row style.
+    #[must_use]
+    pub fn with_row_hover(mut self, row_hover: Style) -> Self {
+        self.row_hover = row_hover;
+        self
+    }
+
+    /// Set the divider style.
+    #[must_use]
+    pub fn with_divider(mut self, divider: Style) -> Self {
+        self.divider = divider;
+        self
+    }
+
+    /// Set table padding (cells inset).
+    #[must_use]
+    pub fn with_padding(mut self, padding: u8) -> Self {
+        self.padding = padding;
+        self
+    }
+
+    /// Set column gap in cells.
+    #[must_use]
+    pub fn with_column_gap(mut self, column_gap: u8) -> Self {
+        self.column_gap = column_gap;
+        self
+    }
+
+    /// Set row height in lines.
+    #[must_use]
+    pub fn with_row_height(mut self, row_height: u8) -> Self {
+        self.row_height = row_height;
+        self
+    }
+
+    /// Replace effect rules.
+    #[must_use]
+    pub fn with_effects(mut self, effects: Vec<TableEffectRule>) -> Self {
+        self.effects = effects;
+        self
+    }
+
+    /// Append a single effect rule.
+    #[must_use]
+    pub fn with_effect(mut self, effect: TableEffectRule) -> Self {
+        self.effects.push(effect);
+        self
+    }
+
+    /// Remove all effect rules.
+    #[must_use]
+    pub fn clear_effects(mut self) -> Self {
+        self.effects.clear();
+        self
+    }
+
+    /// Override the preset identifier (used for diagnostics).
+    #[must_use]
+    pub fn with_preset_id(mut self, preset_id: Option<TablePresetId>) -> Self {
+        self.preset_id = preset_id;
+        self
     }
 
     /// Luminous header with cool zebra rows.
@@ -951,7 +1532,9 @@ impl StableHasher {
 
     #[must_use]
     const fn new() -> Self {
-        Self { state: Self::OFFSET }
+        Self {
+            state: Self::OFFSET,
+        }
     }
 }
 
@@ -1186,7 +1769,11 @@ mod tests {
         let mut theme = TableTheme::aurora();
         let base = theme.style_hash();
         theme.padding = theme.padding.saturating_add(1);
-        assert_ne!(base, theme.style_hash(), "padding should influence style hash");
+        assert_ne!(
+            base,
+            theme.style_hash(),
+            "padding should influence style hash"
+        );
     }
 
     #[test]
@@ -1204,6 +1791,10 @@ mod tests {
                 asymmetry: 0.2,
             },
         ));
-        assert_ne!(base, theme.effects_hash(), "effects hash should change with rules");
+        assert_ne!(
+            base,
+            theme.effects_hash(),
+            "effects hash should change with rules"
+        );
     }
 }

@@ -93,14 +93,19 @@ fn main() {
         model.start_tour(start_step, opts.tour_speed);
     }
 
-    let budget = match screen_mode {
-        ScreenMode::AltScreen => {
-            let mut cfg = FrameBudgetConfig::relaxed();
-            cfg.allow_frame_skip = false;
-            cfg
-        }
-        _ => FrameBudgetConfig::default(),
+    let mut budget = match screen_mode {
+        ScreenMode::AltScreen => FrameBudgetConfig {
+            allow_frame_skip: false,
+            ..FrameBudgetConfig::relaxed()
+        },
+        _ => FrameBudgetConfig {
+            allow_frame_skip: false,
+            ..FrameBudgetConfig::default()
+        },
     };
+    // Demo showcase should prioritize visual stability over aggressive degradation.
+    // Use a generous total budget so VFX doesn't degrade to ASCII/black after a few seconds.
+    budget.total = Duration::from_millis(200);
 
     let config = ProgramConfig {
         screen_mode,

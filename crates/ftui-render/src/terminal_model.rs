@@ -1039,6 +1039,7 @@ impl TerminalModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ansi;
 
     #[test]
     fn new_creates_empty_grid() {
@@ -1231,6 +1232,18 @@ mod tests {
     }
 
     #[test]
+    fn alt_screen_toggle_is_tracked() {
+        let mut model = TerminalModel::new(20, 5);
+        assert!(!model.modes().alt_screen);
+
+        model.process(b"\x1b[?1049h");
+        assert!(model.modes().alt_screen);
+
+        model.process(b"\x1b[?1049l");
+        assert!(!model.modes().alt_screen);
+    }
+
+    #[test]
     fn dump_sequences_readable() {
         let bytes = b"\x1b[1;1H\x1b[1mHello\x1b[0m";
         let dump = TerminalModel::dump_sequences(bytes);
@@ -1251,6 +1264,48 @@ mod tests {
         for y in 0..5 {
             assert_eq!(model.row_text(y), Some(String::new()));
         }
+    }
+
+    #[test]
+    fn erase_scrollback_mode_clears_screen() {
+        let mut model = TerminalModel::new(10, 3);
+        model.process(b"Line1\nLine2\nLine3");
+        model.process(b"\x1b[3J"); // ED scrollback mode
+
+        for y in 0..3 {
+            assert_eq!(model.row_text(y), Some(String::new()));
+        }
+    }
+
+    #[test]
+    fn scroll_region_sequences_are_ignored_but_safe() {
+        let mut model = TerminalModel::new(12, 3);
+        model.process(b"ABCD");
+        let cursor_before = model.cursor();
+
+        let mut buf = Vec::new();
+        ansi::set_scroll_region(&mut buf, 1, 2).expect("scroll region sequence");
+        model.process(&buf);
+        model.process(ansi::RESET_SCROLL_REGION);
+
+        assert_eq!(model.cursor(), cursor_before);
+        model.process(b"EF");
+        assert_eq!(model.row_text(0).as_deref(), Some("ABCDEF"));
+    }
+
+    #[test]
+    fn scroll_region_invalid_params_do_not_corrupt_state() {
+        let mut model = TerminalModel::new(8, 2);
+        model.process(b"Hi");
+        let cursor_before = model.cursor();
+
+        model.process(b"\x1b[5;2r"); // bottom < top
+        model.process(b"\x1b[0;0r"); // zero params
+        model.process(b"\x1b[999;999r"); // out of bounds
+
+        assert_eq!(model.cursor(), cursor_before);
+        model.process(b"!");
+        assert_eq!(model.row_text(0).as_deref(), Some("Hi!"));
     }
 }
 

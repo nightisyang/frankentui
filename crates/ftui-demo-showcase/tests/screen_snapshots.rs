@@ -738,7 +738,7 @@ fn table_theme_gallery_logs_overrides() {
     );
     assert_eq!(
         value.get("header_emphasis").and_then(Value::as_bool),
-        Some(false)
+        Some(true)
     );
     assert_eq!(
         value.get("zebra_strength").and_then(Value::as_str),
@@ -750,7 +750,7 @@ fn table_theme_gallery_logs_overrides() {
     );
     assert_eq!(
         value.get("highlight_row").and_then(Value::as_bool),
-        Some(false)
+        Some(true)
     );
 }
 

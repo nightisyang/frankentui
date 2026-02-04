@@ -47,6 +47,11 @@ if ! declare -f e2e_log_stamp >/dev/null 2>&1; then
     e2e_log_stamp() { date +%Y%m%d_%H%M%S; }
 fi
 
+export E2E_DETERMINISTIC="${E2E_DETERMINISTIC:-1}"
+export E2E_SEED="${E2E_SEED:-0}"
+export E2E_TIME_STEP_MS="${E2E_TIME_STEP_MS:-100}"
+e2e_seed >/dev/null 2>&1 || true
+
 TIMESTAMP="$(e2e_log_stamp)"
 LOG_DIR="${LOG_DIR:-/tmp/ftui-demo-e2e-${TIMESTAMP}}"
 PKG="ftui-demo-showcase"
@@ -1073,17 +1078,37 @@ with open(report_path, "r", encoding="utf-8") as handle:
             continue
         lines.append(json.loads(line))
 
-required = {"event", "frame", "seed", "width", "height", "strategy", "checksum", "changes", "mismatch_count"}
+required = {
+    "event",
+    "timestamp",
+    "run_id",
+    "hash_key",
+    "frame",
+    "seed",
+    "width",
+    "height",
+    "strategy",
+    "checksum",
+    "changes",
+    "mismatch_count",
+}
 strategies = set()
 missing = 0
+env_missing = 0
+env_seen = 0
 for entry in lines:
     if entry.get("event") != "determinism_report":
+        if entry.get("event") == "determinism_env":
+            env_seen += 1
+            env_required = {"event", "timestamp", "run_id", "hash_key", "seed", "width", "height", "env"}
+            if not env_required.issubset(entry.keys()):
+                env_missing += 1
         continue
     strategies.add(entry.get("strategy"))
     if not required.issubset(entry.keys()):
         missing += 1
 
-ok = len(strategies) >= 3 and missing == 0 and len(lines) >= 3
+ok = len(strategies) >= 3 and missing == 0 and env_seen >= 1 and env_missing == 0 and len(lines) >= 3
 
 summary = {
     "event": "determinism_summary",
@@ -1094,6 +1119,8 @@ summary = {
     "strategy_count": len(strategies),
     "strategies": sorted([s for s in strategies if s]),
     "missing_required": missing,
+    "env_seen": env_seen,
+    "env_missing_required": env_missing,
 }
 
 with open(summary_path, "w", encoding="utf-8") as handle:

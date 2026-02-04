@@ -1184,6 +1184,37 @@ mod tests {
     }
 
     #[test]
+    fn test_multi_codepoint_grapheme_cursor_movement() {
+        let mut input = TextInput::new().with_value("a👩‍💻b");
+        assert_eq!(input.grapheme_count(), 3);
+        assert_eq!(input.cursor(), 3);
+
+        input.move_cursor_left();
+        assert_eq!(input.cursor(), 2);
+        input.move_cursor_left();
+        assert_eq!(input.cursor(), 1);
+        input.move_cursor_left();
+        assert_eq!(input.cursor(), 0);
+
+        input.move_cursor_right();
+        assert_eq!(input.cursor(), 1);
+        input.move_cursor_right();
+        assert_eq!(input.cursor(), 2);
+        input.move_cursor_right();
+        assert_eq!(input.cursor(), 3);
+    }
+
+    #[test]
+    fn test_delete_back_multi_codepoint_grapheme() {
+        let mut input = TextInput::new().with_value("a👩‍💻b");
+        input.cursor = 2; // after the emoji grapheme
+        input.delete_char_back();
+        assert_eq!(input.value(), "ab");
+        assert_eq!(input.cursor(), 1);
+        assert_eq!(input.grapheme_count(), 2);
+    }
+
+    #[test]
     fn test_handle_event_char() {
         let mut input = TextInput::new();
         let event = Event::Key(KeyEvent::new(KeyCode::Char('a')));
@@ -1464,6 +1495,16 @@ mod tests {
         assert!(input.handle_event(&event));
         assert_eq!(input.value(), "hello world");
         assert_eq!(input.cursor(), 11);
+    }
+
+    #[test]
+    fn test_paste_multi_grapheme_sequence() {
+        let mut input = TextInput::new().with_value("hi");
+        input.cursor = 2;
+        let event = Event::Paste(ftui_core::event::PasteEvent::new("👩‍💻🔥", false));
+        assert!(input.handle_event(&event));
+        assert_eq!(input.value(), "hi👩‍💻🔥");
+        assert_eq!(input.cursor(), 4);
     }
 
     #[test]

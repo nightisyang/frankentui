@@ -34,6 +34,18 @@ Common variables:
 - `E2E_ONLY_CASE` — run a single case in scripts that support filtering
 - `E2E_DETERMINISTIC=1` — emit deterministic timestamps/run IDs in JSONL logs
 - `E2E_SEED=<n>` — fixed seed for deterministic runs (propagated to harnesses)
+- `E2E_AUTO_SEED=1` — automatically propagate deterministic seed/env defaults when sourcing `tests/e2e/lib/logging.sh`
+- `FTUI_DEMO_DETERMINISTIC=1` — deterministic mode for demo showcase screens
+- `FTUI_DEMO_SEED=<n>` — global demo seed override (used by tour/VFX + screens)
+- `FTUI_TEST_DETERMINISTIC=1` — deterministic mode for Rust E2E/integration tests
+- `FTUI_TEST_SEED=<n>` — seed override for Rust E2E/integration fixtures
+- `FTUI_TEST_TIME_STEP_MS=<n>` — deterministic clock step for fixture timestamps
+
+Script defaults (unless overridden):
+
+- `scripts/e2e_test.sh` and `scripts/demo_showcase_e2e.sh` set
+  `E2E_DETERMINISTIC=1`, `E2E_SEED=0`, and `E2E_TIME_STEP_MS=100` to keep
+  JSONL logs and frame hashes stable across runs.
 
 PTY runner controls (from `tests/e2e/lib/pty.sh`):
 

@@ -20,8 +20,41 @@
 //! assert_eq!(lines.len(), 2);
 //! ```
 
+use std::sync::OnceLock;
+
 use unicode_display_width::width as unicode_display_width;
 use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+#[inline]
+fn env_flag(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+#[inline]
+fn is_cjk_locale(locale: &str) -> bool {
+    let lower = locale.trim().to_ascii_lowercase();
+    lower.starts_with("ja") || lower.starts_with("zh") || lower.starts_with("ko")
+}
+
+#[inline]
+fn use_cjk_width() -> bool {
+    static CJK_WIDTH: OnceLock<bool> = OnceLock::new();
+    *CJK_WIDTH.get_or_init(|| {
+        if let Ok(value) =
+            std::env::var("FTUI_TEXT_CJK_WIDTH").or_else(|_| std::env::var("FTUI_CJK_WIDTH"))
+        {
+            return env_flag(&value);
+        }
+        if let Ok(locale) = std::env::var("LC_CTYPE").or_else(|_| std::env::var("LANG")) {
+            return is_cjk_locale(&locale);
+        }
+        false
+    })
+}
 
 /// Text wrapping mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -459,6 +492,9 @@ fn is_emoji_grapheme(grapheme: &str) -> bool {
 ///
 /// Uses `unicode-display-width` so grapheme clusters (ZWJ emoji, flags, combining
 /// marks) are treated as a single glyph with correct terminal width.
+///
+/// If `FTUI_TEXT_CJK_WIDTH=1` (or `FTUI_CJK_WIDTH=1`) or a CJK locale is detected,
+/// ambiguous-width characters are treated as double-width.
 #[inline]
 #[must_use]
 pub fn grapheme_width(grapheme: &str) -> usize {
@@ -468,7 +504,11 @@ pub fn grapheme_width(grapheme: &str) -> usize {
     if grapheme.chars().all(is_zero_width_codepoint) {
         return 0;
     }
-    let width = unicode_display_width(grapheme) as usize;
+    let width = if use_cjk_width() {
+        grapheme.width_cjk()
+    } else {
+        unicode_display_width(grapheme) as usize
+    };
     if is_emoji_grapheme(grapheme) {
         return 2;
     }
@@ -478,6 +518,9 @@ pub fn grapheme_width(grapheme: &str) -> usize {
 /// Calculate the display width of text in cells.
 ///
 /// Uses ASCII fast-path when possible, falling back to Unicode width calculation.
+///
+/// If `FTUI_TEXT_CJK_WIDTH=1` (or `FTUI_CJK_WIDTH=1`) or a CJK locale is detected,
+/// ambiguous-width characters are treated as double-width.
 ///
 /// # Performance
 /// - ASCII text: O(n) byte scan, no allocations
@@ -491,9 +534,13 @@ pub fn display_width(text: &str) -> usize {
     if text.is_ascii() {
         return ascii_display_width(text);
     }
+    let cjk_width = use_cjk_width();
     if !text.chars().any(is_zero_width_codepoint) {
         if text.chars().any(is_probable_emoji) {
             return text.graphemes(true).map(crate::wrap::grapheme_width).sum();
+        }
+        if cjk_width {
+            return text.width_cjk();
         }
         return unicode_display_width(text) as usize;
     }

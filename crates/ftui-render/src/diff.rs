@@ -1100,6 +1100,23 @@ mod tests {
     }
 
     #[test]
+    fn dirty_row_false_positive_skipped() {
+        let old = Buffer::new(8, 2);
+        let mut new = old.clone();
+
+        // Clear initial dirty state to isolate this row.
+        new.clear_dirty();
+        // Mark row 0 dirty without changing content.
+        new.set_raw(2, 0, Cell::default());
+
+        let diff = BufferDiff::compute_dirty(&old, &new);
+        assert!(
+            diff.is_empty(),
+            "dirty row with no changes should be skipped"
+        );
+    }
+
+    #[test]
     fn multiple_scattered_changes_detected() {
         let old = Buffer::new(10, 10);
         let mut new = Buffer::new(10, 10);
@@ -2033,7 +2050,7 @@ mod tests {
 
         new.clear_dirty();
         for x in 0..10u16 {
-            new.set_raw(x, 0, Cell::from_char('T'));
+            new.set_raw(x, 0, Cell::from_char('X'));
         }
 
         let full = BufferDiff::compute(&old, &new);
@@ -2047,6 +2064,105 @@ mod tests {
             stats.fallback.is_none(),
             "tile path should be used for sparse tiles"
         );
+    }
+
+    fn make_dirty_buffer(width: u16, height: u16, changes: &[(u16, u16, char)]) -> Buffer {
+        let mut buffer = Buffer::new(width, height);
+        buffer.clear_dirty();
+        for &(x, y, ch) in changes {
+            buffer.set_raw(x, y, Cell::from_char(ch));
+        }
+        buffer
+    }
+
+    fn tile_stats_for_config(old: &Buffer, new: &Buffer, config: TileDiffConfig) -> TileDiffStats {
+        let mut diff = BufferDiff::new();
+        *diff.tile_config_mut() = config;
+        diff.compute_dirty_into(old, new);
+        diff.last_tile_stats()
+            .expect("tile stats should be recorded")
+    }
+
+    #[test]
+    fn tile_fallback_disabled_when_config_off() {
+        let width = 64;
+        let height = 32;
+        let old = Buffer::new(width, height);
+        let new = make_dirty_buffer(width, height, &[(0, 0, 'X')]);
+
+        let config = TileDiffConfig {
+            enabled: false,
+            min_cells_for_tiles: 0,
+            dense_cell_ratio: 1.1,
+            dense_tile_ratio: 1.1,
+            max_tiles: usize::MAX,
+            ..Default::default()
+        };
+
+        let stats = tile_stats_for_config(&old, &new, config);
+        assert_eq!(stats.fallback, Some(TileDiffFallback::Disabled));
+    }
+
+    #[test]
+    fn tile_fallback_small_screen_when_below_threshold() {
+        let width = 64;
+        let height = 32;
+        let old = Buffer::new(width, height);
+        let new = make_dirty_buffer(width, height, &[(1, 2, 'Y')]);
+
+        let config = TileDiffConfig {
+            enabled: true,
+            min_cells_for_tiles: width as usize * height as usize + 1,
+            dense_cell_ratio: 1.1,
+            dense_tile_ratio: 1.1,
+            max_tiles: usize::MAX,
+            ..Default::default()
+        };
+
+        let stats = tile_stats_for_config(&old, &new, config);
+        assert_eq!(stats.fallback, Some(TileDiffFallback::SmallScreen));
+    }
+
+    #[test]
+    fn tile_fallback_too_many_tiles_when_budget_exceeded() {
+        let width = 64;
+        let height = 64;
+        let old = Buffer::new(width, height);
+        let new = make_dirty_buffer(width, height, &[(2, 3, 'Z')]);
+
+        let config = TileDiffConfig {
+            enabled: true,
+            tile_w: 8,
+            tile_h: 8,
+            min_cells_for_tiles: 0,
+            dense_cell_ratio: 1.1,
+            dense_tile_ratio: 1.1,
+            max_tiles: 4,
+        };
+
+        let stats = tile_stats_for_config(&old, &new, config);
+        assert_eq!(stats.fallback, Some(TileDiffFallback::TooManyTiles));
+    }
+
+    #[test]
+    fn tile_fallback_dense_tiles_when_ratio_exceeded() {
+        let width = 64;
+        let height = 32;
+        let old = Buffer::new(width, height);
+        let new = make_dirty_buffer(width, height, &[(0, 0, 'A'), (24, 0, 'B')]);
+
+        let config = TileDiffConfig {
+            enabled: true,
+            tile_w: 8,
+            tile_h: 8,
+            min_cells_for_tiles: 0,
+            dense_cell_ratio: 1.1,
+            dense_tile_ratio: 0.05,
+            max_tiles: usize::MAX / 4,
+        };
+
+        let stats = tile_stats_for_config(&old, &new, config);
+        assert_eq!(stats.fallback, Some(TileDiffFallback::DenseTiles));
     }
 
     fn lcg_next(state: &mut u64) -> u64 {
@@ -2476,7 +2592,7 @@ mod proptests {
             )
         )| {
             let old = Buffer::new(width, height);
-            let mut new = old.clone();
+            let mut new = Buffer::new(width, height);
 
             // Clear dirty state on new so we start fresh tracking
             new.clear_dirty();

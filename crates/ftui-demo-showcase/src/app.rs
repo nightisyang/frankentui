@@ -43,6 +43,7 @@ use ftui_widgets::voi_debug_overlay::{
     VoiOverlayStyle, VoiPosteriorSummary,
 };
 
+use crate::determinism;
 use crate::screens;
 use crate::screens::Screen;
 use crate::theme;
@@ -346,7 +347,7 @@ fn tour_seed() -> u64 {
     env::var("FTUI_TOUR_SEED")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(0)
+        .unwrap_or_else(|| determinism::demo_seed(0))
 }
 
 /// Resolve a screen mode label for guided tour logs.
@@ -386,6 +387,8 @@ pub enum ScreenId {
     FormsInput,
     /// Charts, canvas, and structured data.
     DataViz,
+    /// Table theme preset gallery.
+    TableThemeGallery,
     /// File system navigation and preview.
     FileBrowser,
     /// Diagnostics, timers, and spinners.
@@ -483,6 +486,7 @@ impl ScreenId {
             Self::LayoutLab => "LayoutLab",
             Self::FormsInput => "FormsInput",
             Self::DataViz => "DataViz",
+            Self::TableThemeGallery => "TableThemeGallery",
             Self::FileBrowser => "FileBrowser",
             Self::AdvancedFeatures => "AdvancedFeatures",
             Self::TerminalCapabilities => "TerminalCapabilities",
@@ -546,6 +550,8 @@ pub struct ScreenStates {
     pub forms_input: screens::forms_input::FormsInput,
     /// Data visualization screen state.
     pub data_viz: screens::data_viz::DataViz,
+    /// Table theme gallery screen state.
+    pub table_theme_gallery: screens::table_theme_gallery::TableThemeGallery,
     /// File browser screen state.
     pub file_browser: screens::file_browser::FileBrowser,
     /// Advanced features screen state.
@@ -619,6 +625,7 @@ impl Default for ScreenStates {
             layout_lab: Default::default(),
             forms_input: Default::default(),
             data_viz: Default::default(),
+            table_theme_gallery: Default::default(),
             file_browser: Default::default(),
             advanced_features: Default::default(),
             terminal_capabilities: Default::default(),
@@ -679,6 +686,9 @@ impl ScreenStates {
             }
             ScreenId::DataViz => {
                 self.data_viz.update(event);
+            }
+            ScreenId::TableThemeGallery => {
+                self.table_theme_gallery.update(event);
             }
             ScreenId::FileBrowser => {
                 self.file_browser.update(event);
@@ -795,6 +805,7 @@ impl ScreenStates {
             ScreenId::LayoutLab => self.layout_lab.tick(tick_count),
             ScreenId::FormsInput => self.forms_input.tick(tick_count),
             ScreenId::DataViz => self.data_viz.tick(tick_count),
+            ScreenId::TableThemeGallery => self.table_theme_gallery.tick(tick_count),
             ScreenId::FileBrowser => self.file_browser.tick(tick_count),
             ScreenId::AdvancedFeatures => self.advanced_features.tick(tick_count),
             ScreenId::TerminalCapabilities => self.terminal_capabilities.tick(tick_count),
@@ -862,6 +873,7 @@ impl ScreenStates {
                 ScreenId::LayoutLab => self.layout_lab.view(frame, area),
                 ScreenId::FormsInput => self.forms_input.view(frame, area),
                 ScreenId::DataViz => self.data_viz.view(frame, area),
+                ScreenId::TableThemeGallery => self.table_theme_gallery.view(frame, area),
                 ScreenId::FileBrowser => self.file_browser.view(frame, area),
                 ScreenId::AdvancedFeatures => self.advanced_features.view(frame, area),
                 ScreenId::TerminalCapabilities => self.terminal_capabilities.view(frame, area),
@@ -1049,9 +1061,22 @@ impl VfxHarnessLogger {
     fn write_header(&mut self) -> std::io::Result<()> {
         let run_id = escape_json(&self.run_id);
         let effect = escape_json(&self.effect);
+        let hash_key = determinism::hash_key(
+            &determinism::demo_screen_mode(),
+            self.cols,
+            self.rows,
+            self.seed,
+        );
+        let timestamp = determinism::chrono_like_timestamp();
+        let env_json = determinism::demo_env_json();
         let line = format!(
-            "{{\"event\":\"vfx_harness_start\",\"run_id\":\"{run_id}\",\"effect\":\"{effect}\",\"cols\":{},\"rows\":{},\"tick_ms\":{},\"seed\":{}}}",
-            self.cols, self.rows, self.tick_ms, self.seed
+            "{{\"event\":\"vfx_harness_start\",\"timestamp\":\"{timestamp}\",\"run_id\":\"{run_id}\",\"hash_key\":\"{}\",\"effect\":\"{effect}\",\"cols\":{},\"rows\":{},\"tick_ms\":{},\"seed\":{},\"env\":{}}}",
+            escape_json(&hash_key),
+            self.cols,
+            self.rows,
+            self.tick_ms,
+            self.seed,
+            env_json
         );
         writeln!(self.writer, "{line}")?;
         self.writer.flush()
@@ -1060,9 +1085,21 @@ impl VfxHarnessLogger {
     fn write_frame(&mut self, frame_idx: u64, hash: u64, sim_time: f64) -> std::io::Result<()> {
         let run_id = escape_json(&self.run_id);
         let effect = escape_json(&self.effect);
+        let hash_key = determinism::hash_key(
+            &determinism::demo_screen_mode(),
+            self.cols,
+            self.rows,
+            self.seed,
+        );
+        let timestamp = determinism::chrono_like_timestamp();
         let line = format!(
-            "{{\"event\":\"vfx_frame\",\"run_id\":\"{run_id}\",\"effect\":\"{effect}\",\"frame_idx\":{frame_idx},\"hash\":{hash},\"time\":{:.2}}}",
-            sim_time
+            "{{\"event\":\"vfx_frame\",\"timestamp\":\"{timestamp}\",\"run_id\":\"{run_id}\",\"hash_key\":\"{}\",\"effect\":\"{effect}\",\"frame_idx\":{frame_idx},\"hash\":{hash},\"time\":{:.2},\"cols\":{},\"rows\":{},\"tick_ms\":{},\"seed\":{}}}",
+            escape_json(&hash_key),
+            sim_time,
+            self.cols,
+            self.rows,
+            self.tick_ms,
+            self.seed
         );
         writeln!(self.writer, "{line}")?;
         self.writer.flush()
@@ -1104,6 +1141,15 @@ impl VfxHarnessModel {
         let jsonl_path = config
             .jsonl_path
             .unwrap_or_else(|| VFX_HARNESS_DEFAULT_JSONL.to_string());
+        let seed = determinism::seed_from_env(
+            &[
+                "FTUI_DEMO_VFX_SEED",
+                "FTUI_DEMO_SEED",
+                "FTUI_SEED",
+                "E2E_SEED",
+            ],
+            VFX_HARNESS_SEED,
+        );
         let logger = VfxHarnessLogger::new(
             &jsonl_path,
             run_id,
@@ -1111,7 +1157,7 @@ impl VfxHarnessModel {
             cols,
             rows,
             tick_ms,
-            VFX_HARNESS_SEED,
+            seed,
         )?;
 
         Ok(Self {
@@ -1268,6 +1314,12 @@ pub struct AppModel {
     pub terminal_height: u16,
     /// Auto-exit after this many milliseconds (0 = disabled).
     pub exit_after_ms: u64,
+    /// Auto-exit after this many ticks (None = disabled).
+    pub exit_after_ticks: Option<u64>,
+    /// Fixed tick cadence override for deterministic fixtures.
+    deterministic_tick_ms: Option<u64>,
+    /// Deterministic mode flag (seeded + fixed-step fixtures).
+    deterministic_mode: bool,
     /// Performance HUD: timestamp of last tick for tick-interval measurement.
     perf_last_tick: Option<Instant>,
     /// Performance HUD: recent tick intervals in microseconds (ring buffer, max 120).
@@ -1313,6 +1365,9 @@ impl AppModel {
         voi_config.enable_logging = true;
         voi_config.max_log_entries = 96;
         let voi_sampler = VoiSampler::new(voi_config);
+        let deterministic_mode = determinism::is_demo_deterministic();
+        let deterministic_tick_ms = determinism::demo_tick_ms_override();
+        let exit_after_ticks = determinism::demo_exit_after_ticks();
         let mut app = Self {
             current_screen: ScreenId::Dashboard,
             tour: GuidedTourState::new(),
@@ -1334,6 +1389,9 @@ impl AppModel {
             terminal_width: 0,
             terminal_height: 0,
             exit_after_ms: 0,
+            exit_after_ticks,
+            deterministic_tick_ms,
+            deterministic_mode,
             perf_last_tick: None,
             perf_tick_times_us: VecDeque::with_capacity(120),
             perf_view_counter: Cell::new(0),
@@ -1349,6 +1407,16 @@ impl AppModel {
         app.screens
             .accessibility_panel
             .sync_a11y(app.a11y, app.base_theme);
+        if deterministic_mode {
+            let perf_tick_ms = determinism::demo_tick_ms(100);
+            let vfx_tick_ms = determinism::demo_tick_ms(16);
+            app.screens
+                .performance_hud
+                .enable_deterministic_mode(perf_tick_ms);
+            app.screens
+                .visual_effects
+                .enable_deterministic_mode(vfx_tick_ms);
+        }
         app
     }
 
@@ -1367,6 +1435,9 @@ impl AppModel {
     }
 
     fn tick_interval_ms(&self) -> u64 {
+        if let Some(override_ms) = self.deterministic_tick_ms {
+            return override_ms.max(1);
+        }
         if self.tour.is_active() {
             return 100;
         }
@@ -1879,8 +1950,20 @@ impl AppModel {
 
             AppMsg::Tick => {
                 let tick_ms = self.tick_interval_ms();
+                if self.deterministic_mode {
+                    self.screens
+                        .visual_effects
+                        .enable_deterministic_mode(tick_ms);
+                    self.screens
+                        .performance_hud
+                        .enable_deterministic_mode(tick_ms);
+                }
                 self.tick_count += 1;
-                self.tick_last_seen = Some(Instant::now());
+                if self.deterministic_mode {
+                    self.tick_last_seen = None;
+                } else {
+                    self.tick_last_seen = Some(Instant::now());
+                }
                 self.record_tick_timing();
                 self.update_voi_ledger();
                 if !self.a11y.reduced_motion {
@@ -1895,6 +1978,11 @@ impl AppModel {
                     if matches!(cmd, Cmd::Quit) {
                         return Cmd::Quit;
                     }
+                }
+                if let Some(limit) = self.exit_after_ticks
+                    && self.tick_count >= limit
+                {
+                    return Cmd::Quit;
                 }
                 Cmd::None
             }
@@ -2299,6 +2387,14 @@ impl Model for AppModel {
     type Message = AppMsg;
 
     fn init(&mut self) -> Cmd<Self::Message> {
+        if self.exit_after_ticks.is_none() && self.deterministic_mode && self.exit_after_ms > 0 {
+            let tick_ms = self.tick_interval_ms().max(1);
+            let ticks = (self.exit_after_ms + tick_ms.saturating_sub(1)) / tick_ms;
+            self.exit_after_ticks = Some(ticks.max(1));
+        }
+        if self.exit_after_ticks.is_some() {
+            return Cmd::None;
+        }
         if self.exit_after_ms > 0 {
             let ms = self.exit_after_ms;
             Cmd::task_named("demo_exit_after", move || {
@@ -2460,6 +2556,7 @@ impl AppModel {
             ScreenId::LayoutLab => self.screens.layout_lab.keybindings(),
             ScreenId::FormsInput => self.screens.forms_input.keybindings(),
             ScreenId::DataViz => self.screens.data_viz.keybindings(),
+            ScreenId::TableThemeGallery => self.screens.table_theme_gallery.keybindings(),
             ScreenId::FileBrowser => self.screens.file_browser.keybindings(),
             ScreenId::AdvancedFeatures => self.screens.advanced_features.keybindings(),
             ScreenId::TerminalCapabilities => self.screens.terminal_capabilities.keybindings(),
@@ -2717,15 +2814,24 @@ impl AppModel {
     /// Called from tick handling (which has `&mut self`). Keeps the
     /// most recent 120 samples in a ring buffer for statistics.
     fn record_tick_timing(&mut self) {
-        let now = Instant::now();
-        if let Some(last) = self.perf_last_tick {
-            let dt_us = now.duration_since(last).as_micros() as u64;
+        if self.deterministic_mode {
+            let dt_us = self.tick_interval_ms().max(1) * 1000;
             if self.perf_tick_times_us.len() >= 120 {
                 self.perf_tick_times_us.pop_front();
             }
             self.perf_tick_times_us.push_back(dt_us);
+            self.perf_last_tick = None;
+        } else {
+            let now = Instant::now();
+            if let Some(last) = self.perf_last_tick {
+                let dt_us = now.duration_since(last).as_micros() as u64;
+                if self.perf_tick_times_us.len() >= 120 {
+                    self.perf_tick_times_us.pop_front();
+                }
+                self.perf_tick_times_us.push_back(dt_us);
+            }
+            self.perf_last_tick = Some(now);
         }
-        self.perf_last_tick = Some(now);
 
         // Compute views rendered since last tick
         let current_views = self.perf_view_counter.get();
@@ -2787,6 +2893,9 @@ impl AppModel {
 
     /// Emit a diagnostic log if ticks appear to have stalled.
     fn maybe_log_tick_stall(&self) {
+        if self.deterministic_mode {
+            return;
+        }
         if !perf_hud_jsonl_enabled() {
             return;
         }

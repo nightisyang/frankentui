@@ -1205,7 +1205,22 @@ fn expand_context(matches: &[usize], context_lines: usize, total_lines: usize) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::cell::StyleFlags as RenderStyleFlags;
     use ftui_render::grapheme_pool::GraphemePool;
+    use ftui_style::StyleFlags as TextStyleFlags;
+
+    fn line_text(frame: &Frame, y: u16, width: u16) -> String {
+        let mut out = String::with_capacity(width as usize);
+        for x in 0..width {
+            let ch = frame
+                .buffer
+                .get(x, y)
+                .and_then(|cell| cell.content.as_char())
+                .unwrap_or(' ');
+            out.push(ch);
+        }
+        out
+    }
 
     #[test]
     fn test_push_appends_to_end() {
@@ -1951,5 +1966,157 @@ mod tests {
         let rate = log.search_match_rate_hint();
         assert!(rate > 0.0);
         assert!(rate <= 1.0);
+    }
+
+    #[test]
+    fn test_large_scrollback_eviction_and_scroll_bounds() {
+        let mut log = LogViewer::new(1_000);
+        log.virt.set_visible_count(25);
+
+        for i in 0..5_000 {
+            log.push(format!("line {}", i));
+        }
+
+        assert_eq!(log.line_count(), 1_000);
+
+        let first = log.virt.get(0).expect("first line");
+        assert_eq!(first.lines()[0].to_plain_text(), "line 4000");
+
+        let last = log
+            .virt
+            .get(log.line_count().saturating_sub(1))
+            .expect("last line");
+        assert_eq!(last.lines()[0].to_plain_text(), "line 4999");
+
+        log.scroll_to_top();
+        assert!(!log.auto_scroll_enabled());
+
+        log.scroll_down(10_000);
+        assert!(log.is_at_bottom());
+        assert!(log.auto_scroll_enabled());
+
+        let max_offset = log.line_count().saturating_sub(log.virt.visible_count());
+        assert!(log.virt.scroll_offset() <= max_offset);
+    }
+
+    #[test]
+    fn test_large_scrollback_render_top_and_bottom_lines() {
+        let mut log = LogViewer::new(1_000);
+        log.virt.set_visible_count(3);
+        for i in 0..5_000 {
+            log.push(format!("line {}", i));
+        }
+
+        let mut pool = GraphemePool::new();
+        let mut state = LogViewerState::default();
+
+        log.scroll_to_top();
+        let mut frame = Frame::new(20, 3, &mut pool);
+        log.render(Rect::new(0, 0, 20, 3), &mut frame, &mut state);
+        let top_line = line_text(&frame, 0, 20);
+        assert!(
+            top_line.trim_end().starts_with("line 4000"),
+            "expected top line to start with line 4000, got: {top_line:?}"
+        );
+
+        log.scroll_to_bottom();
+        let mut frame = Frame::new(20, 3, &mut pool);
+        log.render(Rect::new(0, 0, 20, 3), &mut frame, &mut state);
+        let bottom_line = line_text(&frame, 2, 20);
+        assert!(
+            bottom_line.trim_end().starts_with("line 4999"),
+            "expected bottom line to start with line 4999, got: {bottom_line:?}"
+        );
+    }
+
+    #[test]
+    fn test_filtered_autoscroll_respects_manual_position() {
+        let mut log = LogViewer::new(200);
+        log.virt.set_visible_count(2);
+
+        log.push("match 1");
+        log.push("skip");
+        log.push("match 2");
+        log.push("match 3");
+        log.push("skip again");
+        log.push("match 4");
+        log.push("match 5");
+
+        log.set_filter(Some("match"));
+        assert!(log.is_at_bottom());
+
+        log.scroll_up(2);
+        let offset_before = log.filtered_scroll_offset;
+        assert!(!log.is_at_bottom());
+
+        log.push("match 6");
+        assert_eq!(log.filtered_scroll_offset, offset_before);
+
+        log.scroll_to_bottom();
+        let offset_at_bottom = log.filtered_scroll_offset;
+        log.push("match 7");
+        assert!(log.filtered_scroll_offset >= offset_at_bottom);
+        assert!(log.is_at_bottom());
+    }
+
+    #[test]
+    fn test_markup_parsing_preserves_spans() {
+        let mut log = LogViewer::new(100);
+        let text = ftui_text::markup::parse_markup("[bold]Hello[/bold] [fg=red]world[/fg]!")
+            .expect("markup parse failed");
+        log.push(text);
+
+        let item = log.virt.get(0).expect("log line");
+        let line = &item.lines()[0];
+        assert_eq!(line.to_plain_text(), "Hello world!");
+
+        let spans = line.spans();
+        assert!(spans.iter().any(|span| span.style.is_some()));
+        assert!(spans.iter().any(|span| {
+            span.style
+                .and_then(|style| style.attrs)
+                .is_some_and(|attrs| attrs.contains(TextStyleFlags::BOLD))
+        }));
+    }
+
+    #[test]
+    fn test_markup_renders_bold_cells() {
+        let mut log = LogViewer::new(10);
+        let text = ftui_text::markup::parse_markup("[bold]Hello[/bold] world")
+            .expect("markup parse failed");
+        log.push(text);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(16, 1, &mut pool);
+        let mut state = LogViewerState::default();
+        log.render(Rect::new(0, 0, 16, 1), &mut frame, &mut state);
+
+        let rendered = line_text(&frame, 0, 16);
+        assert!(rendered.trim_end().starts_with("Hello world"));
+        for x in 0..5 {
+            let cell = frame.buffer.get(x, 0).expect("cell");
+            assert!(
+                cell.attrs.has_flag(RenderStyleFlags::BOLD),
+                "expected bold at x={x}, attrs={:?}",
+                cell.attrs.flags()
+            );
+        }
+    }
+
+    #[test]
+    fn test_toggle_follow_disables_autoscroll_on_push() {
+        let mut log = LogViewer::new(100);
+        log.virt.set_visible_count(3);
+        for i in 0..5 {
+            log.push(format!("line {}", i));
+        }
+        assert!(log.is_at_bottom());
+
+        log.toggle_follow();
+        assert!(!log.auto_scroll_enabled());
+
+        log.push("new line");
+        assert!(!log.auto_scroll_enabled());
+        assert!(!log.is_at_bottom());
     }
 }

@@ -576,6 +576,28 @@ mod tests {
     }
 
     #[test]
+    fn test_convert_to_cell_flags_all_basic() {
+        let flags = StyleFlags::BOLD
+            | StyleFlags::DIM
+            | StyleFlags::ITALIC
+            | StyleFlags::UNDERLINE
+            | StyleFlags::BLINK
+            | StyleFlags::REVERSE
+            | StyleFlags::STRIKETHROUGH
+            | StyleFlags::HIDDEN;
+        let cell_flags: ftui_render::cell::StyleFlags = flags.into();
+
+        assert!(cell_flags.contains(ftui_render::cell::StyleFlags::BOLD));
+        assert!(cell_flags.contains(ftui_render::cell::StyleFlags::DIM));
+        assert!(cell_flags.contains(ftui_render::cell::StyleFlags::ITALIC));
+        assert!(cell_flags.contains(ftui_render::cell::StyleFlags::UNDERLINE));
+        assert!(cell_flags.contains(ftui_render::cell::StyleFlags::BLINK));
+        assert!(cell_flags.contains(ftui_render::cell::StyleFlags::REVERSE));
+        assert!(cell_flags.contains(ftui_render::cell::StyleFlags::STRIKETHROUGH));
+        assert!(cell_flags.contains(ftui_render::cell::StyleFlags::HIDDEN));
+    }
+
+    #[test]
     fn test_convert_from_cell_flags() {
         use ftui_render::cell::StyleFlags as CellFlags;
         let cell_flags = CellFlags::BOLD | CellFlags::ITALIC;
@@ -583,6 +605,30 @@ mod tests {
 
         assert!(style_flags.contains(StyleFlags::BOLD));
         assert!(style_flags.contains(StyleFlags::ITALIC));
+    }
+
+    #[test]
+    fn test_cell_flags_round_trip_preserves_basic_flags() {
+        use ftui_render::cell::StyleFlags as CellFlags;
+        let original = StyleFlags::BOLD
+            | StyleFlags::DIM
+            | StyleFlags::ITALIC
+            | StyleFlags::UNDERLINE
+            | StyleFlags::BLINK
+            | StyleFlags::REVERSE
+            | StyleFlags::STRIKETHROUGH
+            | StyleFlags::HIDDEN;
+        let cell_flags: CellFlags = original.into();
+        let round_trip: StyleFlags = cell_flags.into();
+
+        assert!(round_trip.contains(StyleFlags::BOLD));
+        assert!(round_trip.contains(StyleFlags::DIM));
+        assert!(round_trip.contains(StyleFlags::ITALIC));
+        assert!(round_trip.contains(StyleFlags::UNDERLINE));
+        assert!(round_trip.contains(StyleFlags::BLINK));
+        assert!(round_trip.contains(StyleFlags::REVERSE));
+        assert!(round_trip.contains(StyleFlags::STRIKETHROUGH));
+        assert!(round_trip.contains(StyleFlags::HIDDEN));
     }
 
     #[test]

@@ -884,6 +884,11 @@ impl Drop for ScopedA11yLock {
     }
 }
 
+#[cfg(test)]
+fn a11y_guard() -> ScopedA11yLock {
+    ScopedA11yLock::new(large_text_enabled(), motion_scale())
+}
+
 /// RAII guard that locks BOTH theme AND accessibility state for render determinism tests.
 ///
 /// This combined guard ensures complete isolation from parallel tests by:
@@ -1587,7 +1592,7 @@ mod tests {
 
     #[test]
     fn large_text_toggle_roundtrip() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         // Save initial state
         let initial = large_text_enabled();
 
@@ -1605,7 +1610,7 @@ mod tests {
 
     #[test]
     fn large_text_double_enable_is_idempotent() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = large_text_enabled();
 
         set_large_text(true);
@@ -1618,7 +1623,7 @@ mod tests {
 
     #[test]
     fn large_text_double_disable_is_idempotent() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = large_text_enabled();
 
         set_large_text(false);
@@ -1635,7 +1640,7 @@ mod tests {
 
     #[test]
     fn motion_scale_set_and_get() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = motion_scale();
 
         set_motion_scale(0.5);
@@ -1647,7 +1652,7 @@ mod tests {
 
     #[test]
     fn motion_scale_clamps_above_one() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = motion_scale();
 
         set_motion_scale(1.5);
@@ -1663,7 +1668,7 @@ mod tests {
 
     #[test]
     fn motion_scale_clamps_below_zero() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = motion_scale();
 
         set_motion_scale(-0.5);
@@ -1675,7 +1680,7 @@ mod tests {
 
     #[test]
     fn motion_scale_zero_is_valid() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = motion_scale();
 
         set_motion_scale(0.0);
@@ -1687,7 +1692,7 @@ mod tests {
 
     #[test]
     fn motion_scale_one_is_valid() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = motion_scale();
 
         set_motion_scale(1.0);
@@ -1699,7 +1704,7 @@ mod tests {
 
     #[test]
     fn motion_scale_quantization() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         // Motion scale is stored as u8 percent, so values are quantized
         let initial = motion_scale();
 
@@ -1721,7 +1726,7 @@ mod tests {
 
     #[test]
     fn apply_large_text_adds_bold_when_enabled() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = large_text_enabled();
         set_large_text(true);
 
@@ -1739,7 +1744,7 @@ mod tests {
 
     #[test]
     fn apply_large_text_preserves_style_when_disabled() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = large_text_enabled();
         set_large_text(false);
 
@@ -1760,7 +1765,7 @@ mod tests {
 
     #[test]
     fn apply_large_text_preserves_existing_attrs() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = large_text_enabled();
         set_large_text(true);
 
@@ -1781,7 +1786,7 @@ mod tests {
 
     #[test]
     fn scale_spacing_unchanged_when_disabled() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = large_text_enabled();
         set_large_text(false);
 
@@ -1794,7 +1799,7 @@ mod tests {
 
     #[test]
     fn scale_spacing_doubles_when_enabled() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = large_text_enabled();
         set_large_text(true);
 
@@ -1807,7 +1812,7 @@ mod tests {
 
     #[test]
     fn scale_spacing_zero_is_zero() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = large_text_enabled();
 
         set_large_text(false);
@@ -1821,7 +1826,7 @@ mod tests {
 
     #[test]
     fn scale_spacing_handles_overflow() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = large_text_enabled();
         set_large_text(true);
 
@@ -1834,7 +1839,7 @@ mod tests {
 
     #[test]
     fn scale_spacing_large_value_saturates() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = large_text_enabled();
         set_large_text(true);
 
@@ -1852,7 +1857,7 @@ mod tests {
 
     #[test]
     fn title_style_affected_by_large_text() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = large_text_enabled();
 
         set_large_text(false);
@@ -1873,7 +1878,7 @@ mod tests {
 
     #[test]
     fn body_style_affected_by_large_text() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = large_text_enabled();
 
         set_large_text(false);
@@ -1894,7 +1899,7 @@ mod tests {
 
     #[test]
     fn muted_style_affected_by_large_text() {
-        let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+        let _guard = a11y_guard();
         let initial = large_text_enabled();
 
         set_large_text(true);
@@ -1920,7 +1925,7 @@ mod a11y_proptests {
         /// Motion scale is always clamped to [0.0, 1.0].
         #[test]
         fn motion_scale_always_clamped(value in -100.0f32..100.0f32) {
-            let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+            let _guard = a11y_guard();
             let initial = motion_scale();
 
             set_motion_scale(value);
@@ -1935,7 +1940,7 @@ mod a11y_proptests {
         /// Motion scale roundtrip preserves value within quantization error.
         #[test]
         fn motion_scale_roundtrip(value in 0.0f32..=1.0f32) {
-            let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+            let _guard = a11y_guard();
             let initial = motion_scale();
 
             set_motion_scale(value);
@@ -1958,7 +1963,7 @@ mod a11y_proptests {
         /// scale_spacing never overflows (uses saturating_mul).
         #[test]
         fn scale_spacing_never_overflows(spacing in 0u16..=u16::MAX) {
-            let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+            let _guard = a11y_guard();
             let initial = large_text_enabled();
 
             set_large_text(true);
@@ -1977,7 +1982,7 @@ mod a11y_proptests {
         /// scale_spacing identity when large text disabled.
         #[test]
         fn scale_spacing_identity_when_disabled(spacing in 0u16..=u16::MAX) {
-            let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+            let _guard = a11y_guard();
             let initial = large_text_enabled();
 
             set_large_text(false);
@@ -1991,7 +1996,7 @@ mod a11y_proptests {
         /// scale_spacing monotonically increases with input.
         #[test]
         fn scale_spacing_monotonic(a in 0u16..=32767u16, b in 0u16..=32767u16) {
-            let _lock = GLOBAL_A11Y_LOCK.lock().unwrap();
+            let _guard = a11y_guard();
             let initial = large_text_enabled();
 
             // Test in both modes

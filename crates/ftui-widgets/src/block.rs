@@ -436,6 +436,22 @@ mod tests {
     }
 
     #[test]
+    fn render_title_overrides_on_multiple_calls() {
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Square)
+            .title("First")
+            .title("Second");
+        let area = Rect::new(0, 0, 12, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(12, 3, &mut pool);
+        block.render(area, &mut frame);
+
+        let buf = &frame.buffer;
+        assert_eq!(buf.get(1, 0).unwrap().content.as_char(), Some('S'));
+    }
+
+    #[test]
     fn render_block_with_background() {
         let block = Block::new().style(Style::new().bg(PackedRgba::rgb(10, 20, 30)));
         let area = Rect::new(0, 0, 3, 2);
@@ -519,6 +535,27 @@ mod tests {
     }
 
     #[test]
+    fn render_partial_borders_corners_only_when_edges_enabled() {
+        let block = Block::new()
+            .borders(Borders::TOP | Borders::LEFT | Borders::BOTTOM)
+            .border_type(BorderType::Square);
+        let area = Rect::new(0, 0, 4, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(4, 3, &mut pool);
+        block.render(area, &mut frame);
+
+        let buf = &frame.buffer;
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('┌'));
+        assert_eq!(buf.get(0, 2).unwrap().content.as_char(), Some('└'));
+        assert_eq!(buf.get(3, 0).unwrap().content.as_char(), Some('─'));
+        assert_eq!(buf.get(3, 2).unwrap().content.as_char(), Some('─'));
+        assert!(
+            buf.get(3, 1).unwrap().is_empty()
+                || buf.get(3, 1).unwrap().content.as_char() == Some(' ')
+        );
+    }
+
+    #[test]
     fn render_title_left_aligned() {
         let block = Block::new()
             .borders(Borders::ALL)
@@ -549,6 +586,27 @@ mod tests {
         let buf = &frame.buffer;
         assert_eq!(buf.get(4, 0).unwrap().content.as_char(), Some('H'));
         assert_eq!(buf.get(5, 0).unwrap().content.as_char(), Some('i'));
+    }
+
+    #[test]
+    fn render_title_center_aligned_with_wide_grapheme() {
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .title("界")
+            .title_alignment(Alignment::Center);
+        let area = Rect::new(0, 0, 8, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(8, 3, &mut pool);
+        block.render(area, &mut frame);
+
+        // Available width = 6, title width = 2 => center offset 2 => x = 3
+        let buf = &frame.buffer;
+        let cell = buf.get(3, 0).unwrap();
+        assert!(
+            cell.content.as_char() == Some('界') || cell.content.is_grapheme(),
+            "expected title grapheme at x=3"
+        );
+        assert!(buf.get(4, 0).unwrap().is_continuation());
     }
 
     #[test]
@@ -616,6 +674,78 @@ mod tests {
             buf.get(0, 1).unwrap().is_empty()
                 || buf.get(0, 1).unwrap().content.as_char() == Some(' ')
         );
+    }
+
+    #[test]
+    fn degradation_simple_borders_forces_ascii() {
+        use ftui_render::budget::DegradationLevel;
+
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded);
+        let area = Rect::new(0, 0, 5, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 3, &mut pool);
+        frame.set_degradation(DegradationLevel::SimpleBorders);
+        block.render(area, &mut frame);
+
+        let buf = &frame.buffer;
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('+'));
+        assert_eq!(buf.get(4, 0).unwrap().content.as_char(), Some('+'));
+        assert_eq!(buf.get(2, 0).unwrap().content.as_char(), Some('-'));
+        assert_eq!(buf.get(0, 1).unwrap().content.as_char(), Some('|'));
+    }
+
+    #[test]
+    fn degradation_no_styling_renders_title_without_styles() {
+        use ftui_render::budget::DegradationLevel;
+
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_style(Style::new().fg(PackedRgba::rgb(200, 0, 0)))
+            .title("Hi");
+        let area = Rect::new(0, 0, 6, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(6, 3, &mut pool);
+        frame.set_degradation(DegradationLevel::NoStyling);
+        block.render(area, &mut frame);
+
+        let buf = &frame.buffer;
+        let default_fg = Cell::default().fg;
+        assert_eq!(buf.get(1, 0).unwrap().content.as_char(), Some('H'));
+        assert_eq!(buf.get(1, 0).unwrap().fg, default_fg);
+    }
+
+    #[test]
+    fn degradation_essential_only_skips_borders() {
+        use ftui_render::budget::DegradationLevel;
+
+        let block = Block::bordered().border_type(BorderType::Square);
+        let area = Rect::new(0, 0, 4, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(4, 3, &mut pool);
+        frame.set_degradation(DegradationLevel::EssentialOnly);
+        frame.buffer.set(0, 0, Cell::from_char('X'));
+        block.render(area, &mut frame);
+
+        let buf = &frame.buffer;
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('X'));
+    }
+
+    #[test]
+    fn degradation_skeleton_clears_area() {
+        use ftui_render::budget::DegradationLevel;
+
+        let block = Block::bordered();
+        let area = Rect::new(0, 0, 3, 2);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(3, 2, &mut pool);
+        frame.buffer.fill(area, Cell::from_char('X'));
+        frame.set_degradation(DegradationLevel::Skeleton);
+        block.render(area, &mut frame);
+
+        let buf = &frame.buffer;
+        assert!(buf.get(0, 0).unwrap().is_empty());
     }
 
     #[test]

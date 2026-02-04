@@ -8,7 +8,7 @@
 //! - Diagram type detection
 //! - AST for common diagram elements
 
-use core::fmt;
+use core::{fmt, mem};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Position {
@@ -116,6 +116,13 @@ pub enum Keyword {
     End,
     Title,
     Section,
+    Direction,
+    ClassDef,
+    Class,
+    Style,
+    LinkStyle,
+    Click,
+    Link,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,9 +153,22 @@ pub struct MermaidAst {
     pub statements: Vec<Statement>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DirectiveKind {
+    Init { payload: String },
+    Raw,
+}
+
 #[derive(Debug, Clone)]
 pub struct Directive {
+    pub kind: DirectiveKind,
     pub content: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct Comment {
+    pub text: String,
     pub span: Span,
 }
 
@@ -198,9 +218,58 @@ pub struct MindmapNode {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkKind {
+    Click,
+    Link,
+}
+
 #[derive(Debug, Clone)]
 pub enum Statement {
     Directive(Directive),
+    Comment(Comment),
+    SubgraphStart {
+        title: Option<String>,
+        span: Span,
+    },
+    SubgraphEnd {
+        span: Span,
+    },
+    Direction {
+        direction: GraphDirection,
+        span: Span,
+    },
+    ClassDeclaration {
+        name: String,
+        span: Span,
+    },
+    ClassDef {
+        name: String,
+        style: String,
+        span: Span,
+    },
+    ClassAssign {
+        targets: Vec<String>,
+        classes: Vec<String>,
+        span: Span,
+    },
+    Style {
+        target: String,
+        style: String,
+        span: Span,
+    },
+    LinkStyle {
+        link: String,
+        style: String,
+        span: Span,
+    },
+    Link {
+        kind: LinkKind,
+        target: String,
+        url: String,
+        tooltip: Option<String>,
+        span: Span,
+    },
     Node(Node),
     Edge(Edge),
     SequenceMessage(SequenceMessage),
@@ -490,12 +559,27 @@ pub fn tokenize(input: &str) -> Vec<Token<'_>> {
     Lexer::new(input).tokenize()
 }
 
+#[derive(Debug, Clone)]
+pub struct MermaidParse {
+    pub ast: MermaidAst,
+    pub errors: Vec<MermaidError>,
+}
+
 pub fn parse(input: &str) -> Result<MermaidAst, MermaidError> {
+    let parsed = parse_with_diagnostics(input);
+    if let Some(err) = parsed.errors.first() {
+        return Err(err.clone());
+    }
+    Ok(parsed.ast)
+}
+
+pub fn parse_with_diagnostics(input: &str) -> MermaidParse {
     let mut diagram_type = DiagramType::Unknown;
     let mut direction = None;
     let mut directives = Vec::new();
     let mut statements = Vec::new();
     let mut saw_header = false;
+    let mut errors = Vec::new();
 
     for (idx, raw_line) in input.lines().enumerate() {
         let line_no = idx + 1;
@@ -507,21 +591,22 @@ pub fn parse(input: &str) -> Result<MermaidAst, MermaidError> {
 
         if trimmed.starts_with("%%{") {
             let span = Span::at_line(line_no, line.len());
-            if let Some(content) = trimmed
-                .strip_prefix("%%{")
-                .and_then(|v| v.strip_suffix("}%%"))
-            {
-                let dir = Directive {
-                    content: content.trim().to_string(),
-                    span,
-                };
-                directives.push(dir.clone());
-                statements.push(Statement::Directive(dir));
-                continue;
+            match parse_directive_block(trimmed, span) {
+                Ok(dir) => {
+                    directives.push(dir.clone());
+                    statements.push(Statement::Directive(dir));
+                }
+                Err(err) => errors.push(err),
             }
-            return Err(MermaidError::new("unterminated directive", span));
+            continue;
         }
         if trimmed.starts_with("%%") {
+            let span = Span::at_line(line_no, line.len());
+            let text = trimmed.trim_start_matches('%').trim();
+            statements.push(Statement::Comment(Comment {
+                text: text.to_string(),
+                span,
+            }));
             continue;
         }
 
@@ -533,7 +618,7 @@ pub fn parse(input: &str) -> Result<MermaidAst, MermaidError> {
                 continue;
             }
             let span = Span::at_line(line_no, line.len());
-            return Err(
+            errors.push(
                 MermaidError::new("expected Mermaid diagram header", span).with_expected(vec![
                     "graph",
                     "flowchart",
@@ -546,9 +631,24 @@ pub fn parse(input: &str) -> Result<MermaidAst, MermaidError> {
                     "pie",
                 ]),
             );
+            diagram_type = DiagramType::Unknown;
+            saw_header = true;
         }
 
         let span = Span::at_line(line_no, line.len());
+        if let Some(result) = parse_directive_statement(trimmed, span, diagram_type) {
+            match result {
+                Ok(statement) => statements.push(statement),
+                Err(err) => {
+                    errors.push(err);
+                    statements.push(Statement::Raw {
+                        text: normalize_ws(trimmed),
+                        span,
+                    });
+                }
+            }
+            continue;
+        }
         match diagram_type {
             DiagramType::Graph | DiagramType::State | DiagramType::Class | DiagramType::Er => {
                 if let Some(edge) = parse_edge(trimmed, span) {
@@ -616,12 +716,15 @@ pub fn parse(input: &str) -> Result<MermaidAst, MermaidError> {
         }
     }
 
-    Ok(MermaidAst {
-        diagram_type,
-        direction,
-        directives,
-        statements,
-    })
+    MermaidParse {
+        ast: MermaidAst {
+            diagram_type,
+            direction,
+            directives,
+            statements,
+        },
+        errors,
+    }
 }
 
 fn strip_inline_comment(line: &str) -> &str {
@@ -633,6 +736,307 @@ fn strip_inline_comment(line: &str) -> &str {
     } else {
         line
     }
+}
+
+fn parse_directive_block(trimmed: &str, span: Span) -> Result<Directive, MermaidError> {
+    let content = trimmed
+        .strip_prefix("%%{")
+        .and_then(|v| v.strip_suffix("}%%"))
+        .ok_or_else(|| MermaidError::new("unterminated directive", span))?;
+    let (kind, content) = parse_directive_kind(content);
+    Ok(Directive {
+        kind,
+        content,
+        span,
+    })
+}
+
+fn parse_directive_kind(content: &str) -> (DirectiveKind, String) {
+    let trimmed = content.trim();
+    let prefix = "init:";
+    if trimmed.len() >= prefix.len()
+        && trimmed
+            .get(..prefix.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(prefix))
+    {
+        let payload = trimmed[prefix.len()..].trim().to_string();
+        return (DirectiveKind::Init { payload }, trimmed.to_string());
+    }
+    (DirectiveKind::Raw, trimmed.to_string())
+}
+
+fn parse_directive_statement(
+    line: &str,
+    span: Span,
+    diagram_type: DiagramType,
+) -> Option<Result<Statement, MermaidError>> {
+    if let Some(statement) = parse_subgraph_line(line, span) {
+        return Some(Ok(statement));
+    }
+    if line.trim().eq_ignore_ascii_case("end") {
+        return Some(Ok(Statement::SubgraphEnd { span }));
+    }
+    if let Some(result) = parse_direction_line(line, span) {
+        return Some(result);
+    }
+    if let Some(result) = parse_class_def_line(line, span) {
+        return Some(result);
+    }
+    if let Some(result) = parse_class_line(line, span, diagram_type) {
+        return Some(result);
+    }
+    if let Some(result) = parse_style_line(line, span) {
+        return Some(result);
+    }
+    if let Some(result) = parse_link_style_line(line, span) {
+        return Some(result);
+    }
+    if let Some(result) = parse_link_directive(line, span, LinkKind::Click, "click") {
+        return Some(result);
+    }
+    if let Some(result) = parse_link_directive(line, span, LinkKind::Link, "link") {
+        return Some(result);
+    }
+    None
+}
+
+fn parse_subgraph_line(line: &str, span: Span) -> Option<Statement> {
+    let rest = strip_keyword(line, "subgraph")?;
+    let title = if rest.is_empty() {
+        None
+    } else {
+        Some(normalize_ws(rest))
+    };
+    Some(Statement::SubgraphStart { title, span })
+}
+
+fn parse_direction_line(line: &str, span: Span) -> Option<Result<Statement, MermaidError>> {
+    let rest = strip_keyword(line, "direction")?;
+    let dir_token = rest.split_whitespace().next().unwrap_or("");
+    if dir_token.is_empty() {
+        return Some(Err(MermaidError::new("direction missing", span)
+            .with_expected(vec!["TB", "TD", "LR", "RL", "BT"])));
+    }
+    let direction = match dir_token.to_ascii_lowercase().as_str() {
+        "tb" => Some(GraphDirection::TB),
+        "td" => Some(GraphDirection::TD),
+        "lr" => Some(GraphDirection::LR),
+        "rl" => Some(GraphDirection::RL),
+        "bt" => Some(GraphDirection::BT),
+        _ => None,
+    };
+    match direction {
+        Some(direction) => Some(Ok(Statement::Direction { direction, span })),
+        None => Some(Err(MermaidError::new("invalid direction", span)
+            .with_expected(vec!["TB", "TD", "LR", "RL", "BT"]))),
+    }
+}
+
+fn parse_class_def_line(line: &str, span: Span) -> Option<Result<Statement, MermaidError>> {
+    let rest = strip_keyword(line, "classdef")?;
+    let mut parts = rest.splitn(2, char::is_whitespace);
+    let name = parts.next().unwrap_or("").trim();
+    let style = parts.next().unwrap_or("").trim();
+    if name.is_empty() {
+        return Some(Err(MermaidError::new("classDef missing name", span)
+            .with_expected(vec!["classDef <name> <style>"])));
+    }
+    if style.is_empty() {
+        return Some(Err(MermaidError::new("classDef missing style", span)
+            .with_expected(vec!["classDef <name> <style>"])));
+    }
+    Some(Ok(Statement::ClassDef {
+        name: normalize_ws(name),
+        style: normalize_ws(style),
+        span,
+    }))
+}
+
+fn parse_class_line(
+    line: &str,
+    span: Span,
+    diagram_type: DiagramType,
+) -> Option<Result<Statement, MermaidError>> {
+    let rest = strip_keyword(line, "class")?;
+    let mut parts = rest.split_whitespace();
+    let targets_raw = parts.next().unwrap_or("");
+    if targets_raw.is_empty() {
+        return Some(Err(MermaidError::new("class missing target(s)", span)
+            .with_expected(vec!["class <id[,id...]> <class>"])));
+    }
+    let classes: Vec<String> = parts.map(normalize_ws).filter(|s| !s.is_empty()).collect();
+    let class_name = normalize_ws(targets_raw);
+    if diagram_type == DiagramType::Class {
+        if classes.is_empty() {
+            let name = class_name.trim_end_matches('{').trim().to_string();
+            return Some(Ok(Statement::ClassDeclaration { name, span }));
+        }
+        if classes.len() == 1 && classes[0] == "{" {
+            return Some(Ok(Statement::ClassDeclaration {
+                name: class_name,
+                span,
+            }));
+        }
+    }
+    if classes.is_empty() {
+        return Some(Err(MermaidError::new("class missing class name", span)
+            .with_expected(vec!["class <id[,id...]> <class>"])));
+    }
+    let targets: Vec<String> = targets_raw
+        .split(',')
+        .map(normalize_ws)
+        .filter(|value| !value.is_empty())
+        .collect();
+    if targets.is_empty() {
+        return Some(Err(MermaidError::new("class missing target(s)", span)
+            .with_expected(vec!["class <id[,id...]> <class>"])));
+    }
+    Some(Ok(Statement::ClassAssign {
+        targets,
+        classes,
+        span,
+    }))
+}
+
+fn parse_style_line(line: &str, span: Span) -> Option<Result<Statement, MermaidError>> {
+    let rest = strip_keyword(line, "style")?;
+    let mut parts = rest.splitn(2, char::is_whitespace);
+    let target = parts.next().unwrap_or("").trim();
+    let style = parts.next().unwrap_or("").trim();
+    if target.is_empty() {
+        return Some(Err(MermaidError::new("style missing target", span)
+            .with_expected(vec!["style <id> <style>"])));
+    }
+    if style.is_empty() {
+        return Some(Err(MermaidError::new("style missing style", span)
+            .with_expected(vec!["style <id> <style>"])));
+    }
+    Some(Ok(Statement::Style {
+        target: normalize_ws(target),
+        style: normalize_ws(style),
+        span,
+    }))
+}
+
+fn parse_link_style_line(line: &str, span: Span) -> Option<Result<Statement, MermaidError>> {
+    let rest = strip_keyword(line, "linkstyle")?;
+    let mut parts = rest.splitn(2, char::is_whitespace);
+    let link = parts.next().unwrap_or("").trim();
+    let style = parts.next().unwrap_or("").trim();
+    if link.is_empty() {
+        return Some(Err(MermaidError::new("linkStyle missing link id", span)
+            .with_expected(vec!["linkStyle <id> <style>"])));
+    }
+    if style.is_empty() {
+        return Some(Err(MermaidError::new("linkStyle missing style", span)
+            .with_expected(vec!["linkStyle <id> <style>"])));
+    }
+    Some(Ok(Statement::LinkStyle {
+        link: normalize_ws(link),
+        style: normalize_ws(style),
+        span,
+    }))
+}
+
+fn parse_link_directive(
+    line: &str,
+    span: Span,
+    kind: LinkKind,
+    keyword: &str,
+) -> Option<Result<Statement, MermaidError>> {
+    let rest = strip_keyword(line, keyword)?;
+    let tokens = split_quoted_words(rest);
+    if tokens.len() < 2 {
+        return Some(Err(MermaidError::new(
+            "link directive missing target/url",
+            span,
+        )
+        .with_expected(vec!["<target>", "<url>"])));
+    }
+    let mut url_idx = 1;
+    if tokens[1].eq_ignore_ascii_case("href") {
+        if tokens.len() < 3 {
+            return Some(Err(
+                MermaidError::new("link directive missing url", span).with_expected(vec!["<url>"])
+            ));
+        }
+        url_idx = 2;
+    }
+    let target = normalize_ws(&tokens[0]);
+    let url = tokens
+        .get(url_idx)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    if url.is_empty() {
+        return Some(Err(
+            MermaidError::new("link directive missing url", span).with_expected(vec!["<url>"])
+        ));
+    }
+    let tooltip = if tokens.len() > url_idx + 1 {
+        Some(normalize_ws(&tokens[url_idx + 1..].join(" ")))
+    } else {
+        None
+    };
+    Some(Ok(Statement::Link {
+        kind,
+        target,
+        url,
+        tooltip,
+        span,
+    }))
+}
+
+fn strip_keyword<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
+    let trimmed = line.trim();
+    let prefix = trimmed.get(..keyword.len())?;
+    if !prefix.eq_ignore_ascii_case(keyword) {
+        return None;
+    }
+    let remainder = trimmed.get(keyword.len()..).unwrap_or("");
+    if let Some(next) = remainder.chars().next()
+        && !next.is_whitespace()
+    {
+        return None;
+    }
+    Some(remainder.trim())
+}
+
+fn split_quoted_words(input: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    let mut quote = None;
+    let mut iter = input.chars().peekable();
+    while let Some(ch) = iter.next() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+                continue;
+            }
+            if ch == '\\' {
+                if let Some(next) = iter.next() {
+                    buf.push(next);
+                }
+                continue;
+            }
+            buf.push(ch);
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+            continue;
+        }
+        if ch.is_whitespace() {
+            if !buf.is_empty() {
+                out.push(mem::take(&mut buf));
+            }
+            continue;
+        }
+        buf.push(ch);
+    }
+    if !buf.is_empty() {
+        out.push(buf);
+    }
+    out
 }
 
 fn parse_header(line: &str) -> Option<(DiagramType, Option<GraphDirection>)> {
@@ -918,6 +1322,13 @@ fn keyword_from(text: &str) -> Option<Keyword> {
         "end" => Some(Keyword::End),
         "title" => Some(Keyword::Title),
         "section" => Some(Keyword::Section),
+        "direction" => Some(Keyword::Direction),
+        "classdef" => Some(Keyword::ClassDef),
+        "class" => Some(Keyword::Class),
+        "style" => Some(Keyword::Style),
+        "linkstyle" => Some(Keyword::LinkStyle),
+        "click" => Some(Keyword::Click),
+        "link" => Some(Keyword::Link),
         _ => None,
     }
 }
@@ -1067,12 +1478,133 @@ mod tests {
     }
 
     #[test]
+    fn tokenize_comment_line() {
+        let tokens = tokenize("%% just a comment\n");
+        assert!(
+            tokens
+                .iter()
+                .any(|t| matches!(t.kind, TokenKind::Comment(_)))
+        );
+    }
+
+    #[test]
     fn parse_directive_line() {
         let ast = parse("graph TD\n%%{init: {\"theme\":\"dark\"}}%%\nA-->B\n").expect("parse");
+        let directive = ast
+            .statements
+            .iter()
+            .find_map(|s| match s {
+                Statement::Directive(dir) => Some(dir),
+                _ => None,
+            })
+            .expect("directive");
+        assert!(matches!(directive.kind, DirectiveKind::Init { .. }));
+    }
+
+    #[test]
+    fn parse_subgraph_direction_and_styles() {
+        let input = "graph TD\nsubgraph Cluster A\n  direction LR\n  A-->B\nend\nclassDef hot fill:#f00\nclass A,B hot\nstyle A fill:#f00\nlinkStyle 1 stroke:#333\nclick A \"https://example.com\" \"tip\"\n";
+        let ast = parse(input).expect("parse");
         assert!(
             ast.statements
                 .iter()
-                .any(|s| matches!(s, Statement::Directive(_)))
+                .any(|s| matches!(s, Statement::SubgraphStart { .. }))
         );
+        assert!(
+            ast.statements
+                .iter()
+                .any(|s| matches!(s, Statement::Direction { .. }))
+        );
+        assert!(
+            ast.statements
+                .iter()
+                .any(|s| matches!(s, Statement::SubgraphEnd { .. }))
+        );
+        assert!(
+            ast.statements
+                .iter()
+                .any(|s| matches!(s, Statement::ClassDef { .. }))
+        );
+        assert!(
+            ast.statements
+                .iter()
+                .any(|s| matches!(s, Statement::ClassAssign { .. }))
+        );
+        assert!(
+            ast.statements
+                .iter()
+                .any(|s| matches!(s, Statement::Style { .. }))
+        );
+        assert!(
+            ast.statements
+                .iter()
+                .any(|s| matches!(s, Statement::LinkStyle { .. }))
+        );
+        assert!(ast.statements.iter().any(|s| matches!(
+            s,
+            Statement::Link {
+                kind: LinkKind::Click,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn parse_comment_line() {
+        let ast = parse("graph TD\n%% note\nA-->B\n").expect("parse");
+        assert!(
+            ast.statements
+                .iter()
+                .any(|s| matches!(s, Statement::Comment(_)))
+        );
+    }
+
+    #[test]
+    fn parse_with_error_recovery() {
+        let parsed = parse_with_diagnostics("graph TD\nclassDef\nA-->B\n");
+        assert_eq!(parsed.errors.len(), 1);
+        assert!(
+            parsed
+                .ast
+                .statements
+                .iter()
+                .any(|s| matches!(s, Statement::Edge(_)))
+        );
+    }
+
+    #[test]
+    fn parse_error_reports_expected_header() {
+        let parsed = parse_with_diagnostics("not_a_header\nA-->B\n");
+        let err = parsed.errors.first().expect("error");
+        assert_eq!(err.span.start.line, 1);
+        assert!(
+            err.expected
+                .as_ref()
+                .is_some_and(|expected| expected.contains(&"graph"))
+        );
+    }
+
+    #[test]
+    fn fuzz_parse_is_deterministic_and_safe() {
+        struct Lcg(u64);
+        impl Lcg {
+            fn next_u32(&mut self) -> u32 {
+                self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1);
+                (self.0 >> 32) as u32
+            }
+        }
+
+        let alphabet = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_[](){}<>:;.,|%\"'\n\t";
+        let mut rng = Lcg(0x05ee_da11_cafe_f00d);
+        for _ in 0..128 {
+            let len = (rng.next_u32() % 200 + 1) as usize;
+            let mut s = String::with_capacity(len);
+            for _ in 0..len {
+                let idx = (rng.next_u32() as usize) % alphabet.len();
+                s.push(alphabet[idx] as char);
+            }
+            let _ = tokenize(&s);
+            let _ = parse_with_diagnostics(&s);
+        }
     }
 }

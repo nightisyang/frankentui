@@ -168,7 +168,7 @@ run_case() {
 
     if "$@"; then
         local end_ms
-        end_ms="$(date +%s%3N)"
+        end_ms="$(e2e_now_ms)"
         local duration_ms=$((end_ms - start_ms))
         log_test_pass "$name"
         record_result "$name" "passed" "$duration_ms" "$LOG_FILE"
@@ -177,7 +177,7 @@ run_case() {
     fi
 
     local end_ms
-    end_ms="$(date +%s%3N)"
+    end_ms="$(e2e_now_ms)"
     local duration_ms=$((end_ms - start_ms))
     log_test_fail "$name" "assertion failed"
     record_result "$name" "failed" "$duration_ms" "$LOG_FILE" "assertion failed"

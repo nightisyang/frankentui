@@ -42,6 +42,7 @@ use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::paragraph::Paragraph;
 
 use super::{HelpEntry, Screen};
+use crate::determinism;
 use crate::theme;
 
 /// Maximum number of events to keep in the log.
@@ -302,9 +303,7 @@ impl DiagnosticEntry {
 
 /// Check if deterministic mode is enabled.
 pub fn is_deterministic_mode() -> bool {
-    std::env::var("FTUI_MOUSE_DETERMINISTIC")
-        .map(|v| v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    determinism::env_flag("FTUI_MOUSE_DETERMINISTIC") || determinism::is_demo_deterministic()
 }
 
 /// Diagnostic log collector for testing and debugging.

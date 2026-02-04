@@ -73,6 +73,9 @@ RESULTS_JSONL="$LOG_DIR/results.jsonl"
 LOG_FILE="$LOG_DIR/modal_dialog_e2e.log"
 export E2E_DETERMINISTIC="$DETERMINISTIC"
 export E2E_SEED="$SEED"
+if declare -f e2e_seed >/dev/null 2>&1; then
+    e2e_seed >/dev/null 2>&1 || true
+fi
 
 emit_jsonl() {
     local line="$1"

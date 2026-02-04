@@ -294,6 +294,28 @@ impl TerminalSession {
         Ok(session)
     }
 
+    /// Create a session for tests without touching the real terminal.
+    ///
+    /// This skips raw mode and feature toggles, allowing headless tests
+    /// to construct `TerminalSession` safely.
+    #[cfg(feature = "test-helpers")]
+    pub fn new_for_tests(options: SessionOptions) -> io::Result<Self> {
+        install_panic_hook();
+        #[cfg(unix)]
+        let signal_guard = None;
+
+        Ok(Self {
+            options,
+            alternate_screen_enabled: false,
+            mouse_enabled: false,
+            bracketed_paste_enabled: false,
+            focus_events_enabled: false,
+            kitty_keyboard_enabled: false,
+            #[cfg(unix)]
+            signal_guard,
+        })
+    }
+
     /// Create a minimal session (raw mode only).
     pub fn minimal() -> io::Result<Self> {
         Self::new(SessionOptions::default())
@@ -565,6 +587,16 @@ pub const _SPIKE_NOTES: () = ();
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use portable_pty::{CommandBuilder, PtySize};
+    #[cfg(unix)]
+    use std::io::{self, Read, Write};
+    #[cfg(unix)]
+    use std::sync::mpsc;
+    #[cfg(unix)]
+    use std::thread;
+    #[cfg(unix)]
+    use std::time::{Duration, Instant};
 
     #[test]
     fn session_options_default_is_minimal() {
@@ -621,5 +653,154 @@ mod tests {
         assert!(opts.bracketed_paste);
         assert!(!opts.focus_events);
         assert!(!opts.kitty_keyboard);
+    }
+
+    #[cfg(unix)]
+    enum ReaderMsg {
+        Data(Vec<u8>),
+        Eof,
+        Err(std::io::Error),
+    }
+
+    #[cfg(unix)]
+    fn read_until_pattern(
+        rx: &mpsc::Receiver<ReaderMsg>,
+        captured: &mut Vec<u8>,
+        pattern: &[u8],
+        timeout: Duration,
+    ) -> std::io::Result<()> {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let wait = remaining.min(Duration::from_millis(50));
+            match rx.recv_timeout(wait) {
+                Ok(ReaderMsg::Data(chunk)) => {
+                    captured.extend_from_slice(&chunk);
+                    if captured.windows(pattern.len()).any(|w| w == pattern) {
+                        return Ok(());
+                    }
+                }
+                Ok(ReaderMsg::Eof) => break,
+                Ok(ReaderMsg::Err(err)) => return Err(err),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        Err(std::io::Error::other(
+            "timeout waiting for PTY output marker",
+        ))
+    }
+
+    #[cfg(unix)]
+    fn assert_contains_any(output: &[u8], options: &[&[u8]], label: &str) {
+        let found = options
+            .iter()
+            .any(|needle| output.windows(needle.len()).any(|w| w == *needle));
+        assert!(found, "expected cleanup sequence for {label}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_session_panic_cleanup_idempotent() {
+        const MARKER: &[u8] = b"PANIC_CAUGHT";
+        const TEST_NAME: &str =
+            "terminal_session::tests::terminal_session_panic_cleanup_idempotent";
+        const ALT_SCREEN_EXIT_SEQS: &[&[u8]] = &[b"\x1b[?1049l", b"\x1b[?1047l"];
+        const MOUSE_DISABLE_SEQS: &[&[u8]] = &[
+            b"\x1b[?1000;1002;1006l",
+            b"\x1b[?1000;1002l",
+            b"\x1b[?1000l",
+        ];
+        const BRACKETED_PASTE_DISABLE_SEQS: &[&[u8]] = &[b"\x1b[?2004l"];
+        const FOCUS_DISABLE_SEQS: &[&[u8]] = &[b"\x1b[?1004l"];
+        const KITTY_DISABLE_SEQS: &[&[u8]] = &[b"\x1b[<u"];
+        const CURSOR_SHOW_SEQS: &[&[u8]] = &[b"\x1b[?25h"];
+
+        if std::env::var("FTUI_CORE_PANIC_CHILD").is_ok() {
+            let _ = std::panic::catch_unwind(|| {
+                let _session = TerminalSession::new(SessionOptions {
+                    alternate_screen: true,
+                    mouse_capture: true,
+                    bracketed_paste: true,
+                    focus_events: true,
+                    kitty_keyboard: true,
+                })
+                .expect("TerminalSession::new should succeed in PTY");
+                panic!("intentional panic to exercise cleanup");
+            });
+
+            // The panic hook + Drop will have already attempted cleanup; call again to
+            // verify idempotence when cleanup paths run multiple times.
+            best_effort_cleanup_for_exit();
+
+            let _ = io::stdout().write_all(MARKER);
+            let _ = io::stdout().flush();
+            return;
+        }
+
+        let exe = std::env::current_exe().expect("current_exe");
+        let mut cmd = CommandBuilder::new(exe);
+        cmd.args(["--exact", TEST_NAME, "--nocapture"]);
+        cmd.env("FTUI_CORE_PANIC_CHILD", "1");
+        cmd.env("RUST_BACKTRACE", "0");
+
+        let pty_system = portable_pty::native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+
+        let mut child = pair.slave.spawn_command(cmd).expect("spawn PTY child");
+        drop(pair.slave);
+
+        let mut reader = pair.master.try_clone_reader().expect("clone PTY reader");
+        let _writer = pair.master.take_writer().expect("take PTY writer");
+
+        let (tx, rx) = mpsc::channel::<ReaderMsg>();
+        let reader_thread = thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => {
+                        let _ = tx.send(ReaderMsg::Eof);
+                        break;
+                    }
+                    Ok(n) => {
+                        let _ = tx.send(ReaderMsg::Data(buf[..n].to_vec()));
+                    }
+                    Err(err) => {
+                        let _ = tx.send(ReaderMsg::Err(err));
+                        break;
+                    }
+                }
+            }
+        });
+
+        let mut captured = Vec::new();
+        read_until_pattern(&rx, &mut captured, MARKER, Duration::from_secs(5))
+            .expect("expected marker from child");
+
+        let status = child.wait().expect("child wait");
+        let _ = reader_thread.join();
+
+        assert!(status.success(), "child should exit successfully");
+        assert!(
+            captured.windows(MARKER.len()).any(|w| w == MARKER),
+            "expected panic marker in PTY output"
+        );
+        assert_contains_any(&captured, ALT_SCREEN_EXIT_SEQS, "alt-screen exit");
+        assert_contains_any(&captured, MOUSE_DISABLE_SEQS, "mouse disable");
+        assert_contains_any(
+            &captured,
+            BRACKETED_PASTE_DISABLE_SEQS,
+            "bracketed paste disable",
+        );
+        assert_contains_any(&captured, FOCUS_DISABLE_SEQS, "focus disable");
+        assert_contains_any(&captured, KITTY_DISABLE_SEQS, "kitty disable");
+        assert_contains_any(&captured, CURSOR_SHOW_SEQS, "cursor show");
     }
 }

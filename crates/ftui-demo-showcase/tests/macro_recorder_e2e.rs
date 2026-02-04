@@ -16,11 +16,12 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
 use ftui_demo_showcase::app::{AppModel, AppMsg, ScreenId};
+use ftui_harness::determinism::DeterminismFixture;
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
 use ftui_runtime::Model;
@@ -90,10 +91,12 @@ fn log_jsonl(step: &str, data: &[(&str, &str)]) {
 }
 
 fn chrono_like_timestamp() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("T{n:06}")
+    fixture().timestamp()
+}
+
+fn fixture() -> &'static DeterminismFixture {
+    static FIXTURE: OnceLock<DeterminismFixture> = OnceLock::new();
+    FIXTURE.get_or_init(|| DeterminismFixture::new("macro_recorder_e2e", 42))
 }
 
 // ---------------------------------------------------------------------------

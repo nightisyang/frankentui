@@ -72,6 +72,52 @@ fn log_jsonl(data: &[(&str, &str)]) {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PerfStats {
+    avg: u64,
+    p50: u64,
+    p95: u64,
+    p99: u64,
+}
+
+fn percentile(sorted: &[u64], pct: usize) -> u64 {
+    if sorted.is_empty() {
+        return 0;
+    }
+    let idx = (sorted.len() - 1) * pct / 100;
+    sorted[idx]
+}
+
+fn compute_stats(samples: &mut [u64]) -> PerfStats {
+    if samples.is_empty() {
+        return PerfStats {
+            avg: 0,
+            p50: 0,
+            p95: 0,
+            p99: 0,
+        };
+    }
+    let sum: u128 = samples.iter().map(|value| *value as u128).sum();
+    let avg = (sum / samples.len() as u128) as u64;
+    samples.sort_unstable();
+    PerfStats {
+        avg,
+        p50: percentile(samples, 50),
+        p95: percentile(samples, 95),
+        p99: percentile(samples, 99),
+    }
+}
+
+fn measure_us(iterations: usize, mut f: impl FnMut()) -> Vec<u64> {
+    let mut samples = Vec::with_capacity(iterations);
+    for _ in 0..iterations {
+        let start = Instant::now();
+        f();
+        samples.push(start.elapsed().as_micros() as u64);
+    }
+    samples
+}
+
 /// Create a PerformanceHud with pre-populated samples for benchmarking.
 fn create_seeded_hud(sample_count: usize) -> PerformanceHud {
     let mut hud = PerformanceHud::new();
@@ -126,19 +172,21 @@ fn regression_guard_render_120x40() {
     }
 
     // Measure
-    let start = Instant::now();
-    let iterations = 100;
-    for _ in 0..iterations {
+    let iterations = 100usize;
+    let mut samples = measure_us(iterations, || {
         let mut frame = Frame::new(120, 40, &mut pool);
         let area = Rect::new(0, 0, 120, 40);
         hud.view(&mut frame, area);
-    }
-    let elapsed = start.elapsed();
-    let avg_us = elapsed.as_micros() as u64 / iterations;
+    });
+    let stats = compute_stats(&mut samples);
+    let avg_us = stats.avg;
 
     log_jsonl(&[
         ("test", "regression_guard_render_120x40"),
         ("avg_us", &avg_us.to_string()),
+        ("p50_us", &stats.p50.to_string()),
+        ("p95_us", &stats.p95.to_string()),
+        ("p99_us", &stats.p99.to_string()),
         ("budget_us", &BUDGET_HUD_RENDER_120X40_US.to_string()),
         (
             "passed",
@@ -173,19 +221,21 @@ fn regression_guard_render_80x24() {
     }
 
     // Measure
-    let start = Instant::now();
-    let iterations = 100;
-    for _ in 0..iterations {
+    let iterations = 100usize;
+    let mut samples = measure_us(iterations, || {
         let mut frame = Frame::new(80, 24, &mut pool);
         let area = Rect::new(0, 0, 80, 24);
         hud.view(&mut frame, area);
-    }
-    let elapsed = start.elapsed();
-    let avg_us = elapsed.as_micros() as u64 / iterations;
+    });
+    let stats = compute_stats(&mut samples);
+    let avg_us = stats.avg;
 
     log_jsonl(&[
         ("test", "regression_guard_render_80x24"),
         ("avg_us", &avg_us.to_string()),
+        ("p50_us", &stats.p50.to_string()),
+        ("p95_us", &stats.p95.to_string()),
+        ("p99_us", &stats.p99.to_string()),
         ("budget_us", &BUDGET_HUD_RENDER_80X24_US.to_string()),
         (
             "passed",
@@ -220,36 +270,34 @@ fn regression_guard_overhead_ratio() {
     }
 
     // Measure no-HUD
-    let iterations = 50;
-    let start = Instant::now();
-    for _ in 0..iterations {
+    let iterations = 50usize;
+    let mut no_hud_samples = measure_us(iterations, || {
         let mut frame = Frame::new(120, 40, &mut pool);
         app_no_hud.view(&mut frame);
-    }
-    let no_hud_elapsed = start.elapsed();
+    });
+    let no_hud_stats = compute_stats(&mut no_hud_samples);
 
     // Measure with-HUD
-    let start = Instant::now();
-    for _ in 0..iterations {
+    let mut with_hud_samples = measure_us(iterations, || {
         let mut frame = Frame::new(120, 40, &mut pool);
         app_with_hud.view(&mut frame);
-    }
-    let with_hud_elapsed = start.elapsed();
+    });
+    let with_hud_stats = compute_stats(&mut with_hud_samples);
 
-    let no_hud_us = no_hud_elapsed.as_micros() as f64;
-    let with_hud_us = with_hud_elapsed.as_micros() as f64;
+    let no_hud_us = no_hud_stats.avg as f64;
+    let with_hud_us = with_hud_stats.avg as f64;
     let overhead_percent = ((with_hud_us - no_hud_us) / no_hud_us.max(1.0)) * 100.0;
 
     log_jsonl(&[
         ("test", "regression_guard_overhead_ratio"),
-        (
-            "no_hud_us",
-            &format!("{:.1}", no_hud_us / iterations as f64),
-        ),
-        (
-            "with_hud_us",
-            &format!("{:.1}", with_hud_us / iterations as f64),
-        ),
+        ("no_hud_avg_us", &no_hud_stats.avg.to_string()),
+        ("no_hud_p50_us", &no_hud_stats.p50.to_string()),
+        ("no_hud_p95_us", &no_hud_stats.p95.to_string()),
+        ("no_hud_p99_us", &no_hud_stats.p99.to_string()),
+        ("with_hud_avg_us", &with_hud_stats.avg.to_string()),
+        ("with_hud_p50_us", &with_hud_stats.p50.to_string()),
+        ("with_hud_p95_us", &with_hud_stats.p95.to_string()),
+        ("with_hud_p99_us", &with_hud_stats.p99.to_string()),
         ("overhead_percent", &format!("{:.1}", overhead_percent)),
         (
             "max_allowed_percent",
@@ -284,17 +332,21 @@ fn regression_guard_tick_recording() {
     }
 
     // Measure tick recording
-    let start = Instant::now();
-    let iterations = 1000u64;
-    for i in 0..iterations {
-        hud.tick(100 + i);
-    }
-    let elapsed = start.elapsed();
-    let avg_us = elapsed.as_micros() as u64 / iterations;
+    let iterations = 1000usize;
+    let mut counter = 0u64;
+    let mut samples = measure_us(iterations, || {
+        hud.tick(100 + counter);
+        counter += 1;
+    });
+    let stats = compute_stats(&mut samples);
+    let avg_us = stats.avg;
 
     log_jsonl(&[
         ("test", "regression_guard_tick_recording"),
         ("avg_us", &avg_us.to_string()),
+        ("p50_us", &stats.p50.to_string()),
+        ("p95_us", &stats.p95.to_string()),
+        ("p99_us", &stats.p99.to_string()),
         ("budget_us", &BUDGET_RING_PUSH_US.to_string()),
         ("passed", &(avg_us < BUDGET_RING_PUSH_US * 10).to_string()),
     ]);
@@ -323,17 +375,19 @@ fn regression_guard_toggle_fast() {
     }
 
     // Measure toggle
-    let start = Instant::now();
-    let iterations = 100;
-    for _ in 0..iterations {
+    let iterations = 100usize;
+    let mut samples = measure_us(iterations, || {
         let _ = app.update(AppMsg::ScreenEvent(ctrl_press('p')));
-    }
-    let elapsed = start.elapsed();
-    let avg_us = elapsed.as_micros() as u64 / iterations;
+    });
+    let stats = compute_stats(&mut samples);
+    let avg_us = stats.avg;
 
     log_jsonl(&[
         ("test", "regression_guard_toggle_fast"),
         ("avg_us", &avg_us.to_string()),
+        ("p50_us", &stats.p50.to_string()),
+        ("p95_us", &stats.p95.to_string()),
+        ("p99_us", &stats.p99.to_string()),
         ("budget_us", "100"),
         ("passed", &(avg_us < 100).to_string()),
     ]);

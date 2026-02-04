@@ -683,6 +683,24 @@ mod tests {
     }
 
     #[test]
+    fn compose_layered_precedence_preserves_unset_fields() {
+        let sheet = StyleSheet::new();
+        let base_bg = PackedRgba::rgb(10, 10, 10);
+        let theme_fg = PackedRgba::rgb(200, 50, 50);
+
+        sheet.define("base", Style::new().fg(PackedRgba::WHITE).bg(base_bg));
+        sheet.define("theme", Style::new().fg(theme_fg));
+        sheet.define("widget", Style::new().underline());
+
+        let composed = sheet.compose(&["base", "theme", "widget"]);
+
+        // Later theme overrides base fg, base bg remains, widget adds attrs.
+        assert_eq!(composed.fg, Some(theme_fg));
+        assert_eq!(composed.bg, Some(base_bg));
+        assert!(composed.has_attr(StyleFlags::UNDERLINE));
+    }
+
+    #[test]
     fn get_or_default_returns_defined_style() {
         let sheet = StyleSheet::new();
         let style = Style::new().bold();

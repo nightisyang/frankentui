@@ -1083,6 +1083,21 @@ mod tests {
     }
 
     #[test]
+    fn modifiers_in_csi_alt_ctrl() {
+        let mut parser = InputParser::new();
+
+        // Alt+Ctrl+Up: CSI 1;7 A (1 + ALT(2) + CTRL(4) = 7)
+        let events = parser.parse(b"\x1b[1;7A");
+        assert!(matches!(
+            events.first(),
+            Some(Event::Key(k))
+                if k.code == KeyCode::Up
+                    && k.modifiers.contains(Modifiers::ALT)
+                    && k.modifiers.contains(Modifiers::CTRL)
+        ));
+    }
+
+    #[test]
     fn kitty_keyboard_basic_char() {
         let mut parser = InputParser::new();
 
@@ -1130,6 +1145,18 @@ mod tests {
         assert!(matches!(
             events.first(),
             Some(Event::Key(k)) if k.code == KeyCode::Char('a') && k.modifiers.contains(Modifiers::ALT)
+        ));
+    }
+
+    #[test]
+    fn alt_backspace() {
+        let mut parser = InputParser::new();
+
+        let events = parser.parse(b"\x1b\x7f");
+        assert!(matches!(
+            events.first(),
+            Some(Event::Key(k))
+                if k.code == KeyCode::Backspace && k.modifiers.contains(Modifiers::ALT)
         ));
     }
 
@@ -1186,6 +1213,21 @@ mod tests {
         assert!(matches!(
             events.first(),
             Some(Event::Mouse(m)) if m.x == 9 && m.y == 19 // 0-indexed
+        ));
+    }
+
+    #[test]
+    fn mouse_sgr_modifiers() {
+        let mut parser = InputParser::new();
+
+        // Shift+Alt+Ctrl + left button (0 + 4 + 8 + 16 = 28)
+        let events = parser.parse(b"\x1b[<28;3;4M");
+        assert!(matches!(
+            events.first(),
+            Some(Event::Mouse(m))
+                if m.modifiers.contains(Modifiers::SHIFT)
+                    && m.modifiers.contains(Modifiers::ALT)
+                    && m.modifiers.contains(Modifiers::CTRL)
         ));
     }
 
@@ -1262,6 +1304,23 @@ mod tests {
     }
 
     #[test]
+    fn invalid_utf8_emits_replacement_then_reprocesses_byte() {
+        let mut parser = InputParser::new();
+
+        // 0xE2 expects a 3-byte sequence, 0x28 is invalid continuation.
+        let events = parser.parse(&[0xE2, 0x28]);
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            events[0],
+            Event::Key(k) if k.code == KeyCode::Char(std::char::REPLACEMENT_CHARACTER)
+        ));
+        assert!(matches!(
+            events[1],
+            Event::Key(k) if k.code == KeyCode::Char('(')
+        ));
+    }
+
+    #[test]
     fn dos_protection_csi() {
         let mut parser = InputParser::new();
 
@@ -1286,6 +1345,13 @@ mod tests {
             events.first(),
             Some(Event::Key(k)) if k.code == KeyCode::Up
         ));
+    }
+
+    #[test]
+    fn incomplete_csi_sequence_emits_no_event() {
+        let mut parser = InputParser::new();
+        let events = parser.parse(b"\x1b[");
+        assert!(events.is_empty());
     }
 
     #[test]
@@ -1655,6 +1721,16 @@ mod tests {
         assert!(matches!(
             events.first(),
             Some(Event::Key(k)) if k.code == KeyCode::Char('a') && k.kind == KeyEventKind::Release
+        ));
+
+        // Ctrl+release for 'A' (modifiers=5, event_type=3)
+        let events = parser.parse(b"\x1b[65;5:3u");
+        assert!(matches!(
+            events.first(),
+            Some(Event::Key(k))
+                if k.code == KeyCode::Char('A')
+                    && k.modifiers.contains(Modifiers::CTRL)
+                    && k.kind == KeyEventKind::Release
         ));
     }
 

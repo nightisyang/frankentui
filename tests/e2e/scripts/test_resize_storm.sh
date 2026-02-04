@@ -32,7 +32,13 @@ source "$LIB_DIR/logging.sh"
 source "$LIB_DIR/pty.sh"
 
 # Configuration
-STORM_SEED="${STORM_SEED:-0}"
+export E2E_DETERMINISTIC="${E2E_DETERMINISTIC:-1}"
+export E2E_TIME_STEP_MS="${E2E_TIME_STEP_MS:-100}"
+STORM_SEED="${STORM_SEED:-${E2E_SEED:-0}}"
+export E2E_SEED="${E2E_SEED:-$STORM_SEED}"
+if declare -f e2e_seed >/dev/null 2>&1; then
+    e2e_seed >/dev/null 2>&1 || true
+fi
 STORM_PATTERN="${STORM_PATTERN:-all}"
 STORM_COUNT="${STORM_COUNT:-20}"
 STORM_LOG_DIR="${STORM_LOG_DIR:-$E2E_LOG_DIR/resize_storm}"
@@ -41,7 +47,20 @@ STORM_INTERVAL_MS="${STORM_INTERVAL_MS:-50}"
 mkdir -p "$STORM_LOG_DIR"
 
 # Master JSONL log
-STORM_JSONL="$STORM_LOG_DIR/resize_storm_$(date +%Y%m%d_%H%M%S).jsonl"
+if declare -f e2e_log_stamp >/dev/null 2>&1; then
+    STORM_STAMP="$(e2e_log_stamp)"
+else
+    STORM_STAMP="$(date +%Y%m%d_%H%M%S)"
+fi
+STORM_JSONL="$STORM_LOG_DIR/resize_storm_${STORM_STAMP}.jsonl"
+
+storm_timestamp() {
+    if declare -f e2e_timestamp >/dev/null 2>&1; then
+        e2e_timestamp
+    else
+        date -Iseconds
+    fi
+}
 
 # Artifact detection thresholds
 MAX_GHOSTING_ROWS=0
@@ -52,7 +71,7 @@ log_storm_env() {
     local run_id="$1"
     local pattern="$2"
     cat >> "$STORM_JSONL" <<EOF
-{"event":"env","run_id":"$run_id","timestamp":"$(date -Iseconds)","seed":$STORM_SEED,"storm_pattern":"$pattern","env":{"term":"${TERM:-}","colorterm":"${COLORTERM:-}","columns":"${COLUMNS:-}","lines":"${LINES:-}"}}
+{"event":"env","run_id":"$run_id","timestamp":"$(storm_timestamp)","seed":$STORM_SEED,"storm_pattern":"$pattern","env":{"term":"${TERM:-}","colorterm":"${COLORTERM:-}","columns":"${COLUMNS:-}","lines":"${LINES:-}"}}
 {"event":"git","run_id":"$run_id","commit":"$(git rev-parse HEAD 2>/dev/null || echo 'N/A')","branch":"$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'N/A')"}
 EOF
 }
@@ -79,7 +98,7 @@ log_resize() {
     local to_h="$6"
     local delay_ms="$7"
     cat >> "$STORM_JSONL" <<EOF
-{"event":"resize","run_id":"$run_id","seq":$seq,"from":"${from_w}x${from_h}","to":"${to_w}x${to_h}","delay_ms":$delay_ms,"timestamp":"$(date -Iseconds)"}
+{"event":"resize","run_id":"$run_id","seq":$seq,"from":"${from_w}x${from_h}","to":"${to_w}x${to_h}","delay_ms":$delay_ms,"timestamp":"$(storm_timestamp)"}
 EOF
 }
 

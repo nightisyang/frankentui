@@ -379,6 +379,13 @@ impl std::error::Error for ImageError {}
 mod tests {
     use super::*;
 
+    fn encode_bytes(format: ImageFormat, width: u32, height: u32) -> Vec<u8> {
+        let image = DynamicImage::new_rgba8(width, height);
+        let mut out = Cursor::new(Vec::new());
+        image.write_to(&mut out, format).expect("encode test image");
+        out.into_inner()
+    }
+
     #[test]
     fn detects_kitty_from_env_hint() {
         let caps = TerminalCapabilities::basic();
@@ -422,5 +429,35 @@ mod tests {
         let lines = render_ascii(&image, 4, 4, ImageFit::None);
         assert_eq!(lines.len(), 4);
         assert_eq!(lines[0].len(), 4);
+    }
+
+    #[test]
+    fn decode_png_roundtrip_preserves_dimensions() {
+        let bytes = encode_bytes(ImageFormat::Png, 3, 2);
+        let image = Image::from_bytes(&bytes).expect("decode png");
+        let out = image
+            .to_png_bytes(None, None, ImageFit::None)
+            .expect("encode png");
+        let decoded = image::load_from_memory(&out).expect("decode roundtrip");
+        assert_eq!(decoded.dimensions(), (3, 2));
+    }
+
+    #[test]
+    fn decode_gif_and_jpeg_formats() {
+        for format in [ImageFormat::Gif, ImageFormat::Jpeg] {
+            let bytes = encode_bytes(format, 2, 2);
+            let image = Image::from_bytes(&bytes).expect("decode format");
+            let out = image
+                .to_png_bytes(None, None, ImageFit::None)
+                .expect("encode png");
+            let decoded = image::load_from_memory(&out).expect("decode roundtrip");
+            assert_eq!(decoded.dimensions(), (2, 2));
+        }
+    }
+
+    #[test]
+    fn decode_invalid_bytes_returns_error() {
+        let err = Image::from_bytes(b"not an image").expect_err("expected decode error");
+        assert!(matches!(err, ImageError::Decode(_)));
     }
 }

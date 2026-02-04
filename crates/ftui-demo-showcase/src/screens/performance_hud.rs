@@ -111,6 +111,8 @@ pub struct PerformanceHud {
     sparkline_mode: SparklineMode,
     /// Render budget target in milliseconds.
     budget_ms: f64,
+    /// Fixed tick interval for deterministic fixtures (microseconds).
+    deterministic_tick_us: Option<u64>,
 }
 
 impl Default for PerformanceHud {
@@ -131,7 +133,18 @@ impl PerformanceHud {
             paused: false,
             sparkline_mode: SparklineMode::Intervals,
             budget_ms: 16.67, // ~60 FPS target
+            deterministic_tick_us: None,
         }
+    }
+
+    pub fn enable_deterministic_mode(&mut self, tick_ms: u64) {
+        let tick_us = tick_ms.max(1) * 1000;
+        if self.deterministic_tick_us == Some(tick_us) {
+            return;
+        }
+        self.deterministic_tick_us = Some(tick_us);
+        self.tick_times_us.clear();
+        self.last_tick = None;
     }
 
     fn reset(&mut self) {
@@ -144,18 +157,28 @@ impl PerformanceHud {
 
     fn record_tick(&mut self) {
         if self.paused {
-            self.last_tick = Some(Instant::now());
+            if self.deterministic_tick_us.is_none() {
+                self.last_tick = Some(Instant::now());
+            }
             return;
         }
-        let now = Instant::now();
-        if let Some(last) = self.last_tick {
-            let dt_us = now.duration_since(last).as_micros() as u64;
+        if let Some(dt_us) = self.deterministic_tick_us {
             if self.tick_times_us.len() >= MAX_SAMPLES {
                 self.tick_times_us.pop_front();
             }
             self.tick_times_us.push_back(dt_us);
+            self.last_tick = None;
+        } else {
+            let now = Instant::now();
+            if let Some(last) = self.last_tick {
+                let dt_us = now.duration_since(last).as_micros() as u64;
+                if self.tick_times_us.len() >= MAX_SAMPLES {
+                    self.tick_times_us.pop_front();
+                }
+                self.tick_times_us.push_back(dt_us);
+            }
+            self.last_tick = Some(now);
         }
-        self.last_tick = Some(now);
 
         // EMA for views per tick
         let current = self.view_counter.get();

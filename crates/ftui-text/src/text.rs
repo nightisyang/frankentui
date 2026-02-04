@@ -1326,6 +1326,39 @@ mod tests {
     }
 
     #[test]
+    fn text_from_empty_string_is_empty() {
+        let text: Text = String::new().into();
+        assert!(text.is_empty());
+        assert_eq!(text.height(), 0);
+        assert_eq!(text.width(), 0);
+    }
+
+    #[test]
+    fn text_from_empty_line_preserves_single_empty_line() {
+        let text: Text = Line::new().into();
+        assert_eq!(text.height(), 1);
+        assert!(text.lines()[0].is_empty());
+        assert_eq!(text.width(), 0);
+    }
+
+    #[test]
+    fn text_from_lines_empty_iter_is_empty() {
+        let text = Text::from_lines(Vec::<Line>::new());
+        assert!(text.is_empty());
+        assert_eq!(text.height(), 0);
+    }
+
+    #[test]
+    fn text_from_str_preserves_empty_middle_line() {
+        let text: Text = "a\n\nb".into();
+        assert_eq!(text.height(), 3);
+        assert_eq!(text.lines()[0].to_plain_text(), "a");
+        assert!(text.lines()[1].is_empty());
+        assert_eq!(text.lines()[2].to_plain_text(), "b");
+        assert_eq!(text.to_plain_text(), "a\n\nb");
+    }
+
+    #[test]
     fn text_into_segment_lines() {
         let text = Text::raw("line 1\nline 2");
         let seg_lines = text.into_segment_lines();
@@ -1502,6 +1535,28 @@ mod tests {
         let m = line.measurement();
         assert_eq!(m.minimum, 11);
         assert_eq!(m.maximum, 11);
+    }
+
+    #[test]
+    fn line_from_empty_string_is_empty() {
+        let line: Line = String::new().into();
+        assert!(line.is_empty());
+        assert_eq!(line.width(), 0);
+    }
+
+    #[test]
+    fn line_width_combining_mark_is_single_cell() {
+        let line = Line::raw("e\u{301}");
+        assert_eq!(line.width(), 1);
+    }
+
+    #[test]
+    fn line_wrap_handles_wide_grapheme_with_tiny_width() {
+        let line = Line::raw("你好");
+        let wrapped = line.wrap(1, WrapMode::Char);
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped[0].to_plain_text(), "你");
+        assert_eq!(wrapped[1].to_plain_text(), "好");
     }
 
     #[test]

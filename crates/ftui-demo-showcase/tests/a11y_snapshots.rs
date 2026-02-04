@@ -19,11 +19,13 @@ use ftui_demo_showcase::app::{AppModel, AppMsg};
 use ftui_demo_showcase::screens::Screen;
 use ftui_demo_showcase::theme::{self, ScopedA11yLock, ScopedThemeLock};
 use ftui_harness::assert_snapshot;
+use ftui_harness::determinism::DeterminismFixture;
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
 use ftui_runtime::program::Model;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 // ---------------------------------------------------------------------------
@@ -31,12 +33,12 @@ use std::time::Instant;
 // ---------------------------------------------------------------------------
 
 fn generate_run_id() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("a11y-{:x}", ts)
+    fixture().run_id().to_string()
+}
+
+fn fixture() -> &'static DeterminismFixture {
+    static FIXTURE: OnceLock<DeterminismFixture> = OnceLock::new();
+    FIXTURE.get_or_init(|| DeterminismFixture::new("a11y_snapshots", 42))
 }
 
 fn hash_frame(frame: &ftui_render::buffer::Buffer) -> u64 {

@@ -20,12 +20,15 @@
 //! - `FTUI_TEXTEDITOR_DIAGNOSTICS=true` - Enable verbose diagnostic output
 //! - `FTUI_TEXTEDITOR_DETERMINISTIC=true` - Enable deterministic mode
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Instant;
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
+use ftui_core::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind,
+};
 use ftui_core::geometry::Rect;
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
@@ -41,6 +44,7 @@ use ftui_widgets::paragraph::Paragraph;
 use ftui_widgets::textarea::TextArea;
 
 use super::{HelpEntry, Screen};
+use crate::determinism;
 use crate::theme;
 
 const UNDO_HISTORY_LIMIT: usize = 64;
@@ -86,9 +90,7 @@ pub fn reset_event_counter() {
 
 /// Check if deterministic mode is enabled.
 pub fn is_deterministic_mode() -> bool {
-    std::env::var("FTUI_TEXTEDITOR_DETERMINISTIC")
-        .map(|v| v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    determinism::env_flag("FTUI_TEXTEDITOR_DETERMINISTIC") || determinism::is_demo_deterministic()
 }
 
 /// Diagnostic event types for JSONL logging.
@@ -645,6 +647,16 @@ pub struct AdvancedTextEditor {
     undo_keys: UndoKeybindings,
     /// Diagnostic log for telemetry (bd-12o8.5).
     diagnostic_log: DiagnosticLog,
+    /// Editor panel hit rect for mouse focus.
+    layout_editor: Cell<Rect>,
+    /// Undo panel hit rect for mouse focus.
+    layout_undo: Cell<Rect>,
+    /// Search panel hit rect for mouse focus.
+    layout_search_panel: Cell<Rect>,
+    /// Search input hit rect for mouse focus.
+    layout_search_input: Cell<Rect>,
+    /// Replace input hit rect for mouse focus.
+    layout_replace_input: Cell<Rect>,
 }
 
 impl Default for AdvancedTextEditor {
@@ -715,6 +727,11 @@ and proper Unicode handling throughout.
             undo_panel_visible: false,
             undo_keys: UndoKeybindings::default(),
             diagnostic_log,
+            layout_editor: Cell::new(Rect::default()),
+            layout_undo: Cell::new(Rect::default()),
+            layout_search_panel: Cell::new(Rect::default()),
+            layout_search_input: Cell::new(Rect::default()),
+            layout_replace_input: Cell::new(Rect::default()),
         }
     }
 
@@ -792,6 +809,53 @@ and proper Unicode handling throughout.
         self.editor.set_focused(self.focus == Focus::Editor);
         self.search_input.set_focused(self.focus == Focus::Search);
         self.replace_input.set_focused(self.focus == Focus::Replace);
+    }
+
+    fn clear_layout_rects(&self) {
+        self.layout_editor.set(Rect::default());
+        self.layout_undo.set(Rect::default());
+        self.layout_search_panel.set(Rect::default());
+        self.layout_search_input.set(Rect::default());
+        self.layout_replace_input.set(Rect::default());
+    }
+
+    fn focus_from_point(&mut self, x: u16, y: u16) -> bool {
+        let search_input = self.layout_search_input.get();
+        let replace_input = self.layout_replace_input.get();
+        let search_panel = self.layout_search_panel.get();
+        let editor = self.layout_editor.get();
+        let undo = self.layout_undo.get();
+
+        let target = if search_input.contains(x, y) {
+            Some(Focus::Search)
+        } else if replace_input.contains(x, y) {
+            Some(Focus::Replace)
+        } else if search_panel.contains(x, y) {
+            Some(Focus::Search)
+        } else if editor.contains(x, y) || undo.contains(x, y) {
+            Some(Focus::Editor)
+        } else {
+            None
+        };
+
+        let Some(target) = target else {
+            return false;
+        };
+
+        if target == self.focus {
+            return false;
+        }
+
+        let old_focus = self.focus;
+        self.focus = target;
+        self.update_focus_states();
+
+        let entry = DiagnosticEntry::new(DiagnosticEventKind::FocusChanged)
+            .with_focus(self.focus.as_str())
+            .with_context(format!("from {} via mouse", old_focus.as_str()));
+        self.log_event(entry);
+
+        true
     }
 
     /// Perform a search with the current query.
@@ -1047,6 +1111,7 @@ and proper Unicode handling throughout.
 
     /// Render the main editor panel.
     fn render_editor_panel(&self, frame: &mut Frame, area: Rect) {
+        self.layout_editor.set(area);
         let focused = self.focus == Focus::Editor;
         let border_style = theme::panel_border_style(focused, theme::screen_accent::FORMS_INPUT);
 
@@ -1068,6 +1133,7 @@ and proper Unicode handling throughout.
     }
 
     fn render_undo_panel(&self, frame: &mut Frame, area: Rect) {
+        self.layout_undo.set(area);
         let block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -1105,6 +1171,10 @@ and proper Unicode handling throughout.
             return;
         }
 
+        self.layout_search_panel.set(area);
+        self.layout_search_input.set(Rect::default());
+        self.layout_replace_input.set(Rect::default());
+
         let focused = self.focus == Focus::Search || self.focus == Focus::Replace;
         let border_style = theme::panel_border_style(focused, theme::screen_accent::FORMS_INPUT);
 
@@ -1139,6 +1209,7 @@ and proper Unicode handling throughout.
                 .style(Style::new().fg(theme::fg::SECONDARY))
                 .render(cols[0], frame);
             Widget::render(&self.search_input, cols[1], frame);
+            self.layout_search_input.set(cols[1]);
         }
 
         // Replace row
@@ -1150,6 +1221,7 @@ and proper Unicode handling throughout.
                 .style(Style::new().fg(theme::fg::SECONDARY))
                 .render(cols[0], frame);
             Widget::render(&self.replace_input, cols[1], frame);
+            self.layout_replace_input.set(cols[1]);
         }
 
         // Buttons row
@@ -1212,6 +1284,13 @@ impl Screen for AdvancedTextEditor {
     type Message = Event;
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
+        if let Event::Mouse(mouse) = event
+            && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && self.focus_from_point(mouse.x, mouse.y)
+        {
+            return Cmd::None;
+        }
+
         // Handle focus switching with Ctrl+Arrow
         if let Event::Key(KeyEvent {
             code: KeyCode::Right,
@@ -1463,6 +1542,8 @@ impl Screen for AdvancedTextEditor {
             return;
         }
 
+        self.clear_layout_rects();
+
         // Layout: editor + optional search panel + status bar
         let main_height = if self.search_visible {
             area.height.saturating_sub(6) // 5 for search panel + 1 for status
@@ -1566,6 +1647,10 @@ impl Screen for AdvancedTextEditor {
                 action: "Cycle focus (search open)",
             },
             HelpEntry {
+                key: "Mouse",
+                action: "Click to focus panels",
+            },
+            HelpEntry {
                 key: "Esc",
                 action: "Close search / Clear selection",
             },
@@ -1606,6 +1691,7 @@ impl Screen for AdvancedTextEditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_core::event::MouseEvent;
 
     fn press(code: KeyCode) -> Event {
         Event::Key(KeyEvent {
@@ -1621,6 +1707,10 @@ mod tests {
             modifiers: Modifiers::CTRL,
             kind: KeyEventKind::Press,
         })
+    }
+
+    fn mouse_event(kind: MouseEventKind, x: u16, y: u16) -> Event {
+        Event::Mouse(MouseEvent::new(kind, x, y))
     }
 
     #[test]
@@ -1700,6 +1790,35 @@ mod tests {
             modifiers: Modifiers::CTRL,
             kind: KeyEventKind::Press,
         }));
+        assert_eq!(screen.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn mouse_click_focuses_panels() {
+        let mut screen = AdvancedTextEditor::new();
+        screen.search_visible = true;
+        screen.update_focus_states();
+
+        screen.layout_editor.set(Rect::new(0, 0, 40, 10));
+        screen.layout_search_panel.set(Rect::new(0, 10, 40, 3));
+        screen.layout_search_input.set(Rect::new(12, 10, 20, 1));
+        screen.layout_replace_input.set(Rect::new(12, 11, 20, 1));
+
+        screen.update(&mouse_event(
+            MouseEventKind::Down(MouseButton::Left),
+            15,
+            10,
+        ));
+        assert_eq!(screen.focus, Focus::Search);
+
+        screen.update(&mouse_event(
+            MouseEventKind::Down(MouseButton::Left),
+            15,
+            11,
+        ));
+        assert_eq!(screen.focus, Focus::Replace);
+
+        screen.update(&mouse_event(MouseEventKind::Down(MouseButton::Left), 5, 5));
         assert_eq!(screen.focus, Focus::Editor);
     }
 

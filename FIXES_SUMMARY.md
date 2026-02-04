@@ -312,3 +312,9 @@ Coverage audit + deep review are still in progress (bd-2dui). Do not treat the c
 **Issue:** `TextInput` did not handle `Ctrl+W`, a standard Unix binding for "delete word back", causing it to be ignored.
 **Fix:**
     - Added handling for `KeyCode::Char('w')` with `Modifiers::CTRL` in `handle_key` to trigger `delete_word_back()`.
+
+## 105. Cell Continuation SOH Collision
+**File:** `crates/ftui-render/src/cell.rs`
+**Issue:** The `Cell::CONTINUATION` constant was defined as `Self(1)`, which collides with the valid Unicode control character SOH (U+0001). This caused `TextInput` and other widgets to incorrectly treat SOH characters as continuation placeholders, leading to them disappearing or being treated as empty space.
+**Fix:**
+    - Changed `Cell::CONTINUATION` to `Self(0x7FFF_FFFF)`, a value outside the valid Unicode scalar range but within the 31-bit limit for "Direct Char" storage. This ensures SOH is correctly preserved as a character while maintaining the special meaning of `CONTINUATION`.

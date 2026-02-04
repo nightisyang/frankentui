@@ -173,7 +173,9 @@ impl MacroRecorderScreen {
             FocusPanel::Timeline => "Timeline",
             FocusPanel::Scenarios => "Scenarios",
         };
-        self.status_note = Some(format!("Focus: {label} (Tab or Ctrl/Alt+Arrows)"));
+        self.status_note = Some(format!(
+            "Focus: {label} (Tab or Ctrl/Alt+Arrows: \u{2191}Controls \u{2190}Timeline \u{2192}Scenarios)"
+        ));
     }
 
     pub fn drain_playback_events(&mut self) -> Vec<Event> {
@@ -405,34 +407,24 @@ impl MacroRecorderScreen {
 
         let (code, modifiers) = (*code, *modifiers);
 
-        if modifiers.intersects(Modifiers::CTRL | Modifiers::ALT) {
+        if modifiers
+            .intersects(Modifiers::CTRL | Modifiers::ALT | Modifiers::SHIFT | Modifiers::SUPER)
+        {
             match code {
                 KeyCode::Up => {
-                    // Up from bottom panels goes to Controls
-                    if matches!(self.focus, FocusPanel::Timeline | FocusPanel::Scenarios) {
-                        self.set_focus(FocusPanel::Controls);
-                    }
+                    self.set_focus(FocusPanel::Controls);
                     return;
                 }
                 KeyCode::Down => {
-                    // Down from Controls goes to Timeline (primary workspace)
-                    if self.focus == FocusPanel::Controls {
-                        self.set_focus(FocusPanel::Timeline);
-                    }
+                    self.set_focus(FocusPanel::Timeline);
                     return;
                 }
                 KeyCode::Left => {
-                    // Left from Scenarios goes to Timeline
-                    if self.focus == FocusPanel::Scenarios {
-                        self.set_focus(FocusPanel::Timeline);
-                    }
+                    self.set_focus(FocusPanel::Timeline);
                     return;
                 }
                 KeyCode::Right => {
-                    // Right from Timeline goes to Scenarios
-                    if self.focus == FocusPanel::Timeline {
-                        self.set_focus(FocusPanel::Scenarios);
-                    }
+                    self.set_focus(FocusPanel::Scenarios);
                     return;
                 }
                 _ => {}
@@ -731,8 +723,8 @@ impl MacroRecorderScreen {
                     focus_style(self.focus == FocusPanel::Scenarios),
                 ),
                 Span::raw("   "),
-                Span::styled("Ctrl/Alt+Arrows", Style::new().fg(theme::accent::PRIMARY)),
-                Span::raw(" switch panel"),
+                Span::styled("Ctrl/Alt+Arrows:", Style::new().fg(theme::accent::PRIMARY)),
+                Span::raw(" \u{2191}Controls  \u{2190}Timeline  \u{2192}Scenarios"),
             ]),
             Line::from_spans([
                 Span::styled("Quick Start: ", Style::new().fg(theme::fg::SECONDARY)),
@@ -1169,8 +1161,8 @@ impl Screen for MacroRecorderScreen {
                 action: "Play / Pause",
             },
             HelpEntry {
-                key: "Ctrl/Alt+\u{2190}/\u{2191}/\u{2192}/\u{2193}",
-                action: "Switch panel focus",
+                key: "Ctrl/Alt+\u{2191}/\u{2190}/\u{2192}",
+                action: "Jump focus (Controls/Timeline/Scenarios)",
             },
             HelpEntry {
                 key: "Tab/Shift+Tab",

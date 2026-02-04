@@ -266,3 +266,168 @@ impl Widget for VoiDebugOverlay {
             .render(inner, frame);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ftui_render::grapheme_pool::GraphemePool;
+
+    fn sample_posterior() -> VoiPosteriorSummary {
+        VoiPosteriorSummary {
+            alpha: 3.2,
+            beta: 7.4,
+            mean: 0.301,
+            variance: 0.0123,
+            expected_variance_after: 0.0101,
+            voi_gain: 0.0022,
+        }
+    }
+
+    fn sample_data() -> VoiOverlayData {
+        VoiOverlayData {
+            title: "VOI Overlay".to_string(),
+            tick: Some(42),
+            source: Some("budget".to_string()),
+            posterior: sample_posterior(),
+            decision: Some(VoiDecisionSummary {
+                event_idx: 7,
+                should_sample: true,
+                reason: "voi_gain > cost".to_string(),
+                score: 0.123456,
+                cost: 0.045,
+                log_bayes_factor: 0.437,
+                e_value: 1.23,
+                e_threshold: 0.95,
+                boundary_score: 0.77,
+            }),
+            observation: Some(VoiObservationSummary {
+                sample_idx: 4,
+                violated: false,
+                posterior_mean: 0.312,
+                alpha: 3.9,
+                beta: 8.2,
+            }),
+            ledger: vec![
+                VoiLedgerEntry::Decision {
+                    event_idx: 5,
+                    should_sample: true,
+                    voi_gain: 0.0042,
+                    log_bayes_factor: 0.31,
+                },
+                VoiLedgerEntry::Observation {
+                    sample_idx: 3,
+                    violated: true,
+                    posterior_mean: 0.4,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn build_lines_without_decision_or_ledger() {
+        let data = VoiOverlayData {
+            title: "VOI".to_string(),
+            tick: None,
+            source: None,
+            posterior: sample_posterior(),
+            decision: None,
+            observation: None,
+            ledger: Vec::new(),
+        };
+        let overlay = VoiDebugOverlay::new(data);
+        let lines = overlay.build_lines(24);
+
+        assert!(lines[0].contains("VOI"), "header missing title: {lines:?}");
+        assert_eq!(lines[1].len(), 24, "divider width mismatch: {lines:?}");
+        assert!(
+            lines.iter().any(|line| line.contains("Decision: —")),
+            "missing default decision line: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("Posterior Core")),
+            "missing posterior section: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|line| line.contains("Evidence Ledger")),
+            "unexpected ledger section: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn build_lines_with_decision_and_observation() {
+        let overlay = VoiDebugOverlay::new(sample_data());
+        let lines = overlay.build_lines(30);
+
+        assert!(
+            lines.iter().any(|line| line.contains("Decision: SAMPLE")),
+            "missing decision summary: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("Last Sample")),
+            "missing observation summary: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("Evidence Ledger")),
+            "missing ledger header: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("D#  5")),
+            "missing decision ledger entry: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("O#  3")),
+            "missing observation ledger entry: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn render_applies_background_and_border() {
+        let bg = PackedRgba::rgb(12, 34, 56);
+        let style = VoiOverlayStyle {
+            background: Some(bg),
+            ..VoiOverlayStyle::default()
+        };
+        let overlay = VoiDebugOverlay::new(sample_data()).with_style(style);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 32, &mut pool);
+        let area = Rect::new(0, 0, 80, 32);
+
+        overlay.render(area, &mut frame);
+
+        let top_left = frame.buffer.get(0, 0).unwrap();
+        assert_eq!(
+            top_left.content.as_char(),
+            Some('╭'),
+            "border not rendered as rounded: cell={top_left:?}"
+        );
+
+        let inner = Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2);
+        let lines = overlay.build_lines(inner.width.saturating_sub(2) as usize);
+        let extra_row = inner.y + (lines.len() as u16).saturating_add(1);
+        let bg_cell = frame.buffer.get(inner.x + 1, extra_row).unwrap();
+        assert_eq!(
+            bg_cell.bg,
+            bg,
+            "background not applied at ({}, {}): cell={bg_cell:?}",
+            inner.x + 1,
+            extra_row
+        );
+    }
+
+    #[test]
+    fn render_small_area_noop() {
+        let overlay = VoiDebugOverlay::new(sample_data());
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 4, &mut pool);
+        let before = frame.buffer.get(0, 0).copied();
+
+        overlay.render(Rect::new(0, 0, 10, 4), &mut frame);
+
+        let after = frame.buffer.get(0, 0).copied();
+        assert_eq!(
+            before, after,
+            "small-area render should be no-op: before={before:?} after={after:?}"
+        );
+    }
+}

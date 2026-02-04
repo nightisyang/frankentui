@@ -41,6 +41,7 @@ use ftui_widgets::input::TextInput;
 use ftui_widgets::paragraph::Paragraph;
 
 use super::{HelpEntry, Screen};
+use crate::determinism;
 use crate::theme;
 
 // ---------------------------------------------------------------------------
@@ -93,9 +94,7 @@ pub fn reset_event_counter() {
 
 /// Check if deterministic mode is enabled.
 pub fn is_deterministic_mode() -> bool {
-    std::env::var("FTUI_VSEARCH_DETERMINISTIC")
-        .map(|v| v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    determinism::env_flag("FTUI_VSEARCH_DETERMINISTIC") || determinism::is_demo_deterministic()
 }
 
 /// Diagnostic event types for JSONL logging.

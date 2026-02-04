@@ -900,6 +900,18 @@ mod tests {
         assert_eq!(rgb, Rgb::new(10, 20, 30));
     }
 
+    #[test]
+    fn relative_luminance_packed_ignores_alpha() {
+        let opaque = PackedRgba::rgba(10, 20, 30, 255);
+        let transparent = PackedRgba::rgba(10, 20, 30, 0);
+        let l1 = relative_luminance_packed(opaque);
+        let l2 = relative_luminance_packed(transparent);
+        assert!(
+            (l1 - l2).abs() < 1.0e-12,
+            "luminance should ignore alpha (l1={l1}, l2={l2})"
+        );
+    }
+
     // --- Ansi16 tests ---
 
     #[test]
@@ -1089,6 +1101,13 @@ mod tests {
     #[test]
     fn color_from_packed_rgba() {
         let packed = PackedRgba::rgb(42, 84, 126);
+        let color: Color = packed.into();
+        assert_eq!(color, Color::Rgb(Rgb::new(42, 84, 126)));
+    }
+
+    #[test]
+    fn color_from_packed_rgba_ignores_alpha() {
+        let packed = PackedRgba::rgba(42, 84, 126, 10);
         let color: Color = packed.into();
         assert_eq!(color, Color::Rgb(Rgb::new(42, 84, 126)));
     }

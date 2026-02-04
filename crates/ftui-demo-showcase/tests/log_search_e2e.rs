@@ -13,10 +13,12 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
 use ftui_demo_showcase::app::{AppModel, AppMsg, ScreenId};
+use ftui_harness::determinism::{JsonValue, TestJsonlLogger};
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
 use ftui_runtime::Model;
@@ -64,19 +66,17 @@ fn capture_frame_hash(app: &mut AppModel, width: u16, height: u16) -> u64 {
     hasher.finish()
 }
 
-fn log_jsonl(step: &str, data: &[(&str, &str)]) {
-    let fields: Vec<String> = std::iter::once(format!("\"ts\":\"{}\"", chrono_like_timestamp()))
-        .chain(std::iter::once(format!("\"step\":\"{}\"", step)))
-        .chain(data.iter().map(|(k, v)| format!("\"{}\":\"{}\"", k, v)))
-        .collect();
-    eprintln!("{{{}}}", fields.join(","));
+fn log_jsonl(event: &str, data: &[(&str, JsonValue)]) {
+    logger().log(event, data);
 }
 
-fn chrono_like_timestamp() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!("T{n:06}")
+fn logger() -> &'static TestJsonlLogger {
+    static LOGGER: OnceLock<TestJsonlLogger> = OnceLock::new();
+    LOGGER.get_or_init(|| {
+        let mut logger = TestJsonlLogger::new("log_search_e2e", 42);
+        logger.add_context_str("suite", "log_search_e2e");
+        logger
+    })
 }
 
 // ===========================================================================
@@ -90,9 +90,9 @@ fn e2e_keyboard_only_log_search() {
     log_jsonl(
         "env",
         &[
-            ("test", "e2e_keyboard_only_log_search"),
-            ("term_cols", "120"),
-            ("term_rows", "40"),
+            ("test", JsonValue::str("e2e_keyboard_only_log_search")),
+            ("term_cols", JsonValue::u64(120)),
+            ("term_rows", JsonValue::u64(40)),
         ],
     );
 
@@ -107,17 +107,17 @@ fn e2e_keyboard_only_log_search() {
     assert_eq!(app.current_screen, ScreenId::LogSearch);
 
     // Open search bar and type query.
-    log_jsonl("step", &[("action", "open_search")]);
+    log_jsonl("step", &[("action", JsonValue::str("open_search"))]);
     app.update(AppMsg::ScreenEvent(press(KeyCode::Char('/'))));
     type_chars(&mut app, "ERROR");
 
     // Toggle case sensitivity + context lines.
-    log_jsonl("step", &[("action", "toggle_search_opts")]);
+    log_jsonl("step", &[("action", JsonValue::str("toggle_search_opts"))]);
     app.update(AppMsg::ScreenEvent(ctrl_press(KeyCode::Char('c'))));
     app.update(AppMsg::ScreenEvent(ctrl_press(KeyCode::Char('x'))));
 
     // Submit search and navigate matches.
-    log_jsonl("step", &[("action", "submit_search")]);
+    log_jsonl("step", &[("action", JsonValue::str("submit_search"))]);
     app.update(AppMsg::ScreenEvent(press(KeyCode::Enter)));
     app.update(AppMsg::ScreenEvent(press(KeyCode::Char('n'))));
     app.update(AppMsg::ScreenEvent(press(KeyCode::Char('N'))));
@@ -125,11 +125,11 @@ fn e2e_keyboard_only_log_search() {
     let search_hash = capture_frame_hash(&mut app, 120, 40);
     log_jsonl(
         "search_view",
-        &[("frame_hash", &format!("{search_hash:016x}"))],
+        &[("frame_hash", JsonValue::str(format!("{search_hash:016x}")))],
     );
 
     // Open filter bar and apply filter.
-    log_jsonl("step", &[("action", "open_filter")]);
+    log_jsonl("step", &[("action", JsonValue::str("open_filter"))]);
     app.update(AppMsg::ScreenEvent(press(KeyCode::Char('f'))));
     type_chars(&mut app, "WARN");
     app.update(AppMsg::ScreenEvent(press(KeyCode::Enter)));
@@ -137,11 +137,11 @@ fn e2e_keyboard_only_log_search() {
     let filter_hash = capture_frame_hash(&mut app, 120, 40);
     log_jsonl(
         "filter_view",
-        &[("frame_hash", &format!("{filter_hash:016x}"))],
+        &[("frame_hash", JsonValue::str(format!("{filter_hash:016x}")))],
     );
 
     // Clear filter and pause/resume stream.
-    log_jsonl("step", &[("action", "clear_filter_pause")]);
+    log_jsonl("step", &[("action", JsonValue::str("clear_filter_pause"))]);
     app.update(AppMsg::ScreenEvent(press(KeyCode::Char('F'))));
     app.update(AppMsg::ScreenEvent(press(KeyCode::Char(' '))));
     app.update(AppMsg::ScreenEvent(press(KeyCode::Char(' '))));
@@ -151,8 +151,8 @@ fn e2e_keyboard_only_log_search() {
     log_jsonl(
         "completed",
         &[
-            ("elapsed_us", &elapsed.as_micros().to_string()),
-            ("frame_hash", &format!("{final_hash:016x}")),
+            ("elapsed_us", JsonValue::u64(elapsed.as_micros() as u64)),
+            ("frame_hash", JsonValue::str(format!("{final_hash:016x}"))),
         ],
     );
 }
@@ -168,9 +168,9 @@ fn e2e_search_performance_budget() {
     log_jsonl(
         "env",
         &[
-            ("test", "e2e_search_performance_budget"),
-            ("term_cols", "120"),
-            ("term_rows", "40"),
+            ("test", JsonValue::str("e2e_search_performance_budget")),
+            ("term_cols", JsonValue::u64(120)),
+            ("term_rows", JsonValue::u64(40)),
         ],
     );
 
@@ -202,16 +202,9 @@ fn e2e_search_performance_budget() {
     log_jsonl(
         "perf_result",
         &[
-            ("elapsed_us", &elapsed_us.to_string()),
-            ("budget_us", "100000"),
-            (
-                "pass",
-                if elapsed_us < 100_000 {
-                    "true"
-                } else {
-                    "false"
-                },
-            ),
+            ("elapsed_us", JsonValue::u64(elapsed_us as u64)),
+            ("budget_us", JsonValue::u64(100_000)),
+            ("pass", JsonValue::bool(elapsed_us < 100_000)),
         ],
     );
 
@@ -229,9 +222,9 @@ fn e2e_filter_performance_budget() {
     log_jsonl(
         "env",
         &[
-            ("test", "e2e_filter_performance_budget"),
-            ("term_cols", "120"),
-            ("term_rows", "40"),
+            ("test", JsonValue::str("e2e_filter_performance_budget")),
+            ("term_cols", JsonValue::u64(120)),
+            ("term_rows", JsonValue::u64(40)),
         ],
     );
 
@@ -258,9 +251,9 @@ fn e2e_filter_performance_budget() {
     log_jsonl(
         "perf_result",
         &[
-            ("elapsed_us", &elapsed_us.to_string()),
-            ("budget_us", "50000"),
-            ("pass", if elapsed_us < 50_000 { "true" } else { "false" }),
+            ("elapsed_us", JsonValue::u64(elapsed_us as u64)),
+            ("budget_us", JsonValue::u64(50_000)),
+            ("pass", JsonValue::bool(elapsed_us < 50_000)),
         ],
     );
 
@@ -278,9 +271,9 @@ fn e2e_render_with_highlights_budget() {
     log_jsonl(
         "env",
         &[
-            ("test", "e2e_render_with_highlights_budget"),
-            ("term_cols", "120"),
-            ("term_rows", "40"),
+            ("test", JsonValue::str("e2e_render_with_highlights_budget")),
+            ("term_cols", JsonValue::u64(120)),
+            ("term_rows", JsonValue::u64(40)),
         ],
     );
 
@@ -307,17 +300,10 @@ fn e2e_render_with_highlights_budget() {
     log_jsonl(
         "perf_result",
         &[
-            ("total_us", &elapsed.as_micros().to_string()),
-            ("per_render_us", &per_render_us.to_string()),
-            ("budget_us", "10000"),
-            (
-                "pass",
-                if per_render_us < 10_000 {
-                    "true"
-                } else {
-                    "false"
-                },
-            ),
+            ("total_us", JsonValue::u64(elapsed.as_micros() as u64)),
+            ("per_render_us", JsonValue::u64(per_render_us as u64)),
+            ("budget_us", JsonValue::u64(10_000)),
+            ("pass", JsonValue::bool(per_render_us < 10_000)),
         ],
     );
 
@@ -335,9 +321,9 @@ fn e2e_streaming_with_search_latency() {
     log_jsonl(
         "env",
         &[
-            ("test", "e2e_streaming_with_search_latency"),
-            ("term_cols", "120"),
-            ("term_rows", "40"),
+            ("test", JsonValue::str("e2e_streaming_with_search_latency")),
+            ("term_cols", JsonValue::u64(120)),
+            ("term_rows", JsonValue::u64(40)),
         ],
     );
 
@@ -366,9 +352,12 @@ fn e2e_streaming_with_search_latency() {
     log_jsonl(
         "perf_result",
         &[
-            ("ticks", "100"),
-            ("elapsed_us", &elapsed.as_micros().to_string()),
-            ("avg_per_tick_us", &(elapsed.as_micros() / 100).to_string()),
+            ("ticks", JsonValue::u64(100)),
+            ("elapsed_us", JsonValue::u64(elapsed.as_micros() as u64)),
+            (
+                "avg_per_tick_us",
+                JsonValue::u64((elapsed.as_micros() / 100) as u64),
+            ),
         ],
     );
 

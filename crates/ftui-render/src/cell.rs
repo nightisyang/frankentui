@@ -132,7 +132,10 @@ impl CellContent {
     ///
     /// When a character has display width > 1, subsequent cells are filled
     /// with this marker to indicate they are part of the previous character.
-    pub const CONTINUATION: Self = Self(1);
+    ///
+    /// Value is `0x7FFF_FFFF` (max i32), which is outside valid Unicode scalar
+    /// range (0..0x10FFFF) but fits in 31 bits (Direct Char mode).
+    pub const CONTINUATION: Self = Self(0x7FFF_FFFF);
 
     /// Create content from a single Unicode character.
     ///

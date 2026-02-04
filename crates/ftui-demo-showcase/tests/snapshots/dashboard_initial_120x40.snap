@@ -21,20 +21,20 @@ FRANKENTUI DASHBOARD
 │Click → Visual Effects││Click → Data Viz                  ││Click → Code Exploreru16),        ││Click → Performance163│
 ╰──────────────────────╯╰──────────────────────────────────╯╰──────────────────────────────────╯╰──────────────────────╯
 ╭───Text FX · 3-Up (1/28)────╮╭───────────────────Activity───────────────────╮╭────────Markdown · Streaming… 0%────────╮
-│Sample 1 of 3 · 3-Up stack  ││● INFO 00:02 · CPU spike detected on core 3   ││▌                                       │
-│1 · None · S1               ││                                              ││                                        │
-│# FX Lab                    ││                                              ││                                        │
+│Sample 1 of 3 · 3-Up stack  ││SEV TIME  COMP  MESSAGE                       ││▌                                       │
+│1 · None · S1               ││ INFO  00:02  ● CPU spike detected on core 3  ││                                        │
+│# FX Lab · Deterministic Spe││                                              ││                                        │
 │> *"Render truth, not pixels││                                              ││                                        │
 │                            ││                                              ││                                        │
 │2 · FadeIn · S2             ││                                              ││                                        │
-│## GFM Stress               ││                                              ││                                        │
-│1. **Bold** + _italic_      ││                                              ││                                        │
-│2. `code` + ~~strike~~      ││                                              ││                                        │
+│## GFM Stress · Ledger      ││                                              ││                                        │
+│1. **Bold** + _italic_ + ~~s││                                              ││                                        │
+│2. `code` + [links](https://││                                              ││                                        │
 │3 · FadeOut · S3            ││                                              ││                                        │
-│### Mixed                   ││                                              ││                                        │
+│### Runtime Ledger · Mixed  ││                                              ││                                        │
 │- [x] Tasks                 ││                                              ││                                        │
 │- [ ] Benchmarks            ││                                              ││                                        │
-│                            ││                                              ││                                        │
+│- [x] Evidence log          ││                                              ││                                        │
 │e: next set · click → Visual││Click → Action Timeline                       ││Click → Markdown                        │
 ╰────────────────────────────╯╰──────────────────────────────────────────────╯╰────────────────────────────────────────╯
 g:charts c:code e:fx m:md | 1-9:screens | Tab:next | t:theme | ?:help | q:quit                                          

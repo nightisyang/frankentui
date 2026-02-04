@@ -29,6 +29,17 @@ use std::collections::HashMap;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
+#[cfg(feature = "state-persistence")]
+use ftui_core::event::Event;
+#[cfg(feature = "state-persistence")]
+use ftui_render::frame::Frame;
+#[cfg(feature = "state-persistence")]
+use ftui_runtime::program::{Cmd, Model};
+#[cfg(feature = "state-persistence")]
+use ftui_runtime::simulator::ProgramSimulator;
+#[cfg(feature = "state-persistence")]
+use tempfile::tempdir;
+
 // ============================================================================
 // Test Utilities
 // ============================================================================
@@ -605,5 +616,99 @@ fn persist_property_dirty_flag() {
         "dirty_flag",
         true,
         "dirty flag accurate",
+    );
+}
+
+// ============================================================================
+// 7. ProgramSimulator Integration (bd-1av4o.2.3)
+// ============================================================================
+
+#[cfg(feature = "state-persistence")]
+#[test]
+fn program_simulator_save_restore_round_trip_file_storage() {
+    struct PersistModel {
+        registry: Arc<StateRegistry>,
+        loaded: Option<Vec<u8>>,
+    }
+
+    #[derive(Debug)]
+    enum PersistMsg {
+        Write,
+        Restore,
+        Read,
+    }
+
+    impl From<Event> for PersistMsg {
+        fn from(_: Event) -> Self {
+            PersistMsg::Write
+        }
+    }
+
+    impl Model for PersistModel {
+        type Message = PersistMsg;
+
+        fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+            match msg {
+                PersistMsg::Write => {
+                    self.registry
+                        .set("PersistKey::main", 1, b"snapshot-v1".to_vec());
+                    Cmd::save_state()
+                }
+                PersistMsg::Restore => {
+                    Cmd::sequence(vec![Cmd::restore_state(), Cmd::msg(PersistMsg::Read)])
+                }
+                PersistMsg::Read => {
+                    self.loaded = self
+                        .registry
+                        .get("PersistKey::main")
+                        .map(|entry| entry.data);
+                    Cmd::none()
+                }
+            }
+        }
+
+        fn view(&self, _frame: &mut Frame) {}
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let path = temp.path().join("state.json");
+
+    let registry = Arc::new(StateRegistry::with_file(&path));
+    let mut sim = ProgramSimulator::with_registry(
+        PersistModel {
+            registry: registry.clone(),
+            loaded: None,
+        },
+        registry.clone(),
+    );
+    sim.init();
+    sim.send(PersistMsg::Write);
+
+    assert!(
+        !registry.is_dirty(),
+        "save_state should flush dirty entries"
+    );
+
+    let registry2 = Arc::new(StateRegistry::with_file(&path));
+    let mut sim2 = ProgramSimulator::with_registry(
+        PersistModel {
+            registry: registry2.clone(),
+            loaded: None,
+        },
+        registry2.clone(),
+    );
+    sim2.init();
+    sim2.send(PersistMsg::Restore);
+
+    assert_eq!(
+        sim2.model().loaded.as_deref(),
+        Some(b"snapshot-v1".as_slice())
+    );
+
+    log_jsonl(
+        "program_simulator",
+        "save_restore_round_trip_file_storage",
+        true,
+        "persisted snapshot restored via ProgramSimulator",
     );
 }

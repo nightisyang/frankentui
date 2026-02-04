@@ -10,7 +10,7 @@
 //! - Unicode text with CJK and emoji in a `Table`
 //! - `WrapMode` and `Alignment` cycling
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ftui_core::geometry::Rect;
@@ -291,6 +291,7 @@ struct MarkdownPanel<'a> {
     markdown: &'a str,
     scroll: u16,
     theme: MarkdownTheme,
+    border_style: Style,
 }
 
 fn wrap_markdown_for_panel(text: &Text, width: u16) -> Text {
@@ -356,7 +357,7 @@ impl Widget for MarkdownPanel<'_> {
             .border_type(BorderType::Rounded)
             .title("Markdown Renderer")
             .title_alignment(Alignment::Center)
-            .style(Style::new().fg(theme::screen_accent::MARKDOWN));
+            .style(self.border_style);
 
         let inner = block.inner(area);
         block.render(area, frame);
@@ -365,11 +366,12 @@ impl Widget for MarkdownPanel<'_> {
             return;
         }
 
+        let max_width = inner.width.saturating_sub(1).max(1);
         let renderer = MarkdownRenderer::new(self.theme.clone())
-            .rule_width(RULE_WIDTH.min(inner.width))
-            .table_max_width(inner.width);
+            .rule_width(RULE_WIDTH.min(max_width))
+            .table_max_width(max_width);
         let rendered = renderer.render(self.markdown);
-        let wrapped = wrap_markdown_for_panel(&rendered, inner.width);
+        let wrapped = wrap_markdown_for_panel(&rendered, max_width);
         Paragraph::new(wrapped)
             .wrap(WrapMode::None)
             .scroll((self.scroll, 0))
@@ -388,12 +390,21 @@ pub struct MarkdownRichText {
     md_theme: MarkdownTheme,
     tick_count: u64,
     markdown_backdrop: RefCell<Backdrop>,
+    focus: FocusPanel,
+    layout_markdown: Cell<Rect>,
+    layout_stream: Cell<Rect>,
 }
 
 impl Default for MarkdownRichText {
     fn default() -> Self {
         Self::new()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FocusPanel {
+    Markdown,
+    Stream,
 }
 
 impl MarkdownRichText {
@@ -416,6 +427,9 @@ impl MarkdownRichText {
             md_theme,
             tick_count: 0,
             markdown_backdrop: RefCell::new(markdown_backdrop),
+            focus: FocusPanel::Markdown,
+            layout_markdown: Cell::new(Rect::default()),
+            layout_stream: Cell::new(Rect::default()),
         }
     }
 
@@ -629,6 +643,10 @@ impl MarkdownRichText {
             markdown: SAMPLE_MARKDOWN,
             scroll: self.md_scroll,
             theme: self.md_theme.clone(),
+            border_style: theme::panel_border_style(
+                self.focus == FocusPanel::Markdown,
+                theme::screen_accent::MARKDOWN,
+            ),
         };
 
         // Quality is now derived automatically from frame.buffer.degradation
@@ -752,7 +770,10 @@ impl MarkdownRichText {
             .border_type(BorderType::Rounded)
             .title(title.as_str())
             .title_alignment(Alignment::Center)
-            .style(Style::new().fg(theme::screen_accent::MARKDOWN));
+            .style(theme::panel_border_style(
+                self.focus == FocusPanel::Stream,
+                theme::screen_accent::MARKDOWN,
+            ));
 
         let inner = block.inner(area);
         block.render(area, frame);
@@ -887,6 +908,40 @@ impl Screen for MarkdownRichText {
     type Message = Event;
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
+        if let Event::Mouse(mouse) = event {
+            match mouse.kind {
+                ftui_core::event::MouseEventKind::Down(ftui_core::event::MouseButton::Left) => {
+                    let markdown = self.layout_markdown.get();
+                    let stream = self.layout_stream.get();
+                    if markdown.contains(mouse.x, mouse.y) {
+                        self.focus = FocusPanel::Markdown;
+                    } else if stream.contains(mouse.x, mouse.y) {
+                        self.focus = FocusPanel::Stream;
+                    }
+                }
+                ftui_core::event::MouseEventKind::ScrollUp => {
+                    let markdown = self.layout_markdown.get();
+                    let stream = self.layout_stream.get();
+                    if stream.contains(mouse.x, mouse.y) {
+                        self.stream_scroll = self.stream_scroll.saturating_sub(1);
+                    } else if markdown.contains(mouse.x, mouse.y) {
+                        self.md_scroll = self.md_scroll.saturating_sub(1);
+                    }
+                }
+                ftui_core::event::MouseEventKind::ScrollDown => {
+                    let markdown = self.layout_markdown.get();
+                    let stream = self.layout_stream.get();
+                    if stream.contains(mouse.x, mouse.y) {
+                        self.stream_scroll = self.stream_scroll.saturating_add(1);
+                    } else if markdown.contains(mouse.x, mouse.y) {
+                        self.md_scroll = self.md_scroll.saturating_add(1);
+                    }
+                }
+                _ => {}
+            }
+            return Cmd::None;
+        }
+
         if let Event::Key(KeyEvent {
             code,
             kind: KeyEventKind::Press,
@@ -895,21 +950,46 @@ impl Screen for MarkdownRichText {
         {
             match code {
                 // Markdown panel scrolling
-                KeyCode::Up => {
-                    self.md_scroll = self.md_scroll.saturating_sub(1);
-                }
-                KeyCode::Down => {
-                    self.md_scroll = self.md_scroll.saturating_add(1);
-                }
-                KeyCode::PageUp => {
-                    self.md_scroll = self.md_scroll.saturating_sub(10);
-                }
-                KeyCode::PageDown => {
-                    self.md_scroll = self.md_scroll.saturating_add(10);
-                }
-                KeyCode::Home => {
-                    self.md_scroll = 0;
-                }
+                KeyCode::Up => match self.focus {
+                    FocusPanel::Markdown => {
+                        self.md_scroll = self.md_scroll.saturating_sub(1);
+                    }
+                    FocusPanel::Stream => {
+                        self.stream_scroll = self.stream_scroll.saturating_sub(1);
+                    }
+                },
+                KeyCode::Down => match self.focus {
+                    FocusPanel::Markdown => {
+                        self.md_scroll = self.md_scroll.saturating_add(1);
+                    }
+                    FocusPanel::Stream => {
+                        self.stream_scroll = self.stream_scroll.saturating_add(1);
+                    }
+                },
+                KeyCode::PageUp => match self.focus {
+                    FocusPanel::Markdown => {
+                        self.md_scroll = self.md_scroll.saturating_sub(10);
+                    }
+                    FocusPanel::Stream => {
+                        self.stream_scroll = self.stream_scroll.saturating_sub(10);
+                    }
+                },
+                KeyCode::PageDown => match self.focus {
+                    FocusPanel::Markdown => {
+                        self.md_scroll = self.md_scroll.saturating_add(10);
+                    }
+                    FocusPanel::Stream => {
+                        self.stream_scroll = self.stream_scroll.saturating_add(10);
+                    }
+                },
+                KeyCode::Home => match self.focus {
+                    FocusPanel::Markdown => {
+                        self.md_scroll = 0;
+                    }
+                    FocusPanel::Stream => {
+                        self.stream_scroll = 0;
+                    }
+                },
                 // Wrap/alignment controls
                 KeyCode::Char('w') => {
                     self.wrap_index = (self.wrap_index + 1) % WRAP_MODES.len();
@@ -962,9 +1042,11 @@ impl Screen for MarkdownRichText {
             .split(area);
 
         // Left: Full GFM markdown demo
+        self.layout_markdown.set(cols[0]);
         self.render_markdown_panel(frame, cols[0]);
 
         // Center: Streaming simulation
+        self.layout_stream.set(cols[1]);
         self.render_streaming_panel(frame, cols[1]);
 
         // Right: Auxiliary panels
@@ -986,11 +1068,15 @@ impl Screen for MarkdownRichText {
         vec![
             HelpEntry {
                 key: "\u{2191}/\u{2193}",
-                action: "Scroll markdown",
+                action: "Scroll focused panel",
             },
             HelpEntry {
                 key: "[/]",
                 action: "Scroll stream",
+            },
+            HelpEntry {
+                key: "Mouse",
+                action: "Focus panes + scroll",
             },
             HelpEntry {
                 key: "Space",

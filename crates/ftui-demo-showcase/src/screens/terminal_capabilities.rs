@@ -38,6 +38,7 @@ use ftui_widgets::table::{Row, Table};
 use serde_json::json;
 
 use super::{HelpEntry, Screen};
+use crate::determinism;
 use crate::theme;
 
 #[cfg(not(feature = "caps-probe"))]
@@ -208,7 +209,9 @@ impl DiagnosticEntry {
     /// Create a new diagnostic entry with auto-assigned sequence ID.
     pub fn new(kind: DiagnosticEventKind) -> Self {
         let seq = DIAGNOSTIC_SEQ.fetch_add(1, Ordering::Relaxed);
-        let timestamp_ms = if std::env::var("FTUI_TERMCAPS_DETERMINISTIC").is_ok() {
+        let timestamp_ms = if determinism::env_flag("FTUI_TERMCAPS_DETERMINISTIC")
+            || determinism::is_demo_deterministic()
+        {
             seq // Use sequence as deterministic timestamp
         } else {
             std::time::SystemTime::now()

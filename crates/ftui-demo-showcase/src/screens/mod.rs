@@ -37,6 +37,7 @@ pub mod quake;
 pub mod responsive_demo;
 pub mod shakespeare;
 pub mod snapshot_player;
+pub mod table_theme_gallery;
 pub mod terminal_capabilities;
 pub mod theme_studio;
 pub mod virtualized_search;
@@ -211,6 +212,16 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         palette_tags: &["advanced", "widgets", "patterns"],
         blurb: "Advanced widget patterns and composite layouts.",
         default_hotkey: Some("0"),
+        tour_step_hint: None,
+    },
+    ScreenMeta {
+        id: ScreenId::TableThemeGallery,
+        title: "Table Theme Gallery",
+        short_label: "Tables",
+        category: ScreenCategory::Visuals,
+        palette_tags: &["tables", "theme", "presets"],
+        blurb: "Preset gallery for TableTheme across widget + markdown tables.",
+        default_hotkey: None,
         tour_step_hint: None,
     },
     ScreenMeta {

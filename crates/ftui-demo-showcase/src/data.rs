@@ -7,6 +7,8 @@
 
 use std::collections::VecDeque;
 
+use crate::determinism;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -82,6 +84,7 @@ pub struct ProcessInfo {
 
 /// System-monitor style simulated data, updated each tick.
 pub struct SimulatedData {
+    seed: u64,
     pub cpu_history: VecDeque<f64>,
     pub memory_history: VecDeque<f64>,
     pub network_in: VecDeque<f64>,
@@ -99,6 +102,7 @@ impl Default for SimulatedData {
             .map(|name| ((*name).to_owned(), 0.0))
             .collect();
         Self {
+            seed: determinism::demo_seed(0),
             cpu_history: VecDeque::with_capacity(CPU_HISTORY_CAP + 1),
             memory_history: VecDeque::with_capacity(MEMORY_HISTORY_CAP + 1),
             network_in: VecDeque::with_capacity(NETWORK_HISTORY_CAP + 1),
@@ -112,18 +116,27 @@ impl Default for SimulatedData {
 }
 
 impl SimulatedData {
+    /// Create deterministic data seeded with the given value.
+    pub fn with_seed(seed: u64) -> Self {
+        Self {
+            seed,
+            ..Default::default()
+        }
+    }
+
     /// Advance the simulation by one tick. All values are deterministic given
     /// `tick_count`.
     pub fn tick(&mut self, tick_count: u64) {
-        self.update_cpu(tick_count);
-        self.update_memory(tick_count);
-        self.update_network(tick_count);
-        self.update_disk(tick_count);
-        self.update_processes(tick_count);
-        self.update_alerts(tick_count);
+        let tick = tick_count.wrapping_add(self.seed);
+        self.update_cpu(tick);
+        self.update_memory(tick);
+        self.update_network(tick);
+        self.update_disk(tick);
+        self.update_processes(tick);
+        self.update_alerts(tick);
         self.events_per_second = 800.0
-            + 400.0 * ((tick_count as f64) / 30.0).sin()
-            + det_range(tick_count.wrapping_mul(7), -50.0, 50.0);
+            + 400.0 * ((tick as f64) / 30.0).sin()
+            + det_range(tick.wrapping_mul(7), -50.0, 50.0);
     }
 
     fn update_cpu(&mut self, tick: u64) {

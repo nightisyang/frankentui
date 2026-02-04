@@ -39,10 +39,11 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use ftui_core::geometry::Rect;
+use ftui_demo_showcase::test_logging::JsonlLogger;
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
 use ftui_widgets::Widget;
@@ -52,14 +53,13 @@ use ftui_widgets::help::{HelpCategory, HelpEntry, HelpMode, KeyFormat, Keybindin
 // JSONL logging
 // ---------------------------------------------------------------------------
 
+fn jsonl_logger() -> &'static JsonlLogger {
+    static LOGGER: OnceLock<JsonlLogger> = OnceLock::new();
+    LOGGER.get_or_init(|| JsonlLogger::new("help_keybind_e2e").with_context("suite", "help"))
+}
+
 fn log_jsonl(step: &str, data: &[(&str, &str)]) {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let ts = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let fields: Vec<String> = std::iter::once(format!("\"ts\":\"T{ts:06}\""))
-        .chain(std::iter::once(format!("\"step\":\"{step}\"")))
-        .chain(data.iter().map(|(k, v)| format!("\"{k}\":\"{v}\"")))
-        .collect();
-    eprintln!("{{{}}}", fields.join(","));
+    jsonl_logger().log(step, data);
 }
 
 // ---------------------------------------------------------------------------

@@ -8,7 +8,11 @@
 //! - Search with highlighted current match
 //! - Diff mode to compare raw vs rendered line widths
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
+use std::cell::Cell;
+
+use ftui_core::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind,
+};
 use ftui_core::geometry::Rect;
 use ftui_extras::markdown::{MarkdownRenderer, MarkdownTheme};
 use ftui_layout::{Constraint, Flex};
@@ -111,6 +115,7 @@ fn is_table_like_line(plain: &str) -> bool {
 enum Focus {
     Editor,
     Search,
+    Preview,
 }
 
 impl Focus {
@@ -118,6 +123,7 @@ impl Focus {
         match self {
             Self::Editor => Self::Search,
             Self::Search => Self::Editor,
+            Self::Preview => Self::Editor,
         }
     }
 }
@@ -131,6 +137,9 @@ pub struct MarkdownLiveEditor {
     md_theme: MarkdownTheme,
     diff_mode: bool,
     preview_scroll: u16,
+    layout_search: Cell<Rect>,
+    layout_editor: Cell<Rect>,
+    layout_preview: Cell<Rect>,
 }
 
 impl Default for MarkdownLiveEditor {
@@ -163,6 +172,9 @@ impl MarkdownLiveEditor {
             md_theme,
             diff_mode: false,
             preview_scroll: 0,
+            layout_search: Cell::new(Rect::default()),
+            layout_editor: Cell::new(Rect::default()),
+            layout_preview: Cell::new(Rect::default()),
         };
 
         screen.apply_theme();
@@ -266,8 +278,9 @@ impl MarkdownLiveEditor {
 
     fn sync_focus(&mut self) {
         let editor_focus = self.focus == Focus::Editor;
+        let search_focus = self.focus == Focus::Search;
         self.editor.set_focused(editor_focus);
-        self.search_input.set_focused(!editor_focus);
+        self.search_input.set_focused(search_focus);
     }
 
     fn recompute_search(&mut self) {
@@ -421,7 +434,10 @@ impl MarkdownLiveEditor {
             .border_type(BorderType::Rounded)
             .title(title)
             .title_alignment(Alignment::Center)
-            .style(Style::new().fg(theme::screen_accent::MARKDOWN));
+            .style(theme::panel_border_style(
+                self.focus == Focus::Preview,
+                theme::screen_accent::MARKDOWN,
+            ));
 
         let inner = block.inner(area);
         block.render(area, frame);
@@ -506,6 +522,42 @@ impl Screen for MarkdownLiveEditor {
     type Message = ();
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
+        if let Event::Mouse(mouse) = event {
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    let search = self.layout_search.get();
+                    let editor = self.layout_editor.get();
+                    let preview = self.layout_preview.get();
+                    if search.contains(mouse.x, mouse.y) {
+                        self.focus = Focus::Search;
+                        self.sync_focus();
+                    } else if editor.contains(mouse.x, mouse.y) {
+                        self.focus = Focus::Editor;
+                        self.sync_focus();
+                    } else if preview.contains(mouse.x, mouse.y) {
+                        self.focus = Focus::Preview;
+                        self.sync_focus();
+                    }
+                }
+                MouseEventKind::ScrollUp => {
+                    if self.focus == Focus::Preview
+                        || self.layout_preview.get().contains(mouse.x, mouse.y)
+                    {
+                        self.preview_scroll = self.preview_scroll.saturating_sub(1);
+                    }
+                }
+                MouseEventKind::ScrollDown => {
+                    if self.focus == Focus::Preview
+                        || self.layout_preview.get().contains(mouse.x, mouse.y)
+                    {
+                        self.preview_scroll = self.preview_scroll.saturating_add(1);
+                    }
+                }
+                _ => {}
+            }
+            return Cmd::None;
+        }
+
         if let Event::Key(KeyEvent {
             code,
             modifiers,
@@ -553,6 +605,28 @@ impl Screen for MarkdownLiveEditor {
             }
         }
 
+        if let Event::Key(KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        }) = event
+            && modifiers.is_empty()
+            && self.focus == Focus::Preview
+        {
+            match code {
+                KeyCode::Up => {
+                    self.preview_scroll = self.preview_scroll.saturating_sub(1);
+                    return Cmd::None;
+                }
+                KeyCode::Down => {
+                    self.preview_scroll = self.preview_scroll.saturating_add(1);
+                    return Cmd::None;
+                }
+                _ => {}
+            }
+        }
+
         match self.focus {
             Focus::Search => {
                 if self.search_input.handle_event(event) {
@@ -564,6 +638,7 @@ impl Screen for MarkdownLiveEditor {
                     self.recompute_search();
                 }
             }
+            Focus::Preview => {}
         }
 
         Cmd::None
@@ -593,6 +668,7 @@ impl Screen for MarkdownLiveEditor {
             .constraints([Constraint::Fixed(3), Constraint::Min(1)])
             .split(inner);
 
+        self.layout_search.set(rows[0]);
         self.render_search_bar(frame, rows[0]);
 
         let cols = Flex::horizontal()
@@ -600,6 +676,8 @@ impl Screen for MarkdownLiveEditor {
             .constraints([Constraint::Percentage(50.0), Constraint::Percentage(50.0)])
             .split(rows[1]);
 
+        self.layout_editor.set(cols[0]);
+        self.layout_preview.set(cols[1]);
         self.render_editor_panel(frame, cols[0]);
         self.render_preview_panel(frame, cols[1]);
     }
@@ -609,6 +687,10 @@ impl Screen for MarkdownLiveEditor {
             HelpEntry {
                 key: "Tab",
                 action: "Toggle focus",
+            },
+            HelpEntry {
+                key: "Mouse",
+                action: "Focus panes + scroll preview",
             },
             HelpEntry {
                 key: "Ctrl+F",

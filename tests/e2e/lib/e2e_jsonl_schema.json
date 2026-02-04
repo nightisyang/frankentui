@@ -1,0 +1,284 @@
+{
+  "schema_version": "e2e-jsonl-v1",
+  "common_required": [
+    "schema_version",
+    "type",
+    "timestamp",
+    "run_id",
+    "seed"
+  ],
+  "common_types": {
+    "schema_version": "string",
+    "type": "string",
+    "timestamp": "string",
+    "run_id": "string",
+    "seed": ["number", "null"]
+  },
+  "events": {
+    "env": {
+      "required": [
+        "host",
+        "rustc",
+        "cargo",
+        "git_commit",
+        "git_dirty",
+        "deterministic",
+        "term",
+        "colorterm",
+        "no_color"
+      ],
+      "optional": [],
+      "types": {
+        "host": "string",
+        "rustc": "string",
+        "cargo": "string",
+        "git_commit": "string",
+        "git_dirty": "boolean",
+        "deterministic": "boolean",
+        "term": "string",
+        "colorterm": "string",
+        "no_color": "string"
+      }
+    },
+    "run_start": {
+      "required": [
+        "command",
+        "log_dir",
+        "results_dir"
+      ],
+      "optional": [],
+      "types": {
+        "command": "string",
+        "log_dir": "string",
+        "results_dir": "string"
+      }
+    },
+    "run_end": {
+      "required": [
+        "status",
+        "duration_ms",
+        "failed_count"
+      ],
+      "optional": [],
+      "types": {
+        "status": "string",
+        "duration_ms": "number",
+        "failed_count": "number"
+      }
+    },
+    "step_start": {
+      "required": [
+        "step"
+      ],
+      "optional": [
+        "mode",
+        "hash_key",
+        "cols",
+        "rows"
+      ],
+      "types": {
+        "step": "string",
+        "mode": "string",
+        "hash_key": "string",
+        "cols": ["number", "null"],
+        "rows": ["number", "null"]
+      }
+    },
+    "step_end": {
+      "required": [
+        "step",
+        "status",
+        "duration_ms"
+      ],
+      "optional": [
+        "mode",
+        "hash_key",
+        "cols",
+        "rows"
+      ],
+      "types": {
+        "step": "string",
+        "status": "string",
+        "duration_ms": "number",
+        "mode": "string",
+        "hash_key": "string",
+        "cols": ["number", "null"],
+        "rows": ["number", "null"]
+      }
+    },
+    "pty_capture": {
+      "required": [
+        "output_file",
+        "output_sha256",
+        "output_bytes",
+        "cols",
+        "rows",
+        "exit_code"
+      ],
+      "optional": [
+        "canonical_file",
+        "canonical_sha256",
+        "canonical_bytes"
+      ],
+      "types": {
+        "output_file": "string",
+        "output_sha256": "string",
+        "output_bytes": "number",
+        "cols": "number",
+        "rows": "number",
+        "exit_code": "number",
+        "canonical_file": "string",
+        "canonical_sha256": "string",
+        "canonical_bytes": "number"
+      }
+    },
+    "assert": {
+      "required": [
+        "assertion",
+        "status"
+      ],
+      "optional": [
+        "details"
+      ],
+      "types": {
+        "assertion": "string",
+        "status": "string",
+        "details": "string"
+      }
+    },
+    "large_screen_env": {
+      "required": [
+        "term",
+        "colorterm",
+        "no_color"
+      ],
+      "optional": [
+        "tmux",
+        "zellij",
+        "kitty_window_id",
+        "term_program"
+      ],
+      "types": {
+        "term": "string",
+        "colorterm": "string",
+        "no_color": "string",
+        "tmux": "string",
+        "zellij": "string",
+        "kitty_window_id": "string",
+        "term_program": "string"
+      }
+    },
+    "large_screen_case": {
+      "required": [
+        "case",
+        "status",
+        "screen_mode",
+        "cols",
+        "rows",
+        "ui_height",
+        "diff_bayesian",
+        "bocpd",
+        "conformal",
+        "evidence_jsonl",
+        "pty_output",
+        "caps_file",
+        "duration_ms"
+      ],
+      "optional": [],
+      "types": {
+        "case": "string",
+        "status": "string",
+        "screen_mode": "string",
+        "cols": "number",
+        "rows": "number",
+        "ui_height": "number",
+        "diff_bayesian": "boolean",
+        "bocpd": "boolean",
+        "conformal": "boolean",
+        "evidence_jsonl": "string",
+        "pty_output": "string",
+        "caps_file": "string",
+        "duration_ms": "number"
+      }
+    },
+    "budgeted_refresh_case": {
+      "required": [
+        "case",
+        "status",
+        "screen_mode",
+        "cols",
+        "rows",
+        "frame_budget_us",
+        "render_budget_us",
+        "evidence_jsonl",
+        "pty_output",
+        "duration_ms",
+        "widget_refresh_hash"
+      ],
+      "optional": [],
+      "types": {
+        "case": "string",
+        "status": "string",
+        "screen_mode": "string",
+        "cols": "number",
+        "rows": "number",
+        "frame_budget_us": "number",
+        "render_budget_us": "number",
+        "evidence_jsonl": "string",
+        "pty_output": "string",
+        "duration_ms": "number",
+        "widget_refresh_hash": "string"
+      }
+    },
+    "span_diff_case": {
+      "required": [
+        "case",
+        "status",
+        "screen_mode",
+        "cols",
+        "rows",
+        "evidence_jsonl",
+        "pty_output",
+        "duration_ms",
+        "diff_hash"
+      ],
+      "optional": [],
+      "types": {
+        "case": "string",
+        "status": "string",
+        "screen_mode": "string",
+        "cols": "number",
+        "rows": "number",
+        "evidence_jsonl": "string",
+        "pty_output": "string",
+        "duration_ms": "number",
+        "diff_hash": "string"
+      }
+    },
+    "tile_skip_case": {
+      "required": [
+        "case",
+        "status",
+        "screen_mode",
+        "cols",
+        "rows",
+        "evidence_jsonl",
+        "pty_output",
+        "duration_ms",
+        "diff_hash"
+      ],
+      "optional": [],
+      "types": {
+        "case": "string",
+        "status": "string",
+        "screen_mode": "string",
+        "cols": "number",
+        "rows": "number",
+        "evidence_jsonl": "string",
+        "pty_output": "string",
+        "duration_ms": "number",
+        "diff_hash": "string"
+      }
+    }
+  }
+}
