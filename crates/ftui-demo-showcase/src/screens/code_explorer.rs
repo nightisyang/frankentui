@@ -18,7 +18,7 @@ use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::{Style, StyleFlags};
 use ftui_text::search::search_ascii_case_insensitive;
-use ftui_text::{display_width, grapheme_count, grapheme_width, graphemes};
+use ftui_text::{display_width, grapheme_width, graphemes};
 use ftui_widgets::StatefulWidget;
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
@@ -1586,7 +1586,7 @@ impl CodeExplorer {
         if !lines.is_empty() {
             let total_chars = lines
                 .iter()
-                .map(|line| grapheme_count(line) + 1)
+                .map(|line| line.chars().count() + 1)
                 .sum::<usize>()
                 .max(1);
             let progress = ((self.time * 0.6).sin() * 0.5 + 0.5).clamp(0.0, 1.0);
@@ -1829,8 +1829,12 @@ impl CodeExplorer {
             if self.search_matches.is_empty() {
                 lines.push("Awaiting query...".to_owned());
             } else {
-                let start = self.current_match.saturating_sub(list_area.height as usize);
-                let end = (start + list_area.height as usize).min(self.search_matches.len());
+                let visible = list_area.height as usize;
+                let mut start = self.current_match.saturating_sub(visible / 2);
+                if start + visible > self.search_matches.len() {
+                    start = self.search_matches.len().saturating_sub(visible);
+                }
+                let end = (start + visible).min(self.search_matches.len());
                 for (i, idx) in self.search_matches[start..end].iter().enumerate() {
                     let marker = if start + i == self.current_match {
                         "▶"
@@ -1872,7 +1876,10 @@ impl CodeExplorer {
 
         let list_height = inner.height.saturating_sub(1).max(1);
         let visible = list_height as usize;
-        let start = self.current_hotspot.saturating_sub(visible / 2);
+        let mut start = self.current_hotspot.saturating_sub(visible / 2);
+        if start + visible > self.hotspots.len() {
+            start = self.hotspots.len().saturating_sub(visible);
+        }
         let end = (start + visible).min(self.hotspots.len());
         let is_focused = self.focus == FocusPanel::Hotspots;
 

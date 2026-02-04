@@ -5,11 +5,13 @@
 //! Each screen implements the [`Screen`] trait and can be navigated to via the
 //! tab bar or number keys.
 
+pub mod accessibility_panel;
 pub mod action_timeline;
 pub mod advanced_features;
 pub mod advanced_text_editor;
 pub mod async_tasks;
 pub mod code_explorer;
+pub mod command_palette_lab;
 pub mod dashboard;
 pub mod data_viz;
 pub mod drag_drop;
@@ -17,15 +19,19 @@ pub mod file_browser;
 pub mod form_validation;
 pub mod forms_input;
 pub mod i18n_demo;
+pub mod inline_mode_story;
 pub mod intrinsic_sizing;
+pub mod layout_inspector;
 pub mod layout_lab;
 pub mod log_search;
 pub mod macro_recorder;
+pub mod markdown_live_editor;
 pub mod markdown_rich_text;
 pub mod mouse_playground;
 pub mod notifications;
 pub mod performance;
 pub mod performance_hud;
+pub mod quake;
 pub mod responsive_demo;
 pub mod shakespeare;
 pub mod snapshot_player;
@@ -34,6 +40,7 @@ pub mod theme_studio;
 pub mod virtualized_search;
 pub mod visual_effects;
 pub mod voi_overlay;
+pub mod widget_builder;
 pub mod widget_gallery;
 
 use ftui_core::event::Event;

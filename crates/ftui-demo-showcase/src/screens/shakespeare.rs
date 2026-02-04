@@ -1020,14 +1020,17 @@ impl Shakespeare {
                         .seed(self.tick_count);
                     glow.render(Rect::new(cursor_x, line_y, width.min(remaining), 1), frame);
                 } else {
-                    Paragraph::new(clipped)
-                        .style(
-                            Style::new()
-                                .fg(theme::fg::PRIMARY)
-                                .bg(theme::alpha::HIGHLIGHT)
-                                .attrs(StyleFlags::UNDERLINE),
-                        )
-                        .render(Rect::new(cursor_x, line_y, width.min(remaining), 1), frame);
+                    // Subtle pulse for other matches
+                    let highlight = StyledText::new(clipped)
+                        .base_color(theme::fg::PRIMARY.into())
+                        .bg_color(theme::alpha::HIGHLIGHT.into())
+                        .effect(TextEffect::Pulse {
+                            speed: 0.8,
+                            min_alpha: 0.6,
+                        })
+                        .time(self.time)
+                        .seed(start as u64);
+                    highlight.render(Rect::new(cursor_x, line_y, width.min(remaining), 1), frame);
                 }
                 cursor_x = cursor_x.saturating_add(width);
                 last = end;

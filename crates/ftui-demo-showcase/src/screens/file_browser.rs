@@ -494,7 +494,18 @@ fn file_permissions(entry: &FileEntry) -> &'static str {
 }
 
 fn format_entry_header(width: u16) -> String {
-    fit_to_width("  Name                         Perms      Size", width)
+    // Fixed widths: Icon(2) + 1 + Name(?) + 1 + Perms(10) + 2 + Size(10)
+    // Total fixed = 2 + 1 + 1 + 10 + 2 + 10 = 26
+    let reserved = 26;
+    let name_width = width.saturating_sub(reserved).saturating_sub(1) as usize; // Extra safety buffer
+
+    let h_icon = "  "; // 2 chars
+    let h_name = pad_to_width("Name", name_width);
+    let h_perms = pad_to_width("Perms", 10);
+    let h_size = format!("{:>10}", "Size");
+
+    let line = format!("{h_icon} {h_name} {h_perms}  {h_size}");
+    fit_to_width(&line, width)
 }
 
 fn format_entry_line(entry: &FileEntry, width: u16) -> String {
@@ -505,13 +516,17 @@ fn format_entry_line(entry: &FileEntry, width: u16) -> String {
         .map(filesize::decimal)
         .unwrap_or_else(|| "--".into());
 
-    let icon_width = text_width(icon);
-    let perms_width = text_width(perms);
-    let size_width = size_str.len();
-    let reserved = icon_width + 1 + perms_width + 2 + size_width;
-    let name_width = width.saturating_sub(reserved as u16).saturating_sub(1) as usize;
+    let icon_padded = pad_to_width(icon, 2);
+    let perms_padded = pad_to_width(perms, 10);
+    // Right-align size
+    let size_padded = format!("{:>10}", size_str);
+
+    // Matches header calculation: 2 + 1 + name + 1 + 10 + 2 + 10
+    let reserved = 26;
+    let name_width = width.saturating_sub(reserved).saturating_sub(1) as usize;
     let name = pad_to_width(&entry.name, name_width);
-    let line = format!("{icon} {name} {perms}  {size_str}");
+
+    let line = format!("{icon_padded} {name} {perms_padded}  {size_padded}");
     fit_to_width(&line, width)
 }
 
@@ -794,6 +809,7 @@ impl Screen for FileBrowser {
             .split(area);
 
         let cols = Flex::horizontal()
+            .gap(theme::spacing::XS)
             .constraints([
                 Constraint::Fixed(25),
                 Constraint::Percentage(40.0),

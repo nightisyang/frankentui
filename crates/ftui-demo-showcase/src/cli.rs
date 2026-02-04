@@ -46,16 +46,21 @@ SCREENS:
    17  Notifications      Toast notification system demo
    18  Action Timeline    Event timeline with filtering and severity
    19  Sizing             Content-aware intrinsic sizing demo
-   20  Text Editor        Advanced multi-line text editor with search
-   21  Mouse Playground   Mouse hit-testing and interaction demo
-   22  Form Validation    Comprehensive form validation demo
-   23  Virtualized Search Fuzzy search in 100K+ items demo
-   24  Async Tasks        Async task manager and queue diagnostics
-   25  Theme Studio       Live palette editor and theme inspector
-   26  Snapshot Player    Time-travel playback of recorded UI snapshots
-   27  Performance HUD    Real-time render budget and frame diagnostics
-   28  i18n Demo          Internationalization with locale switching
-   29  VOI Overlay        Galaxy-Brain VOI debug overlay
+   20  Layout Inspector   Constraint solver visual inspector
+   21  Text Editor        Advanced multi-line text editor with search
+   22  Mouse Playground   Mouse hit-testing and interaction demo
+   23  Form Validation    Comprehensive form validation demo
+   24  Virtualized Search Fuzzy search in 100K+ items demo
+   25  Async Tasks        Async task manager and queue diagnostics
+   26  Theme Studio       Live palette editor and theme inspector
+   27  Snapshot Player    Time-travel playback of recorded UI snapshots
+   28  Performance HUD    Real-time render budget and frame diagnostics
+   29  i18n Stress Lab    Unicode width, RTL, emoji, and truncation
+   30  VOI Overlay        Galaxy-Brain VOI debug overlay
+   31  Inline Mode        Inline scrollback + chrome story
+   32  Accessibility      Accessibility control panel + contrast checks
+   33  Widget Builder     Interactive widget composition sandbox
+   34  Palette Evidence   Command palette evidence lab
 
 KEYBINDINGS:
     1-9, 0          Switch to screens 1-10 by number

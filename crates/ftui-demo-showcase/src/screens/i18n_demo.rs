@@ -10,10 +10,17 @@ use ftui_layout::{Constraint, Flex, FlowDirection};
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::Style;
+use ftui_text::{
+    WrapMode, display_width, grapheme_count, grapheme_width, graphemes,
+    truncate_to_width_with_info, truncate_with_ellipsis, wrap_text,
+};
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::paragraph::Paragraph;
+use serde_json::json;
+use std::fs::OpenOptions;
+use std::io::Write;
 
 use super::{HelpEntry, Screen};
 use crate::theme;
@@ -64,12 +71,164 @@ struct LocaleInfo {
     rtl: bool,
 }
 
+const PANEL_COUNT: usize = 4;
+const PANEL_NAMES: [&str; PANEL_COUNT] = ["Overview", "Plurals", "RTL Layout", "Stress Lab"];
+
+struct SampleCase {
+    id: &'static str,
+    label: &'static str,
+    text: &'static str,
+}
+
+struct SampleSet {
+    id: &'static str,
+    name: &'static str,
+    description: &'static str,
+    samples: &'static [SampleCase],
+}
+
+struct TrickyCase {
+    label: &'static str,
+    text: &'static str,
+    expected_width: usize,
+}
+
+const SAMPLE_SET_COMBINING: &[SampleCase] = &[
+    SampleCase {
+        id: "combining_e_acute",
+        label: "Combining acute",
+        text: "e\u{0301}cole",
+    },
+    SampleCase {
+        id: "angstrom",
+        label: "A-ring (NFD)",
+        text: "A\u{030A}ngstro\u{0308}m",
+    },
+    SampleCase {
+        id: "stacked_marks",
+        label: "Stacked marks",
+        text: "Z\u{0335}\u{0336}\u{0337}algo",
+    },
+];
+
+const SAMPLE_SET_CJK: &[SampleCase] = &[
+    SampleCase {
+        id: "cjk_hello",
+        label: "CJK hello",
+        text: "\u{4F60}\u{597D}\u{4E16}\u{754C}",
+    },
+    SampleCase {
+        id: "japanese_sentence",
+        label: "Japanese sentence",
+        text: "\u{65E5}\u{672C}\u{8A9E}\u{306E}\u{9577}\u{3044}\u{6587}\u{7AE0}",
+    },
+    SampleCase {
+        id: "mixed_kanji_kana",
+        label: "Kanji + kana",
+        text: "\u{6F22}\u{5B57}\u{3068}\u{304B}\u{306A}\u{306E}\u{6DF7}\u{5728}",
+    },
+];
+
+const SAMPLE_SET_RTL: &[SampleCase] = &[
+    SampleCase {
+        id: "arabic_hello",
+        label: "Arabic greeting",
+        text: "\u{645}\u{631}\u{62D}\u{628}\u{627} \u{628}\u{627}\u{644}\u{639}\u{627}\u{644}\u{645}",
+    },
+    SampleCase {
+        id: "arabic_mixed",
+        label: "Arabic + Latin",
+        text: "\u{645}\u{631}\u{62D}\u{628}\u{627} world 123",
+    },
+    SampleCase {
+        id: "hebrew_hello",
+        label: "Hebrew greeting",
+        text: "\u{05E9}\u{05DC}\u{05D5}\u{05DD} \u{05E2}\u{05D5}\u{05DC}\u{05DD}",
+    },
+];
+
+const SAMPLE_SET_EMOJI: &[SampleCase] = &[
+    SampleCase {
+        id: "zwj_astronaut",
+        label: "ZWJ astronaut",
+        text: "\u{1F469}\u{200D}\u{1F680} \u{1F680}",
+    },
+    SampleCase {
+        id: "family_emoji",
+        label: "Family emoji",
+        text: "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}",
+    },
+    SampleCase {
+        id: "flags_skin_tone",
+        label: "Flags + skin tone",
+        text: "\u{1F1FA}\u{1F1F8} \u{1F1EF}\u{1F1F5} \u{1F44D}\u{1F3FD}",
+    },
+];
+
+const SAMPLE_SETS: &[SampleSet] = &[
+    SampleSet {
+        id: "combining",
+        name: "Combining Marks",
+        description: "Diacritics and stacked marks",
+        samples: SAMPLE_SET_COMBINING,
+    },
+    SampleSet {
+        id: "cjk",
+        name: "CJK Width",
+        description: "Wide glyphs + mixed scripts",
+        samples: SAMPLE_SET_CJK,
+    },
+    SampleSet {
+        id: "rtl",
+        name: "RTL Text",
+        description: "Arabic/Hebrew with mixing",
+        samples: SAMPLE_SET_RTL,
+    },
+    SampleSet {
+        id: "emoji",
+        name: "Emoji & ZWJ",
+        description: "ZWJ sequences and flags",
+        samples: SAMPLE_SET_EMOJI,
+    },
+];
+
+const TRICKY_CASES: &[TrickyCase] = &[
+    TrickyCase {
+        label: "Combining",
+        text: "e\u{0301}",
+        expected_width: 1,
+    },
+    TrickyCase {
+        label: "CJK",
+        text: "\u{4F60}",
+        expected_width: 2,
+    },
+    TrickyCase {
+        label: "Emoji",
+        text: "\u{1F44B}",
+        expected_width: 2,
+    },
+    TrickyCase {
+        label: "Flag",
+        text: "\u{1F1FA}\u{1F1F8}",
+        expected_width: 2,
+    },
+    TrickyCase {
+        label: "ZWJ",
+        text: "\u{1F469}\u{200D}\u{1F680}",
+        expected_width: 2,
+    },
+];
+
 pub struct I18nDemo {
     locale_idx: usize,
     catalog: StringCatalog,
     plural_count: i64,
     interp_name: &'static str,
     panel: usize,
+    sample_set_idx: usize,
+    sample_idx: usize,
+    cursor_idx: usize,
     tick_count: u64,
 }
 
@@ -87,6 +246,9 @@ impl I18nDemo {
             plural_count: 1,
             interp_name: "Alice",
             panel: 0,
+            sample_set_idx: 0,
+            sample_idx: 0,
+            cursor_idx: 0,
             tick_count: 0,
         }
     }
@@ -109,6 +271,130 @@ impl I18nDemo {
     }
     fn prev_locale(&mut self) {
         self.locale_idx = (self.locale_idx + LOCALES.len() - 1) % LOCALES.len();
+    }
+
+    fn current_sample_set(&self) -> &'static SampleSet {
+        &SAMPLE_SETS[self.sample_set_idx]
+    }
+
+    fn current_sample(&self) -> &'static SampleCase {
+        &self.current_sample_set().samples[self.sample_idx]
+    }
+
+    fn sample_count(&self) -> usize {
+        self.current_sample_set().samples.len()
+    }
+
+    fn clamp_cursor(&mut self) {
+        let total = grapheme_count(self.current_sample().text);
+        if total == 0 {
+            self.cursor_idx = 0;
+        } else if self.cursor_idx >= total {
+            self.cursor_idx = total - 1;
+        }
+    }
+
+    fn move_cursor(&mut self, delta: i32) {
+        let total = grapheme_count(self.current_sample().text);
+        if total == 0 {
+            self.cursor_idx = 0;
+            return;
+        }
+        let max_idx = (total - 1) as i32;
+        let next = (self.cursor_idx as i32 + delta).clamp(0, max_idx);
+        self.cursor_idx = next as usize;
+    }
+
+    fn next_sample_set(&mut self) {
+        self.sample_set_idx = (self.sample_set_idx + 1) % SAMPLE_SETS.len();
+        self.sample_idx = 0;
+        self.cursor_idx = 0;
+    }
+
+    fn prev_sample_set(&mut self) {
+        self.sample_set_idx = (self.sample_set_idx + SAMPLE_SETS.len() - 1) % SAMPLE_SETS.len();
+        self.sample_idx = 0;
+        self.cursor_idx = 0;
+    }
+
+    fn next_sample(&mut self) {
+        let count = self.sample_count();
+        if count == 0 {
+            self.sample_idx = 0;
+            self.cursor_idx = 0;
+            return;
+        }
+        self.sample_idx = (self.sample_idx + 1) % count;
+        self.cursor_idx = 0;
+    }
+
+    fn prev_sample(&mut self) {
+        let count = self.sample_count();
+        if count == 0 {
+            self.sample_idx = 0;
+            self.cursor_idx = 0;
+            return;
+        }
+        self.sample_idx = (self.sample_idx + count - 1) % count;
+        self.cursor_idx = 0;
+    }
+
+    fn report_path() -> String {
+        std::env::var("FTUI_I18N_REPORT_PATH")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "i18n_stress_report.jsonl".to_string())
+    }
+
+    fn report_width() -> usize {
+        std::env::var("FTUI_I18N_REPORT_WIDTH")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(32)
+    }
+
+    fn export_stress_report(&self) -> Result<String, String> {
+        let path = Self::report_path();
+        let max_width = Self::report_width();
+        let set = self.current_sample_set();
+        let sample = self.current_sample();
+        let display = display_width(sample.text);
+        let grapheme_total = grapheme_count(sample.text);
+        let grapheme_sum: usize = graphemes(sample.text).map(grapheme_width).sum();
+        let truncated = truncate_with_ellipsis(sample.text, max_width, "...");
+        let truncated_width = display_width(&truncated);
+        let truncated_flag = truncated_width < display;
+
+        let payload = json!({
+            "event": "i18n_stress_report",
+            "set_id": set.id,
+            "set_name": set.name,
+            "sample_id": sample.id,
+            "sample_label": sample.label,
+            "width_metrics": {
+                "display_width": display,
+                "grapheme_count": grapheme_total,
+                "grapheme_sum": grapheme_sum,
+            },
+            "truncation_state": {
+                "max_width": max_width,
+                "truncated": truncated_flag,
+                "truncated_width": truncated_width,
+                "text": truncated,
+            },
+            "outcome": "ok",
+        });
+
+        let line = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut file| writeln!(file, "{}", line))
+            .map_err(|err| err.to_string())?;
+
+        Ok(path)
     }
 
     fn render_locale_bar(&self, frame: &mut Frame, area: Rect) {
@@ -327,19 +613,249 @@ impl I18nDemo {
         }
     }
 
+    fn render_stress_lab_panel(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            return;
+        }
+
+        if area.height < 10 {
+            let sample = self.current_sample();
+            let width = display_width(sample.text);
+            let text = format!(
+                "Stress Lab (compact)\nSample: {}\n{}\nWidth: {} cells",
+                sample.label, sample.text, width
+            );
+            Paragraph::new(text)
+                .style(Style::new().fg(theme::fg::PRIMARY))
+                .block(
+                    Block::new()
+                        .title("Unicode Stress Lab")
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
+                        .border_style(Style::new().fg(theme::accent::ACCENT_2)),
+                )
+                .render(area, frame);
+            return;
+        }
+
+        let rows = Flex::vertical()
+            .constraints([Constraint::Fixed(4), Constraint::Fill, Constraint::Fixed(8)])
+            .gap(1)
+            .split(area);
+        self.render_stress_header(frame, rows[0]);
+        self.render_stress_body(frame, rows[1]);
+        self.render_stress_footer(frame, rows[2]);
+    }
+
+    fn render_stress_header(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            return;
+        }
+        let set = self.current_sample_set();
+        let sample = self.current_sample();
+        let total_width = display_width(sample.text);
+        let grapheme_total = grapheme_count(sample.text);
+        let grapheme_sum: usize = graphemes(sample.text).map(grapheme_width).sum();
+        let width_ok = total_width == grapheme_sum;
+        let status = if width_ok { "ok" } else { "diff" };
+        let lines = [
+            format!("Set: {} — {}", set.name, set.description),
+            format!(
+                "Sample {}/{}: {} ({})",
+                self.sample_idx + 1,
+                self.sample_count().max(1),
+                sample.label,
+                sample.id
+            ),
+            format!(
+                "Width: {} cells | Graphemes: {} | Sum widths: {} ({})",
+                total_width, grapheme_total, grapheme_sum, status
+            ),
+            "Shift+Left/Right: cursor  Up/Down: sample  [ / ]: set  E: export".to_string(),
+        ];
+        Paragraph::new(lines.join("\n"))
+            .style(Style::new().fg(theme::fg::PRIMARY))
+            .block(
+                Block::new()
+                    .title("Unicode Stress Lab")
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::new().fg(theme::accent::ACCENT_2)),
+            )
+            .render(area, frame);
+    }
+
+    fn render_stress_body(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            return;
+        }
+        let sample = self.current_sample();
+        let outer = Block::new()
+            .title("Wrap + Truncate")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(theme::accent::ACCENT_3));
+        let inner = outer.inner(area);
+        outer.render(area, frame);
+        if inner.is_empty() {
+            return;
+        }
+
+        let wrap_width = inner.width.saturating_sub(2).max(8) as usize;
+        let wrapped = wrap_text(sample.text, wrap_width, WrapMode::WordChar);
+        let truncated = truncate_with_ellipsis(sample.text, wrap_width, "...");
+        let truncated_width = display_width(&truncated);
+        let (plain_trunc, plain_width) = truncate_to_width_with_info(sample.text, wrap_width);
+
+        let mut lines = Vec::new();
+        lines.push("Original:".to_string());
+        lines.push(sample.text.to_string());
+        lines.push(String::new());
+        lines.push(format!("Wrapped ({} cols):", wrap_width));
+        for line in wrapped.iter().take(3) {
+            lines.push(line.clone());
+        }
+        if wrapped.len() > 3 {
+            lines.push("...".to_string());
+        }
+        lines.push(String::new());
+        lines.push(format!(
+            "Truncate ({} cols): {} (w={})",
+            wrap_width, truncated, truncated_width
+        ));
+        lines.push(format!("Raw truncate: {} (w={})", plain_trunc, plain_width));
+
+        Paragraph::new(lines.join("\n"))
+            .style(Style::new().fg(theme::fg::PRIMARY))
+            .render(inner, frame);
+    }
+
+    fn render_stress_footer(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            return;
+        }
+        if area.width < 60 {
+            let rows = Flex::vertical()
+                .constraints([Constraint::Percentage(60.0), Constraint::Percentage(40.0)])
+                .gap(1)
+                .split(area);
+            self.render_grapheme_inspector(frame, rows[0]);
+            self.render_tricky_cases(frame, rows[1]);
+            return;
+        }
+
+        let cols = Flex::horizontal()
+            .constraints([Constraint::Percentage(55.0), Constraint::Percentage(45.0)])
+            .gap(1)
+            .split(area);
+        self.render_grapheme_inspector(frame, cols[0]);
+        self.render_tricky_cases(frame, cols[1]);
+    }
+
+    fn render_grapheme_inspector(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            return;
+        }
+        let sample = self.current_sample();
+        let grapheme_list: Vec<&str> = graphemes(sample.text).collect();
+        let total = grapheme_list.len();
+        let mut lines = Vec::new();
+        if total == 0 {
+            lines.push("No graphemes found.".to_string());
+        } else {
+            let cursor = self.cursor_idx.min(total - 1);
+            let header = format!("Cursor {}/{}  (Shift+Left/Right)", cursor + 1, total);
+            lines.push(header);
+            lines.push("Idx  Grapheme  Width  Bytes".to_string());
+
+            let max_rows = area.height.saturating_sub(3) as usize;
+            let window = max_rows.max(1);
+            let start = cursor.saturating_sub(window / 2);
+            let end = (start + window).min(total);
+            let start = end.saturating_sub(window);
+
+            for (offset, g) in grapheme_list[start..end].iter().enumerate() {
+                let idx = start + offset;
+                let g = *g;
+                let width = grapheme_width(g);
+                let bytes = g.len();
+                let marker = if idx == cursor { ">" } else { " " };
+                lines.push(format!(
+                    "{marker}{idx:>2}  {g}  w={width}  b={bytes}",
+                    marker = marker,
+                    idx = idx,
+                    g = g,
+                    width = width,
+                    bytes = bytes
+                ));
+            }
+        }
+
+        Paragraph::new(lines.join("\n"))
+            .style(Style::new().fg(theme::fg::PRIMARY))
+            .block(
+                Block::new()
+                    .title("Grapheme Inspector")
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::new().fg(theme::accent::ACCENT_1)),
+            )
+            .render(area, frame);
+    }
+
+    fn render_tricky_cases(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            return;
+        }
+        let mut lines = Vec::new();
+        lines.push("Known tricky cases (expected width)".to_string());
+        lines.push(String::new());
+        for case in TRICKY_CASES {
+            let measured = display_width(case.text);
+            let ok = measured == case.expected_width;
+            let status = if ok { "ok" } else { "diff" };
+            let preview_width = area.width.saturating_sub(16).max(4) as usize;
+            let preview = truncate_with_ellipsis(case.text, preview_width, "...");
+            lines.push(format!(
+                "{:<9} {:<8} exp={} got={} {}",
+                case.label, preview, case.expected_width, measured, status
+            ));
+        }
+        Paragraph::new(lines.join("\n"))
+            .style(Style::new().fg(theme::fg::PRIMARY))
+            .block(
+                Block::new()
+                    .title("Tricky Widths")
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::new().fg(theme::accent::ACCENT_3)),
+            )
+            .render(area, frame);
+    }
+
     fn render_status_bar(&self, frame: &mut Frame, area: Rect) {
         if area.is_empty() {
             return;
         }
         let info = self.current_info();
-        let pn = ["Overview", "Plurals", "RTL Layout"];
-        let pl = pn.get(self.panel).unwrap_or(&"?");
+        let pl = PANEL_NAMES.get(self.panel).unwrap_or(&"?");
+        let detail = if self.panel == 3 {
+            let sample_total = self.sample_count().max(1);
+            let graphemes = grapheme_count(self.current_sample().text);
+            format!(
+                "Set: {}  Sample: {}/{}  Cursor: {}/{}",
+                self.current_sample_set().id,
+                self.sample_idx + 1,
+                sample_total,
+                self.cursor_idx + 1,
+                graphemes.max(1)
+            )
+        } else {
+            format!("Dir: {}", if info.rtl { "RTL" } else { "LTR" })
+        };
         Paragraph::new(format!(
-            " Tab/1-3: panels ({})  L/R: locale  Up/Down: count  Current: {} ({})  Dir: {} ",
-            pl,
-            info.name,
-            info.tag,
-            if info.rtl { "RTL" } else { "LTR" }
+            " Tab/1-4: panels ({})  L/R: locale  {}  Current: {} ({}) ",
+            pl, detail, info.name, info.tag
         ))
         .style(
             Style::new()
@@ -364,21 +880,37 @@ impl Screen for I18nDemo {
             match code {
                 KeyCode::Right if !shift => self.next_locale(),
                 KeyCode::Left if !shift => self.prev_locale(),
+                KeyCode::Right if shift && self.panel == 3 => self.move_cursor(1),
+                KeyCode::Left if shift && self.panel == 3 => self.move_cursor(-1),
                 KeyCode::Up => {
-                    self.plural_count = self.plural_count.saturating_add(1);
+                    if self.panel == 1 {
+                        self.plural_count = self.plural_count.saturating_add(1);
+                    } else if self.panel == 3 {
+                        self.prev_sample();
+                    }
                 }
                 KeyCode::Down => {
-                    self.plural_count = (self.plural_count - 1).max(0);
+                    if self.panel == 1 {
+                        self.plural_count = (self.plural_count - 1).max(0);
+                    } else if self.panel == 3 {
+                        self.next_sample();
+                    }
+                }
+                KeyCode::Char('[') if self.panel == 3 => self.prev_sample_set(),
+                KeyCode::Char(']') if self.panel == 3 => self.next_sample_set(),
+                KeyCode::Char('e') | KeyCode::Char('E') if self.panel == 3 => {
+                    let _ = self.export_stress_report();
                 }
                 KeyCode::Tab => {
-                    self.panel = (self.panel + 1) % 3;
+                    self.panel = (self.panel + 1) % PANEL_COUNT;
                 }
                 KeyCode::BackTab => {
-                    self.panel = (self.panel + 2) % 3;
+                    self.panel = (self.panel + PANEL_COUNT - 1) % PANEL_COUNT;
                 }
                 KeyCode::Char('1') => self.panel = 0,
                 KeyCode::Char('2') => self.panel = 1,
                 KeyCode::Char('3') => self.panel = 2,
+                KeyCode::Char('4') => self.panel = 3,
                 _ => {}
             }
         }
@@ -396,6 +928,7 @@ impl Screen for I18nDemo {
             0 => self.render_overview_panel(frame, rows[1]),
             1 => self.render_plural_panel(frame, rows[1]),
             2 => self.render_rtl_panel(frame, rows[1]),
+            3 => self.render_stress_lab_panel(frame, rows[1]),
             _ => {}
         }
         self.render_status_bar(frame, rows[2]);
@@ -407,11 +940,23 @@ impl Screen for I18nDemo {
                 action: "Switch locale",
             },
             HelpEntry {
-                key: "Up/Down",
-                action: "Change plural count",
+                key: "Shift+Left/Right",
+                action: "Move grapheme cursor (Stress)",
             },
             HelpEntry {
-                key: "Tab/1-3",
+                key: "Up/Down",
+                action: "Count (Plurals) / Sample (Stress)",
+            },
+            HelpEntry {
+                key: "[ / ]",
+                action: "Switch sample set (Stress)",
+            },
+            HelpEntry {
+                key: "E",
+                action: "Export stress report (Stress)",
+            },
+            HelpEntry {
+                key: "Tab/1-4",
                 action: "Switch panel",
             },
         ]
@@ -420,7 +965,7 @@ impl Screen for I18nDemo {
         self.tick_count = tick_count;
     }
     fn title(&self) -> &'static str {
-        "i18n Demo"
+        "i18n Stress Lab"
     }
     fn tab_label(&self) -> &'static str {
         "i18n"
@@ -727,7 +1272,7 @@ mod tests {
     #[test]
     fn panel_switching() {
         let mut d = I18nDemo::new();
-        for e in [1, 2, 0] {
+        for e in [1, 2, 3, 0] {
             d.update(&press(KeyCode::Tab));
             assert_eq!(d.panel, e);
         }
@@ -737,12 +1282,15 @@ mod tests {
         let mut d = I18nDemo::new();
         d.update(&press(KeyCode::Char('3')));
         assert_eq!(d.panel, 2);
+        d.update(&press(KeyCode::Char('4')));
+        assert_eq!(d.panel, 3);
         d.update(&press(KeyCode::Char('1')));
         assert_eq!(d.panel, 0);
     }
     #[test]
     fn plural_count_adjustable() {
         let mut d = I18nDemo::new();
+        d.panel = 1;
         d.update(&press(KeyCode::Up));
         assert_eq!(d.plural_count, 2);
         d.update(&press(KeyCode::Down));
@@ -755,7 +1303,7 @@ mod tests {
     #[test]
     fn all_panels_render_each_locale() {
         let mut d = I18nDemo::new();
-        for p in 0..3 {
+        for p in 0..PANEL_COUNT {
             d.panel = p;
             for (i, locale) in LOCALES.iter().enumerate() {
                 d.locale_idx = i;
@@ -774,5 +1322,31 @@ mod tests {
     #[test]
     fn small_terminal_no_panic() {
         assert_ne!(render_hash(&I18nDemo::new(), 30, 8), 0);
+    }
+
+    #[test]
+    fn sample_sets_have_samples() {
+        for set in SAMPLE_SETS {
+            assert!(
+                !set.samples.is_empty(),
+                "sample set should not be empty: {}",
+                set.id
+            );
+        }
+    }
+
+    #[test]
+    fn sample_widths_match_grapheme_sum() {
+        for set in SAMPLE_SETS {
+            for sample in set.samples {
+                let total = display_width(sample.text);
+                let sum: usize = graphemes(sample.text).map(grapheme_width).sum();
+                assert_eq!(
+                    total, sum,
+                    "width mismatch for sample {} (set {})",
+                    sample.id, set.id
+                );
+            }
+        }
     }
 }

@@ -22,6 +22,7 @@ use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
 use ftui_core::geometry::Rect;
 use ftui_demo_showcase::app::{AppModel, AppMsg};
 use ftui_demo_showcase::screens::Screen;
+use ftui_demo_showcase::screens::dashboard::Dashboard;
 use ftui_demo_showcase::screens::performance_hud::PerformanceHud;
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
@@ -310,6 +311,49 @@ fn bench_mode_switching(c: &mut Criterion) {
 }
 
 // =============================================================================
+// Benchmark: Dashboard Render
+// =============================================================================
+
+fn bench_dashboard_render(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dashboard/render");
+
+    // 120x40 render benchmark
+    group.throughput(Throughput::Elements(1));
+    group.bench_function("render_120x40", |b| {
+        let mut dashboard = Dashboard::new();
+        let mut pool = GraphemePool::new();
+        let mut tick = 0u64;
+
+        b.iter(|| {
+            tick = tick.wrapping_add(1);
+            dashboard.tick(tick);
+            let mut frame = Frame::new(120, 40, &mut pool);
+            let area = Rect::new(0, 0, 120, 40);
+            dashboard.view(black_box(&mut frame), black_box(area));
+            black_box(&frame);
+        })
+    });
+
+    // 80x24 render benchmark
+    group.bench_function("render_80x24", |b| {
+        let mut dashboard = Dashboard::new();
+        let mut pool = GraphemePool::new();
+        let mut tick = 0u64;
+
+        b.iter(|| {
+            tick = tick.wrapping_add(1);
+            dashboard.tick(tick);
+            let mut frame = Frame::new(80, 24, &mut pool);
+            let area = Rect::new(0, 0, 80, 24);
+            dashboard.view(black_box(&mut frame), black_box(area));
+            black_box(&frame);
+        })
+    });
+
+    group.finish();
+}
+
+// =============================================================================
 // Criterion Configuration
 // =============================================================================
 
@@ -320,6 +364,7 @@ criterion_group!(
     bench_render_by_samples,
     bench_ring_buffer,
     bench_mode_switching,
+    bench_dashboard_render,
 );
 
 criterion_main!(benches);

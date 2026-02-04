@@ -35,7 +35,7 @@ use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::Style;
 use ftui_text::{Line, Span, Text, WrapMode};
-use ftui_text::{display_width, grapheme_count, grapheme_width, graphemes};
+use ftui_text::{display_width, grapheme_width, graphemes};
 use ftui_widgets::Badge;
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
@@ -171,6 +171,64 @@ fn build_budget(frame_time_ms: u64, dirty_rows: usize) -> Budget {
     }
     budget.seal()
 }
+
+#[derive(Debug)]
+enum BudgetPolicy {
+    Strict,
+    Adaptive { headroom_ms: u64 },
+    Burst { max_rows: usize },
+}
+
+fn enforce_policy(budget: &Budget, policy: BudgetPolicy) -> Result<(), String> {
+    match policy {
+        BudgetPolicy::Strict if budget.violations.len() > 1 => {
+            Err("strict budget exceeded".to_string())
+        }
+        BudgetPolicy::Adaptive { headroom_ms } => {
+            if budget.frame_limit_ms.saturating_sub(headroom_ms) < 10 {
+                Err("headroom too low".to_string())
+            } else {
+                Ok(())
+            }
+        }
+        BudgetPolicy::Burst { max_rows } => {
+            if budget.dirty_rows > max_rows {
+                Err("burst rows exceeded".to_string())
+            } else {
+                Ok(())
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
+#[derive(Debug)]
+struct RenderTrace {
+    frame: u64,
+    dirty: usize,
+    violations: Vec<String>,
+}
+
+impl RenderTrace {
+    fn new(frame: u64, dirty: usize) -> Self {
+        Self {
+            frame,
+            dirty,
+            violations: Vec::new(),
+        }
+    }
+
+    fn push_violation(&mut self, msg: impl Into<String>) {
+        self.violations.push(msg.into());
+    }
+
+    fn commit(self) -> String {
+        format!(
+            "trace frame={} dirty={} violations={:?}",
+            self.frame, self.dirty, self.violations
+        )
+    }
+}
 "###,
     },
     CodeSample {
@@ -272,6 +330,36 @@ export async function streamFrames(
   }
   return count;
 }
+
+type BudgetPolicy =
+  | { kind: "strict" }
+  | { kind: "adaptive"; headroomMs: number }
+  | { kind: "burst"; maxRows: number };
+
+export function enforcePolicy(budget: Budget, policy: BudgetPolicy): Result<Budget> {
+  if (policy.kind === "strict" && budget.violations.length > 0) {
+    return { ok: false, error: "budget exceeded" };
+  }
+  if (policy.kind === "adaptive" && budget.frameMs - policy.headroomMs < 10) {
+    return { ok: false, error: "headroom too low" };
+  }
+  if (policy.kind === "burst" && budget.dirtyRows > policy.maxRows) {
+    return { ok: false, error: "burst rows exceeded" };
+  }
+  return { ok: true, value: budget };
+}
+
+export class TraceBuffer {
+  private buf: string[] = [];
+  push(frame: number, dirty: number, note: string) {
+    this.buf.push(`[${frame}] dirty=${dirty} ${note}`);
+  }
+  flush(): string {
+    const out = this.buf.join("\n");
+    this.buf = [];
+    return out;
+  }
+}
 "###,
     },
     CodeSample {
@@ -329,6 +417,30 @@ async def stream(frames: AsyncIterator[Frame], sink: Sink) -> None:
     async for f in frames:
         if f.dirty:
             await sink.write(f"stream id={f.id} tags={f.tags}")
+
+class BudgetPolicy(Protocol):
+    def enforce(self, budget: Budget) -> None: ...
+
+@dataclass(slots=True)
+class AdaptivePolicy:
+    headroom_ms: int = 6
+
+    def enforce(self, budget: Budget) -> None:
+        if budget.frame_ms - self.headroom_ms < 10:
+            budget.violations.append("low headroom")
+
+@dataclass(slots=True)
+class Trace:
+    frame: int
+    dirty: int
+    notes: list[str] = field(default_factory=list)
+
+    def add(self, note: str) -> None:
+        self.notes.append(note)
+
+    def render(self) -> str:
+        joined = ", ".join(self.notes) if self.notes else "OK"
+        return f"trace frame={self.frame} dirty={self.dirty} notes={joined}"
 "###,
     },
     CodeSample {
@@ -482,7 +594,27 @@ SELECT p.frame_id,
        p.bursts,
        (p.bursts > 3) AS needs_budget
 FROM perf p
-ORDER BY p.spike DESC;"###,
+ORDER BY p.spike DESC;
+
+WITH policy AS (
+  SELECT frame_id,
+         case
+           when needs_budget then 'degrade'
+           when mean_cells < 120 then 'full'
+           else 'adaptive'
+         end AS policy
+  FROM perf
+)
+SELECT p.frame_id,
+       p.policy,
+       jsonb_build_object(
+         'spike', perf.spike,
+         'mean', perf.mean_cells,
+         'bursts', perf.bursts
+       ) AS evidence
+FROM policy p
+JOIN perf ON perf.frame_id = p.frame_id
+ORDER BY p.policy, perf.spike DESC;"###,
     },
     CodeSample {
         label: "JSON",
@@ -531,6 +663,20 @@ ORDER BY p.spike DESC;"###,
     "p95Ms": 14,
     "p99Ms": 20,
     "channels": ["stderr", "otlp", "ndjson"]
+  },
+  "evidenceLedger": {
+    "enabled": true,
+    "fields": ["bayes_factor", "risk", "decision"],
+    "retention": "7d"
+  },
+  "profiles": [
+    { "name": "modern", "syncOutput": true, "scrollRegion": true },
+    { "name": "mux", "syncOutput": false, "scrollRegion": false }
+  ],
+  "renderTrace": {
+    "seed": 42,
+    "runId": "demo-001",
+    "checksums": ["9f2d", "a120", "b3cc"]
   }
 }"###,
     },
@@ -566,6 +712,26 @@ alerts:
   error_budget: 0.02
   p95_ms: 14
   p99_ms: 20
+
+profiles:
+  - name: modern
+    sync_output: true
+    scroll_region: true
+  - name: mux
+    sync_output: false
+    scroll_region: false
+
+evidence_ledger:
+  enabled: true
+  fields: [bayes_factor, risk, decision]
+  retention: 7d
+
+ui:
+  inline_mode:
+    height: 12
+    preserve_scrollback: true
+  alt_screen:
+    enabled: true
   channels: [stderr, otlp, ndjson]
 
 telemetry:
@@ -634,6 +800,23 @@ rotate_logs() {
 if [[ "${1:-}" == "--rotate" ]]; then
   rotate_logs
 fi
+
+usage() {
+  cat <<EOF
+Usage: $0 [--rotate] [--budget <rows>]
+EOF
+}
+
+if [[ "${1:-}" == "--budget" ]]; then
+  rows="${2:-0}"
+  if (( rows > 120 )); then
+    echo "budget: degrade (rows=$rows)" >> "$LOG"
+  else
+    echo "budget: full (rows=$rows)" >> "$LOG"
+  fi
+elif [[ "${1:-}" == "--help" ]]; then
+  usage
+fi
 "###,
     },
     CodeSample {
@@ -698,6 +881,22 @@ inline Metrics summarize(const std::vector<Frame<std::string>>& frames) {
   m.p95 = 12.8;
   m.notes.push_back("inline");
   return m;
+}
+
+class Scheduler {
+ public:
+  explicit Scheduler(int budget_ms) : budget_ms_(budget_ms) {}
+  bool allow(int dirty_rows) const { return dirty_rows <= budget_ms_ * 8; }
+  std::string explain(int dirty_rows) const {
+    return allow(dirty_rows) ? "full" : "degrade";
+  }
+ private:
+  int budget_ms_;
+};
+
+static inline std::string trace_line(std::uint64_t frame, int dirty, const Scheduler& s) {
+  return "frame=" + std::to_string(frame) + " dirty=" + std::to_string(dirty)
+         + " policy=" + s.explain(dirty);
 }
 "###,
     },
@@ -1512,6 +1711,223 @@ budget <- tibble(frame_ms = 12, dirty = summary$dirty, ok = summary$dirty < 5)
 print(budget)
 "###,
     },
+    CodeSample {
+        label: "TOML",
+        lang: "toml",
+        code: r###"# Cargo.toml
+[package]
+name = "ftui"
+version = "0.1.0"
+edition = "2024"
+authors = ["FrankenTUI Team"]
+
+[dependencies]
+crossterm = "0.27"
+unicode-width = "0.1"
+tracing = { version = "0.1", features = ["log"] }
+
+[features]
+default = ["widgets"]
+widgets = []
+simd = ["dep:simd-json"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[[bench]]
+name = "diff"
+harness = false
+"###,
+    },
+    CodeSample {
+        label: "JavaScript",
+        lang: "js",
+        code: r###"// pipeline.js
+const { EventEmitter } = require('events');
+
+class Pipeline extends EventEmitter {
+  constructor(budgetMs = 12) {
+    super();
+    this.budgetMs = budgetMs;
+    this.frames = [];
+  }
+
+  push(frame) {
+    this.frames.push({ ...frame, ts: Date.now() });
+    if (this.frames.length > 60) this.frames.shift();
+  }
+
+  render() {
+    const start = performance.now();
+    const dirty = this.frames.filter(f => f.dirty);
+    
+    // Simulate work
+    const nodes = dirty.reduce((acc, f) => acc + Object.keys(f.tags).length, 0);
+    
+    const elapsed = performance.now() - start;
+    if (elapsed > this.budgetMs) {
+      this.emit('violation', { elapsed, budget: this.budgetMs });
+    }
+    
+    return { nodes, elapsed };
+  }
+}
+
+const pipe = new Pipeline();
+pipe.on('violation', console.warn);
+
+setInterval(() => {
+  pipe.push({ id: 1, dirty: Math.random() > 0.5, tags: { mode: 'inline' } });
+  console.log(pipe.render());
+}, 16);
+"###,
+    },
+    CodeSample {
+        label: "Markdown",
+        lang: "md",
+        code: r###"# Project Plan
+
+## Overview
+We are building a **fast** TUI kernel.
+
+- [x] Zero flicker
+- [ ] 100% coverage
+
+## Architecture
+1. **Core**: Input handling
+2. **Render**: `Buffer` + `Diff`
+3. **Widgets**: Reusable components
+
+```rust
+fn main() {
+    println!("Hello");
+}
+```
+
+> Note: Performance is key.
+
+[Docs](https://docs.rs/ftui)
+"###,
+    },
+    CodeSample {
+        label: "Elixir",
+        lang: "ex",
+        code: r###"# pipeline.ex
+defmodule Pipeline do
+  use GenServer
+
+  def start_link(budget_ms) do
+    GenServer.start_link(__MODULE__, budget_ms, name: __MODULE__)
+  end
+
+  @impl true
+  def init(budget_ms) do
+    {:ok, %{budget: budget_ms, frames: []}}
+  end
+
+  @impl true
+  def handle_cast({:push, frame}, state) do
+    # Keep last 60 frames
+    new_frames = [frame | state.frames] |> Enum.take(60)
+    {:noreply, %{state | frames: new_frames}}
+  end
+
+  @impl true
+  def handle_call(:render, _from, state) do
+    start_time = System.monotonic_time(:millisecond)
+
+    dirty = Enum.filter(state.frames, & &1.dirty)
+    count = Enum.reduce(dirty, 0, fn f, acc -> acc + map_size(f.tags) end)
+
+    elapsed = System.monotonic_time(:millisecond) - start_time
+    if elapsed > state.budget do
+      {:reply, {:error, :over_budget}, state}
+    else
+      {:reply, {:ok, count}, state}
+    end
+  end
+end
+
+# Usage
+{:ok, pid} = Pipeline.start_link(12)
+GenServer.cast(pid, {:push, %{id: 1, dirty: true, tags: %{mode: "inline"}}})
+"###,
+    },
+    CodeSample {
+        label: "Haskell",
+        lang: "hs",
+        code: r###"-- Pipeline.hs
+module Pipeline where
+
+import Data.List (foldl')
+import qualified Data.Map as M
+import System.CPUTime
+
+data Frame = Frame {
+    frameId :: Int,
+    dirty   :: Bool,
+    tags    :: M.Map String String
+} deriving (Show, Eq)
+
+type Budget = Integer
+
+render :: [Frame] -> Budget -> Either String Int
+render frames budget =
+    let dirtyFrames = filter dirty frames
+        cost = foldl' (\acc f -> acc + M.size (tags f)) 0 dirtyFrames
+    in if toInteger (length dirtyFrames) > budget
+       then Left "Over Budget"
+       else Right cost
+
+main :: IO ()
+main = do
+    start <- getCPUTime
+    let frames = [Frame 1 True M.empty, Frame 2 False M.empty]
+    let result = render frames 100
+    end <- getCPUTime
+    let diff = (end - start) `div` 1000000000
+    print $ "Result: " ++ show result ++ " Time: " ++ show diff ++ "ms"
+"###,
+    },
+    CodeSample {
+        label: "Zig",
+        lang: "zig",
+        code: r###"// pipeline.zig
+const std = @import("std");
+
+const Frame = struct {
+    id: u64,
+    dirty: bool,
+    tags: std.StringHashMap([]const u8),
+};
+
+pub fn render(allocator: std.mem.Allocator, frames: []const Frame, budget: u64) !u64 {
+    var timer = try std.time.Timer.start();
+    var count: u64 = 0;
+    
+    for (frames) |f| {
+        if (f.dirty) {
+            count += f.tags.count();
+        }
+    }
+
+    const elapsed = timer.read() / std.time.ns_per_ms;
+    if (elapsed > budget) {
+        return error.BudgetExceeded;
+    }
+    return count;
+}
+
+test "pipeline benchmark" {
+    var frames = [_]Frame{};
+    // Zig compile-time checks ensure correctness
+    try std.testing.expectEqual(try render(std.testing.allocator, &frames, 1000), 0);
+}
+"###,
+    },
 ];
 
 const DASH_MARKDOWN_SAMPLES: &[&str] = &[
@@ -1828,6 +2244,32 @@ enum DashboardFocus {
     None,
 }
 
+impl DashboardFocus {
+    fn next(self) -> Self {
+        match self {
+            Self::Plasma => Self::Charts,
+            Self::Charts => Self::Code,
+            Self::Code => Self::Info,
+            Self::Info => Self::TextFx,
+            Self::TextFx => Self::Activity,
+            Self::Activity => Self::Markdown,
+            Self::Markdown | Self::None => Self::Plasma,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::Plasma => Self::Markdown,
+            Self::Charts => Self::Plasma,
+            Self::Code => Self::Charts,
+            Self::Info => Self::Code,
+            Self::TextFx => Self::Info,
+            Self::Activity => Self::TextFx,
+            Self::Markdown | Self::None => Self::Activity,
+        }
+    }
+}
+
 impl ChartMode {
     fn next(self) -> Self {
         match self {
@@ -1837,6 +2279,17 @@ impl ChartMode {
             Self::Heatmap => Self::Matrix,
             Self::Matrix => Self::Composite,
             Self::Composite => Self::Pulse,
+        }
+    }
+
+    fn prev(self) -> Self {
+        match self {
+            Self::Pulse => Self::Composite,
+            Self::Lines => Self::Pulse,
+            Self::Bars => Self::Lines,
+            Self::Heatmap => Self::Bars,
+            Self::Matrix => Self::Heatmap,
+            Self::Composite => Self::Matrix,
         }
     }
 
@@ -1879,6 +2332,9 @@ pub struct Dashboard {
 
     // Syntax highlighter (cached)
     highlighter: SyntaxHighlighter,
+
+    // Cached highlighted code samples
+    code_cache: Vec<Text>,
 
     // Markdown renderer (cached)
     md_renderer: MarkdownRenderer,
@@ -1923,6 +2379,7 @@ impl Dashboard {
 
         let mut highlighter = SyntaxHighlighter::new();
         highlighter.set_theme(theme::syntax_theme());
+        let code_cache = Self::build_code_cache(&highlighter);
 
         Self {
             tick_count: 30,
@@ -1932,6 +2389,7 @@ impl Dashboard {
             last_frame: None,
             fps: 0.0,
             highlighter,
+            code_cache,
             md_renderer: MarkdownRenderer::new(MarkdownTheme::default()),
             code_index: 0,
             md_sample_index: 0,
@@ -1951,6 +2409,14 @@ impl Dashboard {
 
     pub fn apply_theme(&mut self) {
         self.highlighter.set_theme(theme::syntax_theme());
+        self.code_cache = Self::build_code_cache(&self.highlighter);
+    }
+
+    fn build_code_cache(highlighter: &SyntaxHighlighter) -> Vec<Text> {
+        CODE_SAMPLES
+            .iter()
+            .map(|sample| highlighter.highlight(sample.code, sample.lang))
+            .collect()
     }
 
     fn is_focused(&self, panel: DashboardFocus) -> bool {
@@ -1989,6 +2455,11 @@ impl Dashboard {
         &CODE_SAMPLES[self.code_index % CODE_SAMPLES.len()]
     }
 
+    fn current_code_text(&self) -> &Text {
+        let idx = self.code_index % self.code_cache.len().max(1);
+        &self.code_cache[idx]
+    }
+
     fn current_markdown_sample(&self) -> &'static str {
         DASH_MARKDOWN_SAMPLES[self.md_sample_index % DASH_MARKDOWN_SAMPLES.len()]
     }
@@ -2003,7 +2474,7 @@ impl Dashboard {
         }
         let md = self.current_markdown_sample();
         let max_len = md.len();
-        let mut new_pos = self.md_stream_pos.saturating_add(18);
+        let mut new_pos = self.md_stream_pos.saturating_add(80);
         while new_pos < max_len && !md.is_char_boundary(new_pos) {
             new_pos += 1;
         }
@@ -3036,10 +3507,10 @@ impl Dashboard {
             return;
         }
 
-        let highlighted = self.highlighter.highlight(sample.code, sample.lang);
+        let highlighted = self.current_code_text();
 
         // Render as paragraph with styled text
-        render_text(frame, inner, &highlighted);
+        render_text(frame, inner, highlighted);
         self.render_panel_hint(frame, inner, "Click → Code Explorer");
     }
 
@@ -3645,9 +4116,9 @@ impl Dashboard {
         }
 
         let preview_area = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(2));
-        let effect_slots = if preview_area.height >= 9 {
+        let effect_slots = if preview_area.height >= 8 {
             3
-        } else if preview_area.height >= 6 {
+        } else if preview_area.height >= 5 {
             2
         } else {
             1
@@ -3727,7 +4198,7 @@ impl Dashboard {
                     let clipped = truncate_to_width(raw, max_width);
                     lines.push(clipped);
                 }
-                let text_len: usize = lines.iter().map(|l| grapheme_count(l)).sum();
+                let text_len: usize = lines.iter().map(|l| l.chars().count()).sum();
                 let effect = self.build_effect(demo.kind, text_len);
                 let styled = StyledMultiLine::new(lines)
                     .effect(effect)
@@ -4211,6 +4682,13 @@ impl Screen for Dashboard {
         }) = event
         {
             match code {
+                // Focus navigation
+                KeyCode::Tab | KeyCode::Right | KeyCode::Down => {
+                    self.focus = self.focus.next();
+                }
+                KeyCode::BackTab | KeyCode::Left | KeyCode::Up => {
+                    self.focus = self.focus.prev();
+                }
                 // Reset animations
                 KeyCode::Char('r') => {
                     self.tick_count = 0;
@@ -4219,29 +4697,36 @@ impl Screen for Dashboard {
                 }
                 // Cycle code samples
                 KeyCode::Char('c') => {
-                    if matches!(self.focus, DashboardFocus::Code | DashboardFocus::None) {
-                        self.code_index = (self.code_index + 1) % CODE_SAMPLES.len();
-                    }
+                    self.code_index = (self.code_index + 1) % CODE_SAMPLES.len();
+                }
+                KeyCode::Char('C') => {
+                    self.code_index =
+                        (self.code_index + CODE_SAMPLES.len() - 1) % CODE_SAMPLES.len();
                 }
                 // Cycle text effects (also rotates sample)
                 KeyCode::Char('e') => {
-                    if matches!(self.focus, DashboardFocus::TextFx | DashboardFocus::None) {
-                        self.effect_index = (self.effect_index + 1) % EFFECT_DEMOS.len();
-                    }
+                    self.effect_index = (self.effect_index + 1) % EFFECT_DEMOS.len();
+                }
+                KeyCode::Char('E') => {
+                    self.effect_index =
+                        (self.effect_index + EFFECT_DEMOS.len() - 1) % EFFECT_DEMOS.len();
                 }
                 // Cycle markdown samples + restart stream
                 KeyCode::Char('m') => {
-                    if matches!(self.focus, DashboardFocus::Markdown | DashboardFocus::None) {
-                        self.md_sample_index =
-                            (self.md_sample_index + 1) % DASH_MARKDOWN_SAMPLES.len();
-                        self.reset_markdown_stream();
-                    }
+                    self.md_sample_index = (self.md_sample_index + 1) % DASH_MARKDOWN_SAMPLES.len();
+                    self.reset_markdown_stream();
+                }
+                KeyCode::Char('M') => {
+                    self.md_sample_index = (self.md_sample_index + DASH_MARKDOWN_SAMPLES.len() - 1)
+                        % DASH_MARKDOWN_SAMPLES.len();
+                    self.reset_markdown_stream();
                 }
                 // Cycle chart modes
                 KeyCode::Char('g') => {
-                    if matches!(self.focus, DashboardFocus::Charts | DashboardFocus::None) {
-                        self.chart_mode = self.chart_mode.next();
-                    }
+                    self.chart_mode = self.chart_mode.next();
+                }
+                KeyCode::Char('G') => {
+                    self.chart_mode = self.chart_mode.prev();
                 }
                 _ => {}
             }

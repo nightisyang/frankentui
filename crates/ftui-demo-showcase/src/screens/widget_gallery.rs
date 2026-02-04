@@ -195,6 +195,28 @@ impl Screen for WidgetGallery {
             ..
         }) = event
         {
+            // Section-specific widget navigation
+            if self.current_section == 7 {
+                // Advanced section: VirtualizedList navigation
+                match code {
+                    KeyCode::Up => {
+                        let mut state = self.virtualized_state.borrow_mut();
+                        let curr = state.selected.unwrap_or(0);
+                        state.selected = Some(curr.saturating_sub(1));
+                        return Cmd::None;
+                    }
+                    KeyCode::Down => {
+                        let mut state = self.virtualized_state.borrow_mut();
+                        let curr = state.selected.unwrap_or(0);
+                        if curr + 1 < self.virtualized_items.len() {
+                            state.selected = Some(curr + 1);
+                        }
+                        return Cmd::None;
+                    }
+                    _ => {}
+                }
+            }
+
             match code {
                 KeyCode::Char('j') | KeyCode::Right | KeyCode::Down => {
                     self.current_section = (self.current_section + 1) % SECTION_COUNT;
@@ -2015,8 +2037,9 @@ mod tests {
     #[test]
     fn gallery_section_wrap_around() {
         let mut gallery = WidgetGallery::new();
+        gallery.current_section = 0;
 
-        // Navigate backward from first visible section wraps to last section
+        // Navigate backward from first section wraps to last section.
         let ev_back = Event::Key(KeyEvent {
             code: KeyCode::Char('k'),
             modifiers: Default::default(),

@@ -404,14 +404,32 @@ impl MacroRecorderScreen {
 
         if modifiers.contains(Modifiers::CTRL) || modifiers.contains(Modifiers::ALT) {
             match code {
-                KeyCode::Left | KeyCode::Up => {
-                    let next = self.focus.prev();
-                    self.set_focus(next);
+                KeyCode::Up => {
+                    // Up from bottom panels goes to Controls
+                    if matches!(self.focus, FocusPanel::Timeline | FocusPanel::Scenarios) {
+                        self.set_focus(FocusPanel::Controls);
+                    }
                     return;
                 }
-                KeyCode::Right | KeyCode::Down => {
-                    let next = self.focus.next();
-                    self.set_focus(next);
+                KeyCode::Down => {
+                    // Down from Controls goes to Timeline (primary workspace)
+                    if self.focus == FocusPanel::Controls {
+                        self.set_focus(FocusPanel::Timeline);
+                    }
+                    return;
+                }
+                KeyCode::Left => {
+                    // Left from Scenarios goes to Timeline
+                    if self.focus == FocusPanel::Scenarios {
+                        self.set_focus(FocusPanel::Timeline);
+                    }
+                    return;
+                }
+                KeyCode::Right => {
+                    // Right from Timeline goes to Scenarios
+                    if self.focus == FocusPanel::Timeline {
+                        self.set_focus(FocusPanel::Scenarios);
+                    }
                     return;
                 }
                 _ => {}
@@ -1118,7 +1136,7 @@ impl Screen for MacroRecorderScreen {
             .split(sections[1]);
 
         let right = Flex::vertical()
-            .constraints([Constraint::Percentage(45.0), Constraint::Percentage(55.0)])
+            .constraints([Constraint::Percentage(65.0), Constraint::Percentage(35.0)])
             .split(bottom[1]);
 
         self.layout_timeline.set(bottom[0]);

@@ -305,6 +305,8 @@ pub enum ScreenId {
     ActionTimeline,
     /// Content-aware layout examples (bd-2dow.7).
     IntrinsicSizing,
+    /// Layout inspector (constraint solver visual, bd-iuvb.7).
+    LayoutInspector,
     /// Multi-line text editor with search/replace (bd-12o8).
     AdvancedTextEditor,
     /// Mouse/hit-test playground (bd-bksf).
@@ -325,6 +327,14 @@ pub enum ScreenId {
     I18nDemo,
     /// VOI overlay widget demo (Galaxy-Brain).
     VoiOverlay,
+    /// Inline mode story (scrollback + chrome).
+    InlineModeStory,
+    /// Accessibility control panel (bd-iuvb.8).
+    AccessibilityPanel,
+    /// Interactive widget builder sandbox (bd-iuvb.10).
+    WidgetBuilder,
+    /// Command palette evidence lab (bd-iuvb.11).
+    CommandPaletteLab,
 }
 
 impl ScreenId {
@@ -349,6 +359,7 @@ impl ScreenId {
         Self::Notifications,
         Self::ActionTimeline,
         Self::IntrinsicSizing,
+        Self::LayoutInspector,
         Self::AdvancedTextEditor,
         Self::MousePlayground,
         Self::FormValidation,
@@ -359,6 +370,10 @@ impl ScreenId {
         Self::PerformanceHud,
         Self::I18nDemo,
         Self::VoiOverlay,
+        Self::InlineModeStory,
+        Self::AccessibilityPanel,
+        Self::WidgetBuilder,
+        Self::CommandPaletteLab,
     ];
 
     /// 0-based index in the ALL array.
@@ -400,6 +415,7 @@ impl ScreenId {
             Self::Notifications => "Notifications",
             Self::ActionTimeline => "Action Timeline",
             Self::IntrinsicSizing => "Intrinsic Sizing",
+            Self::LayoutInspector => "Layout Inspector",
             Self::AdvancedTextEditor => "Advanced Text Editor",
             Self::MousePlayground => "Mouse Playground",
             Self::FormValidation => "Form Validation",
@@ -408,8 +424,12 @@ impl ScreenId {
             Self::ThemeStudio => "Theme Studio",
             Self::SnapshotPlayer => "Snapshot Player",
             Self::PerformanceHud => "Performance HUD",
-            Self::I18nDemo => "i18n Demo",
+            Self::I18nDemo => "i18n Stress Lab",
             Self::VoiOverlay => "VOI Overlay",
+            Self::InlineModeStory => "Inline Mode",
+            Self::AccessibilityPanel => "Accessibility",
+            Self::WidgetBuilder => "Widget Builder",
+            Self::CommandPaletteLab => "Command Palette Evidence Lab",
         }
     }
 
@@ -435,6 +455,7 @@ impl ScreenId {
             Self::Notifications => "Notify",
             Self::ActionTimeline => "Timeline",
             Self::IntrinsicSizing => "Sizing",
+            Self::LayoutInspector => "Inspect",
             Self::AdvancedTextEditor => "Editor",
             Self::MousePlayground => "Mouse",
             Self::FormValidation => "Validate",
@@ -445,6 +466,10 @@ impl ScreenId {
             Self::PerformanceHud => "PerfHUD",
             Self::I18nDemo => "i18n",
             Self::VoiOverlay => "VOI",
+            Self::InlineModeStory => "Inline",
+            Self::AccessibilityPanel => "A11y",
+            Self::WidgetBuilder => "Builder",
+            Self::CommandPaletteLab => "Palette",
         }
     }
 
@@ -470,6 +495,7 @@ impl ScreenId {
             Self::Notifications => "Notifications",
             Self::ActionTimeline => "ActionTimeline",
             Self::IntrinsicSizing => "IntrinsicSizing",
+            Self::LayoutInspector => "LayoutInspector",
             Self::AdvancedTextEditor => "AdvancedTextEditor",
             Self::MousePlayground => "MousePlayground",
             Self::FormValidation => "FormValidation",
@@ -480,6 +506,10 @@ impl ScreenId {
             Self::PerformanceHud => "PerformanceHud",
             Self::I18nDemo => "I18nDemo",
             Self::VoiOverlay => "VoiOverlay",
+            Self::InlineModeStory => "InlineModeStory",
+            Self::AccessibilityPanel => "AccessibilityPanel",
+            Self::WidgetBuilder => "WidgetBuilder",
+            Self::CommandPaletteLab => "CommandPaletteLab",
         }
     }
 
@@ -499,7 +529,6 @@ impl ScreenId {
 // ---------------------------------------------------------------------------
 
 /// Holds the state for every screen.
-#[derive(Default)]
 pub struct ScreenStates {
     /// Dashboard screen state.
     pub dashboard: screens::dashboard::Dashboard,
@@ -539,6 +568,8 @@ pub struct ScreenStates {
     pub action_timeline: screens::action_timeline::ActionTimeline,
     /// Intrinsic sizing demo screen state (bd-2dow.7).
     pub intrinsic_sizing: screens::intrinsic_sizing::IntrinsicSizingDemo,
+    /// Layout inspector screen state (bd-iuvb.7).
+    pub layout_inspector: screens::layout_inspector::LayoutInspector,
     /// Advanced text editor demo screen state (bd-12o8).
     pub advanced_text_editor: screens::advanced_text_editor::AdvancedTextEditor,
     /// Mouse/hit-test playground screen state (bd-bksf).
@@ -559,9 +590,59 @@ pub struct ScreenStates {
     pub i18n_demo: screens::i18n_demo::I18nDemo,
     /// VOI overlay widget demo screen state.
     pub voi_overlay: screens::voi_overlay::VoiOverlayScreen,
+    /// Inline mode story screen state.
+    pub inline_mode_story: screens::inline_mode_story::InlineModeStory,
+    /// Accessibility control panel screen state.
+    pub accessibility_panel: screens::accessibility_panel::AccessibilityPanel,
+    /// Widget builder sandbox screen state (bd-iuvb.10).
+    pub widget_builder: screens::widget_builder::WidgetBuilder,
+    /// Command palette evidence lab screen state (bd-iuvb.11).
+    pub command_palette_lab: screens::command_palette_lab::CommandPaletteEvidenceLab,
     /// Tracks whether each screen has errored during rendering.
     /// Indexed by `ScreenId::index()`.
-    screen_errors: [Option<String>; 29],
+    screen_errors: [Option<String>; 34],
+}
+
+impl Default for ScreenStates {
+    fn default() -> Self {
+        Self {
+            dashboard: Default::default(),
+            shakespeare: Default::default(),
+            code_explorer: Default::default(),
+            widget_gallery: Default::default(),
+            layout_lab: Default::default(),
+            forms_input: Default::default(),
+            data_viz: Default::default(),
+            file_browser: Default::default(),
+            advanced_features: Default::default(),
+            terminal_capabilities: Default::default(),
+            macro_recorder: Default::default(),
+            performance: Default::default(),
+            markdown_rich_text: Default::default(),
+            visual_effects: Default::default(),
+            responsive_demo: Default::default(),
+            log_search: Default::default(),
+            notifications: Default::default(),
+            action_timeline: Default::default(),
+            intrinsic_sizing: Default::default(),
+            layout_inspector: Default::default(),
+            advanced_text_editor: Default::default(),
+            mouse_playground: Default::default(),
+            form_validation: Default::default(),
+            virtualized_search: Default::default(),
+            async_tasks: Default::default(),
+            theme_studio: Default::default(),
+            snapshot_player: Default::default(),
+            performance_hud: Default::default(),
+            i18n_demo: Default::default(),
+            voi_overlay: Default::default(),
+            inline_mode_story: Default::default(),
+            accessibility_panel: Default::default(),
+            widget_builder: Default::default(),
+            command_palette_lab: Default::default(),
+            screen_errors: std::array::from_fn(|_| None),
+        }
+    }
 }
 
 impl ScreenStates {
@@ -626,6 +707,9 @@ impl ScreenStates {
             ScreenId::IntrinsicSizing => {
                 self.intrinsic_sizing.update(event);
             }
+            ScreenId::LayoutInspector => {
+                self.layout_inspector.update(event);
+            }
             ScreenId::AdvancedTextEditor => {
                 self.advanced_text_editor.update(event);
             }
@@ -655,6 +739,18 @@ impl ScreenStates {
             }
             ScreenId::VoiOverlay => {
                 self.voi_overlay.update(event);
+            }
+            ScreenId::InlineModeStory => {
+                self.inline_mode_story.update(event);
+            }
+            ScreenId::AccessibilityPanel => {
+                self.accessibility_panel.update(event);
+            }
+            ScreenId::WidgetBuilder => {
+                self.widget_builder.update(event);
+            }
+            ScreenId::CommandPaletteLab => {
+                self.command_palette_lab.update(event);
             }
         }
     }
@@ -695,6 +791,7 @@ impl ScreenStates {
             ScreenId::Notifications => self.notifications.tick(tick_count),
             ScreenId::ActionTimeline => self.action_timeline.tick(tick_count),
             ScreenId::IntrinsicSizing => self.intrinsic_sizing.tick(tick_count),
+            ScreenId::LayoutInspector => self.layout_inspector.tick(tick_count),
             ScreenId::AdvancedTextEditor => self.advanced_text_editor.tick(tick_count),
             ScreenId::MousePlayground => self.mouse_playground.tick(tick_count),
             ScreenId::FormValidation => self.form_validation.tick(tick_count),
@@ -705,6 +802,10 @@ impl ScreenStates {
             ScreenId::PerformanceHud => {} // Already ticked above
             ScreenId::I18nDemo => self.i18n_demo.tick(tick_count),
             ScreenId::VoiOverlay => self.voi_overlay.tick(tick_count),
+            ScreenId::InlineModeStory => self.inline_mode_story.tick(tick_count),
+            ScreenId::AccessibilityPanel => self.accessibility_panel.tick(tick_count),
+            ScreenId::WidgetBuilder => self.widget_builder.tick(tick_count),
+            ScreenId::CommandPaletteLab => self.command_palette_lab.tick(tick_count),
         }
     }
 
@@ -754,6 +855,7 @@ impl ScreenStates {
                 ScreenId::Notifications => self.notifications.view(frame, area),
                 ScreenId::ActionTimeline => self.action_timeline.view(frame, area),
                 ScreenId::IntrinsicSizing => self.intrinsic_sizing.view(frame, area),
+                ScreenId::LayoutInspector => self.layout_inspector.view(frame, area),
                 ScreenId::AdvancedTextEditor => self.advanced_text_editor.view(frame, area),
                 ScreenId::MousePlayground => self.mouse_playground.view(frame, area),
                 ScreenId::FormValidation => self.form_validation.view(frame, area),
@@ -764,6 +866,10 @@ impl ScreenStates {
                 ScreenId::PerformanceHud => self.performance_hud.view(frame, area),
                 ScreenId::I18nDemo => self.i18n_demo.view(frame, area),
                 ScreenId::VoiOverlay => self.voi_overlay.view(frame, area),
+                ScreenId::InlineModeStory => self.inline_mode_story.view(frame, area),
+                ScreenId::AccessibilityPanel => self.accessibility_panel.view(frame, area),
+                ScreenId::WidgetBuilder => self.widget_builder.view(frame, area),
+                ScreenId::CommandPaletteLab => self.command_palette_lab.view(frame, area),
             }
         }));
 
@@ -941,7 +1047,7 @@ impl AppModel {
         voi_config.enable_logging = true;
         voi_config.max_log_entries = 96;
         let voi_sampler = VoiSampler::new(voi_config);
-        Self {
+        let mut app = Self {
             current_screen: ScreenId::Dashboard,
             screens: ScreenStates::default(),
             help_visible: false,
@@ -968,7 +1074,11 @@ impl AppModel {
             tick_stall_last_log: Cell::new(None),
             history: HistoryManager::default(),
             a11y_telemetry: None,
-        }
+        };
+        app.screens
+            .accessibility_panel
+            .sync_a11y(app.a11y, app.base_theme);
+        app
     }
 
     /// Attach telemetry hooks for accessibility mode changes.
@@ -977,7 +1087,7 @@ impl AppModel {
         self
     }
 
-    fn emit_a11y_event(&self, kind: A11yEventKind) {
+    fn emit_a11y_event(&mut self, kind: A11yEventKind) {
         let event = A11yTelemetryEvent {
             kind,
             tick: self.tick_count,
@@ -987,6 +1097,8 @@ impl AppModel {
             reduced_motion: self.a11y.reduced_motion,
             large_text: self.a11y.large_text,
         };
+
+        self.screens.accessibility_panel.record_event(&event);
 
         emit_a11y_jsonl(
             match kind {
@@ -1361,6 +1473,21 @@ impl AppModel {
                         }
                     }
 
+                    if self.current_screen == ScreenId::AccessibilityPanel {
+                        match (*code, *modifiers) {
+                            (KeyCode::Char('h'), Modifiers::NONE) => {
+                                return self.handle_msg(AppMsg::ToggleHighContrast, source);
+                            }
+                            (KeyCode::Char('m'), Modifiers::NONE) => {
+                                return self.handle_msg(AppMsg::ToggleReducedMotion, source);
+                            }
+                            (KeyCode::Char('l'), Modifiers::NONE) => {
+                                return self.handle_msg(AppMsg::ToggleLargeText, source);
+                            }
+                            _ => {}
+                        }
+                    }
+
                     match (*code, *modifiers) {
                         // Quit
                         (KeyCode::Char('q'), Modifiers::NONE) => return Cmd::Quit,
@@ -1475,10 +1602,10 @@ impl Model for AppModel {
     fn init(&mut self) -> Cmd<Self::Message> {
         if self.exit_after_ms > 0 {
             let ms = self.exit_after_ms;
-            Cmd::Task(Box::new(move || {
+            Cmd::task_named("demo_exit_after", move || {
                 std::thread::sleep(Duration::from_millis(ms));
                 AppMsg::Quit
-            }))
+            })
         } else {
             Cmd::None
         }
@@ -1589,7 +1716,12 @@ impl Model for AppModel {
     }
 
     fn subscriptions(&self) -> Vec<Box<dyn Subscription<Self::Message>>> {
-        vec![Box::new(Every::new(Duration::from_millis(100), || {
+        let tick_ms = if matches!(self.current_screen, ScreenId::VisualEffects) {
+            16
+        } else {
+            100
+        };
+        vec![Box::new(Every::new(Duration::from_millis(tick_ms), || {
             AppMsg::Tick
         }))]
     }
@@ -1625,6 +1757,7 @@ impl AppModel {
             ScreenId::Notifications => self.screens.notifications.keybindings(),
             ScreenId::ActionTimeline => self.screens.action_timeline.keybindings(),
             ScreenId::IntrinsicSizing => self.screens.intrinsic_sizing.keybindings(),
+            ScreenId::LayoutInspector => self.screens.layout_inspector.keybindings(),
             ScreenId::AdvancedTextEditor => self.screens.advanced_text_editor.keybindings(),
             ScreenId::MousePlayground => self.screens.mouse_playground.keybindings(),
             ScreenId::FormValidation => self.screens.form_validation.keybindings(),
@@ -1635,6 +1768,10 @@ impl AppModel {
             ScreenId::PerformanceHud => self.screens.performance_hud.keybindings(),
             ScreenId::I18nDemo => self.screens.i18n_demo.keybindings(),
             ScreenId::VoiOverlay => self.screens.voi_overlay.keybindings(),
+            ScreenId::InlineModeStory => self.screens.inline_mode_story.keybindings(),
+            ScreenId::AccessibilityPanel => self.screens.accessibility_panel.keybindings(),
+            ScreenId::WidgetBuilder => self.screens.widget_builder.keybindings(),
+            ScreenId::CommandPaletteLab => self.screens.command_palette_lab.keybindings(),
         };
         // Convert screens::HelpEntry to chrome::HelpEntry (same struct, different module).
         entries
@@ -1989,6 +2126,9 @@ impl AppModel {
         theme::set_motion_scale(motion_scale);
         theme::set_large_text(self.a11y.large_text);
         self.screens.apply_theme();
+        self.screens
+            .accessibility_panel
+            .sync_a11y(self.a11y, self.base_theme);
     }
 
     /// Cycle to the next base theme, returning it.
@@ -2403,7 +2543,7 @@ mod tests {
         assert_eq!(app.current_screen, ScreenId::Dashboard);
 
         app.update(AppMsg::PrevScreen);
-        assert_eq!(app.current_screen, ScreenId::I18nDemo);
+        assert_eq!(app.current_screen, ScreenId::AccessibilityPanel);
     }
 
     #[test]
@@ -2508,7 +2648,7 @@ mod tests {
     fn screen_next_prev_wraps() {
         assert_eq!(ScreenId::Dashboard.next(), ScreenId::Shakespeare);
         assert_eq!(ScreenId::VisualEffects.next(), ScreenId::ResponsiveDemo);
-        assert_eq!(ScreenId::Dashboard.prev(), ScreenId::I18nDemo);
+        assert_eq!(ScreenId::Dashboard.prev(), ScreenId::CommandPaletteLab);
         assert_eq!(ScreenId::Shakespeare.prev(), ScreenId::Dashboard);
     }
 
@@ -2687,7 +2827,7 @@ mod tests {
     /// Verify all screens have the expected count.
     #[test]
     fn all_screens_count() {
-        assert_eq!(ScreenId::ALL.len(), 29);
+        assert_eq!(ScreenId::ALL.len(), 34);
     }
 
     // -----------------------------------------------------------------------
@@ -2991,8 +3131,8 @@ mod tests {
         let app = AppModel::new();
         // The palette should have the perf HUD action registered.
         // Previous test counted ALL.len() + 4 global commands.
-        // Now we have 5 global commands (quit, help, theme, debug, perf_hud).
-        let expected = ScreenId::ALL.len() + 5;
+        // Now we have 6 global commands (quit, help, theme, debug, perf_hud, evidence_ledger).
+        let expected = ScreenId::ALL.len() + 6;
         assert_eq!(app.command_palette.action_count(), expected);
     }
 

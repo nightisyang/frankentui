@@ -773,7 +773,11 @@ impl LogSearch {
             self.viewer
                 .search_with_config(&self.query, self.search_config.clone());
 
-            let latency_us = start.elapsed().as_micros() as u64;
+            let latency_us = if is_deterministic_mode() {
+                0
+            } else {
+                start.elapsed().as_micros() as u64
+            };
             let (pos, total) = self.viewer.search_info().unwrap_or((0, 0));
 
             let diag = DiagnosticEntry::new(DiagnosticEventKind::SearchClosed, self.tick_count)

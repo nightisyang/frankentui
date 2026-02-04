@@ -14,6 +14,7 @@
 //!
 //! For deterministic timestamps in tests, set `FTUI_TERMCAPS_DETERMINISTIC=true`.
 
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -34,6 +35,7 @@ use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::paragraph::Paragraph;
 use ftui_widgets::table::{Row, Table};
+use serde_json::json;
 
 use super::{HelpEntry, Screen};
 use crate::theme;
@@ -168,6 +170,8 @@ pub enum DiagnosticEventKind {
     SimulationActivated,
     /// Environment snapshot was read.
     EnvironmentRead,
+    /// Capability report exported to JSONL.
+    ReportExported,
 }
 
 impl DiagnosticEventKind {
@@ -182,6 +186,7 @@ impl DiagnosticEventKind {
             Self::EvidenceLedgerAccessed => "evidence_ledger_accessed",
             Self::SimulationActivated => "simulation_activated",
             Self::EnvironmentRead => "environment_read",
+            Self::ReportExported => "report_exported",
         }
     }
 }
@@ -293,6 +298,7 @@ pub struct DiagnosticSummary {
     pub evidence_ledger_accessed_count: usize,
     pub simulation_activated_count: usize,
     pub environment_read_count: usize,
+    pub report_exported_count: usize,
 }
 
 impl DiagnosticSummary {
@@ -306,12 +312,13 @@ impl DiagnosticSummary {
             + self.evidence_ledger_accessed_count
             + self.simulation_activated_count
             + self.environment_read_count
+            + self.report_exported_count
     }
 
     /// Serialize to JSONL format.
     pub fn to_jsonl(&self) -> String {
         format!(
-            "{{\"summary\":true,\"total\":{},\"view_mode_changed\":{},\"selection_changed\":{},\"profile_cycled\":{},\"profile_reset\":{},\"capability_inspected\":{},\"evidence_ledger_accessed\":{},\"simulation_activated\":{},\"environment_read\":{}}}",
+            "{{\"summary\":true,\"total\":{},\"view_mode_changed\":{},\"selection_changed\":{},\"profile_cycled\":{},\"profile_reset\":{},\"capability_inspected\":{},\"evidence_ledger_accessed\":{},\"simulation_activated\":{},\"environment_read\":{},\"report_exported\":{}}}",
             self.total(),
             self.view_mode_changed_count,
             self.selection_changed_count,
@@ -320,7 +327,8 @@ impl DiagnosticSummary {
             self.capability_inspected_count,
             self.evidence_ledger_accessed_count,
             self.simulation_activated_count,
-            self.environment_read_count
+            self.environment_read_count,
+            self.report_exported_count
         )
     }
 }
@@ -402,6 +410,7 @@ impl DiagnosticLog {
                 }
                 DiagnosticEventKind::SimulationActivated => summary.simulation_activated_count += 1,
                 DiagnosticEventKind::EnvironmentRead => summary.environment_read_count += 1,
+                DiagnosticEventKind::ReportExported => summary.report_exported_count += 1,
             }
         }
         summary
@@ -436,6 +445,20 @@ struct CapabilityRow {
     fallback: String,
     reason: String,
     probeable: Option<ProbeableCapability>,
+}
+
+#[derive(Debug, Clone)]
+struct ComparisonRow {
+    name: &'static str,
+    detected: bool,
+    simulated: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ReportStatus {
+    path: String,
+    success: bool,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -504,9 +527,11 @@ pub struct TerminalCapabilitiesScreen {
     view: ViewMode,
     selected: usize,
     profile_override: Option<TerminalProfile>,
+    detected_profile_override: Option<TerminalProfile>,
     prober: CapabilityProber,
     env_override: Option<EnvSnapshot>,
     diagnostic_log: DiagnosticLog,
+    last_report: Option<ReportStatus>,
 }
 
 impl Default for TerminalCapabilitiesScreen {
@@ -526,9 +551,11 @@ impl TerminalCapabilitiesScreen {
             view: ViewMode::Matrix,
             selected: 0,
             profile_override: None,
+            detected_profile_override: None,
             prober: CapabilityProber::new(Duration::from_millis(200)),
             env_override: None,
             diagnostic_log,
+            last_report: None,
         }
     }
 
@@ -556,15 +583,34 @@ impl TerminalCapabilitiesScreen {
         }
     }
 
+    pub fn set_detected_profile_override(&mut self, profile: TerminalProfile) {
+        if profile == TerminalProfile::Detected {
+            self.detected_profile_override = None;
+        } else {
+            self.detected_profile_override = Some(profile);
+        }
+    }
+
     pub fn set_env_override(&mut self, env: EnvSnapshot) {
         self.env_override = Some(env);
     }
 
-    fn active_capabilities(&self) -> TerminalCapabilities {
-        match self.profile_override {
+    fn detected_capabilities(&self) -> TerminalCapabilities {
+        match self.detected_profile_override {
             Some(profile) => TerminalCapabilities::from_profile(profile),
             None => TerminalCapabilities::with_overrides(),
         }
+    }
+
+    fn simulated_capabilities(&self, detected: &TerminalCapabilities) -> TerminalCapabilities {
+        match self.profile_override {
+            Some(profile) => TerminalCapabilities::from_profile(profile),
+            None => *detected,
+        }
+    }
+
+    fn active_capabilities(&self, detected: &TerminalCapabilities) -> TerminalCapabilities {
+        self.simulated_capabilities(detected)
     }
 
     fn profile_label(profile: TerminalProfile) -> &'static str {
@@ -696,6 +742,65 @@ impl TerminalCapabilitiesScreen {
         ]
     }
 
+    fn build_comparison_rows(
+        &self,
+        detected: &TerminalCapabilities,
+        simulated: &TerminalCapabilities,
+    ) -> Vec<ComparisonRow> {
+        vec![
+            ComparisonRow {
+                name: "True color (24-bit)",
+                detected: detected.true_color,
+                simulated: simulated.true_color,
+            },
+            ComparisonRow {
+                name: "256-color palette",
+                detected: detected.colors_256,
+                simulated: simulated.colors_256,
+            },
+            ComparisonRow {
+                name: "Synchronized output",
+                detected: detected.sync_output,
+                simulated: simulated.sync_output,
+            },
+            ComparisonRow {
+                name: "Scroll region (DECSTBM)",
+                detected: detected.scroll_region,
+                simulated: simulated.scroll_region,
+            },
+            ComparisonRow {
+                name: "OSC 8 hyperlinks",
+                detected: detected.osc8_hyperlinks,
+                simulated: simulated.osc8_hyperlinks,
+            },
+            ComparisonRow {
+                name: "Kitty keyboard protocol",
+                detected: detected.kitty_keyboard,
+                simulated: simulated.kitty_keyboard,
+            },
+            ComparisonRow {
+                name: "Focus events",
+                detected: detected.focus_events,
+                simulated: simulated.focus_events,
+            },
+            ComparisonRow {
+                name: "Bracketed paste",
+                detected: detected.bracketed_paste,
+                simulated: simulated.bracketed_paste,
+            },
+            ComparisonRow {
+                name: "SGR mouse",
+                detected: detected.mouse_sgr,
+                simulated: simulated.mouse_sgr,
+            },
+            ComparisonRow {
+                name: "OSC 52 clipboard",
+                detected: detected.osc52_clipboard,
+                simulated: simulated.osc52_clipboard,
+            },
+        ]
+    }
+
     fn selected_row<'a>(&self, rows: &'a [CapabilityRow]) -> Option<&'a CapabilityRow> {
         rows.get(self.selected)
     }
@@ -748,7 +853,13 @@ impl TerminalCapabilitiesScreen {
         ]
     }
 
-    fn render_summary(&self, frame: &mut Frame, area: Rect, caps: &TerminalCapabilities) {
+    fn render_summary(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        detected: &TerminalCapabilities,
+        active: &TerminalCapabilities,
+    ) {
         let block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -762,17 +873,19 @@ impl TerminalCapabilitiesScreen {
             return;
         }
 
-        let profile = self.profile_override.unwrap_or(caps.profile());
-        let profile_label = Self::profile_label(profile);
-        let mux_state = if caps.in_any_mux() {
+        let detected_profile = detected.profile();
+        let simulated_profile = self.profile_override.unwrap_or(detected_profile);
+        let detected_label = Self::profile_label(detected_profile);
+        let simulated_label = Self::profile_label(simulated_profile);
+        let mux_state = if active.in_any_mux() {
             let mut muxes = Vec::new();
-            if caps.in_tmux {
+            if active.in_tmux {
                 muxes.push("tmux");
             }
-            if caps.in_screen {
+            if active.in_screen {
                 muxes.push("screen");
             }
-            if caps.in_zellij {
+            if active.in_zellij {
                 muxes.push("zellij");
             }
             if muxes.is_empty() {
@@ -790,22 +903,30 @@ impl TerminalCapabilitiesScreen {
             "overrides: none".to_string()
         };
 
+        let profile_line = if self.profile_override.is_some() {
+            format!(
+                "Detected: {} | Simulated: {} | View: {}",
+                detected_label,
+                simulated_label,
+                self.view.label()
+            )
+        } else {
+            format!("Profile: {} | View: {}", detected_label, self.view.label())
+        };
+
         let lines = [
+            profile_line,
             format!(
-                "Profile: {} | View: {} | Color depth: {}",
-                profile_label,
-                self.view.label(),
-                caps.color_depth()
-            ),
-            format!(
-                "Mux: {} | Sync output: {}",
+                "Color depth: {} | Mux: {} | Sync output: {}",
+                active.color_depth(),
                 mux_state,
-                yes_no(caps.use_sync_output())
+                yes_no(active.use_sync_output())
             ),
             format!(
-                "Hyperlinks: {} | Clipboard: {} | {}",
-                yes_no(caps.use_hyperlinks()),
-                yes_no(caps.use_clipboard()),
+                "Scroll region: {} | Hyperlinks: {} | Clipboard: {} | {}",
+                yes_no(active.use_scroll_region()),
+                yes_no(active.use_hyperlinks()),
+                yes_no(active.use_clipboard()),
                 overrides
             ),
         ];
@@ -881,7 +1002,134 @@ impl TerminalCapabilitiesScreen {
         );
     }
 
-    fn render_details_panel(&self, frame: &mut Frame, area: Rect, row: &CapabilityRow) {
+    fn render_comparison_panel(&self, frame: &mut Frame, area: Rect, rows: &[ComparisonRow]) {
+        if area.is_empty() {
+            return;
+        }
+
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(" Detected vs Simulated ")
+            .style(theme::content_border());
+        let inner = block.inner(area);
+        block.render(area, frame);
+
+        if inner.is_empty() {
+            return;
+        }
+
+        let header = Row::new(["Capability", "Detected", "Simulated", "Δ"])
+            .style(Style::new().fg(theme::fg::PRIMARY).attrs(StyleFlags::BOLD));
+
+        let highlight = Style::new()
+            .bg(theme::alpha::HIGHLIGHT)
+            .fg(theme::fg::PRIMARY)
+            .attrs(StyleFlags::BOLD);
+
+        let table_rows: Vec<Row> = rows
+            .iter()
+            .enumerate()
+            .map(|(idx, row)| {
+                let mismatch = row.detected != row.simulated;
+                let row_style = if idx == self.selected {
+                    highlight
+                } else if mismatch {
+                    theme::warning()
+                } else {
+                    Style::new().fg(theme::fg::SECONDARY)
+                };
+                let delta = if mismatch { "!" } else { "" };
+                Row::new([
+                    Text::raw(row.name),
+                    Self::status_text(row.detected),
+                    Self::status_text(row.simulated),
+                    Text::raw(delta),
+                ])
+                .style(row_style)
+            })
+            .collect();
+
+        let widths = [
+            Constraint::Min(20),
+            Constraint::Fixed(9),
+            Constraint::Fixed(9),
+            Constraint::Fixed(2),
+        ];
+
+        Widget::render(
+            &Table::new(table_rows, widths)
+                .header(header)
+                .style(Style::new().fg(theme::fg::SECONDARY)),
+            inner,
+            frame,
+        );
+    }
+
+    fn render_policy_panel(&self, frame: &mut Frame, area: Rect, caps: &TerminalCapabilities) {
+        if area.is_empty() {
+            return;
+        }
+
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title(" Fallback Policy ")
+            .style(theme::content_border());
+        let inner = block.inner(area);
+        block.render(area, frame);
+
+        if inner.is_empty() {
+            return;
+        }
+
+        let sync_reason =
+            policy_reason(caps.sync_output, caps.use_sync_output(), caps.in_any_mux());
+        let scroll_reason = policy_reason(
+            caps.scroll_region,
+            caps.use_scroll_region(),
+            caps.in_any_mux(),
+        );
+
+        let lines = [
+            format!(
+                "Sync output: {} ({})",
+                yes_no(caps.use_sync_output()),
+                sync_reason
+            ),
+            format!(
+                "Scroll region: {} ({})",
+                yes_no(caps.use_scroll_region()),
+                scroll_reason
+            ),
+            format!(
+                "Mux safety: {}",
+                if caps.in_any_mux() {
+                    "active"
+                } else {
+                    "inactive"
+                }
+            ),
+        ];
+
+        for (idx, line) in lines.iter().enumerate() {
+            if idx as u16 >= inner.height {
+                break;
+            }
+            let row_area = Rect::new(inner.x, inner.y + idx as u16, inner.width, 1);
+            Paragraph::new(line.as_str())
+                .style(Style::new().fg(theme::fg::MUTED))
+                .render(row_area, frame);
+        }
+    }
+
+    fn render_details_panel(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        row: &CapabilityRow,
+        comparison: Option<&ComparisonRow>,
+    ) {
         if area.is_empty() {
             return;
         }
@@ -898,13 +1146,26 @@ impl TerminalCapabilitiesScreen {
             return;
         }
 
-        let lines = [
+        let (detected_line, simulated_line) = if let Some(comp) = comparison {
+            (
+                format!("Detected: {}", yes_no(comp.detected)),
+                Some(format!("Simulated: {}", yes_no(comp.simulated))),
+            )
+        } else {
+            (format!("Detected: {}", yes_no(row.detected)), None)
+        };
+
+        let mut lines = vec![
             format!("Capability: {}", row.name),
-            format!("Detected: {}", yes_no(row.detected)),
+            detected_line,
             format!("Effective: {}", yes_no(row.effective)),
             format!("Fallback: {}", row.fallback),
             format!("Reason: {}", row.reason),
         ];
+
+        if let Some(simulated) = simulated_line {
+            lines.insert(2, simulated);
+        }
 
         for (idx, line) in lines.iter().enumerate() {
             if idx as u16 >= inner.height {
@@ -1006,7 +1267,24 @@ impl TerminalCapabilitiesScreen {
 
         let profiles = Self::profile_order();
         let active = self.profile_override.unwrap_or(TerminalProfile::Detected);
+        let badge_label = if self.profile_override.is_some() {
+            "Simulated profile"
+        } else {
+            "Detected profile"
+        };
         let mut row_idx = 0u16;
+
+        if inner.height > 0 {
+            let header_area = Rect::new(inner.x, inner.y, inner.width, 1);
+            Paragraph::new(format!("{}: {}", badge_label, Self::profile_label(active)))
+                .style(
+                    Style::new()
+                        .fg(theme::screen_accent::ADVANCED)
+                        .attrs(StyleFlags::BOLD),
+                )
+                .render(header_area, frame);
+            row_idx = row_idx.saturating_add(1);
+        }
 
         for profile in profiles {
             if row_idx >= inner.height {
@@ -1032,16 +1310,37 @@ impl TerminalCapabilitiesScreen {
                 .render(hint_area, frame);
         }
 
-        if inner.height > 2 {
-            let info_area = Rect::new(inner.x, inner.bottom().saturating_sub(2), inner.width, 1);
-            Paragraph::new(format!(
-                "Preview: color={} sync={} mux={}",
-                caps.color_depth(),
-                yes_no(caps.use_sync_output()),
-                yes_no(caps.in_any_mux())
-            ))
-            .style(Style::new().fg(theme::fg::SECONDARY))
-            .render(info_area, frame);
+        let mut footer_lines = vec![format!(
+            "Preview: color={} sync={} mux={}",
+            caps.color_depth(),
+            yes_no(caps.use_sync_output()),
+            yes_no(caps.in_any_mux())
+        )];
+
+        if let Some(report) = &self.last_report {
+            let line = if report.success {
+                format!("Last report: {}", report.path)
+            } else {
+                format!(
+                    "Report failed: {}",
+                    report.error.as_deref().unwrap_or("unknown error")
+                )
+            };
+            footer_lines.push(line);
+        }
+
+        let footer_lines = footer_lines
+            .into_iter()
+            .take(inner.height as usize)
+            .collect::<Vec<_>>();
+        let footer_len = footer_lines.len() as u16;
+        let start_y = inner.bottom().saturating_sub(footer_len);
+
+        for (idx, line) in footer_lines.iter().enumerate() {
+            let row_area = Rect::new(inner.x, start_y + idx as u16, inner.width, 1);
+            Paragraph::new(line.as_str())
+                .style(Style::new().fg(theme::fg::SECONDARY))
+                .render(row_area, frame);
         }
     }
 
@@ -1113,6 +1412,94 @@ impl TerminalCapabilitiesScreen {
                 .render(row_area, frame);
         }
     }
+
+    fn report_path() -> String {
+        std::env::var("FTUI_TERMCAPS_REPORT_PATH")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "terminal_caps_report.jsonl".to_string())
+    }
+
+    fn export_report(
+        &self,
+        detected: &TerminalCapabilities,
+        simulated: &TerminalCapabilities,
+        active_rows: &[CapabilityRow],
+        env: &EnvSnapshot,
+        timestamp_ms: u64,
+    ) -> ReportStatus {
+        let path = Self::report_path();
+        let comparison_rows = self.build_comparison_rows(detected, simulated);
+
+        let rows = active_rows
+            .iter()
+            .zip(comparison_rows.iter())
+            .map(|(active, comp)| {
+                json!({
+                    "capability": active.name,
+                    "detected": comp.detected,
+                    "simulated": comp.simulated,
+                    "effective": active.effective,
+                    "fallback": active.fallback.clone(),
+                    "reason": active.reason.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let detected_profile = Self::profile_label(detected.profile());
+        let simulated_profile =
+            Self::profile_label(self.profile_override.unwrap_or(detected.profile()));
+
+        let report = json!({
+            "ts": timestamp_ms,
+            "event": "terminal_caps_report",
+            "detected_profile": detected_profile,
+            "simulated_profile": simulated_profile,
+            "simulation_active": self.profile_override.is_some(),
+            "env": {
+                "TERM": env.term.clone(),
+                "TERM_PROGRAM": env.term_program.clone(),
+                "COLORTERM": env.colorterm.clone(),
+                "NO_COLOR": env.no_color,
+                "TMUX": env.tmux,
+                "SCREEN": env.screen,
+                "ZELLIJ": env.zellij,
+                "KITTY_WINDOW_ID": env.kitty,
+                "WT_SESSION": env.wt_session,
+            },
+            "capabilities": rows,
+        });
+
+        let line = match serde_json::to_string(&report) {
+            Ok(line) => line,
+            Err(err) => {
+                return ReportStatus {
+                    path,
+                    success: false,
+                    error: Some(err.to_string()),
+                };
+            }
+        };
+
+        let result = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .and_then(|mut file| writeln!(file, "{}", line));
+
+        match result {
+            Ok(()) => ReportStatus {
+                path,
+                success: true,
+                error: None,
+            },
+            Err(err) => ReportStatus {
+                path,
+                success: false,
+                error: Some(err.to_string()),
+            },
+        }
+    }
 }
 
 impl Screen for TerminalCapabilitiesScreen {
@@ -1125,8 +1512,9 @@ impl Screen for TerminalCapabilitiesScreen {
             ..
         }) = event
         {
-            let caps = self.active_capabilities();
-            let rows = self.build_rows(&caps);
+            let detected = self.detected_capabilities();
+            let simulated = self.simulated_capabilities(&detected);
+            let rows = self.build_rows(&simulated);
             let row_count = rows.len();
             let old_view = self.view;
             let old_selected = self.selected;
@@ -1226,6 +1614,22 @@ impl Screen for TerminalCapabilitiesScreen {
                         self.diagnostic_log.record(entry);
                     }
                 }
+                KeyCode::Char('e') | KeyCode::Char('E') => {
+                    let env = self.env_override.clone().unwrap_or_else(EnvSnapshot::read);
+                    let mut entry = DiagnosticEntry::new(DiagnosticEventKind::ReportExported);
+                    let report_status =
+                        self.export_report(&detected, &simulated, &rows, &env, entry.timestamp_ms);
+                    self.last_report = Some(report_status.clone());
+                    entry = entry
+                        .with_detail("path", &report_status.path)
+                        .with_detail("status", if report_status.success { "ok" } else { "error" })
+                        .with_profile(
+                            self.profile_override
+                                .map(Self::profile_label)
+                                .unwrap_or("detected"),
+                        );
+                    self.diagnostic_log.record(entry);
+                }
                 _ => {}
             }
         }
@@ -1237,15 +1641,18 @@ impl Screen for TerminalCapabilitiesScreen {
             return;
         }
 
-        let caps = self.active_capabilities();
+        let detected = self.detected_capabilities();
+        let simulated = self.simulated_capabilities(&detected);
+        let active = self.active_capabilities(&detected);
         let env = self.env_override.clone().unwrap_or_else(EnvSnapshot::read);
-        let rows = self.build_rows(&caps);
+        let rows = self.build_rows(&active);
+        let comparison_rows = self.build_comparison_rows(&detected, &simulated);
 
         let layout = Flex::vertical()
             .constraints([Constraint::Fixed(5), Constraint::Fill])
             .split(area);
 
-        self.render_summary(frame, layout[0], &caps);
+        self.render_summary(frame, layout[0], &detected, &active);
 
         let body = layout[1];
         if body.is_empty() {
@@ -1259,23 +1666,41 @@ impl Screen for TerminalCapabilitiesScreen {
         let left = columns[0];
         let right = columns[1];
 
-        self.render_matrix_panel(frame, left, &rows);
+        if self.view == ViewMode::Simulation && self.profile_override.is_some() {
+            self.render_comparison_panel(frame, left, &comparison_rows);
+        } else {
+            self.render_matrix_panel(frame, left, &rows);
+        }
 
         let right_chunks = Flex::vertical()
-            .constraints([Constraint::Percentage(60.0), Constraint::Percentage(40.0)])
+            .constraints([
+                Constraint::Percentage(55.0),
+                Constraint::Percentage(25.0),
+                Constraint::Percentage(20.0),
+            ])
             .split(right);
 
         if let Some(selected_row) = self.selected_row(&rows) {
+            let comparison = if self.profile_override.is_some() {
+                comparison_rows.get(self.selected)
+            } else {
+                None
+            };
             match self.view {
-                ViewMode::Matrix => self.render_details_panel(frame, right_chunks[0], selected_row),
-                ViewMode::Evidence => {
-                    self.render_evidence_panel(frame, right_chunks[0], &caps, selected_row)
+                ViewMode::Matrix => {
+                    self.render_details_panel(frame, right_chunks[0], selected_row, comparison)
                 }
-                ViewMode::Simulation => self.render_simulation_panel(frame, right_chunks[0], &caps),
+                ViewMode::Evidence => {
+                    self.render_evidence_panel(frame, right_chunks[0], &active, selected_row)
+                }
+                ViewMode::Simulation => {
+                    self.render_simulation_panel(frame, right_chunks[0], &active)
+                }
             }
         }
 
-        self.render_environment_panel(frame, right_chunks[1], &env, &caps);
+        self.render_policy_panel(frame, right_chunks[1], &active);
+        self.render_environment_panel(frame, right_chunks[2], &env, &active);
     }
 
     fn keybindings(&self) -> Vec<HelpEntry> {
@@ -1296,6 +1721,10 @@ impl Screen for TerminalCapabilitiesScreen {
                 key: "R",
                 action: "Reset to detected profile",
             },
+            HelpEntry {
+                key: "E",
+                action: "Export JSONL capability report",
+            },
         ]
     }
 
@@ -1310,6 +1739,18 @@ impl Screen for TerminalCapabilitiesScreen {
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
+}
+
+fn policy_reason(detected: bool, effective: bool, in_mux: bool) -> &'static str {
+    if !detected {
+        "terminal lacks support"
+    } else if effective {
+        "enabled"
+    } else if in_mux {
+        "disabled in mux"
+    } else {
+        "policy disabled"
+    }
 }
 
 fn evidence_label(source: EvidenceSource) -> &'static str {
@@ -1460,6 +1901,7 @@ mod tests {
         assert_eq!(summary.evidence_ledger_accessed_count, 1);
         assert_eq!(summary.simulation_activated_count, 1);
         assert_eq!(summary.environment_read_count, 1);
+        assert_eq!(summary.report_exported_count, 0);
         assert_eq!(summary.total(), 9);
     }
 
@@ -1788,5 +2230,17 @@ mod tests {
             DiagnosticEventKind::EnvironmentRead.as_str(),
             "environment_read"
         );
+        assert_eq!(
+            DiagnosticEventKind::ReportExported.as_str(),
+            "report_exported"
+        );
+    }
+
+    #[test]
+    fn policy_reason_explains_mux_and_support() {
+        assert_eq!(policy_reason(false, false, false), "terminal lacks support");
+        assert_eq!(policy_reason(true, true, false), "enabled");
+        assert_eq!(policy_reason(true, false, true), "disabled in mux");
+        assert_eq!(policy_reason(true, false, false), "policy disabled");
     }
 }

@@ -26,7 +26,6 @@ use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::paragraph::Paragraph;
-use ftui_widgets::rule::Rule;
 use ftui_widgets::table::{Row, Table};
 
 use super::{HelpEntry, Screen};
@@ -35,56 +34,43 @@ use crate::theme;
 /// Simulated LLM streaming response with complex GFM content.
 /// This demonstrates real-world markdown that an LLM might generate.
 const STREAMING_MARKDOWN: &str = "\
-# Understanding Quantum Computing
+# FrankenTUI Architecture
 
-Quantum computers leverage **quantum mechanics** to process information in fundamentally different ways than classical computers.
+FrankenTUI is a **kernel-level** TUI library for Rust.
 
-## Key Concepts
+## Core Principles
 
-### Qubits vs Classical Bits
+1.  **Correctness**: No flicker, no tearing.
+2.  **Determinism**: $State_n \\to Output_n$.
+3.  **Performance**: 16-byte cells, diffing.
 
-While classical bits are either $0$ or $1$, qubits can exist in a **superposition**:
+### The Render Pipeline
 
-$$|\\psi\\rangle = \\alpha|0\\rangle + \\beta|1\\rangle$$
-
-where $|\\alpha|^2 + |\\beta|^2 = 1$.
-
-### Quantum Gates
-
-Common single-qubit gates include:
-
-| Gate | Matrix | Effect |
-|------|--------|--------|
-| Hadamard | $H$ | Creates superposition |
-| Pauli-X | $X$ | Bit flip (NOT) |
-| Pauli-Z | $Z$ | Phase flip |
-
-> [!NOTE]
-> The Hadamard gate is fundamental to quantum algorithms like Grover's search.
-
-### Example: Bell State
-
-```python
-from qiskit import QuantumCircuit
-
-# Create a Bell state (maximally entangled)
-qc = QuantumCircuit(2)
-qc.h(0)      # Hadamard on qubit 0
-qc.cx(0, 1)  # CNOT: entangle qubits
+```rust
+fn render(frame: &mut Frame) {
+    let buffer = frame.buffer_mut();
+    // 1. Draw widgets
+    // 2. Diff against previous
+    // 3. Emit ANSI
+}
 ```
 
-## Progress Checklist
+> [!TIP]
+> Use `Buffer::diff()` for minimal I/O.
 
-- [x] Understand superposition
-- [x] Learn about entanglement
-- [ ] Implement Shor's algorithm
-- [ ] Build quantum error correction
+### Performance Budget
 
-## Further Reading
+| Metric | Budget | Status |
+| :--- | :--- | :--- |
+| Diff | 4ms | ✅ |
+| Render | 16ms | ✅ |
+| Input | 1ms | ✅ |
 
-See [Qiskit Textbook](https://qiskit.org/learn)[^1] for interactive tutorials.
+### Quantum Safety
 
-[^1]: IBM's open-source quantum computing framework.
+Our state machine is **entangled** with the terminal:
+
+$$|\\psi\\rangle = \\frac{1}{\\sqrt{2}} (|00\\rangle + |11\\rangle)$$
 
 ---
 
@@ -179,21 +165,13 @@ Math notation: x<sup>2</sup> + y<sup>2</sup> = r<sup>2</sup>
 | Math | ✓ | LaTeX → Unicode |
 | Admonitions | ✓ | Note, tip, warning, etc. |
 
-## ASCII Diagrams (Auto-Corrected)
+## ASCII Diagrams
 
-Misaligned borders inside code blocks are fixed automatically:
-
-```text
-+----------+
-| Diagram |
-+-----+
-```
-
-Already-aligned:
+Manual alignment:
 
 ```text
 +----------+
-| Diagram |
+| Diagram  |
 +----------+
 ```
 
@@ -239,6 +217,35 @@ struct MarkdownPanel {
     scroll: u16,
 }
 
+fn wrap_markdown_for_panel(text: &Text, width: u16) -> Text {
+    let width = usize::from(width);
+    if width == 0 {
+        return text.clone();
+    }
+
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        let plain = line.to_plain_text();
+        if is_table_line(&plain) || line.width() <= width {
+            lines.push(line.clone());
+            continue;
+        }
+
+        lines.extend(line.wrap(width, WrapMode::Word));
+    }
+
+    Text::from_lines(lines)
+}
+
+fn is_table_line(plain: &str) -> bool {
+    plain.chars().any(|c| {
+        matches!(
+            c,
+            '┌' | '┬' | '┐' | '├' | '┼' | '┤' | '└' | '┴' | '┘' | '│' | '─'
+        )
+    })
+}
+
 impl Widget for MarkdownPanel {
     fn render(&self, area: Rect, frame: &mut Frame) {
         let block = Block::new()
@@ -255,8 +262,9 @@ impl Widget for MarkdownPanel {
             return;
         }
 
-        Paragraph::new(self.text.clone())
-            .wrap(WrapMode::Word)
+        let wrapped = wrap_markdown_for_panel(&self.text, inner.width);
+        Paragraph::new(wrapped)
+            .wrap(WrapMode::None)
             .scroll((self.scroll, 0))
             .render(inner, frame);
     }
@@ -337,6 +345,15 @@ impl MarkdownRichText {
             strikethrough: Style::new().strikethrough(),
             list_bullet: Style::new().fg(theme::accent::PRIMARY),
             horizontal_rule: Style::new().fg(theme::fg::MUTED).dim(),
+            table_border: Style::new().fg(theme::fg::MUTED),
+            table_header: Style::new()
+                .fg(theme::accent::INFO)
+                .bg(theme::alpha::SURFACE)
+                .bold(),
+            table_row: Style::new().fg(theme::fg::PRIMARY),
+            table_row_alt: Style::new()
+                .fg(theme::fg::PRIMARY)
+                .bg(theme::alpha::SURFACE),
             // GFM extensions - use themed colors
             task_done: Style::new().fg(theme::accent::SUCCESS),
             task_todo: Style::new().fg(theme::accent::INFO),
@@ -683,8 +700,9 @@ impl MarkdownRichText {
 
         // Render the streaming markdown fragment
         let stream_text = self.render_stream_fragment();
-        Paragraph::new(stream_text)
-            .wrap(WrapMode::Word)
+        let wrapped_stream = wrap_markdown_for_panel(&stream_text, chunks[0].width);
+        Paragraph::new(wrapped_stream)
+            .wrap(WrapMode::None)
             .scroll((self.stream_scroll, 0))
             .render(chunks[0], frame);
 
@@ -828,17 +846,13 @@ impl Screen for MarkdownRichText {
             .gap(theme::spacing::XS)
             .constraints([
                 Constraint::Fixed(8),
-                Constraint::Fixed(1),
+                Constraint::Fixed(10), // Unicode table
                 Constraint::Min(6),
             ])
             .split(cols[2]);
 
         self.render_style_sampler(frame, right_rows[0]);
-
-        Rule::new()
-            .style(Style::new().fg(theme::fg::MUTED).dim())
-            .render(right_rows[1], frame);
-
+        self.render_unicode_table(frame, right_rows[1]);
         self.render_wrap_demo(frame, right_rows[2]);
     }
 

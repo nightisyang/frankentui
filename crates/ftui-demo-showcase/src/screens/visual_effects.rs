@@ -18,7 +18,7 @@ use std::f64::consts::TAU;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind};
+use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEventKind};
 use ftui_core::geometry::Rect;
 use ftui_extras::canvas::{CanvasRef, Mode, Painter};
 use ftui_extras::markdown::render_markdown;
@@ -44,6 +44,14 @@ use ftui_widgets::paragraph::Paragraph;
 
 use super::{HelpEntry, Screen};
 use crate::theme;
+
+mod three_d_data {
+    include!("3d_data.rs");
+}
+
+use three_d_data::{
+    FREEDOOM_E1M1_LINES, FREEDOOM_E1M1_PLAYER_START, QUAKE_E1M1_TRIS, QUAKE_E1M1_VERTS,
+};
 
 const MARKDOWN_OVERLAY: &str = r#"# FrankenTUI Visual FX
 
@@ -98,6 +106,10 @@ pub struct VisualEffectsScreen {
     spiral: SpiralState,
     /// Spin lattice state.
     spin_lattice: SpinLatticeState,
+    /// Doom E1M1 braille automap state.
+    doom_e1m1: DoomE1M1State,
+    /// Quake E1M1 braille rasterizer state.
+    quake_e1m1: RefCell<QuakeE1M1State>,
     // FPS tracking
     /// Frame times for FPS calculation (microseconds).
     frame_times: VecDeque<u64>,
@@ -124,6 +136,20 @@ pub struct VisualEffectsScreen {
     text_effects: TextEffectsDemo,
     /// Markdown panel rendered over backdrop effects.
     markdown_panel: Text,
+    /// Active FPS movement input state (WASD).
+    fps_input: FpsInputState,
+    /// Last mouse position for FPS-style mouse look.
+    fps_last_mouse: Option<(u16, u16)>,
+    /// Mouse sensitivity for FPS-style mouse look.
+    fps_mouse_sensitivity: f32,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct FpsInputState {
+    forward: bool,
+    back: bool,
+    strafe_left: bool,
+    strafe_right: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,6 +171,8 @@ enum EffectType {
     WaveInterference,
     Spiral,
     SpinLattice,
+    DoomE1M1,
+    QuakeE1M1,
 }
 
 impl EffectType {
@@ -165,6 +193,8 @@ impl EffectType {
         Self::WaveInterference,
         Self::Spiral,
         Self::SpinLattice,
+        Self::DoomE1M1,
+        Self::QuakeE1M1,
     ];
 
     fn next(self) -> Self {
@@ -195,6 +225,8 @@ impl EffectType {
             Self::WaveInterference => "≈ Wave Interference",
             Self::Spiral => "✦ Spiral Galaxy",
             Self::SpinLattice => "◈ Spin Lattice",
+            Self::DoomE1M1 => "⛦ Doom E1M1",
+            Self::QuakeE1M1 => "⛧ Quake E1M1",
         }
     }
 
@@ -216,6 +248,8 @@ impl EffectType {
             Self::WaveInterference => "Multiple wave sources creating interference patterns",
             Self::Spiral => "Logarithmic spiral galaxy with rotating star field",
             Self::SpinLattice => "Landau-Lifshitz spin dynamics on a magnetic lattice",
+            Self::DoomE1M1 => "First-person raycasted braille renderer (Freedoom E1M1)",
+            Self::QuakeE1M1 => "First-person braille rasterizer of Quake's Slipgate Complex",
         }
     }
 }
@@ -698,6 +732,37 @@ fn palette_cyberpunk(t: f64) -> PackedRgba {
     PackedRgba::rgb(r, g, b)
 }
 
+fn palette_doom_wall(idx: usize) -> PackedRgba {
+    // Muted browns/greys reminiscent of classic Doom E1M1.
+    const PALETTE: &[(u8, u8, u8)] = &[
+        (48, 40, 32),
+        (72, 56, 40),
+        (96, 72, 48),
+        (120, 88, 56),
+        (80, 80, 80),
+        (110, 110, 110),
+        (92, 64, 40),
+        (140, 100, 64),
+        (160, 120, 80),
+        (70, 58, 46),
+    ];
+    let (r, g, b) = PALETTE[idx % PALETTE.len()];
+    PackedRgba::rgb(r, g, b)
+}
+
+fn palette_quake_stone(t: f64) -> PackedRgba {
+    let t = t.clamp(0.0, 1.0);
+    // Cool blue-grey stone gradient (Quake-ish).
+    let (r, g, b) = if t < 0.5 {
+        let s = t / 0.5;
+        lerp_rgb((30, 34, 38), (74, 82, 90), s)
+    } else {
+        let s = (t - 0.5) / 0.5;
+        lerp_rgb((74, 82, 90), (130, 140, 150), s)
+    };
+    PackedRgba::rgb(r, g, b)
+}
+
 fn lerp_rgb(a: (u8, u8, u8), b: (u8, u8, u8), t: f64) -> (u8, u8, u8) {
     (
         (a.0 as f64 + (b.0 as f64 - a.0 as f64) * t) as u8,
@@ -1174,11 +1239,46 @@ impl Default for ParticleState {
 }
 
 impl ParticleState {
-    fn update(&mut self) {
+    fn update_with_quality(&mut self, quality: FxQuality) {
+        if matches!(quality, FxQuality::Off) {
+            return;
+        }
+
+        let spawn_threshold = match quality {
+            FxQuality::Full => 22.0,
+            FxQuality::Reduced => 26.0,
+            FxQuality::Minimal => 32.0,
+            FxQuality::Off => f64::INFINITY,
+        };
+        let max_particles = match quality {
+            FxQuality::Full => 1500,
+            FxQuality::Reduced => 1100,
+            FxQuality::Minimal => 700,
+            FxQuality::Off => 0,
+        };
+        let max_trail = match quality {
+            FxQuality::Full => 14,
+            FxQuality::Reduced => 10,
+            FxQuality::Minimal => 6,
+            FxQuality::Off => 0,
+        };
+        let min_explosion = match quality {
+            FxQuality::Full => 80,
+            FxQuality::Reduced => 60,
+            FxQuality::Minimal => 40,
+            FxQuality::Off => 0,
+        };
+        let extra_explosion = match quality {
+            FxQuality::Full => 60,
+            FxQuality::Reduced => 40,
+            FxQuality::Minimal => 25,
+            FxQuality::Off => 0,
+        };
+
         self.spawn_timer += 1.0;
 
         // Launch rockets periodically
-        if self.spawn_timer >= 22.0 {
+        if self.spawn_timer >= spawn_threshold {
             self.spawn_timer = 0.0;
             let x = 0.2 + rand_simple() * 0.6;
             self.particles.push(Particle {
@@ -1198,8 +1298,12 @@ impl ParticleState {
         let mut new_particles = Vec::new();
 
         for p in &mut self.particles {
+            if max_trail > 0 && p.trail.len() > max_trail {
+                let excess = p.trail.len() - max_trail;
+                p.trail.drain(0..excess);
+            }
             // Store trail position - longer trails for more dramatic effect (bd-3vbf.27 polish)
-            if p.trail.len() < 14 {
+            if p.trail.len() < max_trail {
                 p.trail.push((p.x, p.y));
             } else {
                 p.trail.remove(0);
@@ -1217,7 +1321,8 @@ impl ParticleState {
                 if p.life <= 0.0 || p.vy > 0.0 {
                     // Create explosion with variety (bd-3vbf.27 polish)
                     // More particles (80-140 range) with varied patterns
-                    let num_particles = 80 + (rand_simple() * 60.0) as usize;
+                    let num_particles =
+                        min_explosion + (rand_simple() * extra_explosion as f64) as usize;
                     let pattern = (rand_simple() * 3.0) as u8; // 0=circular, 1=ring, 2=starburst
 
                     for i in 0..num_particles {
@@ -1267,8 +1372,9 @@ impl ParticleState {
         self.particles.extend(new_particles);
 
         // Limit total particles
-        if self.particles.len() > 1500 {
-            self.particles.drain(0..500);
+        if self.particles.len() > max_particles {
+            let drain = (self.particles.len() - max_particles).min(500);
+            self.particles.drain(0..drain);
         }
     }
 
@@ -2066,11 +2172,26 @@ impl Default for FlowFieldState {
 }
 
 impl FlowFieldState {
-    fn update(&mut self) {
+    fn update_with_quality(&mut self, quality: FxQuality) {
+        if matches!(quality, FxQuality::Off) {
+            return;
+        }
+
+        let target_particles = match quality {
+            FxQuality::Full => 1500,
+            FxQuality::Reduced => 1100,
+            FxQuality::Minimal => 700,
+            FxQuality::Off => 0,
+        };
+
+        if self.particles.len() > target_particles {
+            self.particles.truncate(target_particles);
+        }
+
         self.time += 0.03;
 
         // Spawn new particles
-        while self.particles.len() < 1500 {
+        while self.particles.len() < target_particles {
             let x = rand_simple();
             let y = rand_simple();
             self.particles.push(FlowParticle {
@@ -2128,6 +2249,9 @@ impl FlowFieldState {
 
         // Remove old particles
         self.particles.retain(|p| p.age < 3.0);
+        if self.particles.len() > target_particles {
+            self.particles.truncate(target_particles);
+        }
     }
 
     fn render(&self, painter: &mut Painter, width: u16, height: u16) {
@@ -2409,7 +2533,9 @@ impl SpiralState {
             // Logarithmic spiral: r = a * e^(b*theta)
             let arm_angle = (star.arm as f64 / self.num_arms as f64) * TAU;
             let theta = star.angle + arm_angle + self.rotation;
-            let r = 0.05 * (self.spiral_tightness * star.angle).exp() + star.radial_offset;
+            // Clamp exponent to prevent infinity/overflow which can cause render artifacts or hangs
+            let exponent = (self.spiral_tightness * star.angle).min(50.0);
+            let r = 0.05 * exponent.exp() + star.radial_offset;
 
             // Clamp radius
             if r > 1.0 {
@@ -2645,6 +2771,958 @@ impl SpinLatticeState {
 }
 
 // =============================================================================
+// Doom E1M1 - First-person braille raycaster
+// =============================================================================
+
+const DOOM_FOV: f32 = 1.2;
+const DOOM_WALL_HEIGHT: f32 = 128.0;
+const DOOM_GRAVITY: f32 = -4.0;
+const DOOM_JUMP_VELOCITY: f32 = 38.0;
+const DOOM_COLLISION_RADIUS: f32 = 18.0;
+const DOOM_MOVE_STEP: f32 = 14.0;
+const DOOM_STRAFE_STEP: f32 = 12.0;
+
+#[derive(Debug, Clone)]
+struct DoomPlayer {
+    x: f32,
+    y: f32,
+    yaw: f32,
+    pitch: f32,
+    jump_z: f32,
+    vel_z: f32,
+    grounded: bool,
+}
+
+impl Default for DoomPlayer {
+    fn default() -> Self {
+        let (px, py) = FREEDOOM_E1M1_PLAYER_START;
+        Self {
+            x: px as f32,
+            y: py as f32,
+            yaw: 0.0,
+            pitch: 0.0,
+            jump_z: 0.0,
+            vel_z: 0.0,
+            grounded: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DoomE1M1State {
+    time: f32,
+    fire_flash: f32,
+    player: DoomPlayer,
+}
+
+impl Default for DoomE1M1State {
+    fn default() -> Self {
+        Self {
+            time: 0.0,
+            fire_flash: 0.0,
+            player: DoomPlayer::default(),
+        }
+    }
+}
+
+impl DoomE1M1State {
+    fn look(&mut self, yaw_delta: f32, pitch_delta: f32) {
+        self.player.yaw = (self.player.yaw + yaw_delta) % TAU as f32;
+        self.player.pitch = (self.player.pitch + pitch_delta).clamp(-0.6, 0.6);
+    }
+
+    fn jump(&mut self) {
+        if self.player.grounded {
+            self.player.vel_z = DOOM_JUMP_VELOCITY;
+            self.player.grounded = false;
+        }
+    }
+
+    fn fire(&mut self) {
+        self.fire_flash = 1.0;
+    }
+
+    fn move_forward(&mut self, amount: f32) {
+        let dx = amount * self.player.yaw.cos();
+        let dy = amount * self.player.yaw.sin();
+        self.try_move(dx, dy);
+    }
+
+    fn strafe(&mut self, amount: f32) {
+        let dx = amount * (self.player.yaw + std::f32::consts::FRAC_PI_2).cos();
+        let dy = amount * (self.player.yaw + std::f32::consts::FRAC_PI_2).sin();
+        self.try_move(dx, dy);
+    }
+
+    fn try_move(&mut self, dx: f32, dy: f32) {
+        let mut nx = (self.player.x + dx).clamp(0.0, 2048.0);
+        let mut ny = (self.player.y + dy).clamp(0.0, 2048.0);
+
+        if self.collides(nx, ny) {
+            nx = (self.player.x + dx).clamp(0.0, 2048.0);
+            ny = self.player.y;
+            if self.collides(nx, ny) {
+                nx = self.player.x;
+                ny = (self.player.y + dy).clamp(0.0, 2048.0);
+                if self.collides(nx, ny) {
+                    return;
+                }
+            }
+        }
+
+        self.player.x = nx;
+        self.player.y = ny;
+    }
+
+    fn collides(&self, x: f32, y: f32) -> bool {
+        let radius_sq = DOOM_COLLISION_RADIUS * DOOM_COLLISION_RADIUS;
+        for (x1, y1, x2, y2) in FREEDOOM_E1M1_LINES {
+            let dist_sq =
+                point_segment_distance_sq(x, y, *x1 as f32, *y1 as f32, *x2 as f32, *y2 as f32);
+            if dist_sq < radius_sq {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn update(&mut self) {
+        self.time += 0.1;
+        if self.fire_flash > 0.0 {
+            self.fire_flash = (self.fire_flash - 0.12).max(0.0);
+        }
+        if !self.player.grounded {
+            self.player.vel_z += DOOM_GRAVITY * 0.1;
+            self.player.jump_z += self.player.vel_z * 0.1;
+            if self.player.jump_z <= 0.0 {
+                self.player.jump_z = 0.0;
+                self.player.vel_z = 0.0;
+                self.player.grounded = true;
+            }
+        }
+    }
+
+    fn raycast(&self, ox: f32, oy: f32, dx: f32, dy: f32) -> Option<(f32, usize, f32, f32)> {
+        let mut best_t = f32::INFINITY;
+        let mut best_idx = 0usize;
+        let mut best_side = 0.0f32;
+        let mut best_u = 0.0f32;
+        for (idx, (x1, y1, x2, y2)) in FREEDOOM_E1M1_LINES.iter().enumerate() {
+            let vx = *x2 as f32 - *x1 as f32;
+            let vy = *y2 as f32 - *y1 as f32;
+            let denom = cross2(dx, dy, vx, vy);
+            if denom.abs() < 1e-5 {
+                continue;
+            }
+            let px = *x1 as f32 - ox;
+            let py = *y1 as f32 - oy;
+            let t = cross2(px, py, vx, vy) / denom;
+            let u = cross2(px, py, dx, dy) / denom;
+            if t > 0.0 && (0.0..=1.0).contains(&u) && t < best_t {
+                best_t = t;
+                best_idx = idx;
+                best_side = if denom > 0.0 { 1.0 } else { -1.0 };
+                best_u = u;
+            }
+        }
+        if best_t.is_finite() {
+            Some((best_t, best_idx, best_side, best_u))
+        } else {
+            None
+        }
+    }
+
+    fn render(
+        &self,
+        painter: &mut Painter,
+        width: u16,
+        height: u16,
+        quality: FxQuality,
+        _time: f64,
+        frame: u64,
+    ) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        let stride = match quality {
+            FxQuality::Off => 0,
+            _ => 1,
+        };
+        if stride == 0 {
+            return;
+        }
+
+        let w = width as f32;
+        let h = height as f32;
+        let half_h = h * 0.5;
+        let pitch_offset = -self.player.pitch * (h * 0.35);
+        let jump_offset = self.player.jump_z * 0.2;
+        let center_y = half_h + pitch_offset + jump_offset;
+        let proj_scale = h * 0.9;
+
+        for px in (0..width as usize).step_by(stride) {
+            let x = px as f32;
+            let t = (x / (w - 1.0) - 0.5) * DOOM_FOV;
+            let ray_angle = self.player.yaw + t;
+            let dir_x = ray_angle.cos();
+            let dir_y = ray_angle.sin();
+            let ray = self.raycast(self.player.x, self.player.y, dir_x, dir_y);
+
+            let (dist, hit_idx, side, hit_u) = if let Some(hit) = ray {
+                hit
+            } else {
+                continue;
+            };
+
+            let corrected = (dist * t.cos()).max(1.0);
+            let wall_height = (DOOM_WALL_HEIGHT / corrected) * proj_scale;
+            let top = (center_y - wall_height).round() as i32;
+            let bottom = (center_y + wall_height).round() as i32;
+
+            let mut base = palette_doom_wall(hit_idx);
+            if side > 0.0 {
+                base = palette_doom_wall(hit_idx + 3);
+            }
+
+            let fog = (corrected / 900.0).clamp(0.0, 1.0);
+            let mut brightness = (1.0 - fog).powf(1.35);
+            if self.fire_flash > 0.0 {
+                brightness = (brightness + self.fire_flash * 0.35).min(1.3);
+            }
+
+            let stripe = ((hit_u * 16.0).floor() as i32 & 1) as f32;
+            let stripe_boost = if stripe == 0.0 { 0.9 } else { 1.08 };
+
+            let grain =
+                (((px as u64).wrapping_mul(113) ^ (frame.wrapping_mul(131)) ^ hit_idx as u64) & 7)
+                    as f32
+                    / 90.0;
+            brightness = (brightness * stripe_boost + grain).clamp(0.08, 1.25);
+
+            let r = (base.r() as f32 * brightness).min(255.0) as u8;
+            let g = (base.g() as f32 * brightness).min(255.0) as u8;
+            let b = (base.b() as f32 * brightness).min(255.0) as u8;
+            let wall_color = PackedRgba::rgb(r, g, b);
+
+            let sky_base = PackedRgba::rgb(18, 20, 26);
+            let floor_base = PackedRgba::rgb(20, 16, 14);
+            let sky_fade = fog.clamp(0.0, 1.0);
+            let floor_fade = fog.clamp(0.0, 1.0);
+            let ceiling_color = PackedRgba::rgb(
+                ((sky_base.r() as f32) * (1.0 - sky_fade)) as u8,
+                ((sky_base.g() as f32) * (1.0 - sky_fade)) as u8,
+                ((sky_base.b() as f32) * (1.0 - sky_fade)) as u8,
+            );
+            let floor_color = PackedRgba::rgb(
+                ((floor_base.r() as f32) * (1.0 - floor_fade)) as u8,
+                ((floor_base.g() as f32) * (1.0 - floor_fade)) as u8,
+                ((floor_base.b() as f32) * (1.0 - floor_fade)) as u8,
+            );
+
+            let top_line = top.clamp(0, height as i32 - 1);
+            let bottom_line = bottom.clamp(0, height as i32 - 1);
+
+            if top_line > 0 {
+                painter.line_colored(px as i32, 0, px as i32, top_line, Some(ceiling_color));
+            }
+            if bottom_line < height as i32 - 1 {
+                painter.line_colored(
+                    px as i32,
+                    bottom_line,
+                    px as i32,
+                    height as i32 - 1,
+                    Some(floor_color),
+                );
+            }
+
+            painter.line_colored(
+                px as i32,
+                top_line,
+                px as i32,
+                bottom_line,
+                Some(wall_color),
+            );
+        }
+
+        // Simple crosshair + muzzle flash
+        let cx = (width / 2) as i32;
+        let cy = (center_y.round() as i32).clamp(0, height as i32 - 1);
+        let flash = self.fire_flash;
+        let cross_r = (220.0 + flash * 30.0).min(255.0) as u8;
+        let cross_color = PackedRgba::rgb(cross_r, 240, 240);
+        painter.line_colored(cx - 3, cy, cx + 3, cy, Some(cross_color));
+        painter.line_colored(cx, cy - 2, cx, cy + 2, Some(cross_color));
+    }
+}
+
+// =============================================================================
+// Quake E1M1 - True 3D braille rasterizer
+// =============================================================================
+
+#[derive(Debug, Clone, Copy)]
+struct Vec3 {
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+impl Vec3 {
+    const fn new(x: f32, y: f32, z: f32) -> Self {
+        Self { x, y, z }
+    }
+
+    fn dot(self, other: Self) -> f32 {
+        self.x * other.x + self.y * other.y + self.z * other.z
+    }
+
+    fn cross(self, other: Self) -> Self {
+        Self {
+            x: self.y * other.z - self.z * other.y,
+            y: self.z * other.x - self.x * other.z,
+            z: self.x * other.y - self.y * other.x,
+        }
+    }
+
+    fn len(self) -> f32 {
+        (self.x * self.x + self.y * self.y + self.z * self.z).sqrt()
+    }
+
+    fn normalized(self) -> Self {
+        let len = self.len();
+        if len > 0.0 {
+            Self::new(self.x / len, self.y / len, self.z / len)
+        } else {
+            self
+        }
+    }
+}
+
+impl core::ops::Add for Vec3 {
+    type Output = Self;
+    fn add(self, other: Self) -> Self {
+        Self::new(self.x + other.x, self.y + other.y, self.z + other.z)
+    }
+}
+
+impl core::ops::Sub for Vec3 {
+    type Output = Self;
+    fn sub(self, other: Self) -> Self {
+        Self::new(self.x - other.x, self.y - other.y, self.z - other.z)
+    }
+}
+
+impl core::ops::Mul<f32> for Vec3 {
+    type Output = Self;
+    fn mul(self, s: f32) -> Self {
+        Self::new(self.x * s, self.y * s, self.z * s)
+    }
+}
+
+const QUAKE_EYE_HEIGHT: f32 = 0.18;
+const QUAKE_GRAVITY: f32 = -0.28;
+const QUAKE_JUMP_VELOCITY: f32 = 0.22;
+const QUAKE_COLLISION_RADIUS: f32 = 0.06;
+const QUAKE_MOVE_STEP: f32 = 0.07;
+const QUAKE_STRAFE_STEP: f32 = 0.06;
+
+#[derive(Debug, Clone, Copy)]
+struct WallSeg {
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+}
+
+#[derive(Debug, Clone)]
+struct FloorTri {
+    v0: Vec3,
+    v1: Vec3,
+    v2: Vec3,
+    min_x: f32,
+    max_x: f32,
+    min_y: f32,
+    max_y: f32,
+    area: f32,
+}
+
+impl FloorTri {
+    fn new(v0: Vec3, v1: Vec3, v2: Vec3) -> Option<Self> {
+        let area = cross2(v1.x - v0.x, v1.y - v0.y, v2.x - v0.x, v2.y - v0.y);
+        if area.abs() <= 1e-6 {
+            return None;
+        }
+        let min_x = v0.x.min(v1.x).min(v2.x);
+        let max_x = v0.x.max(v1.x).max(v2.x);
+        let min_y = v0.y.min(v1.y).min(v2.y);
+        let max_y = v0.y.max(v1.y).max(v2.y);
+        Some(Self {
+            v0,
+            v1,
+            v2,
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+            area,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct QuakePlayer {
+    pos: Vec3,
+    yaw: f32,
+    pitch: f32,
+    vel_z: f32,
+    grounded: bool,
+}
+
+impl QuakePlayer {
+    fn new(pos: Vec3) -> Self {
+        Self {
+            pos,
+            yaw: 0.0,
+            pitch: 0.0,
+            vel_z: 0.0,
+            grounded: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct QuakeE1M1State {
+    player: QuakePlayer,
+    fire_flash: f32,
+    bounds_min: Vec3,
+    bounds_max: Vec3,
+    wall_segments: Vec<WallSeg>,
+    floor_tris: Vec<FloorTri>,
+    depth: Vec<f32>,
+    depth_w: u16,
+    depth_h: u16,
+}
+
+impl Default for QuakeE1M1State {
+    fn default() -> Self {
+        let (min, max) = QuakeE1M1State::compute_bounds();
+        let (wall_segments, floor_tris) = QuakeE1M1State::build_collision();
+        let center_x = (min.x + max.x) * 0.5;
+        let center_y = (min.y + max.y) * 0.5;
+        let start = Vec3::new(center_x, center_y, min.z + QUAKE_EYE_HEIGHT);
+        let mut state = Self {
+            player: QuakePlayer::new(start),
+            fire_flash: 0.0,
+            bounds_min: min,
+            bounds_max: max,
+            wall_segments,
+            floor_tris,
+            depth: Vec::new(),
+            depth_w: 0,
+            depth_h: 0,
+        };
+        state.player.pos = state.pick_spawn();
+        state
+    }
+}
+
+impl QuakeE1M1State {
+    fn compute_bounds() -> (Vec3, Vec3) {
+        let inv_scale = 1.0 / 1024.0;
+        let mut min = Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY);
+        let mut max = Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+        for (x, y, z) in QUAKE_E1M1_VERTS {
+            let wx = *x as f32 * inv_scale;
+            let wy = *y as f32 * inv_scale;
+            let wz = *z as f32 * inv_scale;
+            min.x = min.x.min(wx);
+            min.y = min.y.min(wy);
+            min.z = min.z.min(wz);
+            max.x = max.x.max(wx);
+            max.y = max.y.max(wy);
+            max.z = max.z.max(wz);
+        }
+        (min, max)
+    }
+
+    fn build_collision() -> (Vec<WallSeg>, Vec<FloorTri>) {
+        let inv_scale = 1.0 / 1024.0;
+        let mut walls = Vec::new();
+        let mut floors = Vec::new();
+
+        let mut push_edge = |a: Vec3, b: Vec3| {
+            let dx = b.x - a.x;
+            let dy = b.y - a.y;
+            if (dx * dx + dy * dy) <= 1e-6 {
+                return;
+            }
+            walls.push(WallSeg {
+                x1: a.x,
+                y1: a.y,
+                x2: b.x,
+                y2: b.y,
+            });
+        };
+
+        for (i0, i1, i2) in QUAKE_E1M1_TRIS.iter().copied() {
+            let v0 = QUAKE_E1M1_VERTS[i0 as usize];
+            let v1 = QUAKE_E1M1_VERTS[i1 as usize];
+            let v2 = QUAKE_E1M1_VERTS[i2 as usize];
+
+            let w0 = Vec3::new(
+                v0.0 as f32 * inv_scale,
+                v0.1 as f32 * inv_scale,
+                v0.2 as f32 * inv_scale,
+            );
+            let w1 = Vec3::new(
+                v1.0 as f32 * inv_scale,
+                v1.1 as f32 * inv_scale,
+                v1.2 as f32 * inv_scale,
+            );
+            let w2 = Vec3::new(
+                v2.0 as f32 * inv_scale,
+                v2.1 as f32 * inv_scale,
+                v2.2 as f32 * inv_scale,
+            );
+
+            let n = (w1 - w0).cross(w2 - w0);
+            let len = n.len();
+            if len <= 1e-6 {
+                continue;
+            }
+            let n = n * (1.0 / len);
+
+            if n.z.abs() < 0.35 {
+                push_edge(w0, w1);
+                push_edge(w1, w2);
+                push_edge(w2, w0);
+            }
+
+            if n.z > 0.35
+                && let Some(tri) = FloorTri::new(w0, w1, w2)
+            {
+                floors.push(tri);
+            }
+        }
+
+        (walls, floors)
+    }
+
+    fn pick_spawn(&self) -> Vec3 {
+        let center_x = (self.bounds_min.x + self.bounds_max.x) * 0.5;
+        let center_y = (self.bounds_min.y + self.bounds_max.y) * 0.5;
+        let mut best_score = f32::NEG_INFINITY;
+        let mut best = None;
+        let min_clear_sq = (QUAKE_COLLISION_RADIUS * 2.2).powi(2);
+
+        for tri in &self.floor_tris {
+            let cx = (tri.v0.x + tri.v1.x + tri.v2.x) / 3.0;
+            let cy = (tri.v0.y + tri.v1.y + tri.v2.y) / 3.0;
+            if cx <= self.bounds_min.x
+                || cx >= self.bounds_max.x
+                || cy <= self.bounds_min.y
+                || cy >= self.bounds_max.y
+            {
+                continue;
+            }
+            let dist_sq = min_wall_distance_sq(cx, cy, &self.wall_segments);
+            if dist_sq < min_clear_sq {
+                continue;
+            }
+            let z = self.ground_eye_height(cx, cy);
+            let score = dist_sq + (z - self.bounds_min.z) * 0.15;
+            if score > best_score {
+                best_score = score;
+                best = Some(Vec3::new(cx, cy, z));
+            }
+        }
+
+        best.unwrap_or_else(|| {
+            Vec3::new(
+                center_x,
+                center_y,
+                self.ground_eye_height(center_x, center_y),
+            )
+        })
+    }
+
+    fn ground_height_at(&self, x: f32, y: f32) -> Option<f32> {
+        let mut best = None;
+        let eps = 1e-3;
+
+        for tri in &self.floor_tris {
+            if x < tri.min_x || x > tri.max_x || y < tri.min_y || y > tri.max_y {
+                continue;
+            }
+
+            let w0 = cross2(tri.v1.x - x, tri.v1.y - y, tri.v2.x - x, tri.v2.y - y) / tri.area;
+            let w1 = cross2(tri.v2.x - x, tri.v2.y - y, tri.v0.x - x, tri.v0.y - y) / tri.area;
+            let w2 = 1.0 - w0 - w1;
+
+            if w0 >= -eps && w1 >= -eps && w2 >= -eps {
+                let z = w0 * tri.v0.z + w1 * tri.v1.z + w2 * tri.v2.z;
+                if best.is_none_or(|best_z| z > best_z) {
+                    best = Some(z);
+                }
+            }
+        }
+
+        best
+    }
+
+    fn ground_eye_height(&self, x: f32, y: f32) -> f32 {
+        let ground = self.ground_height_at(x, y).unwrap_or(self.bounds_min.z);
+        ground + QUAKE_EYE_HEIGHT
+    }
+
+    fn snap_to_ground(&mut self) {
+        if self.player.grounded {
+            let ground = self.ground_eye_height(self.player.pos.x, self.player.pos.y);
+            self.player.pos.z = ground;
+        }
+    }
+
+    fn collides(&self, x: f32, y: f32) -> bool {
+        let radius_sq = QUAKE_COLLISION_RADIUS * QUAKE_COLLISION_RADIUS;
+        for seg in &self.wall_segments {
+            let dist_sq = point_segment_distance_sq(x, y, seg.x1, seg.y1, seg.x2, seg.y2);
+            if dist_sq < radius_sq {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn look(&mut self, yaw_delta: f32, pitch_delta: f32) {
+        self.player.yaw = (self.player.yaw + yaw_delta) % TAU as f32;
+        self.player.pitch = (self.player.pitch + pitch_delta).clamp(-0.9, 0.9);
+    }
+
+    fn move_forward(&mut self, amount: f32) {
+        let (sy, cy) = self.player.yaw.sin_cos();
+        let dx = cy * amount;
+        let dy = sy * amount;
+        self.try_move(dx, dy);
+    }
+
+    fn strafe(&mut self, amount: f32) {
+        let (sy, cy) = self.player.yaw.sin_cos();
+        let dx = -sy * amount;
+        let dy = cy * amount;
+        self.try_move(dx, dy);
+    }
+
+    fn try_move(&mut self, dx: f32, dy: f32) {
+        let margin = (QUAKE_COLLISION_RADIUS + 0.02).max(0.04);
+        let min_x = self.bounds_min.x + margin;
+        let max_x = self.bounds_max.x - margin;
+        let min_y = self.bounds_min.y + margin;
+        let max_y = self.bounds_max.y - margin;
+        let mut nx = (self.player.pos.x + dx).clamp(min_x, max_x);
+        let mut ny = (self.player.pos.y + dy).clamp(min_y, max_y);
+
+        if self.collides(nx, ny) {
+            nx = (self.player.pos.x + dx).clamp(min_x, max_x);
+            ny = self.player.pos.y;
+            if self.collides(nx, ny) {
+                nx = self.player.pos.x;
+                ny = (self.player.pos.y + dy).clamp(min_y, max_y);
+                if self.collides(nx, ny) {
+                    return;
+                }
+            }
+        }
+
+        self.player.pos.x = nx;
+        self.player.pos.y = ny;
+        self.snap_to_ground();
+    }
+
+    fn jump(&mut self) {
+        if self.player.grounded {
+            self.player.vel_z = QUAKE_JUMP_VELOCITY;
+            self.player.grounded = false;
+        }
+    }
+
+    fn fire(&mut self) {
+        self.fire_flash = 1.0;
+    }
+
+    fn update(&mut self) {
+        if self.fire_flash > 0.0 {
+            self.fire_flash = (self.fire_flash - 0.1).max(0.0);
+        }
+
+        let ground = self.ground_eye_height(self.player.pos.x, self.player.pos.y);
+        if self.player.grounded {
+            self.player.pos.z = ground;
+        }
+
+        if !self.player.grounded {
+            self.player.vel_z += QUAKE_GRAVITY * 0.1;
+            self.player.pos.z += self.player.vel_z * 0.1;
+            if self.player.pos.z <= ground {
+                self.player.pos.z = ground;
+                self.player.vel_z = 0.0;
+                self.player.grounded = true;
+            }
+        }
+    }
+
+    fn ensure_depth(&mut self, width: u16, height: u16) {
+        let len = width as usize * height as usize;
+        if len > self.depth.len() {
+            self.depth.resize(len, f32::INFINITY);
+        }
+        self.depth_w = width;
+        self.depth_h = height;
+    }
+
+    fn clear_depth(&mut self) {
+        let len = self.depth_w as usize * self.depth_h as usize;
+        if len > 0 {
+            self.depth[..len].fill(f32::INFINITY);
+        }
+    }
+
+    fn render(
+        &mut self,
+        painter: &mut Painter,
+        width: u16,
+        height: u16,
+        quality: FxQuality,
+        _time: f64,
+        frame: u64,
+    ) {
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        let stride = match quality {
+            FxQuality::Off => 0,
+            _ => 1,
+        };
+        if stride == 0 {
+            return;
+        }
+
+        self.ensure_depth(width, height);
+        self.clear_depth();
+
+        let w = width as f32;
+        let h = height as f32;
+        let center = Vec3::new(w * 0.5, h * 0.5, 0.0);
+        let eye = self.player.pos;
+
+        let (sy, cy) = self.player.yaw.sin_cos();
+        let (sp, cp) = self.player.pitch.sin_cos();
+        let forward = Vec3::new(cy * cp, sy * cp, sp).normalized();
+        let right = Vec3::new(-sy, cy, 0.0).normalized();
+        let up = right.cross(forward).normalized();
+
+        let light_dir = Vec3::new(0.3, -0.45, 0.85).normalized();
+
+        let proj_scale = w.min(h) * 0.78;
+        let near = 0.06f32;
+        let far = 5.0f32;
+        let fog_color = PackedRgba::rgb(18, 20, 24);
+
+        let inv_scale = 1.0 / 1024.0;
+        let tri_step = match quality {
+            FxQuality::Off => 0,
+            _ => 1,
+        };
+        let edge_stride = if tri_step > 1 { tri_step * 2 } else { 1 };
+
+        let edge = |ax: f32, ay: f32, bx: f32, by: f32, cx: f32, cy: f32| {
+            (cx - ax) * (by - ay) - (cy - ay) * (bx - ax)
+        };
+
+        for (tri_idx, tri) in QUAKE_E1M1_TRIS.iter().enumerate().step_by(tri_step) {
+            let (i0, i1, i2) = (tri.0 as usize, tri.1 as usize, tri.2 as usize);
+            let v0 = QUAKE_E1M1_VERTS[i0];
+            let v1 = QUAKE_E1M1_VERTS[i1];
+            let v2 = QUAKE_E1M1_VERTS[i2];
+
+            let w0 = Vec3::new(
+                v0.0 as f32 * inv_scale,
+                v0.1 as f32 * inv_scale,
+                v0.2 as f32 * inv_scale,
+            );
+            let w1 = Vec3::new(
+                v1.0 as f32 * inv_scale,
+                v1.1 as f32 * inv_scale,
+                v1.2 as f32 * inv_scale,
+            );
+            let w2 = Vec3::new(
+                v2.0 as f32 * inv_scale,
+                v2.1 as f32 * inv_scale,
+                v2.2 as f32 * inv_scale,
+            );
+
+            let n = (w1 - w0).cross(w2 - w0).normalized();
+            let view_dir = (eye - w0).normalized();
+            let facing = n.dot(view_dir);
+            if facing <= 0.02 {
+                continue;
+            }
+            let diffuse = n.dot(light_dir).max(0.0);
+            let rim = (1.0 - facing.clamp(0.0, 1.0)).powf(2.0) * 0.35;
+
+            let height_span = (self.bounds_max.z - self.bounds_min.z).max(0.001);
+            let height_t = ((w0.z - self.bounds_min.z) / height_span).clamp(0.0, 1.0);
+            let base = palette_quake_stone(height_t as f64);
+            let ambient = 0.2f32;
+            let light = (ambient + diffuse * 0.9 + rim).clamp(0.0, 1.2);
+
+            let cam0 = Vec3::new(
+                (w0 - eye).dot(right),
+                (w0 - eye).dot(up),
+                (w0 - eye).dot(forward),
+            );
+            let cam1 = Vec3::new(
+                (w1 - eye).dot(right),
+                (w1 - eye).dot(up),
+                (w1 - eye).dot(forward),
+            );
+            let cam2 = Vec3::new(
+                (w2 - eye).dot(right),
+                (w2 - eye).dot(up),
+                (w2 - eye).dot(forward),
+            );
+            let tri_depth = (cam0.z + cam1.z + cam2.z) / 3.0;
+            let edge_fade = ((tri_depth - near) / (far - near)).clamp(0.0, 1.0);
+            let clipped = clip_polygon_near(&[cam0, cam1, cam2], near);
+            if clipped.len() < 3 {
+                continue;
+            }
+
+            let mut draw_tri = |a: Vec3, b: Vec3, c: Vec3| {
+                let sx0 = center.x + (a.x / a.z) * proj_scale;
+                let sy0 = center.y - (a.y / a.z) * proj_scale;
+                let sx1 = center.x + (b.x / b.z) * proj_scale;
+                let sy1 = center.y - (b.y / b.z) * proj_scale;
+                let sx2 = center.x + (c.x / c.z) * proj_scale;
+                let sy2 = center.y - (c.y / c.z) * proj_scale;
+
+                let minx = sx0.min(sx1).min(sx2).floor().max(0.0) as i32;
+                let maxx = sx0.max(sx1).max(sx2).ceil().min(w - 1.0) as i32;
+                let miny = sy0.min(sy1).min(sy2).floor().max(0.0) as i32;
+                let maxy = sy0.max(sy1).max(sy2).ceil().min(h - 1.0) as i32;
+
+                if minx > maxx || miny > maxy {
+                    return;
+                }
+
+                let area = edge(sx0, sy0, sx1, sy1, sx2, sy2);
+                if area.abs() < 1e-5 {
+                    return;
+                }
+
+                let inv_area = 1.0 / area;
+                let stride_usize = stride;
+
+                for py in (miny..=maxy).step_by(stride_usize) {
+                    let fy = py as f32;
+                    for px in (minx..=maxx).step_by(stride_usize) {
+                        let fx = px as f32;
+                        let w0e = edge(sx1, sy1, sx2, sy2, fx, fy);
+                        let w1e = edge(sx2, sy2, sx0, sy0, fx, fy);
+                        let w2e = edge(sx0, sy0, sx1, sy1, fx, fy);
+
+                        if (w0e * area) < 0.0 || (w1e * area) < 0.0 || (w2e * area) < 0.0 {
+                            continue;
+                        }
+
+                        let b0 = w0e * inv_area;
+                        let b1 = w1e * inv_area;
+                        let b2 = w2e * inv_area;
+                        let z = b0 * a.z + b1 * b.z + b2 * c.z;
+
+                        let idx = py as usize * width as usize + px as usize;
+                        if z >= self.depth[idx] {
+                            continue;
+                        }
+                        self.depth[idx] = z;
+
+                        let fog = ((z - near) / (far - near)).clamp(0.0, 1.0);
+                        let fade = (1.0 - fog).powf(1.55);
+                        let grain = (((px as u64).wrapping_mul(73856093)
+                            ^ (py as u64).wrapping_mul(19349663)
+                            ^ frame)
+                            & 3) as f32
+                            / 22.0;
+                        let mut brightness = (light * fade + grain).clamp(0.0, 1.0);
+                        if self.fire_flash > 0.0 {
+                            brightness = (brightness + self.fire_flash * 0.35).min(1.25);
+                        }
+
+                        let mut r = base.r() as f32 * brightness;
+                        let mut g = base.g() as f32 * brightness;
+                        let mut b = base.b() as f32 * brightness;
+                        r += (fog_color.r() as f32 - r) * fog;
+                        g += (fog_color.g() as f32 - g) * fog;
+                        b += (fog_color.b() as f32 - b) * fog;
+                        let r = r.clamp(0.0, 255.0) as u8;
+                        let g = g.clamp(0.0, 255.0) as u8;
+                        let b = b.clamp(0.0, 255.0) as u8;
+                        painter.point_colored(px, py, PackedRgba::rgb(r, g, b));
+                    }
+                }
+
+                if tri_idx % edge_stride == 0 && edge_fade < 0.55 {
+                    let edge_boost = (light + 0.25).clamp(0.0, 1.2);
+                    let edge_scale = (1.0 - edge_fade).powf(1.4);
+                    let er = (base.r() as f32 * edge_boost * edge_scale).min(255.0) as u8;
+                    let eg = (base.g() as f32 * edge_boost * edge_scale).min(255.0) as u8;
+                    let eb = (base.b() as f32 * edge_boost * edge_scale).min(255.0) as u8;
+                    let edge_color = PackedRgba::rgb(er, eg, eb);
+
+                    painter.line_colored(
+                        sx0 as i32,
+                        sy0 as i32,
+                        sx1 as i32,
+                        sy1 as i32,
+                        Some(edge_color),
+                    );
+                    painter.line_colored(
+                        sx1 as i32,
+                        sy1 as i32,
+                        sx2 as i32,
+                        sy2 as i32,
+                        Some(edge_color),
+                    );
+                    painter.line_colored(
+                        sx2 as i32,
+                        sy2 as i32,
+                        sx0 as i32,
+                        sy0 as i32,
+                        Some(edge_color),
+                    );
+                }
+            };
+
+            if clipped.len() == 3 {
+                draw_tri(clipped[0], clipped[1], clipped[2]);
+            } else {
+                for i in 1..(clipped.len() - 1) {
+                    draw_tri(clipped[0], clipped[i], clipped[i + 1]);
+                }
+            }
+        }
+
+        // Crosshair
+        let cx = (width / 2) as i32;
+        let cy = (height / 2) as i32;
+        let flash = self.fire_flash;
+        let cross_r = (200.0 + flash * 40.0).min(255.0) as u8;
+        let cross = PackedRgba::rgb(cross_r, 240, 240);
+        painter.line_colored(cx - 3, cy, cx + 3, cy, Some(cross));
+        painter.line_colored(cx, cy - 2, cx, cy + 2, Some(cross));
+    }
+}
+
+// =============================================================================
 // Helper functions
 // =============================================================================
 
@@ -2658,6 +3736,84 @@ fn rand_simple() -> f64 {
         .unwrap();
     let new = old.wrapping_mul(6364136223846793005).wrapping_add(1);
     (new >> 33) as f64 / (1u64 << 31) as f64
+}
+
+fn cross2(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
+    ax * by - ay * bx
+}
+
+fn point_segment_distance_sq(px: f32, py: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
+    let vx = x2 - x1;
+    let vy = y2 - y1;
+    let wx = px - x1;
+    let wy = py - y1;
+    let len_sq = vx * vx + vy * vy;
+    if len_sq <= 1e-6 {
+        let dx = px - x1;
+        let dy = py - y1;
+        return dx * dx + dy * dy;
+    }
+    let t = ((wx * vx) + (wy * vy)) / len_sq;
+    let t = t.clamp(0.0, 1.0);
+    let proj_x = x1 + t * vx;
+    let proj_y = y1 + t * vy;
+    let dx = px - proj_x;
+    let dy = py - proj_y;
+    dx * dx + dy * dy
+}
+
+fn min_wall_distance_sq(x: f32, y: f32, walls: &[WallSeg]) -> f32 {
+    let mut best = f32::INFINITY;
+    for seg in walls {
+        let dist_sq = point_segment_distance_sq(x, y, seg.x1, seg.y1, seg.x2, seg.y2);
+        if dist_sq < best {
+            best = dist_sq;
+        }
+    }
+    best
+}
+
+fn clip_polygon_near(poly: &[Vec3], near: f32) -> Vec<Vec3> {
+    if poly.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::with_capacity(poly.len() + 2);
+    let mut prev = poly[poly.len() - 1];
+    let mut prev_inside = prev.z >= near;
+
+    for &curr in poly {
+        let curr_inside = curr.z >= near;
+        if prev_inside && curr_inside {
+            out.push(curr);
+        } else if prev_inside && !curr_inside {
+            let denom = curr.z - prev.z;
+            if denom.abs() > 1e-6 {
+                let t = (near - prev.z) / denom;
+                out.push(Vec3::new(
+                    prev.x + (curr.x - prev.x) * t,
+                    prev.y + (curr.y - prev.y) * t,
+                    near,
+                ));
+            }
+        } else if !prev_inside && curr_inside {
+            let denom = curr.z - prev.z;
+            if denom.abs() > 1e-6 {
+                let t = (near - prev.z) / denom;
+                out.push(Vec3::new(
+                    prev.x + (curr.x - prev.x) * t,
+                    prev.y + (curr.y - prev.y) * t,
+                    near,
+                ));
+            }
+            out.push(curr);
+        }
+
+        prev = curr;
+        prev_inside = curr_inside;
+    }
+
+    out
 }
 
 fn fx_stride(quality: FxQuality) -> usize {
@@ -2700,6 +3856,8 @@ impl Default for VisualEffectsScreen {
             wave_interference: WaveInterferenceState::default(),
             spiral: SpiralState::default(),
             spin_lattice: SpinLatticeState::default(),
+            doom_e1m1: DoomE1M1State::default(),
+            quake_e1m1: RefCell::new(QuakeE1M1State::default()),
             // FPS tracking
             frame_times: VecDeque::with_capacity(60),
             last_frame: None,
@@ -2715,6 +3873,9 @@ impl Default for VisualEffectsScreen {
             demo_mode: DemoMode::Canvas,
             text_effects: TextEffectsDemo::default(),
             markdown_panel,
+            fps_input: FpsInputState::default(),
+            fps_last_mouse: None,
+            fps_mouse_sensitivity: 0.018,
         }
     }
 }
@@ -2726,11 +3887,134 @@ fn initial_effect_from_env() -> Option<EffectType> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "metaballs" => Some(EffectType::Metaballs),
         "plasma" => Some(EffectType::Plasma),
+        "doom" | "doom-e1m1" => Some(EffectType::DoomE1M1),
+        "quake" | "quake-e1m1" | "e1m1" => Some(EffectType::QuakeE1M1),
         _ => None,
     }
 }
 
 impl VisualEffectsScreen {
+    fn is_fps_effect(&self) -> bool {
+        matches!(self.effect, EffectType::DoomE1M1 | EffectType::QuakeE1M1)
+    }
+
+    fn switch_effect(&mut self, effect: EffectType) {
+        self.effect = effect;
+        self.fps_last_mouse = None;
+        self.fps_input = FpsInputState::default();
+        self.start_transition();
+    }
+
+    fn update_fps_input(&mut self, code: KeyCode, kind: KeyEventKind) {
+        let is_down = matches!(kind, KeyEventKind::Press | KeyEventKind::Repeat);
+        match code {
+            KeyCode::Char('w') | KeyCode::Char('W') => self.fps_input.forward = is_down,
+            KeyCode::Char('s') | KeyCode::Char('S') => self.fps_input.back = is_down,
+            KeyCode::Char('a') | KeyCode::Char('A') => self.fps_input.strafe_left = is_down,
+            KeyCode::Char('d') | KeyCode::Char('D') => self.fps_input.strafe_right = is_down,
+            _ => {}
+        }
+    }
+
+    fn apply_fps_movement(&mut self) {
+        if !self.is_fps_effect() {
+            return;
+        }
+
+        let mut forward = (self.fps_input.forward as i8 - self.fps_input.back as i8) as f32;
+        let mut strafe =
+            (self.fps_input.strafe_right as i8 - self.fps_input.strafe_left as i8) as f32;
+        if forward == 0.0 && strafe == 0.0 {
+            return;
+        }
+
+        let mag = (forward * forward + strafe * strafe).sqrt();
+        if mag > 1.0 {
+            forward /= mag;
+            strafe /= mag;
+        }
+
+        match self.effect {
+            EffectType::DoomE1M1 => {
+                if forward != 0.0 {
+                    self.doom_e1m1.move_forward(forward * DOOM_MOVE_STEP);
+                }
+                if strafe != 0.0 {
+                    self.doom_e1m1.strafe(strafe * DOOM_STRAFE_STEP);
+                }
+            }
+            EffectType::QuakeE1M1 => {
+                let mut quake = self.quake_e1m1.borrow_mut();
+                if forward != 0.0 {
+                    quake.move_forward(forward * QUAKE_MOVE_STEP);
+                }
+                if strafe != 0.0 {
+                    quake.strafe(strafe * QUAKE_STRAFE_STEP);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_fps_key(&mut self, code: KeyCode, kind: KeyEventKind) {
+        self.update_fps_input(code, kind);
+        if !matches!(kind, KeyEventKind::Press) {
+            return;
+        }
+
+        match code {
+            KeyCode::Char(' ') => match self.effect {
+                EffectType::DoomE1M1 => self.doom_e1m1.jump(),
+                EffectType::QuakeE1M1 => self.quake_e1m1.borrow_mut().jump(),
+                _ => {}
+            },
+            KeyCode::Left => {
+                let effect = self.effect.prev();
+                self.switch_effect(effect);
+            }
+            KeyCode::Right => {
+                let effect = self.effect.next();
+                self.switch_effect(effect);
+            }
+            KeyCode::Char('[') => {
+                let effect = self.effect.prev();
+                self.switch_effect(effect);
+            }
+            KeyCode::Char(']') => {
+                let effect = self.effect.next();
+                self.switch_effect(effect);
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_fps_mouse(&mut self, kind: MouseEventKind, x: u16, y: u16) {
+        match kind {
+            MouseEventKind::Moved | MouseEventKind::Drag(_) => {
+                if let Some((lx, ly)) = self.fps_last_mouse {
+                    let dx = x as i32 - lx as i32;
+                    let dy = y as i32 - ly as i32;
+                    let yaw_delta = dx as f32 * self.fps_mouse_sensitivity;
+                    let pitch_delta = dy as f32 * self.fps_mouse_sensitivity;
+                    match self.effect {
+                        EffectType::DoomE1M1 => self.doom_e1m1.look(yaw_delta, pitch_delta),
+                        EffectType::QuakeE1M1 => {
+                            self.quake_e1m1.borrow_mut().look(yaw_delta, pitch_delta);
+                        }
+                        _ => {}
+                    }
+                }
+                self.fps_last_mouse = Some((x, y));
+            }
+            MouseEventKind::Down(MouseButton::Left) => match self.effect {
+                EffectType::DoomE1M1 => self.doom_e1m1.fire(),
+                EffectType::QuakeE1M1 => self.quake_e1m1.borrow_mut().fire(),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
     /// Start a transition overlay for the current effect.
     fn start_transition(&mut self) {
         // Use a rainbow gradient for the transition
@@ -3110,32 +4394,44 @@ impl Screen for VisualEffectsScreen {
     type Message = ();
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
-        if let Event::Key(KeyEvent {
-            code,
-            kind: KeyEventKind::Press,
-            ..
-        }) = event
+        if let Event::Mouse(mouse) = event
+            && matches!(self.demo_mode, DemoMode::Canvas)
+            && self.is_fps_effect()
         {
+            self.handle_fps_mouse(mouse.kind, mouse.x, mouse.y);
+            return Cmd::None;
+        }
+
+        if let Event::Key(KeyEvent { code, kind, .. }) = event {
             // 't' toggles between Canvas and TextEffects modes
-            if matches!(code, KeyCode::Char('t')) {
+            if matches!(code, KeyCode::Char('t')) && matches!(kind, KeyEventKind::Press) {
                 self.demo_mode = match self.demo_mode {
                     DemoMode::Canvas => DemoMode::TextEffects,
                     DemoMode::TextEffects => DemoMode::Canvas,
                 };
+                self.fps_last_mouse = None;
+                self.fps_input = FpsInputState::default();
                 return Cmd::None;
             }
 
             match self.demo_mode {
                 DemoMode::Canvas => {
+                    if self.is_fps_effect() {
+                        self.handle_fps_key(*code, *kind);
+                        return Cmd::None;
+                    }
+                    if !matches!(kind, KeyEventKind::Press) {
+                        return Cmd::None;
+                    }
                     // Canvas mode key handling (original behavior)
                     match code {
                         KeyCode::Left | KeyCode::Char('h') => {
-                            self.effect = self.effect.prev();
-                            self.start_transition();
+                            let effect = self.effect.prev();
+                            self.switch_effect(effect);
                         }
                         KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' ') => {
-                            self.effect = self.effect.next();
-                            self.start_transition();
+                            let effect = self.effect.next();
+                            self.switch_effect(effect);
                         }
                         KeyCode::Char('p') => match self.effect {
                             EffectType::Shape3D => {
@@ -3150,6 +4446,9 @@ impl Screen for VisualEffectsScreen {
                     }
                 }
                 DemoMode::TextEffects => {
+                    if !matches!(kind, KeyEventKind::Press) {
+                        return Cmd::None;
+                    }
                     // Text effects mode key handling
                     match code {
                         // 1-6 keys switch tabs
@@ -3268,12 +4567,20 @@ impl Screen for VisualEffectsScreen {
             self.min_frame_time_us / 1000.0,
             self.max_frame_time_us / 1000.0
         );
-        let header_text = format!(
-            " {} │ ←/→ Switch │ [t] Text FX{}{}",
-            self.effect.name(),
-            space_hint,
-            fps_stats
-        );
+        let header_text = if self.is_fps_effect() {
+            format!(
+                " {} │ WASD move │ Mouse look │ Space jump │ Click fire │ ←/→ switch │ [t] Text FX{}",
+                self.effect.name(),
+                fps_stats
+            )
+        } else {
+            format!(
+                " {} │ ←/→ Switch │ [t] Text FX{}{}",
+                self.effect.name(),
+                space_hint,
+                fps_stats
+            )
+        };
         let header = Paragraph::new(header_text)
             .style(Style::new().bold().fg(PackedRgba::rgb(200, 200, 255)));
         header.render(header_area, frame);
@@ -3298,41 +4605,59 @@ impl Screen for VisualEffectsScreen {
             painter.clear();
             let (pw, ph) = painter.size();
 
-            match self.effect {
-                EffectType::Shape3D => self.shape3d.render(&mut painter, pw, ph, self.time),
-                EffectType::Particles => self.particles.render(&mut painter, pw, ph),
-                EffectType::Matrix => self.matrix.render(&mut painter, pw, ph),
-                EffectType::Tunnel => self.tunnel.render(&mut painter, pw, ph),
-                EffectType::Fire => self.fire.render(&mut painter, pw, ph),
-                EffectType::ReactionDiffusion => {
-                    self.reaction_diffusion.render(&mut painter, pw, ph)
-                }
-                EffectType::StrangeAttractor => self.attractor.render(&mut painter, pw, ph),
-                EffectType::Mandelbrot => self.mandelbrot.render(&mut painter, pw, ph),
-                EffectType::Lissajous => self.lissajous.render(&mut painter, pw, ph),
-                EffectType::FlowField => self.flow_field.render(&mut painter, pw, ph),
-                EffectType::Julia => self.julia.render(&mut painter, pw, ph),
-                EffectType::WaveInterference => {
-                    self.wave_interference.render(&mut painter, pw, ph, quality)
-                }
-                EffectType::Spiral => self.spiral.render(&mut painter, pw, ph, quality),
-                EffectType::SpinLattice => self.spin_lattice.render(&mut painter, pw, ph, quality),
-                // Canvas adapters for metaballs and plasma (bd-l8x9.5.3)
-                EffectType::Metaballs => {
-                    self.metaballs_adapter.borrow_mut().fill_frame(
-                        &mut painter,
-                        self.time,
-                        quality,
-                        &theme_inputs,
-                    );
-                }
-                EffectType::Plasma => {
-                    self.plasma_adapter.borrow().fill(
-                        &mut painter,
-                        self.time,
-                        quality,
-                        &theme_inputs,
-                    );
+            if !matches!(quality, FxQuality::Off) {
+                match self.effect {
+                    EffectType::Shape3D => self.shape3d.render(&mut painter, pw, ph, self.time),
+                    EffectType::Particles => self.particles.render(&mut painter, pw, ph),
+                    EffectType::Matrix => self.matrix.render(&mut painter, pw, ph),
+                    EffectType::Tunnel => self.tunnel.render(&mut painter, pw, ph),
+                    EffectType::Fire => self.fire.render(&mut painter, pw, ph),
+                    EffectType::ReactionDiffusion => {
+                        self.reaction_diffusion.render(&mut painter, pw, ph)
+                    }
+                    EffectType::StrangeAttractor => self.attractor.render(&mut painter, pw, ph),
+                    EffectType::Mandelbrot => self.mandelbrot.render(&mut painter, pw, ph),
+                    EffectType::Lissajous => self.lissajous.render(&mut painter, pw, ph),
+                    EffectType::FlowField => self.flow_field.render(&mut painter, pw, ph),
+                    EffectType::Julia => self.julia.render(&mut painter, pw, ph),
+                    EffectType::WaveInterference => {
+                        self.wave_interference.render(&mut painter, pw, ph, quality)
+                    }
+                    EffectType::Spiral => self.spiral.render(&mut painter, pw, ph, quality),
+                    EffectType::SpinLattice => {
+                        self.spin_lattice.render(&mut painter, pw, ph, quality)
+                    }
+                    EffectType::DoomE1M1 => {
+                        self.doom_e1m1
+                            .render(&mut painter, pw, ph, quality, self.time, self.frame);
+                    }
+                    EffectType::QuakeE1M1 => {
+                        self.quake_e1m1.borrow_mut().render(
+                            &mut painter,
+                            pw,
+                            ph,
+                            quality,
+                            self.time,
+                            self.frame,
+                        );
+                    }
+                    // Canvas adapters for metaballs and plasma (bd-l8x9.5.3)
+                    EffectType::Metaballs => {
+                        self.metaballs_adapter.borrow_mut().fill_frame(
+                            &mut painter,
+                            self.time,
+                            quality,
+                            &theme_inputs,
+                        );
+                    }
+                    EffectType::Plasma => {
+                        self.plasma_adapter.borrow().fill(
+                            &mut painter,
+                            self.time,
+                            quality,
+                            &theme_inputs,
+                        );
+                    }
                 }
             }
 
@@ -3383,10 +4708,47 @@ impl Screen for VisualEffectsScreen {
 
         self.frame += 1;
         self.time += 0.1;
+        if matches!(self.demo_mode, DemoMode::Canvas) && self.is_fps_effect() {
+            self.apply_fps_movement();
+        }
 
         let quality = self.last_quality.get();
         let update_stride = fx_stride(quality) as u64;
-        let update_this_frame = update_stride != 0 && self.frame.is_multiple_of(update_stride);
+        let update_this_frame =
+            update_stride != 0 && (self.frame == 1 || self.frame.is_multiple_of(update_stride));
+
+        let (matrix_width, matrix_height) = match quality {
+            FxQuality::Full => (80, 60),
+            FxQuality::Reduced => (60, 45),
+            FxQuality::Minimal => (45, 30),
+            FxQuality::Off => (0, 0),
+        };
+        let (fire_width, fire_height) = match quality {
+            FxQuality::Full => (80, 50),
+            FxQuality::Reduced => (60, 36),
+            FxQuality::Minimal => (40, 28),
+            FxQuality::Off => (0, 0),
+        };
+        let (reaction_width, reaction_height) = match quality {
+            FxQuality::Full => (100, 60),
+            FxQuality::Reduced => (72, 45),
+            FxQuality::Minimal => (50, 30),
+            FxQuality::Off => (0, 0),
+        };
+        let (spin_width, spin_height) = match quality {
+            FxQuality::Full => (60, 40),
+            FxQuality::Reduced => (45, 30),
+            FxQuality::Minimal => (30, 20),
+            FxQuality::Off => (0, 0),
+        };
+        let fractal_iters = match quality {
+            FxQuality::Full => 80,
+            FxQuality::Reduced => 60,
+            FxQuality::Minimal => 40,
+            FxQuality::Off => 0,
+        };
+        self.mandelbrot.max_iter = fractal_iters;
+        self.julia.max_iter = fractal_iters;
 
         // Update only the active effect to avoid heavy background work.
         match self.effect {
@@ -3397,15 +4759,17 @@ impl Screen for VisualEffectsScreen {
             }
             EffectType::Particles => {
                 if update_this_frame {
-                    self.particles.update();
+                    self.particles.update_with_quality(quality);
                 }
             }
             EffectType::Matrix => {
-                if !self.matrix.initialized {
-                    self.matrix.init(80);
+                if matrix_width > 0
+                    && (!self.matrix.initialized || self.matrix.width != matrix_width)
+                {
+                    self.matrix.init(matrix_width);
                 }
-                if update_this_frame {
-                    self.matrix.update(60);
+                if update_this_frame && matrix_width > 0 && matrix_height > 0 {
+                    self.matrix.update(matrix_height);
                 }
             }
             EffectType::Tunnel => {
@@ -3414,18 +4778,29 @@ impl Screen for VisualEffectsScreen {
                 }
             }
             EffectType::Fire => {
-                if !self.fire.initialized {
-                    self.fire.init(80, 50);
+                if fire_width > 0
+                    && fire_height > 0
+                    && (!self.fire.initialized
+                        || self.fire.width != fire_width
+                        || self.fire.height != fire_height)
+                {
+                    self.fire.init(fire_width, fire_height);
                 }
-                if update_this_frame {
+                if update_this_frame && fire_width > 0 && fire_height > 0 {
                     self.fire.update();
                 }
             }
             EffectType::ReactionDiffusion => {
-                if !self.reaction_diffusion.initialized {
-                    self.reaction_diffusion.init(100, 60);
+                if reaction_width > 0
+                    && reaction_height > 0
+                    && (!self.reaction_diffusion.initialized
+                        || self.reaction_diffusion.width != reaction_width
+                        || self.reaction_diffusion.height != reaction_height)
+                {
+                    self.reaction_diffusion
+                        .init(reaction_width, reaction_height);
                 }
-                if update_this_frame {
+                if update_this_frame && reaction_width > 0 && reaction_height > 0 {
                     let iterations = match quality {
                         FxQuality::Full => {
                             if self.frame.is_multiple_of(2) {
@@ -3460,7 +4835,7 @@ impl Screen for VisualEffectsScreen {
             }
             EffectType::FlowField => {
                 if update_this_frame {
-                    self.flow_field.update();
+                    self.flow_field.update_with_quality(quality);
                 }
             }
             EffectType::Julia => {
@@ -3479,11 +4854,26 @@ impl Screen for VisualEffectsScreen {
                 }
             }
             EffectType::SpinLattice => {
-                if !self.spin_lattice.initialized {
-                    self.spin_lattice.init(60, 40);
+                if spin_width > 0
+                    && spin_height > 0
+                    && (!self.spin_lattice.initialized
+                        || self.spin_lattice.width != spin_width
+                        || self.spin_lattice.height != spin_height)
+                {
+                    self.spin_lattice.init(spin_width, spin_height);
                 }
-                if update_this_frame {
+                if update_this_frame && spin_width > 0 && spin_height > 0 {
                     self.spin_lattice.update();
+                }
+            }
+            EffectType::DoomE1M1 => {
+                if update_this_frame {
+                    self.doom_e1m1.update();
+                }
+            }
+            EffectType::QuakeE1M1 => {
+                if update_this_frame {
+                    self.quake_e1m1.borrow_mut().update();
                 }
             }
             EffectType::Metaballs | EffectType::Plasma => {}
@@ -3501,24 +4891,53 @@ impl Screen for VisualEffectsScreen {
     fn keybindings(&self) -> Vec<HelpEntry> {
         match self.demo_mode {
             DemoMode::Canvas => {
-                vec![
-                    HelpEntry {
-                        key: "Space/→",
-                        action: "Next effect",
-                    },
-                    HelpEntry {
-                        key: "←",
-                        action: "Prev effect",
-                    },
-                    HelpEntry {
-                        key: "p",
-                        action: "Cycle options",
-                    },
-                    HelpEntry {
-                        key: "t",
-                        action: "Text Effects mode",
-                    },
-                ]
+                if self.is_fps_effect() {
+                    vec![
+                        HelpEntry {
+                            key: "WASD",
+                            action: "Move",
+                        },
+                        HelpEntry {
+                            key: "Mouse",
+                            action: "Look",
+                        },
+                        HelpEntry {
+                            key: "Space",
+                            action: "Jump",
+                        },
+                        HelpEntry {
+                            key: "Click",
+                            action: "Fire",
+                        },
+                        HelpEntry {
+                            key: "←/→",
+                            action: "Switch effect",
+                        },
+                        HelpEntry {
+                            key: "t",
+                            action: "Text Effects mode",
+                        },
+                    ]
+                } else {
+                    vec![
+                        HelpEntry {
+                            key: "Space/→",
+                            action: "Next effect",
+                        },
+                        HelpEntry {
+                            key: "←",
+                            action: "Prev effect",
+                        },
+                        HelpEntry {
+                            key: "p",
+                            action: "Cycle options",
+                        },
+                        HelpEntry {
+                            key: "t",
+                            action: "Text Effects mode",
+                        },
+                    ]
+                }
             }
             DemoMode::TextEffects => {
                 vec![
@@ -3714,7 +5133,7 @@ mod tests {
 
         // Update many times to fill trail
         for _ in 0..20 {
-            state.update();
+            state.update_with_quality(FxQuality::Full);
         }
 
         // Check that some particle has a long trail
