@@ -67,8 +67,8 @@
 - [x] `cargo check --all-targets`
 - [x] `cargo clippy --all-targets -- -D warnings`
 - [ ] Update bead status (`br close bd-iuvb.2 --reason "Completed"`)
-- [ ] Post completion message in Agent Mail thread `[bd-iuvb.2]`
-- [ ] Release file reservations
+- [ ] Post completion message in Agent Mail thread `[bd-iuvb.2]` (send_message timeouts)
+- [x] Release file reservations
 
 ## Current Session (StormyEagle) — bd-3e1t.8.3 Strategy Selector + Evidence Log (2026-02-04)
 - [x] Read all of `AGENTS.md` and `README.md` to refresh constraints and architecture context
