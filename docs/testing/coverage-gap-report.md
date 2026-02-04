@@ -12,6 +12,9 @@ tests. Until a full run completes, the 2026-02-02 coverage numbers remain the
 latest verified baseline. The prioritized gap map below is derived from that
 baseline and current code review.
 
+Additional attempt (2026-02-04): `cargo llvm-cov --workspace --all-targets --all-features --summary-only --json --output-path /tmp/ftui_coverage_pre.json`
+failed during `ftui-demo-showcase` a11y snapshot tests (multiple failures and >60s stalls). Run was aborted; no new metrics produced.
+
 **Priority 0 (Critical coverage gaps)**
 - `crates/ftui-runtime/src/program.rs` (34.05%): add `ProgramSimulator` tests
   covering `Cmd::Batch`, `Cmd::Sequence`, `Cmd::Task` (effects), `Cmd::Tick`,

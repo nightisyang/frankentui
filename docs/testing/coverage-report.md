@@ -1,28 +1,37 @@
 # Coverage Report (llvm-cov)
 
-- Generated: 2026-02-02 03:15:52Z
+- Generated: 2026-02-02 03:15:52Z (baseline)
 - Command: `cargo llvm-cov --workspace --all-targets --all-features --summary-only --json --output-path /tmp/ftui_coverage.json`
 - Notes: All tests passed; coverage run completed without `--ignore-run-fail`.
-  - 2026-02-04: attempted a fresh full run; hung on long-running demo tests. Baseline below remains authoritative.
+  - 2026-02-04: attempted a fresh full run (command below); coverage run failed in `ftui-demo-showcase` a11y snapshot tests and then hung. Baseline below remains authoritative.
+    - Command: `cargo llvm-cov --workspace --all-targets --all-features --summary-only --json --output-path /tmp/ftui_coverage_pre.json`
+    - Outcome: a11y snapshot failures + many tests stalled >60s; run aborted (cargo-llvm-cov/test processes terminated).
 
 ## Failing Tests During Coverage Run
-- None.
+- `crates/ftui-demo-showcase/tests/a11y_snapshots.rs` failures:
+  - `a11y_accessibility_panel_all_modes_120x40`
+  - `a11y_accessibility_panel_high_contrast_80x24`
+  - `a11y_accessibility_panel_reduced_motion_80x24`
+  - `a11y_accessibility_panel_large_text_80x24`
+- Additional `a11y_snapshots` tests reported running >60s (large batch across dashboard/data_viz/forms/widget_gallery and multiple size modes); run was terminated to prevent indefinite hang.
 
 ## Coverage Summary (Lines)
-| Crate | Covered / Total | % | Target | Status |
-| --- | ---: | ---: | ---: | :---: |
-| `ftui` | 0/8 | 0.00% | n/a | n/a |
-| `ftui-core` | 4612/4862 | 94.86% | 80% | PASS |
-| `ftui-demo-showcase` | 745/1442 | 51.66% | n/a | n/a |
-| `ftui-extras` | 8679/9680 | 89.66% | 60% | PASS |
-| `ftui-harness` | 2030/2652 | 76.55% | n/a | n/a |
-| `ftui-layout` | 1308/1343 | 97.39% | 75% | PASS |
-| `ftui-pty` | 603/667 | 90.40% | n/a | n/a |
-| `ftui-render` | 6180/6501 | 95.06% | 85% | PASS |
-| `ftui-runtime` | 3341/3976 | 84.03% | 75% | PASS |
-| `ftui-style` | 1607/1631 | 98.53% | 80% | PASS |
-| `ftui-text` | 5014/5309 | 94.44% | 80% | PASS |
-| `ftui-widgets` | 11613/12897 | 90.04% | 70% | PASS |
+Target policy: overall >= 70%; per-crate targets per `coverage-matrix.md`.
+
+| Crate | Covered / Total | % | Target | Delta | Status |
+| --- | ---: | ---: | ---: | ---: | :---: |
+| `ftui` | 0/8 | 0.00% | n/a | n/a | n/a |
+| `ftui-core` | 4612/4862 | 94.86% | 80% | +14.86 | PASS |
+| `ftui-demo-showcase` | 745/1442 | 51.66% | n/a | n/a | n/a |
+| `ftui-extras` | 8679/9680 | 89.66% | 60% | +29.66 | PASS |
+| `ftui-harness` | 2030/2652 | 76.55% | n/a | n/a | n/a |
+| `ftui-layout` | 1308/1343 | 97.39% | 75% | +22.39 | PASS |
+| `ftui-pty` | 603/667 | 90.40% | n/a | n/a | n/a |
+| `ftui-render` | 6180/6501 | 95.06% | 80% | +15.06 | PASS |
+| `ftui-runtime` | 3341/3976 | 84.03% | 75% | +9.03 | PASS |
+| `ftui-style` | 1607/1631 | 98.53% | 80% | +18.53 | PASS |
+| `ftui-text` | 5014/5309 | 94.44% | 80% | +14.44 | PASS |
+| `ftui-widgets` | 11613/12897 | 90.04% | 70% | +20.04 | PASS |
 
 ## Lowest-Covered Files (Top 5 per Target Crate)
 ### `ftui-core`

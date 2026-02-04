@@ -50,8 +50,9 @@ After running coverage, update these docs:
 
 ## CI Alignment
 
-CI uses the LCOV output for Codecov and threshold checks. Keep local results
-consistent with CI by using:
+CI uses the LCOV output for Codecov **and** a per-crate threshold gate. The gate
+parses `lcov.info`, compares each crate to `coverage-matrix.md`, and fails with
+crate + delta guidance. Keep local results consistent with CI by using:
 
 ```bash
 cargo llvm-cov --workspace --lcov --output-path lcov.info
@@ -71,4 +72,3 @@ Coverage must be achieved with real components. See:
   ```
 - **Feature-gated code**: always use `--all-features` for the full view.
 - **Flaky tests**: fix the underlying issue; do not suppress coverage failures.
-

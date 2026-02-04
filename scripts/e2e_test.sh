@@ -347,6 +347,7 @@ write_budget_case_meta() {
 
     if command -v jq >/dev/null 2>&1; then
         jq -nc \
+            --arg schema_version "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}" \
             --arg case "$case_name" \
             --arg status "$status" \
             --arg timestamp "$(e2e_timestamp)" \
@@ -361,10 +362,11 @@ write_budget_case_meta() {
             --arg pty_output "$pty_out" \
             --argjson duration_ms "$duration_ms" \
             --arg refresh_hash "$refresh_hash" \
-            '{event:"budgeted_refresh_case",case:$case,status:$status,timestamp:$timestamp,run_id:$run_id,seed:$seed,screen_mode:$screen_mode,cols:$cols,rows:$rows,frame_budget_us:$frame_budget_us,render_budget_us:$render_budget_us,evidence_jsonl:$evidence_jsonl,pty_output:$pty_output,duration_ms:$duration_ms,widget_refresh_hash:$refresh_hash}' \
+            '{schema_version:$schema_version,type:"budgeted_refresh_case",event:"budgeted_refresh_case",case:$case,status:$status,timestamp:$timestamp,run_id:$run_id,seed:$seed,screen_mode:$screen_mode,cols:$cols,rows:$rows,frame_budget_us:$frame_budget_us,render_budget_us:$render_budget_us,evidence_jsonl:$evidence_jsonl,pty_output:$pty_output,duration_ms:$duration_ms,widget_refresh_hash:$refresh_hash}' \
             >> "$jsonl"
     else
-        printf '{"event":"budgeted_refresh_case","case":"%s","status":"%s","timestamp":"%s","run_id":"%s","seed":%s,"screen_mode":"%s","cols":%s,"rows":%s,"frame_budget_us":%s,"render_budget_us":%s,"evidence_jsonl":"%s","pty_output":"%s","duration_ms":%s,"widget_refresh_hash":"%s"}\n' \
+        printf '{"schema_version":"%s","type":"budgeted_refresh_case","event":"budgeted_refresh_case","case":"%s","status":"%s","timestamp":"%s","run_id":"%s","seed":%s,"screen_mode":"%s","cols":%s,"rows":%s,"frame_budget_us":%s,"render_budget_us":%s,"evidence_jsonl":"%s","pty_output":"%s","duration_ms":%s,"widget_refresh_hash":"%s"}\n' \
+            "$(escape_json "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}")" \
             "$(escape_json "$case_name")" "$(escape_json "$status")" "$(e2e_timestamp)" "$(escape_json "$run_id")" \
             "$seed" "$(escape_json "$screen_mode")" "$cols" "$rows" "$frame_budget_us" "$render_budget_us" \
             "$(escape_json "$evidence_jsonl")" "$(escape_json "$pty_out")" "$duration_ms" "$(escape_json "$refresh_hash")" \
@@ -508,6 +510,7 @@ write_span_case_meta() {
 
     if command -v jq >/dev/null 2>&1; then
         jq -nc \
+            --arg schema_version "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}" \
             --arg case "$case_name" \
             --arg status "$status" \
             --arg timestamp "$(e2e_timestamp)" \
@@ -520,10 +523,11 @@ write_span_case_meta() {
             --arg pty_output "$pty_out" \
             --argjson duration_ms "$duration_ms" \
             --arg diff_hash "$diff_hash" \
-            '{event:"span_diff_case",case:$case,status:$status,timestamp:$timestamp,run_id:$run_id,seed:$seed,screen_mode:$screen_mode,cols:$cols,rows:$rows,evidence_jsonl:$evidence_jsonl,pty_output:$pty_output,duration_ms:$duration_ms,diff_hash:$diff_hash}' \
+            '{schema_version:$schema_version,type:"span_diff_case",event:"span_diff_case",case:$case,status:$status,timestamp:$timestamp,run_id:$run_id,seed:$seed,screen_mode:$screen_mode,cols:$cols,rows:$rows,evidence_jsonl:$evidence_jsonl,pty_output:$pty_output,duration_ms:$duration_ms,diff_hash:$diff_hash}' \
             >> "$jsonl"
     else
-        printf '{"event":"span_diff_case","case":"%s","status":"%s","timestamp":"%s","run_id":"%s","seed":%s,"screen_mode":"%s","cols":%s,"rows":%s,"evidence_jsonl":"%s","pty_output":"%s","duration_ms":%s,"diff_hash":"%s"}\n' \
+        printf '{"schema_version":"%s","type":"span_diff_case","event":"span_diff_case","case":"%s","status":"%s","timestamp":"%s","run_id":"%s","seed":%s,"screen_mode":"%s","cols":%s,"rows":%s,"evidence_jsonl":"%s","pty_output":"%s","duration_ms":%s,"diff_hash":"%s"}\n' \
+            "$(escape_json "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}")" \
             "$(escape_json "$case_name")" "$(escape_json "$status")" "$(e2e_timestamp)" "$(escape_json "$run_id")" \
             "$seed" "$(escape_json "$screen_mode")" "$cols" "$rows" \
             "$(escape_json "$evidence_jsonl")" "$(escape_json "$pty_out")" "$duration_ms" "$(escape_json "$diff_hash")" \
@@ -547,6 +551,7 @@ write_tile_case_meta() {
 
     if command -v jq >/dev/null 2>&1; then
         jq -nc \
+            --arg schema_version "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}" \
             --arg case "$case_name" \
             --arg status "$status" \
             --arg timestamp "$(e2e_timestamp)" \
@@ -559,10 +564,11 @@ write_tile_case_meta() {
             --arg pty_output "$pty_out" \
             --argjson duration_ms "$duration_ms" \
             --arg diff_hash "$diff_hash" \
-            '{event:"tile_skip_case",case:$case,status:$status,timestamp:$timestamp,run_id:$run_id,seed:$seed,screen_mode:$screen_mode,cols:$cols,rows:$rows,evidence_jsonl:$evidence_jsonl,pty_output:$pty_output,duration_ms:$duration_ms,diff_hash:$diff_hash}' \
+            '{schema_version:$schema_version,type:"tile_skip_case",event:"tile_skip_case",case:$case,status:$status,timestamp:$timestamp,run_id:$run_id,seed:$seed,screen_mode:$screen_mode,cols:$cols,rows:$rows,evidence_jsonl:$evidence_jsonl,pty_output:$pty_output,duration_ms:$duration_ms,diff_hash:$diff_hash}' \
             >> "$jsonl"
     else
-        printf '{"event":"tile_skip_case","case":"%s","status":"%s","timestamp":"%s","run_id":"%s","seed":%s,"screen_mode":"%s","cols":%s,"rows":%s,"evidence_jsonl":"%s","pty_output":"%s","duration_ms":%s,"diff_hash":"%s"}\n' \
+        printf '{"schema_version":"%s","type":"tile_skip_case","event":"tile_skip_case","case":"%s","status":"%s","timestamp":"%s","run_id":"%s","seed":%s,"screen_mode":"%s","cols":%s,"rows":%s,"evidence_jsonl":"%s","pty_output":"%s","duration_ms":%s,"diff_hash":"%s"}\n' \
+            "$(escape_json "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}")" \
             "$(escape_json "$case_name")" "$(escape_json "$status")" "$(e2e_timestamp)" "$(escape_json "$run_id")" \
             "$seed" "$(escape_json "$screen_mode")" "$cols" "$rows" \
             "$(escape_json "$evidence_jsonl")" "$(escape_json "$pty_out")" "$duration_ms" "$(escape_json "$diff_hash")" \

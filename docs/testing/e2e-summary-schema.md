@@ -61,27 +61,52 @@ every event yet.
 Default location: `<E2E_LOG_DIR>/e2e.jsonl` (scripts may override).
 One JSON object per line.
 
-### Common Fields (all events)
+Machine-readable schema:
+
+```
+tests/e2e/lib/e2e_jsonl_schema.json
+```
+
+The logger sets `schema_version` from `E2E_JSONL_SCHEMA_VERSION`
+(default `e2e-jsonl-v1`).
+
+Validator:
+
+```bash
+python3 tests/e2e/lib/validate_jsonl.py <path/to/e2e.jsonl> --schema tests/e2e/lib/e2e_jsonl_schema.json --warn
+```
+
+Example fixture (handy for local verification):
+
+```
+tests/e2e/lib/e2e_jsonl_examples.jsonl
+```
+
+### Common Fields (required)
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `schema_version` | string | Schema version (current: `e2e-jsonl-v1`) |
 | `type` | string | Event type (see below) |
 | `timestamp` | string | ISO-8601 timestamp |
 | `run_id` | string | Stable run id for correlation |
-| `suite` | string | Suite name (script or test group) |
-| `case` | string | Case name (test id or step id) |
-| `mode` | string | `alt` or `inline` when applicable |
-| `cols` | number | Terminal columns |
-| `rows` | number | Terminal rows |
-| `seed` | number | Determinism seed (if used) |
-| `caps_profile` | string | Terminal caps profile label |
-| `git_commit` | string | Git commit hash (if available) |
-| `git_dirty` | boolean | Working tree dirty flag (if available) |
-| `term` | string | `TERM` value |
-| `colorterm` | string | `COLORTERM` value |
-| `no_color` | string | `NO_COLOR` value |
-| `host` | string | Hostname |
-| `pid` | number | Process id (if applicable) |
+| `seed` | number | Determinism seed (required, may be `0`) |
+
+Additional fields are defined per-event in
+`tests/e2e/lib/e2e_jsonl_schema.json`; not every script emits every field.
+Common optional fields (depending on event type) include `mode`, `cols`,
+`rows`, `hash_key`, `git_commit`, `git_dirty`, `term`, `colorterm`,
+`no_color`, and `host`.
+
+### Validation Behavior
+
+- In CI, validation is **strict** (fail on first schema violation).
+- Locally, validation **warns** by default.
+- Override with `E2E_JSONL_VALIDATE=1` (strict) or
+  `E2E_JSONL_VALIDATE_MODE=warn|strict`.
+- The logger uses `tests/e2e/lib/validate_jsonl.py` when `E2E_PYTHON` is set and
+  the schema file is present; otherwise it falls back to a lightweight `jq`
+  check of required fields.
 
 ### Event Types
 

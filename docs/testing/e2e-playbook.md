@@ -117,6 +117,27 @@ The target JSONL schema for step/input/frame/hash/timing/environment events is
 defined in `docs/testing/e2e-summary-schema.md`. Scripts may emit only a subset
 today; new E2E work should log events that conform to that schema.
 
+Validation:
+
+```bash
+python3 tests/e2e/lib/validate_jsonl.py "$E2E_JSONL_FILE" --schema tests/e2e/lib/e2e_jsonl_schema.json --warn
+```
+
+Validator self-test (unit coverage for required/optional fields + malformed lines):
+
+```bash
+python3 tests/e2e/lib/validate_jsonl.py --self-test
+```
+
+Validation mode (default): warn locally, strict in CI.
+
+Environment controls:
+
+- `E2E_JSONL_VALIDATE_MODE=warn|strict` — force validation mode.
+- `E2E_JSONL_SCHEMA_FILE` — override schema file path.
+- `E2E_JSONL_VALIDATOR` — override validator script path.
+- `E2E_JSONL_SCHEMA_VERSION` — override schema version string in emitted JSONL.
+
 When `E2E_DETERMINISTIC=1` is set, JSONL timestamps and run IDs become stable,
 and step logs include `hash_key` in the format `mode-<cols>x<rows>-seed<seed>`.
 

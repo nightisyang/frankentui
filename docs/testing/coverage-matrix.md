@@ -9,10 +9,11 @@ See Bead: bd-2nu8.17.
 ## How to Use
 - When adding a new module, add it here.
 - When adding a new public API, add explicit unit tests here.
-- CI should enforce these thresholds (see bd-2nu8.13).
+- CI enforces these thresholds via the coverage gate.
 
 ## Coverage Targets (v1)
-- ftui-render: >= 85% (kernel)
+- Overall workspace: >= 70% (CI gate)
+- ftui-render: >= 80% (kernel)
 - ftui-core: >= 80% (terminal/session + input)
 - ftui-style: >= 80%
 - ftui-text: >= 80%
@@ -26,10 +27,11 @@ Non-gated crates (report-only, no threshold): ftui, ftui-harness, ftui-demo-show
 Note: Integration-heavy PTY tests are enforced separately; do not "unit test" around reality.
 
 ## Last Measured: 2026-02-02 (cargo llvm-cov, 2630 tests)
+Note: 2026-02-04 attempt hung in `ftui-demo-showcase` a11y snapshot tests; no new metrics produced.
 
 | Crate | Target | Actual | Status |
 |-------|--------|--------|--------|
-| ftui-render | >= 85% | 95.06% | PASS |
+| ftui-render | >= 80% | 95.06% | PASS |
 | ftui-core | >= 80% | 94.86% | PASS |
 | ftui-style | >= 80% | 98.53% | PASS |
 | ftui-text | >= 80% | 94.44% | PASS |

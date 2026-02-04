@@ -137,10 +137,10 @@ jsonl_validate_line() {
             jq -e 'has("seed") and has("deterministic") and has("term") and has("colorterm") and has("no_color")' >/dev/null <<<"$line"
             ;;
         run_start)
-            jq -e 'has("command") and has("log_dir") and has("results_dir")' >/dev/null <<<"$line"
+            jq -e 'has("seed") and has("command") and has("log_dir") and has("results_dir")' >/dev/null <<<"$line"
             ;;
         run_end)
-            jq -e 'has("status") and has("duration_ms") and has("failed_count")' >/dev/null <<<"$line"
+            jq -e 'has("seed") and has("status") and has("duration_ms") and has("failed_count")' >/dev/null <<<"$line"
             ;;
         step_start)
             jq -e 'has("step") and has("mode") and has("cols") and has("rows") and has("seed")' >/dev/null <<<"$line"
@@ -149,10 +149,10 @@ jsonl_validate_line() {
             jq -e 'has("step") and has("status") and has("duration_ms") and has("mode") and has("cols") and has("rows") and has("seed")' >/dev/null <<<"$line"
             ;;
         pty_capture)
-            jq -e 'has("output_sha256") and has("output_bytes") and has("cols") and has("rows") and has("exit_code")' >/dev/null <<<"$line"
+            jq -e 'has("seed") and has("output_sha256") and has("output_bytes") and has("cols") and has("rows") and has("exit_code")' >/dev/null <<<"$line"
             ;;
         assert)
-            jq -e 'has("assertion") and has("status")' >/dev/null <<<"$line"
+            jq -e 'has("seed") and has("assertion") and has("status")' >/dev/null <<<"$line"
             ;;
         *)
             return 0
@@ -162,11 +162,12 @@ jsonl_validate_line() {
 
 jsonl_validate_file() {
     local jsonl_file="$1"
+    local mode="${2:-}"
     if [[ ! -f "$jsonl_file" ]]; then
         return 0
     fi
     if ! command -v jq >/dev/null 2>&1; then
-        if jsonl_should_validate; then
+        if [[ "$mode" == "strict" ]] || jsonl_should_validate; then
             echo "WARN: jq not available; skipping JSONL validation for $jsonl_file" >&2
         fi
         return 0
@@ -179,7 +180,10 @@ jsonl_validate_file() {
         fi
         if ! jsonl_validate_line "$line"; then
             echo "JSONL schema violation at line $line_no: $line" >&2
-            if jsonl_should_validate; then
+            if [[ "$mode" == "strict" ]]; then
+                return 1
+            fi
+            if [[ -z "$mode" ]] && jsonl_should_validate; then
                 return 1
             fi
         fi
@@ -217,7 +221,7 @@ jsonl_validate_current() {
     fi
 
     if [[ "$mode" == "strict" || "$mode" == "warn" ]]; then
-        jsonl_validate_file "$E2E_JSONL_FILE"
+        jsonl_validate_file "$E2E_JSONL_FILE" "$mode"
         return $?
     fi
 
@@ -296,8 +300,6 @@ jsonl_run_start() {
             --argjson seed "$seed_json" \
             '{schema_version:$schema_version,type:$type,timestamp:$timestamp,run_id:$run_id,seed:$seed,command:$command,log_dir:$log_dir,results_dir:$results_dir}')"
     else
-        local seed_json="null"
-        if [[ -n "${E2E_SEED:-}" ]]; then seed_json="${E2E_SEED}"; fi
         jsonl_emit "{\"schema_version\":\"${E2E_JSONL_SCHEMA_VERSION}\",\"type\":\"run_start\",\"timestamp\":\"$(json_escape "$ts")\",\"run_id\":\"$(json_escape "$E2E_RUN_ID")\",\"seed\":${seed_json},\"command\":\"$(json_escape "$cmd")\",\"log_dir\":\"$(json_escape "$E2E_LOG_DIR")\",\"results_dir\":\"$(json_escape "$E2E_RESULTS_DIR")\"}"
     fi
 }
@@ -322,8 +324,6 @@ jsonl_run_end() {
             --argjson failed_count "$failed_count" \
             '{schema_version:$schema_version,type:$type,timestamp:$timestamp,run_id:$run_id,seed:$seed,status:$status,duration_ms:$duration_ms,failed_count:$failed_count}')"
     else
-        local seed_json="null"
-        if [[ -n "${E2E_SEED:-}" ]]; then seed_json="${E2E_SEED}"; fi
         jsonl_emit "{\"schema_version\":\"${E2E_JSONL_SCHEMA_VERSION}\",\"type\":\"run_end\",\"timestamp\":\"$(json_escape "$ts")\",\"run_id\":\"$(json_escape "$E2E_RUN_ID")\",\"seed\":${seed_json},\"status\":\"$(json_escape "$status")\",\"duration_ms\":${duration_ms},\"failed_count\":${failed_count}}"
     fi
     jsonl_validate_current
