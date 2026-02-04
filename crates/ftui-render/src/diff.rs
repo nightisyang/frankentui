@@ -95,6 +95,89 @@ fn scan_row_changes(old_row: &[Cell], new_row: &[Cell], y: u16, changes: &mut Ve
     }
 }
 
+#[inline]
+fn reserve_changes_capacity(width: u16, height: u16, changes: &mut Vec<(u16, u16)>) {
+    // Estimate capacity: assume ~5% of cells change on average.
+    let estimated_changes = (width as usize * height as usize) / 20;
+    let additional = estimated_changes.saturating_sub(changes.capacity());
+    if additional > 0 {
+        changes.reserve(additional);
+    }
+}
+
+fn compute_changes(old: &Buffer, new: &Buffer, changes: &mut Vec<(u16, u16)>) {
+    #[cfg(feature = "tracing")]
+    let _span = tracing::debug_span!("diff_compute", width = old.width(), height = old.height());
+    #[cfg(feature = "tracing")]
+    let _guard = _span.enter();
+
+    assert_eq!(old.width(), new.width(), "buffer widths must match");
+    assert_eq!(old.height(), new.height(), "buffer heights must match");
+
+    let width = old.width();
+    let height = old.height();
+    let w = width as usize;
+
+    changes.clear();
+    reserve_changes_capacity(width, height, changes);
+
+    let old_cells = old.cells();
+    let new_cells = new.cells();
+
+    // Row-major scan with row-skip fast path
+    for y in 0..height {
+        let row_start = y as usize * w;
+        let old_row = &old_cells[row_start..row_start + w];
+        let new_row = &new_cells[row_start..row_start + w];
+
+        // Fast path: skip entirely unchanged rows.
+        if old_row == new_row {
+            continue;
+        }
+
+        // Scan for changed cells using block-based comparison
+        scan_row_changes(old_row, new_row, y, changes);
+    }
+
+    #[cfg(feature = "tracing")]
+    tracing::trace!(changes = changes.len(), "diff computed");
+}
+
+fn compute_dirty_changes(old: &Buffer, new: &Buffer, changes: &mut Vec<(u16, u16)>) {
+    assert_eq!(old.width(), new.width(), "buffer widths must match");
+    assert_eq!(old.height(), new.height(), "buffer heights must match");
+
+    let width = old.width();
+    let height = old.height();
+    let w = width as usize;
+
+    changes.clear();
+    reserve_changes_capacity(width, height, changes);
+
+    let old_cells = old.cells();
+    let new_cells = new.cells();
+    let dirty = new.dirty_rows();
+
+    for y in 0..height {
+        // Skip clean rows (the key optimization).
+        if !dirty[y as usize] {
+            continue;
+        }
+
+        let row_start = y as usize * w;
+        let old_row = &old_cells[row_start..row_start + w];
+        let new_row = &new_cells[row_start..row_start + w];
+
+        // Even for dirty rows, row-skip fast path applies:
+        // a row may be marked dirty but end up identical after compositing.
+        if old_row == new_row {
+            continue;
+        }
+
+        scan_row_changes(old_row, new_row, y, changes);
+    }
+}
+
 /// A contiguous run of changed cells on a single row.
 ///
 /// Used by the presenter to emit efficient cursor positioning.
@@ -193,48 +276,14 @@ impl BufferDiff {
     ///
     /// Debug-asserts that both buffers have identical dimensions.
     pub fn compute(old: &Buffer, new: &Buffer) -> Self {
-        #[cfg(feature = "tracing")]
-        let _span =
-            tracing::debug_span!("diff_compute", width = old.width(), height = old.height());
-        #[cfg(feature = "tracing")]
-        let _guard = _span.enter();
+        let mut diff = Self::new();
+        diff.compute_into(old, new);
+        diff
+    }
 
-        assert_eq!(old.width(), new.width(), "buffer widths must match");
-        assert_eq!(old.height(), new.height(), "buffer heights must match");
-
-        let width = old.width();
-        let height = old.height();
-        let w = width as usize;
-
-        // Estimate capacity: assume ~5% of cells change on average
-        let estimated_changes = (w * height as usize) / 20;
-        let mut changes = Vec::with_capacity(estimated_changes);
-
-        let old_cells = old.cells();
-        let new_cells = new.cells();
-
-        // Row-major scan with row-skip fast path
-        for y in 0..height {
-            let row_start = y as usize * w;
-            let old_row = &old_cells[row_start..row_start + w];
-            let new_row = &new_cells[row_start..row_start + w];
-
-            // Fast path: skip entirely unchanged rows.
-            // Cell derives PartialEq over four u32 fields, so slice
-            // equality compiles to tight element-wise comparison that
-            // LLVM can auto-vectorize for 16-byte aligned cells.
-            if old_row == new_row {
-                continue;
-            }
-
-            // Scan for changed cells using block-based comparison
-            scan_row_changes(old_row, new_row, y, &mut changes);
-        }
-
-        #[cfg(feature = "tracing")]
-        tracing::trace!(changes = changes.len(), "diff computed");
-
-        Self { changes }
+    /// Compute the diff into an existing buffer to reuse allocation.
+    pub fn compute_into(&mut self, old: &Buffer, new: &Buffer) {
+        compute_changes(old, new, &mut self.changes);
     }
 
     /// Compute the diff between two buffers using dirty-row hints.
@@ -249,41 +298,14 @@ impl BufferDiff {
     /// (marking a row dirty when it didn't actually change) are safe — they
     /// only cost the per-cell scan for that row.
     pub fn compute_dirty(old: &Buffer, new: &Buffer) -> Self {
-        assert_eq!(old.width(), new.width(), "buffer widths must match");
-        assert_eq!(old.height(), new.height(), "buffer heights must match");
+        let mut diff = Self::new();
+        diff.compute_dirty_into(old, new);
+        diff
+    }
 
-        let width = old.width();
-        let height = old.height();
-        let w = width as usize;
-
-        let estimated_changes = (w * height as usize) / 20;
-        let mut changes = Vec::with_capacity(estimated_changes);
-
-        let old_cells = old.cells();
-        let new_cells = new.cells();
-        let dirty = new.dirty_rows();
-
-        for y in 0..height {
-            // Skip clean rows (the key optimization).
-            if !dirty[y as usize] {
-                continue;
-            }
-
-            let row_start = y as usize * w;
-            let old_row = &old_cells[row_start..row_start + w];
-            let new_row = &new_cells[row_start..row_start + w];
-
-            // Even for dirty rows, row-skip fast path applies:
-            // a row may be marked dirty but end up identical after compositing.
-            if old_row == new_row {
-                continue;
-            }
-
-            // Scan for changed cells using block-based comparison
-            scan_row_changes(old_row, new_row, y, &mut changes);
-        }
-
-        Self { changes }
+    /// Compute the dirty-row diff into an existing buffer to reuse allocation.
+    pub fn compute_dirty_into(&mut self, old: &Buffer, new: &Buffer) {
+        compute_dirty_changes(old, new, &mut self.changes);
     }
 
     /// Number of changed cells.
@@ -1688,6 +1710,34 @@ mod proptests {
         let full = BufferDiff::compute(&old, &new);
         let dirty = BufferDiff::compute_dirty(&old, &new);
         assert_eq!(full.changes(), dirty.changes());
+    }
+
+    #[test]
+    fn compute_into_matches_compute() {
+        let old = Buffer::new(10, 10);
+        let mut new = Buffer::new(10, 10);
+        new.set_raw(3, 2, Cell::from_char('A'));
+        new.set_raw(7, 5, Cell::from_char('B'));
+
+        let full = BufferDiff::compute(&old, &new);
+        let mut reuse = BufferDiff::new();
+        reuse.compute_into(&old, &new);
+
+        assert_eq!(reuse.changes(), full.changes());
+    }
+
+    #[test]
+    fn compute_dirty_into_matches_compute_dirty() {
+        let old = Buffer::new(10, 10);
+        let mut new = Buffer::new(10, 10);
+        new.set_raw(2, 3, Cell::from_char('Q'));
+        new.set_raw(4, 7, Cell::from_char('Z'));
+
+        let dirty = BufferDiff::compute_dirty(&old, &new);
+        let mut reuse = BufferDiff::new();
+        reuse.compute_dirty_into(&old, &new);
+
+        assert_eq!(reuse.changes(), dirty.changes());
     }
 
     #[test]

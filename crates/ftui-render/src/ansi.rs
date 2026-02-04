@@ -83,6 +83,38 @@ pub const fn sgr_codes_for_flag(flag: StyleFlags) -> Option<SgrCodes> {
     }
 }
 
+#[inline]
+fn write_u8_dec(buf: &mut [u8], n: u8) -> usize {
+    if n >= 100 {
+        let hundreds = n / 100;
+        let tens = (n / 10) % 10;
+        let ones = n % 10;
+        buf[0] = b'0' + hundreds;
+        buf[1] = b'0' + tens;
+        buf[2] = b'0' + ones;
+        3
+    } else if n >= 10 {
+        let tens = n / 10;
+        let ones = n % 10;
+        buf[0] = b'0' + tens;
+        buf[1] = b'0' + ones;
+        2
+    } else {
+        buf[0] = b'0' + n;
+        1
+    }
+}
+
+#[inline]
+fn write_sgr_code<W: Write>(w: &mut W, code: u8) -> io::Result<()> {
+    let mut buf = [0u8; 6];
+    buf[0] = 0x1b;
+    buf[1] = b'[';
+    let len = write_u8_dec(&mut buf[2..], code);
+    buf[2 + len] = b'm';
+    w.write_all(&buf[..2 + len + 1])
+}
+
 /// Write SGR sequence for style flags (all set flags).
 ///
 /// Emits `CSI n ; n ; ... m` for each enabled flag.
@@ -99,20 +131,27 @@ pub fn sgr_flags<W: Write>(w: &mut W, flags: StyleFlags) -> io::Result<()> {
         return w.write_all(seq);
     }
 
-    w.write_all(b"\x1b[")?;
+    let mut buf = [0u8; 32];
+    let mut idx = 0usize;
+    buf[idx] = 0x1b;
+    buf[idx + 1] = b'[';
+    idx += 2;
     let mut first = true;
 
     for (flag, codes) in FLAG_TABLE {
         if flags.contains(flag) {
             if !first {
-                w.write_all(b";")?;
+                buf[idx] = b';';
+                idx += 1;
             }
-            write!(w, "{}", codes.on)?;
+            idx += write_u8_dec(&mut buf[idx..], codes.on);
             first = false;
         }
     }
 
-    w.write_all(b"m")
+    buf[idx] = b'm';
+    idx += 1;
+    w.write_all(&buf[..idx])
 }
 
 /// Ordered table of (flag, on/off codes) for iteration.
@@ -197,7 +236,7 @@ pub fn sgr_flags_off<W: Write>(
             continue;
         }
         // Emit the off code
-        write!(w, "\x1b[{}m", codes.off)?;
+        write_sgr_code(w, codes.off)?;
         // Check for collateral damage: Bold (off=22) and Dim (off=22) share the same off code
         if codes.off == 22 {
             // Off code 22 disables both Bold and Dim

@@ -35,6 +35,19 @@ use crate::cell::{Cell, CellContent, GraphemeId};
 use crate::drawing::{BorderChars, Draw};
 use crate::grapheme_pool::GraphemePool;
 use ftui_core::geometry::Rect;
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+fn grapheme_width(grapheme: &str) -> usize {
+    UnicodeWidthStr::width(grapheme)
+}
+
+fn display_width(text: &str) -> usize {
+    if text.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
+        return text.len();
+    }
+    text.graphemes(true).map(grapheme_width).sum()
+}
 
 /// Identifier for a clickable region in the hit grid.
 ///
@@ -358,7 +371,7 @@ impl<'a> Frame<'a> {
     ///
     /// Panics if width > 127.
     pub fn intern(&mut self, text: &str) -> GraphemeId {
-        let width = unicode_width::UnicodeWidthStr::width(text).min(127) as u8;
+        let width = display_width(text).min(127) as u8;
         self.pool.intern(text, width)
     }
 
@@ -495,12 +508,9 @@ impl<'a> Draw for Frame<'a> {
         base_cell: Cell,
         max_x: u16,
     ) -> u16 {
-        use unicode_segmentation::UnicodeSegmentation;
-        use unicode_width::UnicodeWidthStr;
-
         let mut cx = x;
         for grapheme in text.graphemes(true) {
-            let width = UnicodeWidthStr::width(grapheme);
+            let width = grapheme_width(grapheme);
             if width == 0 {
                 continue;
             }

@@ -12,6 +12,11 @@
 use crate::buffer::Buffer;
 use crate::cell::{Cell, CellContent};
 use ftui_core::geometry::Rect;
+use unicode_width::UnicodeWidthStr;
+
+fn grapheme_width(grapheme: &str) -> usize {
+    UnicodeWidthStr::width(grapheme)
+}
 
 /// Characters used to draw a border around a rectangle.
 ///
@@ -202,11 +207,10 @@ impl Draw for Buffer {
         max_x: u16,
     ) -> u16 {
         use unicode_segmentation::UnicodeSegmentation;
-        use unicode_width::UnicodeWidthStr;
 
         let mut cx = x;
         for grapheme in text.graphemes(true) {
-            let width = UnicodeWidthStr::width(grapheme);
+            let width = grapheme_width(grapheme);
             if width == 0 {
                 continue;
             }
