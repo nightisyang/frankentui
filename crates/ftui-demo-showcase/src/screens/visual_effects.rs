@@ -3290,6 +3290,7 @@ impl Screen for VisualEffectsScreen {
         {
             let area_cells = canvas_area.width as usize * canvas_area.height as usize;
             let quality = FxQuality::from_degradation_with_area(frame.degradation, area_cells);
+            self.last_quality.set(quality);
             let theme_inputs = current_fx_theme();
 
             let mut painter = self.painter.borrow_mut();
@@ -3383,44 +3384,105 @@ impl Screen for VisualEffectsScreen {
         self.frame += 1;
         self.time += 0.1;
 
+        let quality = self.last_quality.get();
+        let update_stride = fx_stride(quality) as u64;
+        let update_this_frame = update_stride != 0 && self.frame.is_multiple_of(update_stride);
+
         // Update only the active effect to avoid heavy background work.
         match self.effect {
-            EffectType::Shape3D => self.shape3d.update(),
-            EffectType::Particles => self.particles.update(),
+            EffectType::Shape3D => {
+                if update_this_frame {
+                    self.shape3d.update();
+                }
+            }
+            EffectType::Particles => {
+                if update_this_frame {
+                    self.particles.update();
+                }
+            }
             EffectType::Matrix => {
                 if !self.matrix.initialized {
                     self.matrix.init(80);
                 }
-                self.matrix.update(60);
+                if update_this_frame {
+                    self.matrix.update(60);
+                }
             }
-            EffectType::Tunnel => self.tunnel.update(),
+            EffectType::Tunnel => {
+                if update_this_frame {
+                    self.tunnel.update();
+                }
+            }
             EffectType::Fire => {
                 if !self.fire.initialized {
                     self.fire.init(80, 50);
                 }
-                self.fire.update();
+                if update_this_frame {
+                    self.fire.update();
+                }
             }
             EffectType::ReactionDiffusion => {
                 if !self.reaction_diffusion.initialized {
                     self.reaction_diffusion.init(100, 60);
                 }
-                let iterations = if self.frame.is_multiple_of(2) { 4 } else { 6 };
-                for _ in 0..iterations {
-                    self.reaction_diffusion.update();
+                if update_this_frame {
+                    let iterations = match quality {
+                        FxQuality::Full => {
+                            if self.frame.is_multiple_of(2) {
+                                4
+                            } else {
+                                6
+                            }
+                        }
+                        FxQuality::Reduced => 3,
+                        FxQuality::Minimal => 2,
+                        FxQuality::Off => 0,
+                    };
+                    for _ in 0..iterations {
+                        self.reaction_diffusion.update();
+                    }
                 }
             }
-            EffectType::StrangeAttractor => self.attractor.update(),
-            EffectType::Mandelbrot => self.mandelbrot.update(),
-            EffectType::Lissajous => self.lissajous.update(),
-            EffectType::FlowField => self.flow_field.update(),
-            EffectType::Julia => self.julia.update(),
-            EffectType::WaveInterference => self.wave_interference.update(),
-            EffectType::Spiral => self.spiral.update(),
+            EffectType::StrangeAttractor => {
+                if update_this_frame {
+                    self.attractor.update();
+                }
+            }
+            EffectType::Mandelbrot => {
+                if update_this_frame {
+                    self.mandelbrot.update();
+                }
+            }
+            EffectType::Lissajous => {
+                if update_this_frame {
+                    self.lissajous.update();
+                }
+            }
+            EffectType::FlowField => {
+                if update_this_frame {
+                    self.flow_field.update();
+                }
+            }
+            EffectType::Julia => {
+                if update_this_frame {
+                    self.julia.update();
+                }
+            }
+            EffectType::WaveInterference => {
+                if update_this_frame {
+                    self.wave_interference.update();
+                }
+            }
+            EffectType::Spiral => {
+                if update_this_frame {
+                    self.spiral.update();
+                }
+            }
             EffectType::SpinLattice => {
                 if !self.spin_lattice.initialized {
                     self.spin_lattice.init(60, 40);
                 }
-                if self.frame.is_multiple_of(2) {
+                if update_this_frame {
                     self.spin_lattice.update();
                 }
             }
