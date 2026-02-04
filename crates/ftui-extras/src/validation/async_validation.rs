@@ -42,7 +42,7 @@
 use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use super::ValidationResult;
@@ -646,6 +646,16 @@ impl Default for SharedValidationCoordinator {
 }
 
 impl SharedValidationCoordinator {
+    fn lock_inner(&self) -> MutexGuard<'_, AsyncValidationCoordinator> {
+        match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                // Best-effort recovery: keep coordinator usable after a panic.
+                poisoned.into_inner()
+            }
+        }
+    }
+
     /// Create a new shared coordinator.
     #[must_use]
     pub fn new() -> Self {
@@ -666,13 +676,13 @@ impl SharedValidationCoordinator {
 
     /// Start a new validation.
     pub fn start_validation(&self) -> ValidationToken {
-        self.inner.lock().unwrap().start_validation()
+        self.lock_inner().start_validation()
     }
 
     /// Get the current token.
     #[must_use]
     pub fn current_token(&self) -> ValidationToken {
-        self.inner.lock().unwrap().current_token()
+        self.lock_inner().current_token()
     }
 
     /// Try to apply a validation result.
@@ -682,33 +692,30 @@ impl SharedValidationCoordinator {
         result: ValidationResult,
         duration: Duration,
     ) -> bool {
-        self.inner
-            .lock()
-            .unwrap()
-            .try_apply_result(token, result, duration)
+        self.lock_inner().try_apply_result(token, result, duration)
     }
 
     /// Get the current result.
     #[must_use]
     pub fn current_result(&self) -> Option<ValidationResult> {
-        self.inner.lock().unwrap().current_result().cloned()
+        self.lock_inner().current_result().cloned()
     }
 
     /// Get a copy of the trace.
     #[must_use]
     pub fn trace(&self) -> ValidationTrace {
-        self.inner.lock().unwrap().trace().clone()
+        self.lock_inner().trace().clone()
     }
 
     /// Get the trace checksum.
     #[must_use]
     pub fn trace_checksum(&self) -> u64 {
-        self.inner.lock().unwrap().trace().checksum()
+        self.lock_inner().trace().checksum()
     }
 
     /// Verify trace invariants.
     pub fn verify_trace(&self) -> Result<(), Vec<String>> {
-        self.inner.lock().unwrap().verify_trace()
+        self.lock_inner().verify_trace()
     }
 }
 

@@ -1130,6 +1130,12 @@ mod tests {
         assert!(lines.iter().any(|l| l.contains("👨‍👩‍👧")));
     }
 
+    #[test]
+    fn wrap_mixed_ascii_and_emoji_respects_width() {
+        let lines = wrap_text("a😀b", 3, WrapMode::Char);
+        assert_eq!(lines, vec!["a😀", "b"]);
+    }
+
     // ==========================================================================
     // Truncation tests
     // ==========================================================================
@@ -1210,6 +1216,47 @@ mod tests {
     }
 
     #[test]
+    fn display_width_emoji_presentation_selector() {
+        assert_eq!(display_width("❤️"), 2);
+        assert_eq!(display_width("⌨️"), 2);
+        assert_eq!(display_width("⚠️"), 2);
+    }
+
+    #[test]
+    fn display_width_misc_symbol_ranges() {
+        assert_eq!(display_width("⌚"), 2);
+        assert_eq!(display_width("✈"), 2);
+        assert_eq!(display_width("⭐"), 2);
+        assert_eq!(display_width("⬆"), 2);
+    }
+
+    #[test]
+    fn display_width_flags() {
+        assert_eq!(display_width("🇺🇸"), 2);
+        assert_eq!(display_width("🇯🇵"), 2);
+        assert_eq!(display_width("🇺🇸🇯🇵"), 4);
+    }
+
+    #[test]
+    fn display_width_skin_tone_modifiers() {
+        assert_eq!(display_width("👍🏻"), 2);
+        assert_eq!(display_width("👍🏽"), 2);
+    }
+
+    #[test]
+    fn display_width_zwj_sequences() {
+        assert_eq!(display_width("👩‍💻"), 2);
+        assert_eq!(display_width("👨‍👩‍👧‍👦"), 2);
+    }
+
+    #[test]
+    fn display_width_mixed_ascii_and_emoji() {
+        assert_eq!(display_width("A😀B"), 4);
+        assert_eq!(display_width("A👩‍💻B"), 4);
+        assert_eq!(display_width("ok ✅"), 5);
+    }
+
+    #[test]
     fn display_width_file_icons() {
         let icons = [
             "📁", "🔗", "🦀", "🐍", "📜", "📝", "⚙️", "🖼️", "🎵", "🎬", "⚡️", "📄",
@@ -1222,6 +1269,12 @@ mod tests {
     #[test]
     fn grapheme_width_emoji_sequence() {
         assert_eq!(grapheme_width("👩‍🔬"), 2);
+    }
+
+    #[test]
+    fn grapheme_width_flags_and_modifiers() {
+        assert_eq!(grapheme_width("🇺🇸"), 2);
+        assert_eq!(grapheme_width("👍🏽"), 2);
     }
 
     #[test]
