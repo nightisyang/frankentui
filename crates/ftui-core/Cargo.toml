@@ -2,7 +2,12 @@
 name = "ftui-core"
 version = "0.1.0"
 edition = "2024"
-publish = false
+license = "MIT"
+description = "Terminal lifecycle, capabilities, and event parsing for FrankenTUI."
+repository = "https://github.com/Dicklesworthstone/frankentui"
+homepage = "https://github.com/Dicklesworthstone/frankentui"
+documentation = "https://docs.rs/ftui-core"
+readme = "../../README.md"
 
 [features]
 default = []
@@ -13,6 +18,7 @@ tracing-json = ["tracing", "dep:tracing-subscriber"]
 # Enable runtime terminal capability probing (DA queries, OSC probes).
 # Requires exclusive terminal ownership; probes are bounded by timeouts.
 caps-probe = []
+test-helpers = []
 
 [dependencies]
 bitflags = "2.10.0"

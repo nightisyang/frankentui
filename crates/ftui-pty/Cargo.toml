@@ -2,9 +2,14 @@
 name = "ftui-pty"
 version = "0.1.0"
 edition = "2024"
-publish = false
+license = "MIT"
+description = "PTY-backed test utilities for FrankenTUI."
+repository = "https://github.com/Dicklesworthstone/frankentui"
+homepage = "https://github.com/Dicklesworthstone/frankentui"
+documentation = "https://docs.rs/ftui-pty"
+readme = "../../README.md"
 
 [dependencies]
-ftui-core = { path = "../ftui-core" }
+ftui-core = { path = "../ftui-core", version = "0.1.0" }
 portable-pty = "0.9.0"
 time = { version = "0.3", features = ["formatting"] }

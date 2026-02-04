@@ -17,9 +17,12 @@ Minimal, high‑performance terminal UI kernel focused on correctness, determini
 
 ![status](https://img.shields.io/badge/status-WIP-yellow)
 ![rust](https://img.shields.io/badge/rust-nightly-blue)
-![license](https://img.shields.io/badge/license-unspecified-lightgrey)
+![license](https://img.shields.io/badge/license-MIT-green)
 
 ## Quick Run (from source)
+
+The **primary** way to see what the system can do is the demo showcase:
+`cargo run -p ftui-demo-showcase` (not the harness).
 
 ```bash
 # Download source with curl (no installer yet)
@@ -305,6 +308,18 @@ cargo run -p ftui-harness --example streaming
 ```bash
 cargo test
 BLESS=1 cargo test -p ftui-harness  # update snapshot baselines
+```
+
+### Deterministic E2E Runs
+
+Use deterministic fixtures for stable hashes and reproducible logs:
+
+```bash
+# Full E2E suite with deterministic seeds/time
+E2E_DETERMINISTIC=1 E2E_SEED=0 E2E_TIME_STEP_MS=100 ./scripts/e2e_test.sh
+
+# Demo showcase E2E with an explicit seed
+E2E_DETERMINISTIC=1 E2E_SEED=42 ./scripts/demo_showcase_e2e.sh
 ```
 
 ### Format + Lint
@@ -694,6 +709,80 @@ Dual detection:
 
 **Why dual?** CUSUM is fast but can false-alarm; e-process is slower but anytime-valid. Intersection gives speed with guarantees.
 
+### CUSUM Hover Stabilizer (Mouse Jitter)
+
+Hover target flicker is suppressed with a **CUSUM change‑point detector** on boundary‑crossing distance:
+
+```
+S_t = max(0, S_{t-1} + d_t - k)
+switch if S_t > h
+```
+
+where `d_t` is signed distance to the current target boundary, `k` is drift allowance, and `h` is the switch threshold.
+
+**Result:** single‑cell jitter doesn’t cause hover flicker, but intentional crossings still switch within a couple frames.
+
+### Damped Spring Dynamics (Animation System)
+
+Animation transitions use a **damped harmonic oscillator** for natural motion:
+
+```
+F = -k(x - x*) - c v
+⇒ x'' + c x' + k(x - x*) = 0
+```
+
+Critical damping (fastest convergence without overshoot) is:
+
+```
+c_crit = 2√k
+```
+
+We integrate with **semi‑implicit Euler** and clamp large `dt` by subdividing
+into small steps for stability. The result is deterministic, smooth motion
+without frame‑rate sensitivity.
+
+### Easing Curves + Stagger Distributions
+
+Base animations use analytic easing curves:
+
+```
+ease_in(t)  = t²
+ease_out(t) = 1 - (1 - t)²
+ease_in_out(t) =
+    2t²                (t < 0.5)
+    1 - (-2t + 2)²/2   (t ≥ 0.5)
+```
+
+Staggered lists distribute start offsets by applying easing to normalized
+indices:
+
+```
+offset_i = D · ease(i / (n - 1))
+```
+
+Optional deterministic jitter is added with a xorshift PRNG and clamped,
+so cascades feel organic but remain reproducible in tests.
+
+### Sine Pulse Sequences (Attention Cues)
+
+Attention pulses are a single **half‑cycle sine**:
+
+```
+p(t) = sin(πt),  t ∈ [0, 1]
+```
+
+This produces a smooth 0→1→0 emphasis without sharp edges or flicker.
+
+### Perceived Luminance (Terminal Background Probe)
+
+Background probing converts RGB to perceived luminance:
+
+```
+Y = 0.299R + 0.587G + 0.114B
+```
+
+That classification feeds capability detection for dark/light defaults.
+
 ### Jain's Fairness Index (Input Guard)
 
 Input fairness monitoring uses **Jain's Fairness Index**:
@@ -1043,6 +1132,12 @@ The visual effects screen is deterministic math, not “random shader noise.” 
 | **Conformal Prediction** | Risk bounds | $q=\text{Quantile}_{\lceil(1-\alpha)(n+1)\rceil}(R)$ | Stable thresholds without tuning |
 | **Mondrian Conformal** | Frame‑time risk gating | $\hat y^+=\hat y+q_{1-\alpha}(|r|)$ per bucket | Safe budget gating with sparse data |
 | **CUSUM** | Budget change detection | $S_t=\max(0,S_{t-1}+X_t-\mu_0-k)$ | Fast drift detection |
+| **CUSUM Hover Stabilizer** | Mouse hover jitter | $S_t=\max(0,S_{t-1}+d_t-k)$ | Stable hover targets without lag |
+| **Damped Spring** | Animation transitions | $x''+c x' + k(x-x^*)=0$ | Natural motion without frame‑rate artifacts |
+| **Easing Curves** | Fade/slide timing | $t^2$, $1-(1-t)^2$, cubic variants | Predictable velocity shaping |
+| **Staggered Cascades** | List animations | $offset_i=D\cdot ease(i/(n-1))$ | Coordinated, non‑uniform entrances |
+| **Sine Pulse** | Attention pulses | $p(t)=\sin(\pi t)$ | Smooth 0→1→0 emphasis |
+| **Perceived Luminance** | Dark/light probe | $Y=0.299R+0.587G+0.114B$ | Reliable theme defaults |
 | **PID / PI** | Degradation control | $u_t=K_pe_t+K_i\sum e_t+K_d\Delta e_t$ | Smooth frame‑time stabilization |
 | **MPC** | Control evaluation | $\min_{u_{t:t+H}}\sum\|y_{t+k}-y^*\|^2+\rho\|u_{t+k}\|^2$ | Confirms PI is sufficient |
 | **VOI Sampling** | Expensive measurements | $\mathrm{VOI}=\mathrm{Var}-\mathbb{E}[\mathrm{Var}\mid\text{sample}]$ | Lower overhead in steady state |
@@ -1522,4 +1617,4 @@ let historical_frame = recorder.current();
 
 ## License
 
-No license file is specified yet. If you plan to use FrankenTUI in production, please open an issue to clarify licensing.
+MIT © 2026 Jeffrey Emanuel. See `LICENSE`.

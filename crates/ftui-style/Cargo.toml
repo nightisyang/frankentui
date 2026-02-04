@@ -2,10 +2,15 @@
 name = "ftui-style"
 version = "0.1.0"
 edition = "2024"
-publish = false
+license = "MIT"
+description = "Style, theme, and color primitives for FrankenTUI."
+repository = "https://github.com/Dicklesworthstone/frankentui"
+homepage = "https://github.com/Dicklesworthstone/frankentui"
+documentation = "https://docs.rs/ftui-style"
+readme = "../../README.md"
 
 [dependencies]
-ftui-render = { path = "../ftui-render" }
+ftui-render = { path = "../ftui-render", version = "0.1.0" }
 tracing = "0.1"
 
 [dev-dependencies]

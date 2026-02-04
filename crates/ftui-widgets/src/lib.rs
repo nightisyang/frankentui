@@ -16,6 +16,16 @@
 //! - **`frame.cursor_visible`** - Cursor visibility control
 //! - **`frame.degradation`** - Performance budget hints (for adaptive rendering)
 //!
+//! # Role in FrankenTUI
+//! `ftui-widgets` is the standard widget library. It provides the reusable
+//! building blocks (tables, lists, inputs, graphs, etc.) that most apps will
+//! render inside their `view()` functions.
+//!
+//! # How it fits in the system
+//! Widgets render into `ftui-render::Frame` using `ftui-style` for appearance
+//! and `ftui-text` for text measurement and wrapping. The runtime drives these
+//! widgets by calling your model's `view()` on each frame.
+//!
 //! # Widget Categories
 //!
 //! Widgets fall into four categories based on which Frame features they use:

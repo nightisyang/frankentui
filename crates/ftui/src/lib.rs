@@ -2,9 +2,25 @@
 
 //! FrankenTUI public facade crate.
 //!
-//! This crate provides the stable, ergonomic surface area for users. It
-//! re-exports common types from internal crates and offers a lightweight
-//! prelude for day-to-day usage.
+//! # Role in FrankenTUI
+//! This crate is the user-facing entry point for the ecosystem. It re-exports
+//! the most commonly used types from the internal crates (core/render/layout/
+//! runtime/widgets/style/text/extras) so application code does not need to wire
+//! each crate individually.
+//!
+//! # What belongs here
+//! - Stable public surface area (re-exports).
+//! - Minimal glue and convenience APIs.
+//! - A lightweight prelude for day-to-day use.
+//!
+//! # How it fits in the system
+//! - Input layer: provided by `ftui-core`
+//! - Runtime loop: provided by `ftui-runtime`
+//! - Render kernel: provided by `ftui-render`
+//! - Layout, text, style, and widgets: provided by their respective crates
+//! - This crate ties them together for application authors.
+//!
+//! If you only depend on one crate in your application, it should be `ftui`.
 
 use std::fmt;
 
@@ -32,7 +48,7 @@ pub use ftui_render::presenter::Presenter;
 
 pub use ftui_style::{
     AdaptiveColor, Ansi16, Color, ColorCache, ColorProfile, MonoColor, ResolvedTheme, Rgb, Style,
-    StyleFlags, StyleId, StyleSheet, Theme, ThemeBuilder,
+    StyleFlags, StyleId, StyleSheet, TablePresetId, TableTheme, Theme, ThemeBuilder,
 };
 
 // --- Runtime re-exports ----------------------------------------------------
@@ -79,7 +95,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub mod prelude {
     pub use crate::{
         App, Buffer, Cmd, Error, Event, Frame, KeyCode, KeyEvent, Model, Modifiers, Result,
-        ScreenMode, Style, TerminalSession, TerminalWriter, Theme,
+        ScreenMode, Style, TablePresetId, TableTheme, TerminalSession, TerminalWriter, Theme,
     };
 
     pub use crate::{core, layout, render, runtime, style, text, widgets};

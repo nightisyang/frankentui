@@ -14,6 +14,16 @@
 //! - [`Cmd`] - Commands for side effects
 //! - [`Subscription`] - Trait for continuous event sources
 //! - [`Every`] - Built-in tick subscription
+//!
+//! # Role in FrankenTUI
+//! `ftui-runtime` is the orchestrator. It consumes input events from
+//! `ftui-core`, drives your `Model::update`, calls `Model::view` to render
+//! frames, and delegates rendering to `ftui-render` via `TerminalWriter`.
+//!
+//! # How it fits in the system
+//! The runtime is the center of the architecture: it is the bridge between
+//! input (`ftui-core`) and output (`ftui-render`). Widgets and layout are
+//! optional layers used by your `view()` to construct UI output.
 
 pub mod allocation_budget;
 pub mod asciicast;

@@ -15,6 +15,16 @@
 //! - [`pty_process`] - Shell process management with `spawn()`, `kill()`, `is_alive()`.
 //! - [`virtual_terminal`] - In-memory terminal state machine for testing.
 //! - [`input_forwarding`] - Key-to-sequence conversion and paste handling.
+//!
+//! # Role in FrankenTUI
+//! `ftui-pty` underpins end-to-end and integration tests that need real PTYs.
+//! It is used by the harness and test suites to validate behavior that cannot
+//! be simulated with pure unit tests.
+//!
+//! # How it fits in the system
+//! This crate does not participate in the runtime or render pipeline directly.
+//! Instead, it provides test infrastructure used by `ftui-harness` and E2E
+//! scripts to verify correctness and cleanup behavior.
 
 /// Input forwarding: key events to ANSI sequences.
 pub mod input_forwarding;
@@ -618,7 +628,10 @@ impl Drop for PtySession {
 }
 
 /// Assert that terminal cleanup sequences were emitted.
-pub fn assert_terminal_restored(output: &[u8], expectations: &CleanupExpectations) {
+pub fn assert_terminal_restored(
+    output: &[u8],
+    expectations: &CleanupExpectations,
+) -> Result<(), String> {
     let mut failures = Vec::new();
 
     if expectations.sgr_reset && !contains_any(output, SGR_RESET_SEQS) {
@@ -645,7 +658,7 @@ pub fn assert_terminal_restored(output: &[u8], expectations: &CleanupExpectation
 
     if failures.is_empty() {
         log_event(true, "PTY_TEST_PASS", "terminal cleanup sequences verified");
-        return;
+        return Ok(());
     }
 
     for failure in &failures {
@@ -662,7 +675,7 @@ pub fn assert_terminal_restored(output: &[u8], expectations: &CleanupExpectation
         log_event(true, "PTY_OUTPUT_DUMP", line);
     }
 
-    panic!("PTY cleanup assertions failed: {}", failures.join("; "));
+    Err(failures.join("; "))
 }
 
 fn log_event(enabled: bool, event: &str, detail: impl fmt::Display) {
@@ -785,14 +798,20 @@ mod tests {
     fn cleanup_expectations_match_sequences() {
         let output =
             b"\x1b[0m\x1b[?25h\x1b[?1049l\x1b[?1000;1002;1006l\x1b[?2004l\x1b[?1004l\x1b[<u";
-        assert_terminal_restored(output, &CleanupExpectations::strict());
+        assert!(
+            assert_terminal_restored(output, &CleanupExpectations::strict()).is_ok(),
+            "terminal cleanup assertions failed"
+        );
     }
 
     #[test]
     #[should_panic]
     fn cleanup_expectations_fail_when_missing() {
         let output = b"\x1b[?25h";
-        assert_terminal_restored(output, &CleanupExpectations::strict());
+        assert!(
+            assert_terminal_restored(output, &CleanupExpectations::strict()).is_ok(),
+            "terminal cleanup assertions failed"
+        );
     }
 
     #[cfg(unix)]
@@ -1075,7 +1094,10 @@ mod tests {
             kitty_keyboard: true,
         };
         let expectations = CleanupExpectations::for_session(&options);
-        assert_terminal_restored(&output, &expectations);
+        assert!(
+            assert_terminal_restored(&output, &expectations).is_ok(),
+            "terminal cleanup assertions failed"
+        );
     }
 
     #[cfg(unix)]
@@ -1130,7 +1152,10 @@ mod tests {
             kitty_keyboard: true,
         };
         let expectations = CleanupExpectations::for_session(&options);
-        assert_terminal_restored(&output, &expectations);
+        assert!(
+            assert_terminal_restored(&output, &expectations).is_ok(),
+            "terminal cleanup assertions failed"
+        );
     }
 
     #[cfg(unix)]
@@ -1149,7 +1174,7 @@ mod tests {
         };
 
         let _session = TerminalSession::new(options).expect("TerminalSession::new");
-        panic!("intentional panic to verify cleanup on unwind");
+        std::panic::panic_any("intentional panic to verify cleanup on unwind");
     }
 
     #[cfg(unix)]
@@ -1183,7 +1208,10 @@ mod tests {
             kitty_keyboard: true,
         };
         let expectations = CleanupExpectations::for_session(&options);
-        assert_terminal_restored(&output, &expectations);
+        assert!(
+            assert_terminal_restored(&output, &expectations).is_ok(),
+            "terminal cleanup assertions failed"
+        );
     }
 
     #[cfg(unix)]
@@ -1524,17 +1552,26 @@ mod tests {
     fn assert_restored_with_alt_sequence_variants() {
         // Both alt-screen exit sequences should be accepted
         let output1 = b"\x1b[0m\x1b[?25h\x1b[?1049l\x1b[?1000l\x1b[?2004l\x1b[?1004l\x1b[<u";
-        assert_terminal_restored(output1, &CleanupExpectations::strict());
+        assert!(
+            assert_terminal_restored(output1, &CleanupExpectations::strict()).is_ok(),
+            "terminal cleanup assertions failed"
+        );
 
         let output2 = b"\x1b[0m\x1b[?25h\x1b[?1047l\x1b[?1000;1002l\x1b[?2004l\x1b[?1004l\x1b[<u";
-        assert_terminal_restored(output2, &CleanupExpectations::strict());
+        assert!(
+            assert_terminal_restored(output2, &CleanupExpectations::strict()).is_ok(),
+            "terminal cleanup assertions failed"
+        );
     }
 
     #[test]
     fn assert_restored_sgr_reset_variant() {
         // Both \x1b[0m and \x1b[m should be accepted for sgr_reset
         let output = b"\x1b[m\x1b[?25h\x1b[?1049l\x1b[?1000l\x1b[?2004l\x1b[?1004l\x1b[<u";
-        assert_terminal_restored(output, &CleanupExpectations::strict());
+        assert!(
+            assert_terminal_restored(output, &CleanupExpectations::strict()).is_ok(),
+            "terminal cleanup assertions failed"
+        );
     }
 
     #[test]
@@ -1549,7 +1586,10 @@ mod tests {
             focus_events: false,
             kitty_keyboard: false,
         };
-        assert_terminal_restored(b"\x1b[?25h", &expectations);
+        assert!(
+            assert_terminal_restored(b"\x1b[?25h", &expectations).is_ok(),
+            "terminal cleanup assertions failed"
+        );
     }
 
     // --- sequence constant tests ---

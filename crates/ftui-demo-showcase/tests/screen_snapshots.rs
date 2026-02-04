@@ -8,6 +8,10 @@
 //!
 //! Naming convention: `screen_name_scenario_WIDTHxHEIGHT`
 
+use std::env;
+use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use ftui_core::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseEvent, MouseEventKind,
 };
@@ -21,6 +25,7 @@ use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
 use ftui_render::link_registry::LinkRegistry;
 use ftui_runtime::Model;
+use serde_json::Value;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -661,6 +666,92 @@ fn data_viz_tiny_40x10() {
     let area = Rect::new(0, 0, 40, 10);
     screen.view(&mut frame, area);
     assert_snapshot!("data_viz_tiny_40x10", &frame.buffer);
+}
+
+// ============================================================================
+// Table Theme Gallery
+// ============================================================================
+
+#[test]
+fn table_theme_gallery_80x24() {
+    let screen = ftui_demo_showcase::screens::table_theme_gallery::TableThemeGallery::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("table_theme_gallery_80x24", &frame.buffer);
+}
+
+#[test]
+fn table_theme_gallery_120x40() {
+    let screen = ftui_demo_showcase::screens::table_theme_gallery::TableThemeGallery::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("table_theme_gallery_120x40", &frame.buffer);
+}
+
+#[test]
+fn table_theme_gallery_logs_overrides() {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let path = env::temp_dir().join(format!("ftui_table_theme_gallery_{unique}.jsonl"));
+    let path_str = path.to_string_lossy().to_string();
+
+    let mut screen =
+        ftui_demo_showcase::screens::table_theme_gallery::TableThemeGallery::with_log_path(Some(
+            path_str.clone(),
+        ));
+    screen.update(&press(KeyCode::Char('m')));
+    screen.update(&press(KeyCode::Char('h')));
+    screen.update(&press(KeyCode::Char('z')));
+    screen.update(&press(KeyCode::Char('b')));
+    screen.update(&press(KeyCode::Char('l')));
+
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+
+    let contents = fs::read_to_string(&path).expect("table theme log should be written");
+    let line = contents
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .expect("table theme log should contain at least one entry");
+    let value: Value = serde_json::from_str(line).expect("table theme log should be valid JSON");
+
+    assert_eq!(
+        value.get("event").and_then(Value::as_str),
+        Some("table_theme_gallery")
+    );
+    assert_eq!(
+        value.get("selected_preset").and_then(Value::as_str),
+        Some("aurora")
+    );
+    assert_eq!(value.get("selected_index").and_then(Value::as_u64), Some(0));
+    assert_eq!(
+        value.get("preview_mode").and_then(Value::as_str),
+        Some("Markdown")
+    );
+    assert_eq!(
+        value.get("header_emphasis").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        value.get("zebra_strength").and_then(Value::as_str),
+        Some("Strong")
+    );
+    assert_eq!(
+        value.get("border_style").and_then(Value::as_str),
+        Some("Subtle")
+    );
+    assert_eq!(
+        value.get("highlight_row").and_then(Value::as_bool),
+        Some(false)
+    );
 }
 
 // ============================================================================

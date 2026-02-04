@@ -2,6 +2,11 @@
 name = "ftui-simd"
 version = "0.1.0"
 edition = "2024"
-publish = false
+license = "MIT"
+description = "Optional safe SIMD-friendly optimizations for FrankenTUI."
+repository = "https://github.com/Dicklesworthstone/frankentui"
+homepage = "https://github.com/Dicklesworthstone/frankentui"
+documentation = "https://docs.rs/ftui-simd"
+readme = "../../README.md"
 
 [dependencies]

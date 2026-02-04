@@ -2,19 +2,24 @@
 name = "ftui-demo-showcase"
 version = "0.1.0"
 edition = "2024"
-publish = false
+license = "MIT"
+description = "Demo showcase app and snapshots for FrankenTUI."
+repository = "https://github.com/Dicklesworthstone/frankentui"
+homepage = "https://github.com/Dicklesworthstone/frankentui"
+documentation = "https://docs.rs/ftui-demo-showcase"
+readme = "../../README.md"
 
 [dependencies]
-ftui-core = { path = "../ftui-core", features = ["caps-probe"] }
-ftui-i18n = { path = "../ftui-i18n" }
-ftui-render = { path = "../ftui-render" }
-ftui-style = { path = "../ftui-style" }
-ftui-text = { path = "../ftui-text", features = ["markup", "bidi"] }
-ftui-layout = { path = "../ftui-layout" }
-ftui-runtime = { path = "../ftui-runtime", features = ["tracing"] }
-ftui-widgets = { path = "../ftui-widgets", features = ["tracing"] }
+ftui-core = { path = "../ftui-core", version = "0.1.0", features = ["caps-probe"] }
+ftui-i18n = { path = "../ftui-i18n", version = "0.1.0" }
+ftui-render = { path = "../ftui-render", version = "0.1.0" }
+ftui-style = { path = "../ftui-style", version = "0.1.0" }
+ftui-text = { path = "../ftui-text", version = "0.1.0", features = ["markup", "bidi"] }
+ftui-layout = { path = "../ftui-layout", version = "0.1.0" }
+ftui-runtime = { path = "../ftui-runtime", version = "0.1.0", features = ["tracing"] }
+ftui-widgets = { path = "../ftui-widgets", version = "0.1.0", features = ["tracing"] }
 tracing = "0.1"
-ftui-extras = { path = "../ftui-extras", features = [
+ftui-extras = { path = "../ftui-extras", version = "0.1.0", features = [
     "canvas",
     "charts",
     "clipboard",
@@ -48,8 +53,8 @@ default = ["caps-probe"]
 test-support = []
 
 [dev-dependencies]
-ftui-harness = { path = "../ftui-harness" }
-ftui-pty = { path = "../ftui-pty" }
+ftui-harness = { path = "../ftui-harness", version = "0.1.0" }
+ftui-pty = { path = "../ftui-pty", version = "0.1.0" }
 portable-pty = "0.9.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["registry"] }

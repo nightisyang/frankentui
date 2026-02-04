@@ -8,6 +8,16 @@
 //! Captures `Buffer` output as plain text or ANSI-styled text, compares
 //! against stored snapshots, and shows diffs on mismatch.
 //!
+//! # Role in FrankenTUI
+//! `ftui-harness` is the verification layer. It powers snapshot tests,
+//! time-travel debugging, and deterministic rendering checks used across the
+//! workspace.
+//!
+//! # How it fits in the system
+//! The harness is not the primary demo app (use `ftui-demo-showcase` for that).
+//! Instead, it is used by tests and CI to validate the behavior of render,
+//! widgets, and runtime under controlled conditions.
+//!
 //! # Quick Start
 //!
 //! ```ignore
@@ -33,6 +43,7 @@
 //! crate's `CARGO_MANIFEST_DIR`.
 
 pub mod asciicast;
+pub mod determinism;
 pub mod flicker_detection;
 pub mod golden;
 pub mod resize_storm;

@@ -3,6 +3,22 @@
 #![cfg_attr(test, deny(unsafe_code))]
 
 //! Core: terminal lifecycle, capability detection, events, and input parsing.
+//!
+//! # Role in FrankenTUI
+//! `ftui-core` is the input layer. It owns terminal session setup/teardown,
+//! capability probing, and normalized event types that the runtime consumes.
+//!
+//! # Primary responsibilities
+//! - **TerminalSession**: RAII lifecycle for raw mode, alt-screen, and cleanup.
+//! - **Event**: canonical input events (keys, mouse, paste, resize, focus).
+//! - **Capability detection**: terminal features and overrides.
+//! - **Input parsing**: robust decoding of terminal input streams.
+//!
+//! # How it fits in the system
+//! The runtime (`ftui-runtime`) consumes `ftui-core::Event` values and drives
+//! application models. The render kernel (`ftui-render`) is independent of
+//! input, so `ftui-core` is the clean bridge between terminal I/O and the
+//! deterministic render pipeline.
 
 pub mod animation;
 pub mod capability_override;

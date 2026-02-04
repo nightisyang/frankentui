@@ -5,12 +5,24 @@
 //!
 //! This module exposes the demo application internals so that integration tests
 //! can construct screens, render them, and assert snapshots.
+//!
+//! # Role in FrankenTUI
+//! `ftui-demo-showcase` is the primary way to see what the system can do.
+//! It aggregates the visual effects, widgets, layouts, and interaction demos
+//! into a single runnable application.
+//!
+//! # How it fits in the system
+//! The demo showcase is a consumer of all core crates. It exercises the runtime,
+//! render kernel, widgets, and extras in one place, and its screens are used
+//! as the reference for snapshots and visual regression tests.
 
 pub mod app;
 pub mod chrome;
 pub mod cli;
 pub mod data;
+pub mod determinism;
 pub mod screens;
+pub mod test_logging;
 pub mod theme;
 pub mod tour;
 

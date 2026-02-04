@@ -14,6 +14,17 @@
 //! - [`Editor`] - core text editing operations (insert, delete, cursor movement)
 //! - [`WidthCache`] - LRU cache for text width measurements
 //!
+//! # Role in FrankenTUI
+//! `ftui-text` owns the text model used by widgets and renderers: spans, lines,
+//! wrapping, width calculations, and editing utilities. It is deliberately
+//! independent of rendering and terminal I/O so it can be reused across
+//! widgets, the demo showcase, and any consumer crate.
+//!
+//! # How it fits in the system
+//! Widgets build `Text` and `Span` structures, layout depends on width
+//! measurement, and the render kernel consumes text as styled cells. This
+//! crate is the glue between high-level content and low-level cell output.
+//!
 //! # Example
 //! ```
 //! use ftui_text::{Segment, Text, Span, Line, WidthCache};

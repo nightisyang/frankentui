@@ -5,6 +5,15 @@
 //! Provides externalized string storage with key-based lookup,
 //! locale fallback chains, ICU-style plural forms, and variable
 //! interpolation.
+//!
+//! # Role in FrankenTUI
+//! `ftui-i18n` isolates localization concerns so widgets and apps can
+//! remain deterministic while still supporting multiple languages.
+//!
+//! # How it fits in the system
+//! Widgets and demo screens can depend on this crate to resolve strings
+//! into localized text before rendering. It does not depend on rendering or
+//! runtime, keeping the localization layer reusable and testable.
 
 pub mod catalog;
 pub mod plural;

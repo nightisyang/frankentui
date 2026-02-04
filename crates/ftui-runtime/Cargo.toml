@@ -2,7 +2,12 @@
 name = "ftui-runtime"
 version = "0.1.0"
 edition = "2024"
-publish = false
+license = "MIT"
+description = "Elm-style runtime loop and subscriptions for FrankenTUI."
+repository = "https://github.com/Dicklesworthstone/frankentui"
+homepage = "https://github.com/Dicklesworthstone/frankentui"
+documentation = "https://docs.rs/ftui-runtime"
+readme = "../../README.md"
 
 [features]
 default = []
@@ -30,12 +35,12 @@ telemetry = [
 ]
 
 [dependencies]
-ftui-core = { path = "../ftui-core" }
-ftui-layout = { path = "../ftui-layout" }
-ftui-i18n = { path = "../ftui-i18n" }
-ftui-render = { path = "../ftui-render" }
-ftui-style = { path = "../ftui-style" }
-ftui-text = { path = "../ftui-text" }
+ftui-core = { path = "../ftui-core", version = "0.1.0" }
+ftui-layout = { path = "../ftui-layout", version = "0.1.0" }
+ftui-i18n = { path = "../ftui-i18n", version = "0.1.0" }
+ftui-render = { path = "../ftui-render", version = "0.1.0" }
+ftui-style = { path = "../ftui-style", version = "0.1.0" }
+ftui-text = { path = "../ftui-text", version = "0.1.0" }
 crossterm = "0.29.0"
 tracing = "0.1"
 unicode-segmentation = "1.12.0"
@@ -54,6 +59,7 @@ serde_json = { version = "1", optional = true }
 base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]
+ftui-core = { path = "../ftui-core", version = "0.1.0", features = ["test-helpers"] }
 criterion = { version = "0.8.2", features = ["html_reports"] }
 proptest = "1"
 tempfile = "3"

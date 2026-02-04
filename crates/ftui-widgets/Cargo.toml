@@ -2,7 +2,12 @@
 name = "ftui-widgets"
 version = "0.1.0"
 edition = "2024"
-publish = false
+license = "MIT"
+description = "Widget library built on FrankenTUI render and layout."
+repository = "https://github.com/Dicklesworthstone/frankentui"
+homepage = "https://github.com/Dicklesworthstone/frankentui"
+documentation = "https://docs.rs/ftui-widgets"
+readme = "../../README.md"
 
 [features]
 default = []
@@ -13,11 +18,11 @@ tracing = ["dep:tracing", "ftui-render/tracing"]
 
 [dependencies]
 bitflags = "2.10.0"
-ftui-core = { path = "../ftui-core" }
-ftui-layout = { path = "../ftui-layout" }
-ftui-render = { path = "../ftui-render" }
-ftui-style = { path = "../ftui-style" }
-ftui-text = { path = "../ftui-text" }
+ftui-core = { path = "../ftui-core", version = "0.1.0" }
+ftui-layout = { path = "../ftui-layout", version = "0.1.0" }
+ftui-render = { path = "../ftui-render", version = "0.1.0" }
+ftui-style = { path = "../ftui-style", version = "0.1.0" }
+ftui-text = { path = "../ftui-text", version = "0.1.0", features = ["markup"] }
 regex = { version = "1.12.3", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 tracing = { version = "0.1", optional = true }

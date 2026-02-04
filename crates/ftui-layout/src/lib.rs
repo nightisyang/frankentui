@@ -10,6 +10,16 @@
 //! - [`debug`] - Layout constraint debugging and introspection
 //! - [`cache`] - Layout result caching for memoization
 //!
+//! # Role in FrankenTUI
+//! `ftui-layout` is the geometry solver for widgets and screens. It converts
+//! constraints into concrete rectangles, with support for intrinsic sizing and
+//! caching to keep layout deterministic and fast.
+//!
+//! # How it fits in the system
+//! The runtime and widgets call into this crate to split a `Rect` into nested
+//! regions. Those regions are then passed to widgets or custom renderers, which
+//! ultimately draw into `ftui-render` frames.
+//!
 //! # Intrinsic Sizing
 //!
 //! The layout system supports content-aware sizing via [`LayoutSizeHint`] and
@@ -1230,6 +1240,49 @@ mod tests {
         let rects = flex.split(Rect::new(0, 0, 100, 10));
         assert!(rects[0].width <= 20);
         assert_eq!(rects[1].width, 30);
+    }
+
+    #[test]
+    fn percentage_rounding_never_exceeds_available() {
+        let constraints = [
+            Constraint::Percentage(33.4),
+            Constraint::Percentage(33.3),
+            Constraint::Percentage(33.3),
+        ];
+        let sizes = solve_constraints(&constraints, 7);
+        let total: u16 = sizes.iter().sum();
+        assert!(total <= 7, "percent rounding overflowed: {sizes:?}");
+        assert!(sizes.iter().all(|size| *size <= 7));
+    }
+
+    #[test]
+    fn tiny_area_saturates_fixed_and_min() {
+        let constraints = [Constraint::Fixed(5), Constraint::Min(3), Constraint::Max(2)];
+        let sizes = solve_constraints(&constraints, 2);
+        assert_eq!(sizes[0], 2);
+        assert_eq!(sizes[1], 0);
+        assert_eq!(sizes[2], 0);
+        assert_eq!(sizes.iter().sum::<u16>(), 2);
+    }
+
+    #[test]
+    fn ratio_distribution_sums_to_available() {
+        let constraints = [Constraint::Ratio(1, 3), Constraint::Ratio(2, 3)];
+        let sizes = solve_constraints(&constraints, 5);
+        assert_eq!(sizes.iter().sum::<u16>(), 5);
+        assert_eq!(sizes[0], 1);
+        assert_eq!(sizes[1], 4);
+    }
+
+    #[test]
+    fn flex_gap_exceeds_area_yields_zero_widths() {
+        let flex = Flex::horizontal()
+            .gap(5)
+            .constraints([Constraint::Fixed(1), Constraint::Fixed(1)]);
+        let rects = flex.split(Rect::new(0, 0, 3, 1));
+        assert_eq!(rects.len(), 2);
+        assert_eq!(rects[0].width, 0);
+        assert_eq!(rects[1].width, 0);
     }
 
     // --- SpaceAround alignment ---

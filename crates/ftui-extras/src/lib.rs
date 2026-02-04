@@ -6,6 +6,15 @@
 //! These modules provide higher-level functionality built on top of the core
 //! ftui crates (render, style, text, widgets).
 //!
+//! # Role in FrankenTUI
+//! `ftui-extras` collects optional, higher-level utilities that are useful
+//! across apps but not required by the core runtime or render kernel. It is
+//! feature-gated to keep the base dependency graph lean.
+//!
+//! # How it fits in the system
+//! Extras build on `ftui-render`, `ftui-style`, `ftui-text`, and `ftui-widgets`.
+//! You can enable only the pieces you need without pulling in everything else.
+//!
 //! # Available Features
 //!
 //! | Feature | Module | Description |

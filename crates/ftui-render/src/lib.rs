@@ -1,6 +1,23 @@
 #![forbid(unsafe_code)]
 
 //! Render kernel: cells, buffers, diffs, and ANSI presentation.
+//!
+//! # Role in FrankenTUI
+//! `ftui-render` is the deterministic rendering engine. It turns a logical
+//! `Frame` into a `Buffer`, computes diffs, and emits minimal ANSI output via
+//! the `Presenter`.
+//!
+//! # Primary responsibilities
+//! - **Cell/Buffer**: 2D grid with fixed-size cells and scissor/opacity stacks.
+//! - **BufferDiff**: efficient change detection between frames.
+//! - **Presenter**: stateful ANSI emitter with cursor/mode tracking.
+//! - **Frame**: rendering surface used by widgets and application views.
+//!
+//! # How it fits in the system
+//! `ftui-runtime` calls your model's `view()` to render into a `Frame`. That
+//! frame becomes a `Buffer`, which is diffed and presented to the terminal via
+//! `TerminalWriter`. This crate is the kernel of FrankenTUI's flicker-free,
+//! deterministic output guarantees.
 
 pub mod alloc_budget;
 pub mod ansi;
@@ -21,8 +38,11 @@ pub mod spatial_hit_index;
 pub mod terminal_model;
 
 mod text_width {
-    use unicode_display_width::{is_double_width, width as unicode_display_width};
+    use std::sync::OnceLock;
+
+    use unicode_display_width::width as unicode_display_width;
     use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
     #[inline]
     fn ascii_width(text: &str) -> Option<usize> {
         if text.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
@@ -43,6 +63,36 @@ mod text_width {
             }
         }
         width
+    }
+
+    #[inline]
+    fn env_flag(value: &str) -> bool {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    }
+
+    #[inline]
+    fn is_cjk_locale(locale: &str) -> bool {
+        let lower = locale.trim().to_ascii_lowercase();
+        lower.starts_with("ja") || lower.starts_with("zh") || lower.starts_with("ko")
+    }
+
+    #[inline]
+    fn use_cjk_width() -> bool {
+        static CJK_WIDTH: OnceLock<bool> = OnceLock::new();
+        *CJK_WIDTH.get_or_init(|| {
+            if let Ok(value) =
+                std::env::var("FTUI_TEXT_CJK_WIDTH").or_else(|_| std::env::var("FTUI_CJK_WIDTH"))
+            {
+                return env_flag(&value);
+            }
+            if let Ok(locale) = std::env::var("LC_CTYPE").or_else(|_| std::env::var("LANG")) {
+                return is_cjk_locale(&locale);
+            }
+            false
+        })
     }
 
     #[inline]
@@ -95,7 +145,11 @@ mod text_width {
         if grapheme.chars().all(is_zero_width_codepoint) {
             return 0;
         }
-        let width = unicode_display_width(grapheme) as usize;
+        let width = if use_cjk_width() {
+            grapheme.width_cjk()
+        } else {
+            unicode_display_width(grapheme) as usize
+        };
         if is_emoji_grapheme(grapheme) {
             return 2;
         }
@@ -114,13 +168,14 @@ mod text_width {
         if is_zero_width_codepoint(ch) {
             return 0;
         }
-        if is_double_width(ch) {
-            return 2;
-        }
         if is_probable_emoji(ch) {
             return 2;
         }
-        1
+        if use_cjk_width() {
+            ch.width_cjk().unwrap_or(0)
+        } else {
+            ch.width().unwrap_or(0)
+        }
     }
 
     #[inline]
@@ -131,9 +186,13 @@ mod text_width {
         if text.is_ascii() {
             return ascii_display_width(text);
         }
+        let cjk_width = use_cjk_width();
         if !text.chars().any(is_zero_width_codepoint) {
             if text.chars().any(is_probable_emoji) {
                 return text.graphemes(true).map(grapheme_width).sum();
+            }
+            if cjk_width {
+                return text.width_cjk();
             }
             return unicode_display_width(text) as usize;
         }
