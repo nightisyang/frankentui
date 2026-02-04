@@ -16,8 +16,6 @@ const SPEED_MIN: f64 = 0.25;
 const SPEED_MAX: f64 = 4.0;
 const DEFAULT_STEP_DURATION_MS: u64 = 5200;
 
-const DEFAULT_HIGHLIGHT: TourHighlight = TourHighlight::new_pct(0.12, 0.12, 0.76, 0.72);
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TourAdvanceReason {
     Auto,
@@ -337,7 +335,7 @@ fn build_steps() -> Vec<TourStep> {
             blurb: meta.blurb,
             hint: meta.tour_step_hint,
             duration: step_duration(meta),
-            highlight: Some(DEFAULT_HIGHLIGHT),
+            highlight: None,
         })
         .collect()
 }

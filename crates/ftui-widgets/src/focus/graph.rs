@@ -247,8 +247,8 @@ impl FocusGraph {
         let mut p1 = start;
         let mut p2 = slow;
         while p1 != p2 {
-            p1 = self.navigate(p1, NavDirection::Next).unwrap_or(p1);
-            p2 = self.navigate(p2, NavDirection::Next).unwrap_or(p2);
+            p1 = self.navigate(p1, NavDirection::Next)?;
+            p2 = self.navigate(p2, NavDirection::Next)?;
         }
 
         // Phase 3: collect cycle.
@@ -288,8 +288,8 @@ impl FocusGraph {
         let mut p1 = start;
         let mut p2 = slow;
         while p1 != p2 {
-            p1 = self.navigate(p1, dir).unwrap_or(p1);
-            p2 = self.navigate(p2, dir).unwrap_or(p2);
+            p1 = self.navigate(p1, dir)?;
+            p2 = self.navigate(p2, dir)?;
         }
 
         let cycle_start = p1;
@@ -309,6 +309,8 @@ impl FocusGraph {
     /// Overwrites existing `Next`/`Prev` edges. If `wrap` is true, the
     /// last node links back to the first (and vice versa).
     pub fn build_tab_chain(&mut self, wrap: bool) {
+        self.edges
+            .retain(|(_, dir), _| *dir != NavDirection::Next && *dir != NavDirection::Prev);
         let order = self.tab_order();
         if order.len() < 2 {
             return;

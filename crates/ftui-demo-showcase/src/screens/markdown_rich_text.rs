@@ -303,7 +303,17 @@ fn wrap_markdown_for_panel(text: &Text, width: u16) -> Text {
     for line in text.lines() {
         let plain = line.to_plain_text();
         let table_like = is_table_line(&plain) || is_table_like_line(&plain);
-        if table_like || line.width() <= width {
+        if table_like {
+            if line.width() <= width {
+                lines.push(line.clone());
+            } else {
+                let mut text = Text::from_lines([line.clone()]);
+                text.truncate(width, None);
+                lines.extend(text.lines().iter().cloned());
+            }
+            continue;
+        }
+        if line.width() <= width {
             lines.push(line.clone());
             continue;
         }

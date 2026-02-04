@@ -173,7 +173,7 @@ impl MacroRecorderScreen {
             FocusPanel::Timeline => "Timeline",
             FocusPanel::Scenarios => "Scenarios",
         };
-        self.status_note = Some(format!("Focus: {label} (Tab or Ctrl+Arrows)"));
+        self.status_note = Some(format!("Focus: {label} (Tab or Ctrl/Alt+Arrows)"));
     }
 
     pub fn drain_playback_events(&mut self) -> Vec<Event> {
@@ -405,7 +405,7 @@ impl MacroRecorderScreen {
 
         let (code, modifiers) = (*code, *modifiers);
 
-        if modifiers.contains(Modifiers::CTRL) || modifiers.contains(Modifiers::ALT) {
+        if modifiers.intersects(Modifiers::CTRL | Modifiers::ALT) {
             match code {
                 KeyCode::Up => {
                     // Up from bottom panels goes to Controls
@@ -731,7 +731,7 @@ impl MacroRecorderScreen {
                     focus_style(self.focus == FocusPanel::Scenarios),
                 ),
                 Span::raw("   "),
-                Span::styled("Ctrl+Arrows", Style::new().fg(theme::accent::PRIMARY)),
+                Span::styled("Ctrl/Alt+Arrows", Style::new().fg(theme::accent::PRIMARY)),
                 Span::raw(" switch panel"),
             ]),
             Line::from_spans([

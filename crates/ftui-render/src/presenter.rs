@@ -541,6 +541,60 @@ impl<W: Write> Presenter<W> {
         Ok(())
     }
 
+    #[inline]
+    fn dec_len_u8(value: u8) -> u32 {
+        if value >= 100 {
+            3
+        } else if value >= 10 {
+            2
+        } else {
+            1
+        }
+    }
+
+    #[inline]
+    fn sgr_code_len(code: u8) -> u32 {
+        2 + Self::dec_len_u8(code) + 1
+    }
+
+    #[inline]
+    fn sgr_flags_len(flags: StyleFlags) -> u32 {
+        if flags.is_empty() {
+            return 0;
+        }
+        let mut count = 0u32;
+        let mut digits = 0u32;
+        for (flag, codes) in ansi::FLAG_TABLE {
+            if flags.contains(flag) {
+                count += 1;
+                digits += Self::dec_len_u8(codes.on);
+            }
+        }
+        if count == 0 {
+            return 0;
+        }
+        3 + digits + (count - 1)
+    }
+
+    #[inline]
+    fn sgr_flags_off_len(flags: StyleFlags) -> u32 {
+        if flags.is_empty() {
+            return 0;
+        }
+        let mut len = 0u32;
+        for (flag, codes) in ansi::FLAG_TABLE {
+            if flags.contains(flag) {
+                len += Self::sgr_code_len(codes.off);
+            }
+        }
+        len
+    }
+
+    #[inline]
+    fn sgr_rgb_len(color: PackedRgba) -> u32 {
+        10 + Self::dec_len_u8(color.r()) + Self::dec_len_u8(color.g()) + Self::dec_len_u8(color.b())
+    }
+
     /// Emit minimal SGR delta between old and new styles.
     ///
     /// Computes which properties changed and emits only those.
@@ -551,59 +605,43 @@ impl<W: Write> Presenter<W> {
         let fg_changed = old.fg != new.fg;
         let bg_changed = old.bg != new.bg;
 
-        // Estimate delta cost vs baseline cost to decide strategy.
-        //
-        // Off-codes are 5 bytes each ("\x1b[XXm", XX is 22-29).
-        // On-codes are 4 bytes each ("\x1b[Xm", X is 1-9).
-        // RGB color: up to 19 bytes ("\x1b[38;2;255;255;255m").
-        // Reset: 4 bytes ("\x1b[0m").
-        //
-        // Bold/Dim share off-code 22, so removing one may require
-        // re-enabling the other (4 bytes collateral).
-        let removed_count = attrs_removed.bits().count_ones();
-        let added_count = attrs_added.bits().count_ones();
+        let mut collateral = StyleFlags::empty();
+        if attrs_removed.contains(StyleFlags::BOLD) && new.attrs.contains(StyleFlags::DIM) {
+            collateral |= StyleFlags::DIM;
+        }
+        if attrs_removed.contains(StyleFlags::DIM) && new.attrs.contains(StyleFlags::BOLD) {
+            collateral |= StyleFlags::BOLD;
+        }
 
-        // Estimate Bold/Dim collateral cost
-        let collateral_cost: u32 = if attrs_removed.intersects(StyleFlags::BOLD | StyleFlags::DIM) {
-            let removing_bold = attrs_removed.contains(StyleFlags::BOLD);
-            let removing_dim = attrs_removed.contains(StyleFlags::DIM);
-            if (removing_bold && !removing_dim && new.attrs.contains(StyleFlags::DIM))
-                || (removing_dim && !removing_bold && new.attrs.contains(StyleFlags::BOLD))
-            {
-                4
+        let mut delta_len = 0u32;
+        delta_len += Self::sgr_flags_off_len(attrs_removed);
+        delta_len += Self::sgr_flags_len(collateral);
+        delta_len += Self::sgr_flags_len(attrs_added);
+        if fg_changed {
+            delta_len += if new.fg.a() == 0 {
+                5
             } else {
-                0
-            }
-        } else {
-            0
-        };
+                Self::sgr_rgb_len(new.fg)
+            };
+        }
+        if bg_changed {
+            delta_len += if new.bg.a() == 0 {
+                5
+            } else {
+                Self::sgr_rgb_len(new.bg)
+            };
+        }
 
-        let color_cost = 19u32; // conservative max for one RGB color
+        let mut baseline_len = 4u32;
+        if new.fg.a() > 0 {
+            baseline_len += Self::sgr_rgb_len(new.fg);
+        }
+        if new.bg.a() > 0 {
+            baseline_len += Self::sgr_rgb_len(new.bg);
+        }
+        baseline_len += Self::sgr_flags_len(new.attrs);
 
-        let fg_cost = if !fg_changed {
-            0
-        } else if new.fg.a() == 0 {
-            5 // \x1b[39m
-        } else {
-            color_cost
-        };
-
-        let bg_cost = if !bg_changed {
-            0
-        } else if new.bg.a() == 0 {
-            5 // \x1b[49m
-        } else {
-            color_cost
-        };
-
-        let delta_est = removed_count * 5 + collateral_cost + added_count * 4 + fg_cost + bg_cost;
-
-        let baseline_est = 4 // reset
-            + new.attrs.bits().count_ones() * 4
-            + if new.fg.a() > 0 { color_cost } else { 0 }
-            + if new.bg.a() > 0 { color_cost } else { 0 };
-
-        if delta_est > baseline_est {
+        if delta_len > baseline_len {
             return self.emit_style_full(new);
         }
 

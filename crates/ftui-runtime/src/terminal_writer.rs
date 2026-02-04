@@ -1277,7 +1277,6 @@ impl<W: Write> TerminalWriter<W> {
         // Update posterior if Bayesian mode is enabled
         if self.diff_config.bayesian_enabled && has_diff {
             let span_stats = span_stats_snapshot.unwrap_or_else(|| buffer.dirty_span_stats());
-            let total_cells = width.saturating_mul(height);
             let (scan_cost, reason) = estimate_diff_scan_cost(
                 strategy,
                 dirty_rows,
@@ -1287,7 +1286,7 @@ impl<W: Write> TerminalWriter<W> {
                 tile_stats,
             );
             self.diff_strategy
-                .observe(total_cells, self.diff_scratch.len());
+                .observe(scan_cost, self.diff_scratch.len());
             span_stats_snapshot = Some(span_stats);
             scan_cost_estimate = scan_cost;
             fallback_reason = reason;
@@ -1756,7 +1755,10 @@ impl<W: Write> TerminalWriter<W> {
                     if let Some(text) = self.pool.get(gid) {
                         writer.write_all(text.as_bytes())?;
                     } else {
-                        writer.write_all(b" ")?;
+                        // Fallback: emit placeholder cells to preserve width.
+                        for _ in 0..raw_width.max(1) {
+                            writer.write_all(b"?")?;
+                        }
                     }
                 } else {
                     writer.write_all(b" ")?;
@@ -1909,7 +1911,10 @@ impl<W: Write> TerminalWriter<W> {
                     if let Some(text) = self.pool.get(gid) {
                         writer.write_all(text.as_bytes())?;
                     } else {
-                        writer.write_all(b" ")?;
+                        // Fallback: emit placeholder cells to preserve width.
+                        for _ in 0..raw_width.max(1) {
+                            writer.write_all(b"?")?;
+                        }
                     }
                 } else {
                     writer.write_all(b" ")?;

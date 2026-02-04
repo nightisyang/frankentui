@@ -253,6 +253,14 @@ check_policy_evidence() {
         log_test_fail "$case_name" "missing budget_decision evidence"
         missing=1
     fi
+    if ! rg -q '"event":"fairness_config"' "$evidence_jsonl"; then
+        log_test_fail "$case_name" "missing fairness_config evidence"
+        missing=1
+    fi
+    if ! rg -q '"event":"fairness_decision"' "$evidence_jsonl"; then
+        log_test_fail "$case_name" "missing fairness_decision evidence"
+        missing=1
+    fi
 
     return "$missing"
 }

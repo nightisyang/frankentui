@@ -749,8 +749,23 @@ ORDER BY p99_changed DESC;
         label: "JSON",
         lang: "json",
         code: r###"{
-  "mode": "inline",
-  "uiHeight": 12,
+  "runtime": {
+    "screenMode": "inline",
+    "uiHeight": 12,
+    "uiMinHeight": 8,
+    "uiMaxHeight": 16,
+    "focus": {
+      "mode": "pane",
+      "defaultPane": "code",
+      "mouse": true
+    },
+    "input": {
+      "paste": true,
+      "mouse": true,
+      "bracketed": true,
+      "keys": ["tab", "shift+tab", "arrows", "ctrl+arrows"]
+    }
+  },
   "renderer": {
     "diff": "row-major",
     "strategy": "bayes",
@@ -758,27 +773,57 @@ ORDER BY p99_changed DESC;
     "budgets": {
       "renderMs": 8.0,
       "presentMs": 4.0,
-      "degradation": "auto"
+      "degradation": "auto",
+      "tiers": [
+        { "name": "full", "maxMs": 12 },
+        { "name": "simple", "maxMs": 16 },
+        { "name": "textOnly", "maxMs": 20 }
+      ]
     }
   },
-  "features": ["mouse", "paste", "focus", "synchronized-output"],
+  "diff": {
+    "dirtyRows": true,
+    "spanUnion": true,
+    "tileSkip": true,
+    "posterior": { "alpha": 3.5, "beta": 92.5 }
+  },
+  "presenter": {
+    "syncOutput": true,
+    "flushBytes": 65536,
+    "cursorModel": "tracked",
+    "ansiBudget": "adaptive"
+  },
+  "features": ["mouse", "paste", "focus", "synchronized-output", "hyperlinks"],
   "theme": {
     "name": "NordicFrost",
     "accent": "#6AD1E3",
     "bg": "#0E141B",
-    "fg": "#E6EEF5"
+    "fg": "#E6EEF5",
+    "muted": "#6D7A86"
   },
+  "themes": [
+    { "name": "NordicFrost", "accent": "#6AD1E3" },
+    { "name": "EmberLab", "accent": "#FF8C5A" },
+    { "name": "Aurora", "accent": "#8AF7C8" }
+  ],
   "telemetry": {
     "enabled": true,
     "sampleRate": 0.25,
     "exporter": "otlp",
-    "endpoint": "http://localhost:4317"
+    "endpoint": "http://localhost:4317",
+    "tags": { "service": "ftui", "build": "nightly" }
+  },
+  "logging": {
+    "level": "info",
+    "channels": ["stderr", "ndjson"],
+    "ndjsonPath": "/var/log/ftui.ndjson"
   },
   "pipelines": [
     {
       "name": "diff",
       "maxRows": 120,
-      "priorities": ["text", "widgets", "chrome"]
+      "priorities": ["text", "widgets", "chrome"],
+      "steps": ["sanitize", "scan", "union", "emit"]
     },
     {
       "name": "present",
@@ -787,15 +832,24 @@ ORDER BY p99_changed DESC;
       "rateLimitFps": 60
     }
   ],
+  "subscriptions": {
+    "tickMs": 16,
+    "resizeCoalesceMs": 20,
+    "logTail": { "path": "/var/log/app.log", "lines": 50 }
+  },
   "alerts": {
     "errorBudget": 0.02,
     "p95Ms": 14,
     "p99Ms": 20,
-    "channels": ["stderr", "otlp", "ndjson"]
+    "channels": ["stderr", "otlp", "ndjson"],
+    "rules": [
+      { "name": "cpu_hot", "threshold": 0.85, "severity": "warning" },
+      { "name": "frame_drop", "threshold": 0.12, "severity": "error" }
+    ]
   },
   "evidenceLedger": {
     "enabled": true,
-    "fields": ["bayes_factor", "risk", "decision"],
+    "fields": ["bayes_factor", "risk", "decision", "posterior"],
     "retention": "7d"
   },
   "profiles": [
@@ -805,12 +859,14 @@ ORDER BY p99_changed DESC;
   "renderTrace": {
     "seed": 42,
     "runId": "demo-001",
-    "checksums": ["9f2d", "a120", "b3cc"]
+    "checksums": ["9f2d", "a120", "b3cc"],
+    "mode": "inline"
   },
   "streaming": {
-    "markdownCharsPerTick": 240,
+    "markdownCharsPerTick": 720,
     "codeRotationMs": 3200,
-    "fxRotationMs": 1800
+    "fxRotationMs": 1800,
+    "chartRotationMs": 2400
   },
   "panes": [
     { "id": "charts", "title": "Charts", "focusable": true },
@@ -820,11 +876,26 @@ ORDER BY p99_changed DESC;
     { "id": "activity", "title": "Activity", "focusable": true },
     { "id": "markdown", "title": "Markdown", "focusable": true }
   ],
-  "chartModes": ["pulse", "lines", "bars", "heatmap", "matrix", "composite"],
+  "chartModes": ["pulse", "lines", "bars", "heatmap", "matrix", "composite", "radar"],
+  "textEffects": {
+    "stack": ["gradient", "glow", "wave"],
+    "maxLayers": 3,
+    "seed": 1337
+  },
   "cache": {
     "type": "lru",
     "maxEntries": 512,
-    "evictPolicy": "lfu-backoff"
+    "evictPolicy": "lfu-backoff",
+    "ttlSeconds": 180
+  },
+  "snapshots": {
+    "sizes": ["80x24", "120x40"],
+    "bless": false,
+    "path": "./snapshots"
+  },
+  "backpressure": {
+    "maxQueuedFrames": 2,
+    "dropPolicy": "oldest"
   }
 }"###,
     },
@@ -855,24 +926,32 @@ theme:
   name: NordicFrost
   accent: "#6AD1E3"
   background: "#0E141B"
+  foreground: "#E6EEF5"
+  muted: "#6D7A86"
 
 alerts:
   error_budget: 0.02
   p95_ms: 14
   p99_ms: 20
+  rules:
+    - { name: cpu_hot, threshold: 0.85, severity: warning }
+    - { name: frame_drop, threshold: 0.12, severity: error }
 
 profiles:
   - name: modern
     sync_output: true
     scroll_region: true
+    ansi_budget: adaptive
   - name: mux
     sync_output: false
     scroll_region: false
+    ansi_budget: conservative
 
 evidence_ledger:
   enabled: true
   fields: [bayes_factor, risk, decision]
   retention: 7d
+  posterior: { alpha: 3.5, beta: 92.5 }
 
 ui:
   inline_mode:
@@ -881,6 +960,9 @@ ui:
   alt_screen:
     enabled: true
   channels: [stderr, otlp, ndjson]
+  focus:
+    default_pane: code
+    mouse: true
 
 telemetry:
   sampling: 0.25
@@ -893,14 +975,23 @@ telemetry:
     - type: file
       path: /var/log/ftui.ndjson
 
+subscriptions:
+  tick_ms: 16
+  resize_coalesce_ms: 20
+  log_tail:
+    path: /var/log/app.log
+    lines: 50
+
 streams:
   markdown:
-    chars_per_tick: 240
+    chars_per_tick: 720
     cursor: block
   code:
     rotate_ms: 3200
   effects:
     rotate_ms: 1800
+  charts:
+    rotate_ms: 2400
 
 panes:
   - id: charts
@@ -912,6 +1003,26 @@ panes:
   - id: markdown
     title: Markdown
     focusable: true
+  - id: activity
+    title: Activity
+    focusable: true
+
+charts:
+  modes: [pulse, lines, bars, heatmap, matrix, composite, radar]
+  palette: aurora
+
+effects:
+  stack: [gradient, glow, wave]
+  max_layers: 3
+
+cache:
+  type: lru
+  max_entries: 512
+  ttl_seconds: 180
+
+backpressure:
+  max_queued_frames: 2
+  drop_policy: oldest
 "###,
     },
     CodeSample {
@@ -1310,42 +1421,99 @@ static class EvidenceBuilder
         code: r###"# pipeline.rb
 require "set"
 
-Frame = Struct.new(:id, :dirty, :tags, keyword_init: true)
+Frame = Struct.new(:id, :dirty, :tags, :ts, keyword_init: true)
 
-module Pipeline
-  def self.run(frames, budget_ms: 12)
+module Telemetry
+  def self.span(name)
     start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    count = frames.select(&:dirty).sum { |f| f.tags.size }
+    yield
+  ensure
     elapsed = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - start) * 1000.0
-    raise "over budget" if elapsed > budget_ms
-    count
+    puts "[span=#{name}] #{elapsed.round(2)}ms"
+  end
+end
+
+class Pipeline
+  attr_reader :frames, :budget_ms
+
+  def initialize(budget_ms: 12, max_frames: 60)
+    @budget_ms = budget_ms
+    @max_frames = max_frames
+    @frames = []
   end
 
-  def self.diff(prev, nxt)
+  def push(frame)
+    @frames.unshift(frame.merge(ts: Time.now.to_f))
+    @frames = @frames.take(@max_frames)
+  end
+
+  def render
+    Telemetry.span("render") do
+      start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      dirty = @frames.select(&:dirty)
+      nodes = dirty.sum { |f| f.tags.size }
+      elapsed = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - start) * 1000.0
+      raise "over budget" if elapsed > @budget_ms
+      nodes
+    end
+  end
+
+  def diff(prev, nxt)
     seen = prev.to_set
     nxt.reject { |x| seen.include?(x) }
   end
 end
 
-frames = (1..5).map { |i| Frame.new(id: i, dirty: i.even?, tags: { idx: i.to_s }) }
-Pipeline.run(frames)
-
-budget = { frame_ms: 12, dirty_rows: frames.count(&:dirty) }
-puts "budget=#{budget}"
-
-def checksum(frames)
-  hash = 0xcbf29ce484222325
-  frames.each do |f|
-    hash ^= f.id
-    hash = (hash * 0x100000001b3) & 0xffffffffffffffff
-    hash ^= f.tags.size
-    hash = (hash * 0x100000001b3) & 0xffffffffffffffff
+module Evidence
+  def self.checksum(frames)
+    hash = 0xcbf29ce484222325
+    frames.each do |f|
+      hash ^= f.id
+      hash = (hash * 0x100000001b3) & 0xffffffffffffffff
+      hash ^= f.tags.size
+      hash = (hash * 0x100000001b3) & 0xffffffffffffffff
+    end
+    "0x#{hash.to_s(16)}"
   end
-  "0x#{hash.to_s(16)}"
+
+  def self.build(frames, frame_id)
+    dirty = frames.count(&:dirty)
+    strategy = dirty > 120 ? "degrade" : "full"
+    {
+      frame: frame_id,
+      checksum: checksum(frames),
+      dirty: dirty,
+      strategy: strategy
+    }
+  end
 end
 
-evidence = { frame: 42, checksum: checksum(frames), dirty: frames.count(&:dirty), strategy: "full" }
-puts "evidence=#{evidence}"
+pipe = Pipeline.new(budget_ms: 12)
+5.times do |i|
+  pipe.push(Frame.new(id: i + 1, dirty: i.even?, tags: { idx: i.to_s }))
+end
+
+budget = { frame_ms: 12, dirty_rows: pipe.frames.count(&:dirty) }
+puts "budget=#{budget}"
+puts "nodes=#{pipe.render}"
+puts "evidence=#{Evidence.build(pipe.frames, 42)}"
+
+class Scheduler
+  def initialize(pipe)
+    @pipe = pipe
+  end
+
+  def tick!
+    frame = Frame.new(id: rand(1000), dirty: rand < 0.5, tags: { mode: "inline" })
+    @pipe.push(frame)
+    @pipe.render
+  rescue => e
+    warn "[violation] #{e}"
+  end
+end
+
+sched = Scheduler.new(pipe)
+3.times { sched.tick! }
 "###,
     },
     CodeSample {
@@ -2169,22 +2337,30 @@ name = "ftui"
 version = "0.1.0"
 edition = "2024"
 authors = ["FrankenTUI Team"]
+license = "UNLICENSED"
+description = "Deterministic TUI kernel"
+keywords = ["tui", "terminal", "determinism", "rendering"]
 
 [dependencies]
 crossterm = "0.27"
 unicode-width = "0.1"
 tracing = { version = "0.1", features = ["log"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+lru = "0.16.3"
 
 [features]
 default = ["widgets"]
 widgets = []
 simd = ["dep:simd-json"]
+telemetry = ["dep:opentelemetry", "dep:opentelemetry-otlp"]
 
 [profile.release]
 opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
+strip = true
 
 [[bench]]
 name = "diff"
@@ -2196,6 +2372,8 @@ members = [
   "crates/ftui-render",
   "crates/ftui-runtime",
   "crates/ftui-widgets",
+  "crates/ftui-text",
+  "crates/ftui-style",
 ]
 
 [profile.dev]
@@ -2204,6 +2382,24 @@ opt-level = 1
 [profile.bench]
 debug = true
 strip = false
+
+[workspace.dependencies]
+unicode-segmentation = "1.12.0"
+insta = "1.43.0"
+
+[package.metadata.ftui]
+screen_mode = "inline"
+ui_height = 12
+theme = "NordicFrost"
+evidence_ledger = true
+snapshots = ["80x24", "120x40"]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = "deny"
+nursery = "deny"
 "###,
     },
     CodeSample {
@@ -2275,55 +2471,103 @@ console.log(evidence(pipe));
     CodeSample {
         label: "Markdown",
         lang: "md",
-        code: r###"# Project Plan
+        code: r###"# FrankenTUI Launch Plan
 
-## Overview
-We are building a **fast** TUI kernel.
+> **Premise:** render *truth*, not pixels.
 
-- [x] Zero flicker
-- [ ] 100% coverage
+## Goals
+- [x] Deterministic output
+- [x] Inline mode + scrollback
+- [x] One-writer rule
+- [ ] GPU raster (not needed)
 
-## Architecture
-1. **Core**: Input handling
-2. **Render**: `Buffer` + `Diff`
-3. **Widgets**: Reusable components
+## Architecture Map
+1. **Core** — input + terminal session
+2. **Render** — buffer, diff, presenter
+3. **Runtime** — Elm loop + subscriptions
+4. **Widgets** — composable UI
 
 ```rust
-fn main() {
-    println!("Hello");
+fn view(frame: &mut Frame) {
+    let area = Rect::new(0, 0, frame.width(), 1);
+    Paragraph::new("ok").render(area, frame);
 }
 ```
 
-> Note: Performance is key.
-
-[Docs](https://docs.rs/ftui)
-
-> [!TIP]
-> Use `Cmd::batch` to compose effects and keep render deterministic.
-
-| Metric | Target | Status |
-| :-- | --: | :--: |
-| Frame | <16ms | ✅ |
-| Diff | <4ms | ✅ |
-| Present | <4ms | ⚠️ |
-
-```mermaid
-sequenceDiagram
-  participant T as Terminal
-  participant R as Renderer
-  participant P as Presenter
-  T->>R: Events
-  R->>P: BufferDiff
-  P-->>T: ANSI Frame
+```diff
+- write_stdout_immediately()
++ buffer_diff_then_present()
 ```
-
-<details>
-<summary>Evidence Ledger</summary>
 
 ```json
-{ "frame": 42, "dirty": 84, "strategy": "full", "checksum": "0x9f2d" }
+{ "mode": "inline", "ui_height": 12, "sync": true }
+```
+
+```toml
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
+```
+
+## Evidence Ledger
+| Frame | Dirty | Strategy | Checksum |
+| --: | --: | :-- | :-- |
+| 120 | 84 | full | `0x9f2d` |
+| 121 | 164 | degrade | `0xa120` |
+| 122 | 44 | spans | `0xb3cc` |
+
+> [!NOTE]
+> The posterior `α=3.5, β=92.5` favors sparse diffs.
+
+### Control Surface
+| Panel | Shortcut | Notes |
+| --- | --- | --- |
+| Charts | `g` | cycle modes |
+| Code | `c` | 27 languages |
+| Markdown | `m` | stream GFM |
+
+#### Task Checklist
+- [x] Dirty-row tracking
+- [x] Sync update brackets
+- [x] ANSI cost model
+- [ ] Cross-terminal golden tests
+
+```mermaid
+graph TD
+  A[Input] --> B[Runtime]
+  B --> C[Frame]
+  C --> D[BufferDiff]
+  D --> E[Presenter]
+  E --> F[Terminal]
+```
+
+> [!TIP]
+> Use `Cmd::batch` for side effects without blocking.
+
+### Edge Notes
+1. **No unsafe code**
+2. **Cells are 16 bytes**
+3. **Output is atomic**
+
+> [!WARNING]
+> Never call `process::exit()` before `TerminalSession` drops.
+
+<details>
+<summary>Trace Snapshot</summary>
+
+```json
+{
+  "frame": 42,
+  "dirty": 84,
+  "strategy": "full",
+  "checksum": "0x9f2d"
+}
 ```
 </details>
+
+Inline mode keeps logs above UI:
+> "Scrollback survives; chrome stays stable."
 
 [^1]: Determinism beats magic.
 "###,
@@ -3142,7 +3386,7 @@ impl Dashboard {
         let md = self.current_markdown_sample();
         let max_len = md.len();
         // Triple streaming speed to keep the dashboard markdown lively.
-        let mut new_pos = self.md_stream_pos.saturating_add(720);
+        let mut new_pos = self.md_stream_pos.saturating_add(2160);
         while new_pos < max_len && !md.is_char_boundary(new_pos) {
             new_pos += 1;
         }
@@ -4732,7 +4976,17 @@ impl Dashboard {
         for line in text.lines() {
             let plain = line.to_plain_text();
             let table_like = Self::is_table_line(&plain) || Self::is_table_like_line(&plain);
-            if table_like || line.width() <= width {
+            if table_like {
+                if line.width() <= width {
+                    lines.push(line.clone());
+                } else {
+                    let mut text = Text::from_lines([line.clone()]);
+                    text.truncate(width, None);
+                    lines.extend(text.lines().iter().cloned());
+                }
+                continue;
+            }
+            if line.width() <= width {
                 lines.push(line.clone());
                 continue;
             }

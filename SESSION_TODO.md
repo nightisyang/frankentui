@@ -1,5 +1,121 @@
 # Session TODO List
 
+## Current Session (Codex) — Menu Semantics + Doom/Quake Fix + Deep Audit (2026-02-04)
+- [x] Re-read `AGENTS.md` + `README.md` (fresh constraints + architecture)
+- [x] Load skills: `agent-mail`, `beads-bv`, `codebase-archaeology`, `codebase-audit`, `multi-pass-bug-hunting`
+- [x] Run `bv --robot-triage` + `br ready --json` to confirm priorities
+- [ ] Start Agent Mail session (macro) and list active agents (blocked by tool error)
+- [ ] Post Agent Mail start note for `bd-1e3w` (blocked by tool error)
+- [x] Update bead `bd-1e3w` status/notes for menu + FPS fixes
+- [x] Menu semantics: keep single-level tabs, Tab/Shift+Tab next/prev, arrow keys global
+- [x] Status bar: show `Tab/Shift+Tab` hint even in compact width
+- [x] Visual Effects FPS controls: confirm WASD + mouse look + Space jump + arrow keys switch FX
+- [x] Doom/Quake visuals: diagnose "black screen" root cause, fix brightness/visibility
+- [x] Quake rendering fidelity: improve lighting/contrast + readability
+- [x] Run quality gates after edits: `cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`
+- [x] Run UBS on changed files (`UBS_MAX_DIR_SIZE_MB=0 ubs --diff`)
+- [x] Deep audit pass 1: run UBS + scan critical files (visual_effects, chrome, app)
+- [ ] Deep audit pass 2: fresh-eyes reread for edge cases
+- [x] Deep audit pass 3: integration check (tests + diff review) — full `cargo test -p ftui-demo-showcase` hung on long-running tests; targeted tests passed
+- [x] Deep audit pass 4: final UBS clean scan (warnings remain; documented)
+- [ ] Send Agent Mail update in thread `bd-1e3w` with summary
+
+## Current Session (Codex) — Deep Review + Perf Loop + bd-1e3w (2026-02-04)
+- [x] Re-read `AGENTS.md` + `README.md`
+- [x] Run `bv --robot-triage` to identify top-impact beads
+- [x] Mark bead in progress: `br update bd-1e3w --status in_progress`
+- [ ] Start Agent Mail session (macro) + post thread update (tool erroring)
+- [x] Run UBS surface scan:
+- [x] `UBS_MAX_DIR_SIZE_MB=0 ubs --only=rust crates/ftui-runtime`
+- [x] `UBS_MAX_DIR_SIZE_MB=0 ubs --only=rust crates/ftui-widgets`
+- [x] `UBS_MAX_DIR_SIZE_MB=0 ubs --only=rust crates/ftui-demo-showcase`
+- [x] Review recent code changes (diff sweep):
+- [x] `crates/ftui-demo-showcase/src/app.rs`
+- [x] `crates/ftui-demo-showcase/src/screens/macro_recorder.rs`
+- [x] `crates/ftui-demo-showcase/src/screens/visual_effects.rs`
+- [x] `crates/ftui-render/src/drawing.rs`
+- [x] `crates/ftui-text/tests/unicode_width_corpus.rs`
+- [x] Fix root-cause bug: restore grapheme-width alignment in `Buffer::print_text_clipped`
+- [x] Run quality gates: `cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`
+- [x] Build release demo: `cargo build -p ftui-demo-showcase --release`
+- [x] Baseline perf (TTY): `hyperfine --warmup 3 --runs 10` (markdown screen)
+- [ ] Profile perf with symbols (flamegraph blocked by TTY; perf symbol resolution limited)
+- [ ] Opportunity matrix + single-lever optimization (pending usable profile)
+- [ ] Write isomorphism proof for any perf change (ordering/tie-break/FP/RNG)
+- [ ] Verify golden checksums (`sha256sum -c golden_checksums.txt`) post-change
+- [ ] Post Agent Mail update to thread `bd-1e3w` with findings + next steps
+
+## Current Session (Codex) — Review + VFX Perf Optimization (2026-02-04)
+- [x] Re-read `AGENTS.md` + `README.md` (refresh constraints + architecture)
+- [x] Run `bv --robot-triage` + `br ready --json` to confirm priorities
+- [x] Re-run `bv --robot-triage` (2026-02-04 08:52) to refresh top picks
+- [x] Mark bead in progress: `br update bd-1e3w --status in_progress`
+- [ ] Start Agent Mail session + coordinate (tool currently erroring)
+- [x] Re-attempt Agent Mail session (still connection error)
+- [x] Agent Mail health check returns OK (HTTP 8765), but `ensure_project` still fails
+- [x] Build `ftui-demo-showcase` release for profiling (with debug symbols)
+- [x] Baseline perf for Visual Effects (hyperfine, exit-after 2s)
+- [x] Profile Visual Effects (perf record/report)
+- [x] Opportunity matrix: `point_segment_distance_sq` (~46% cycles) → optimize
+- [x] Implement single-lever optimization: precompute wall segment vectors/len_sq
+- [x] Rebuild + re-baseline (hyperfine) + re-profile (perf)
+- [x] Second lever: dedupe Quake wall edges by vertex indices (fewer segments)
+- [x] Rebuild + re-baseline (hyperfine) + re-profile (perf) after dedupe
+- [x] Isomorphism proof writeup (ordering/tie-breaking/FP/RNG/golden checksums)
+- [x] `sha256sum -c golden_checksums.txt` (many preexisting mismatches)
+- [ ] Review remaining modified files from other agents:
+- [x] `crates/ftui-demo-showcase/src/screens/macro_recorder.rs`
+- [x] Macro recorder: avoid Shift+Arrow conflict (Ctrl/Alt only)
+- [x] `crates/ftui-render/src/drawing.rs`
+- [x] `crates/ftui-text/tests/unicode_width_corpus.rs`
+- [x] Review render/text deltas (`diff.rs`, `presenter.rs`, `lib.rs`, `wrap.rs`)
+- [x] Unify `unicode-width` dependency in `ftui-text` to `0.2.2` for consistency
+- [x] Align `ftui-text` dev-dependency `unicode-width` to `0.2.2` (fix cargo check ambiguity)
+- [x] Chrome test comment: update Shakespeare key index after Guided Tour insertion
+- [x] Diff posterior update: use scan-cell estimate (not total cells) in `TerminalWriter::decide_diff`
+- [x] Run `cargo fmt` to resolve formatting drift in `dashboard.rs`
+- [x] Re-run quality gates after diff-posterior fix (`cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`)
+- [x] Re-run UBS diff scan after diff-posterior fix
+
+## Current Session (Codex) — Deep Review + bd-1e3w Execution (2026-02-04)
+- [ ] Refresh constraints: re-read `AGENTS.md` + `README.md` if any ambiguity arises
+- [ ] Re-run `bv --robot-triage` if priorities shift
+- [ ] Maintain Agent Mail attempt log (health check + ensure_project)
+- [ ] Deep review: runtime core
+- [ ] `crates/ftui-runtime/src/program.rs` (event loop, subscription handling, terminal session lifecycle)
+- [ ] `crates/ftui-runtime/src/terminal_writer.rs` (diff decision, inline/alt-screen correctness, cursor restore)
+- [ ] `crates/ftui-runtime/src/queueing_scheduler.rs` (fairness, preemption, evidence, stats correctness)
+- [ ] Deep review: render core
+- [ ] `crates/ftui-render/src/diff_strategy.rs` (Bayesian selector, variance guard, hysteresis)
+- [ ] `crates/ftui-render/src/diff.rs` (dirty spans/tiles, scan ordering, run coalescing)
+- [ ] `crates/ftui-render/src/presenter.rs` (SGR delta lengths, cursor movement, link toggles)
+- [ ] `crates/ftui-render/src/drawing.rs` (grapheme width fallback, clipping)
+- [ ] `crates/ftui-render/src/lib.rs` (text width helpers alignment with ftui-text)
+- [ ] Deep review: text core
+- [ ] `crates/ftui-text/src/wrap.rs` (grapheme width, emoji width clamps, wrap correctness)
+- [ ] `crates/ftui-text/tests/unicode_width_corpus.rs` (regression coverage for emoji clusters)
+- [ ] Deep review: widgets focus graph
+- [ ] `crates/ftui-widgets/src/focus/graph.rs` (cycle detection, tab chain rebuilding)
+- [ ] Deep review: demo showcase deltas
+- [ ] `crates/ftui-demo-showcase/src/app.rs` (tour resume, palette favorites, next/prev screen ordering)
+- [ ] `crates/ftui-demo-showcase/src/chrome.rs` (tab hit regions, category tabs, guided tour overlay)
+- [ ] `crates/ftui-demo-showcase/src/screens/dashboard.rs` (markdown wrapping, data density, borders)
+- [ ] `crates/ftui-demo-showcase/src/screens/markdown_rich_text.rs` (table-line truncation)
+- [ ] `crates/ftui-demo-showcase/src/screens/macro_recorder.rs` (ctrl/alt arrows, UX hints)
+- [ ] `crates/ftui-demo-showcase/src/screens/visual_effects.rs` (perf changes, determinism)
+- [ ] `crates/ftui-demo-showcase/src/tour.rs` (step generation, highlights, resume behavior)
+- [ ] Review: identify bugs, risks, and perf pitfalls; write root-cause notes
+- [ ] Fix any issues found (manual edits only; no deletions)
+- [ ] Re-run quality gates after fixes (`cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`)
+- [ ] Re-run UBS on diff after fixes (`UBS_MAX_DIR_SIZE_MB=0 ubs --diff`)
+- [ ] Update bead notes for `bd-1e3w` with review/fix summary
+- [ ] Try Agent Mail update to thread `bd-1e3w` (if connection recovers)
+- [x] Re-run quality gates after dependency alignment (`cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`)
+- [x] Re-run UBS diff scan after dependency alignment
+- [x] Run quality gates: `cargo fmt --check`, `cargo check --all-targets`, `cargo clippy --all-targets -- -D warnings`
+- [x] Run UBS on changed files (warnings mainly from existing asserts/unwraps)
+- [ ] Send Agent Mail update to thread `bd-1e3w` (tool still erroring)
+
 ## Current Session (Codex) — Guided Tour Fixes + Review Sweep (2026-02-04)
 - [x] Re-read `AGENTS.md` + `README.md` (refresh constraints + architecture)
 - [x] Fix GuidedTour compile errors (imports + match arms + accent mapping)

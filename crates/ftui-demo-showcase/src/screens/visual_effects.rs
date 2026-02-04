@@ -12,7 +12,7 @@
 //! - Fire simulation
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::env;
 use std::f64::consts::TAU;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -3134,15 +3134,11 @@ impl DoomE1M1State {
         // Paint a subtle Doom-like sky/floor gradient under the walls.
         let horizon = center_y.round() as i32;
         let max_y = height as i32 - 1;
-        let sky_top = (42, 66, 120);
-        let sky_bottom = (120, 140, 180);
-        let floor_top = (118, 86, 56);
-        let floor_bottom = (62, 42, 28);
-        let fill_stride = if matches!(quality, FxQuality::Minimal) {
-            2
-        } else {
-            1
-        };
+        let sky_top = (62, 92, 152);
+        let sky_bottom = (132, 164, 210);
+        let floor_top = (142, 106, 72);
+        let floor_bottom = (82, 56, 36);
+        let fill_stride = 1;
         for py in (0..=max_y).step_by(fill_stride) {
             let (r, g, b) = if py <= horizon {
                 let denom = horizon.max(1) as f64;
@@ -3187,32 +3183,32 @@ impl DoomE1M1State {
             }
 
             let fog = (corrected / 900.0).clamp(0.0, 1.0);
-            let mut brightness = (0.32 + (1.0 - fog).powf(1.1)).clamp(0.0, 1.6);
+            let mut brightness = (0.45 + (1.0 - fog).powf(1.1)).clamp(0.0, 1.8);
             if self.fire_flash > 0.0 {
                 brightness = (brightness + self.fire_flash * 0.35).min(1.6);
             }
 
             let tex_band = ((hit_u * 32.0).floor() as i32) & 3;
             let tex_boost = match tex_band {
-                0 => 0.95,
-                1 => 1.08,
-                2 => 1.18,
-                _ => 1.28,
+                0 => 1.05,
+                1 => 1.18,
+                2 => 1.28,
+                _ => 1.38,
             };
 
             let grain =
                 (((px as u64).wrapping_mul(113) ^ (frame.wrapping_mul(131)) ^ hit_idx as u64) & 7)
                     as f32
                     / 80.0;
-            brightness = (brightness * tex_boost + grain + 0.1).clamp(0.25, 1.8);
+            brightness = (brightness * tex_boost + grain + 0.16).clamp(0.35, 1.9);
 
             let r = (base.r() as f32 * brightness).min(255.0) as u8;
             let g = (base.g() as f32 * brightness).min(255.0) as u8;
             let b = (base.b() as f32 * brightness).min(255.0) as u8;
             let wall_color = PackedRgba::rgb(r, g, b);
 
-            let sky_base = PackedRgba::rgb(48, 72, 120);
-            let floor_base = PackedRgba::rgb(80, 58, 36);
+            let sky_base = PackedRgba::rgb(68, 98, 150);
+            let floor_base = PackedRgba::rgb(96, 70, 44);
             let sky_fade = fog.clamp(0.0, 1.0);
             let floor_fade = fog.clamp(0.0, 1.0);
             let ceiling_color = PackedRgba::rgb(
@@ -3355,6 +3351,47 @@ struct WallSeg {
     y1: f32,
     x2: f32,
     y2: f32,
+    vx: f32,
+    vy: f32,
+    len_sq: f32,
+}
+
+impl WallSeg {
+    fn new(a: Vec3, b: Vec3) -> Option<Self> {
+        let vx = b.x - a.x;
+        let vy = b.y - a.y;
+        let len_sq = vx * vx + vy * vy;
+        if len_sq <= 1e-6 {
+            return None;
+        }
+        Some(Self {
+            x1: a.x,
+            y1: a.y,
+            x2: b.x,
+            y2: b.y,
+            vx,
+            vy,
+            len_sq,
+        })
+    }
+
+    #[inline]
+    fn distance_sq(self, px: f32, py: f32) -> f32 {
+        if self.len_sq <= 1e-6 {
+            let dx = px - self.x1;
+            let dy = py - self.y1;
+            return dx * dx + dy * dy;
+        }
+        let wx = px - self.x1;
+        let wy = py - self.y1;
+        let t = ((wx * self.vx) + (wy * self.vy)) / self.len_sq;
+        let t = t.clamp(0.0, 1.0);
+        let proj_x = self.x1 + t * self.vx;
+        let proj_y = self.y1 + t * self.vy;
+        let dx = px - proj_x;
+        let dy = py - proj_y;
+        dx * dx + dy * dy
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -3503,18 +3540,15 @@ impl QuakeE1M1State {
         let light_dir = Vec3::new(0.3, -0.45, 0.85).normalized();
         let height_span = (bounds_max.z - bounds_min.z).max(0.001);
 
-        let mut push_edge = |a: Vec3, b: Vec3| {
-            let dx = b.x - a.x;
-            let dy = b.y - a.y;
-            if (dx * dx + dy * dy) <= 1e-6 {
+        let mut seen_edges: HashSet<(u16, u16)> = HashSet::new();
+        let mut push_edge = |ia: u16, ib: u16, a: Vec3, b: Vec3| {
+            let key = if ia < ib { (ia, ib) } else { (ib, ia) };
+            if !seen_edges.insert(key) {
                 return;
             }
-            walls.push(WallSeg {
-                x1: a.x,
-                y1: a.y,
-                x2: b.x,
-                y2: b.y,
-            });
+            if let Some(seg) = WallSeg::new(a, b) {
+                walls.push(seg);
+            }
         };
 
         for (i0, i1, i2) in QUAKE_E1M1_TRIS.iter().copied() {
@@ -3546,9 +3580,9 @@ impl QuakeE1M1State {
             let normal = n * (1.0 / len);
 
             if normal.z.abs() < 0.35 {
-                push_edge(w0, w1);
-                push_edge(w1, w2);
-                push_edge(w2, w0);
+                push_edge(i0, i1, w0, w1);
+                push_edge(i1, i2, w1, w2);
+                push_edge(i2, i0, w2, w0);
             }
 
             if normal.z > 0.35
@@ -3568,13 +3602,13 @@ impl QuakeE1M1State {
                 palette_quake_stone(height_t as f64)
             };
             let ambient = if is_floor {
-                0.38
+                0.45
             } else if is_ceiling {
-                0.28
+                0.32
             } else {
-                0.3
+                0.36
             };
-            let diffuse_scale = if is_floor || is_ceiling { 0.85 } else { 1.0 };
+            let diffuse_scale = if is_floor || is_ceiling { 0.95 } else { 1.05 };
             let diffuse = normal.dot(light_dir).abs();
 
             tris.push(QuakeTri {
@@ -3671,7 +3705,7 @@ impl QuakeE1M1State {
     fn collides(&self, x: f32, y: f32) -> bool {
         let radius_sq = QUAKE_COLLISION_RADIUS * QUAKE_COLLISION_RADIUS;
         for seg in &self.wall_segments {
-            let dist_sq = point_segment_distance_sq(x, y, seg.x1, seg.y1, seg.x2, seg.y2);
+            let dist_sq = seg.distance_sq(x, y);
             if dist_sq < radius_sq {
                 return true;
             }
@@ -3830,21 +3864,17 @@ impl QuakeE1M1State {
         let proj_scale = (w.min(h) * 0.5) / (QUAKE_FOV * 0.5).tan();
         let near = 0.04f32;
         let far = 10.0f32;
-        let fog_color = PackedRgba::rgb(52, 56, 66);
+        let fog_color = PackedRgba::rgb(72, 80, 92);
 
         let horizon = (h * 0.5 - self.player.pitch * (h * 0.35) + bob * proj_scale * 0.8)
             .clamp(0.0, h - 1.0)
             .round() as i32;
         let max_y = height as i32 - 1;
-        let sky_top = (36, 50, 78);
-        let sky_bottom = (88, 104, 136);
-        let floor_top = (104, 86, 62);
-        let floor_bottom = (50, 36, 26);
-        let fill_stride = if matches!(quality, FxQuality::Minimal) {
-            2
-        } else {
-            1
-        };
+        let sky_top = (48, 70, 104);
+        let sky_bottom = (104, 128, 164);
+        let floor_top = (120, 100, 74);
+        let floor_bottom = (64, 46, 32);
+        let fill_stride = 1;
         for py in (0..=max_y).step_by(fill_stride) {
             let (r, g, b) = if py <= horizon {
                 let denom = horizon.max(1) as f64;
@@ -4017,9 +4047,9 @@ impl QuakeE1M1State {
                             & 3) as f32
                             / 20.0;
                         let mut brightness =
-                            (light * fade * pattern + grain + 0.24).clamp(0.16, 1.6);
+                            (light * fade * pattern + grain + 0.38).clamp(0.28, 1.8);
                         if self.fire_flash > 0.0 {
-                            brightness = (brightness + self.fire_flash * 0.45).min(1.7);
+                            brightness = (brightness + self.fire_flash * 0.5).min(1.9);
                         }
 
                         let mut r = base.r() as f32 * brightness;
@@ -4139,30 +4169,10 @@ fn cross2(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
     ax * by - ay * bx
 }
 
-fn point_segment_distance_sq(px: f32, py: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
-    let vx = x2 - x1;
-    let vy = y2 - y1;
-    let wx = px - x1;
-    let wy = py - y1;
-    let len_sq = vx * vx + vy * vy;
-    if len_sq <= 1e-6 {
-        let dx = px - x1;
-        let dy = py - y1;
-        return dx * dx + dy * dy;
-    }
-    let t = ((wx * vx) + (wy * vy)) / len_sq;
-    let t = t.clamp(0.0, 1.0);
-    let proj_x = x1 + t * vx;
-    let proj_y = y1 + t * vy;
-    let dx = px - proj_x;
-    let dy = py - proj_y;
-    dx * dx + dy * dy
-}
-
 fn min_wall_distance_sq(x: f32, y: f32, walls: &[WallSeg]) -> f32 {
     let mut best = f32::INFINITY;
     for seg in walls {
-        let dist_sq = point_segment_distance_sq(x, y, seg.x1, seg.y1, seg.x2, seg.y2);
+        let dist_sq = seg.distance_sq(x, y);
         if dist_sq < best {
             best = dist_sq;
         }

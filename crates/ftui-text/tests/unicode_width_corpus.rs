@@ -261,6 +261,23 @@ fn file_browser_icons_are_wide() {
 }
 
 #[test]
+fn emoji_clusters_clamp_to_two_cells() {
+    let cases = [
+        "\u{1F1FA}\u{1F1F8}",                          // US flag (regional indicators)
+        "\u{1F44D}\u{1F3FB}",                          // thumbs up + skin tone
+        "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}", // family ZWJ
+    ];
+    for case in cases {
+        let width = grapheme_width(case);
+        assert_eq!(
+            width, 2,
+            "Expected emoji cluster '{}' to clamp to width 2",
+            case
+        );
+    }
+}
+
+#[test]
 fn emoji_basic_width_tests() {
     for case in EMOJI_BASIC_TESTS {
         let width = case.input.width();

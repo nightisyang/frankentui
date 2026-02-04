@@ -29,6 +29,7 @@ use ftui_runtime::{
     VoiSamplerSnapshot, inline_auto_voi_snapshot,
 };
 use ftui_style::Style;
+use ftui_text::{Line, Span, Text, WrapMode};
 use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
@@ -1180,7 +1181,11 @@ impl AppModel {
 
     pub fn start_tour(&mut self, start_step: usize, speed: f64) {
         let resume_screen = if self.current_screen == ScreenId::GuidedTour {
-            self.display_screen()
+            if self.tour.is_active() {
+                self.tour.active_screen()
+            } else {
+                ScreenId::Dashboard
+            }
         } else {
             self.current_screen
         };
@@ -1424,6 +1429,7 @@ impl AppModel {
             AppMsg::Quit => Cmd::Quit,
 
             AppMsg::SwitchScreen(id) => {
+                let from = self.display_screen().title();
                 if id == ScreenId::GuidedTour {
                     self.start_tour(0, self.tour.speed());
                     return Cmd::None;
@@ -1431,7 +1437,6 @@ impl AppModel {
                 if self.tour.is_active() {
                     self.stop_tour(false, "switch_screen");
                 }
-                let from = self.display_screen().title();
                 self.current_screen = id;
                 self.screens.action_timeline.record_command_event(
                     self.tick_count,
@@ -1447,12 +1452,12 @@ impl AppModel {
             AppMsg::NextScreen => {
                 let from_screen = self.display_screen();
                 let to_screen = from_screen.next();
-                if self.tour.is_active() {
-                    self.stop_tour(false, "next_screen");
-                }
                 if to_screen == ScreenId::GuidedTour {
                     self.start_tour(0, self.tour.speed());
                     return Cmd::None;
+                }
+                if self.tour.is_active() {
+                    self.stop_tour(false, "next_screen");
                 }
                 self.current_screen = to_screen;
                 self.screens.action_timeline.record_command_event(
@@ -1469,12 +1474,12 @@ impl AppModel {
             AppMsg::PrevScreen => {
                 let from_screen = self.display_screen();
                 let to_screen = from_screen.prev();
-                if self.tour.is_active() {
-                    self.stop_tour(false, "prev_screen");
-                }
                 if to_screen == ScreenId::GuidedTour {
                     self.start_tour(0, self.tour.speed());
                     return Cmd::None;
+                }
+                if self.tour.is_active() {
+                    self.stop_tour(false, "prev_screen");
                 }
                 self.current_screen = to_screen;
                 self.screens.action_timeline.record_command_event(
@@ -1687,6 +1692,29 @@ impl AppModel {
                     source_label,
                     screen_title,
                 );
+
+                if !self.tour.is_active()
+                    && self.current_screen == ScreenId::GuidedTour
+                    && let Event::Key(KeyEvent {
+                        code,
+                        modifiers,
+                        kind: KeyEventKind::Press,
+                        ..
+                    }) = &event
+                    && modifiers.is_empty()
+                {
+                    match *code {
+                        KeyCode::Enter | KeyCode::Char(' ') => {
+                            self.start_tour(0, self.tour.speed());
+                            return Cmd::None;
+                        }
+                        KeyCode::Escape => {
+                            self.current_screen = ScreenId::Dashboard;
+                            return Cmd::None;
+                        }
+                        _ => {}
+                    }
+                }
 
                 if self.tour.is_active()
                     && let Event::Key(KeyEvent {
@@ -1964,10 +1992,6 @@ impl AppModel {
                         // Tab cycling (Tab/BackTab, or Shift+H/Shift+L for Vim users)
                         (KeyCode::Tab, Modifiers::NONE) => {
                             let target = self.display_screen().next();
-                            if target == ScreenId::GuidedTour {
-                                self.start_tour(0, self.tour.speed());
-                                return Cmd::None;
-                            }
                             if self.tour.is_active() {
                                 self.stop_tour(false, "tab_next");
                             }
@@ -1976,10 +2000,6 @@ impl AppModel {
                         }
                         (KeyCode::BackTab, _) => {
                             let target = self.display_screen().prev();
-                            if target == ScreenId::GuidedTour {
-                                self.start_tour(0, self.tour.speed());
-                                return Cmd::None;
-                            }
                             if self.tour.is_active() {
                                 self.stop_tour(false, "tab_prev");
                             }
@@ -1988,10 +2008,6 @@ impl AppModel {
                         }
                         (KeyCode::Char('L'), Modifiers::SHIFT) => {
                             let target = self.display_screen().next();
-                            if target == ScreenId::GuidedTour {
-                                self.start_tour(0, self.tour.speed());
-                                return Cmd::None;
-                            }
                             if self.tour.is_active() {
                                 self.stop_tour(false, "shift_l");
                             }
@@ -2000,68 +2016,25 @@ impl AppModel {
                         }
                         (KeyCode::Char('H'), Modifiers::SHIFT) => {
                             let target = self.display_screen().prev();
-                            if target == ScreenId::GuidedTour {
-                                self.start_tour(0, self.tour.speed());
-                                return Cmd::None;
-                            }
                             if self.tour.is_active() {
                                 self.stop_tour(false, "shift_h");
                             }
                             self.current_screen = target;
                             return Cmd::None;
                         }
-                        // Category navigation (Shift+Left/Right)
-                        (KeyCode::Left, m) if m.contains(Modifiers::SHIFT) => {
-                            let current_category = screens::screen_category(self.display_screen());
-                            let prev_category = screens::prev_category(current_category);
-                            if let Some(next_screen) = screens::first_in_category(prev_category) {
-                                if next_screen == ScreenId::GuidedTour {
-                                    self.start_tour(0, self.tour.speed());
-                                    return Cmd::None;
-                                }
-                                if self.tour.is_active() {
-                                    self.stop_tour(false, "category_prev");
-                                }
-                                self.current_screen = next_screen;
-                            }
-                            return Cmd::None;
-                        }
-                        (KeyCode::Right, m) if m.contains(Modifiers::SHIFT) => {
-                            let current_category = screens::screen_category(self.display_screen());
-                            let next_category = screens::next_category(current_category);
-                            if let Some(next_screen) = screens::first_in_category(next_category) {
-                                if next_screen == ScreenId::GuidedTour {
-                                    self.start_tour(0, self.tour.speed());
-                                    return Cmd::None;
-                                }
-                                if self.tour.is_active() {
-                                    self.stop_tour(false, "category_next");
-                                }
-                                self.current_screen = next_screen;
-                            }
-                            return Cmd::None;
-                        }
-                        // Screen navigation within current category (Left/Right)
+                        // Screen navigation (Left/Right)
                         (KeyCode::Left, Modifiers::NONE) => {
-                            let target = screens::prev_in_category(self.display_screen());
-                            if target == ScreenId::GuidedTour {
-                                self.start_tour(0, self.tour.speed());
-                                return Cmd::None;
-                            }
+                            let target = self.display_screen().prev();
                             if self.tour.is_active() {
-                                self.stop_tour(false, "nav_prev");
+                                self.stop_tour(false, "nav_prev_global");
                             }
                             self.current_screen = target;
                             return Cmd::None;
                         }
                         (KeyCode::Right, Modifiers::NONE) => {
-                            let target = screens::next_in_category(self.display_screen());
-                            if target == ScreenId::GuidedTour {
-                                self.start_tour(0, self.tour.speed());
-                                return Cmd::None;
-                            }
+                            let target = self.display_screen().next();
                             if self.tour.is_active() {
-                                self.stop_tour(false, "nav_next");
+                                self.stop_tour(false, "nav_next_global");
                             }
                             self.current_screen = target;
                             return Cmd::None;
@@ -2069,10 +2042,6 @@ impl AppModel {
                         // Number keys for direct screen access
                         (KeyCode::Char(ch @ '0'..='9'), Modifiers::NONE) => {
                             if let Some(id) = ScreenId::from_number_key(ch) {
-                                if id == ScreenId::GuidedTour {
-                                    self.start_tour(0, self.tour.speed());
-                                    return Cmd::None;
-                                }
                                 if self.tour.is_active() {
                                     self.stop_tour(false, "number_key");
                                 }
@@ -2134,32 +2103,17 @@ impl Model for AppModel {
             .buffer
             .fill(area, RenderCell::default().with_bg(theme::bg::DEEP.into()));
 
-        // Top-level layout: nav (1-2 rows) + content + status bar (1 row)
-        let nav_rows = if area.height >= 3 { 2 } else { 1 };
+        // Top-level layout: nav (1 row) + content + status bar (1 row)
         let chunks = Flex::vertical()
             .constraints([
-                Constraint::Fixed(nav_rows),
+                Constraint::Fixed(1),
                 Constraint::Min(1),
                 Constraint::Fixed(1),
             ])
             .split(area);
 
-        // Navigation rows (chrome module)
-        if nav_rows >= 2 {
-            let nav_chunks = Flex::vertical()
-                .constraints([Constraint::Fixed(1), Constraint::Fixed(1)])
-                .split(chunks[0]);
-            let current_category = screens::screen_category(display_screen);
-            crate::chrome::render_category_tabs(display_screen, frame, nav_chunks[0]);
-            crate::chrome::render_screen_tabs_for_category(
-                display_screen,
-                current_category,
-                frame,
-                nav_chunks[1],
-            );
-        } else {
-            crate::chrome::render_tab_bar(display_screen, frame, chunks[0]);
-        }
+        // Navigation row (single-level tab bar)
+        crate::chrome::render_tab_bar(display_screen, frame, chunks[0]);
 
         // Content area with border
         let content_block = Block::new()
@@ -2175,6 +2129,9 @@ impl Model for AppModel {
 
         // Screen content (wrapped in error boundary)
         self.screens.view(display_screen, frame, inner);
+        if display_screen == ScreenId::GuidedTour && !self.tour.is_active() {
+            self.render_guided_tour_landing(frame, inner);
+        }
 
         // A11y panel (small overlay inside content area)
         if self.a11y_panel_visible {
@@ -2262,7 +2219,16 @@ impl AppModel {
     fn current_screen_keybindings(&self) -> Vec<crate::chrome::HelpEntry> {
         use screens::Screen;
         let mut entries = match self.display_screen() {
-            ScreenId::GuidedTour => Vec::new(),
+            ScreenId::GuidedTour => vec![
+                screens::HelpEntry {
+                    key: "Enter / Space",
+                    action: "Start guided tour",
+                },
+                screens::HelpEntry {
+                    key: "Esc",
+                    action: "Back to Dashboard",
+                },
+            ],
             ScreenId::Dashboard => self.screens.dashboard.keybindings(),
             ScreenId::Shakespeare => self.screens.shakespeare.keybindings(),
             ScreenId::CodeExplorer => self.screens.code_explorer.keybindings(),
@@ -2447,10 +2413,6 @@ impl AppModel {
                 );
                 // Screen navigation: "screen:<name>"
                 if let Some(sid) = Self::screen_id_from_action_id(&id) {
-                    if sid == ScreenId::GuidedTour {
-                        self.start_tour(0, self.tour.speed());
-                        return Cmd::None;
-                    }
                     if self.tour.is_active() {
                         self.stop_tour(false, "palette");
                     }
@@ -2877,6 +2839,67 @@ impl AppModel {
             .collect()
     }
 
+    /// Render the guided tour landing screen (when the tour is not active).
+    fn render_guided_tour_landing(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            return;
+        }
+
+        let panel_width = if area.width < 24 {
+            area.width
+        } else {
+            area.width.clamp(24, 62)
+        };
+        let panel_height = if area.height < 7 {
+            area.height
+        } else {
+            area.height.clamp(7, 11)
+        };
+        let x = area.x + area.width.saturating_sub(panel_width) / 2;
+        let y = area.y + area.height.saturating_sub(panel_height) / 2;
+        let panel = Rect::new(x, y, panel_width, panel_height);
+
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Guided Tour")
+            .title_alignment(Alignment::Center)
+            .style(
+                Style::new()
+                    .fg(theme::accent::PRIMARY)
+                    .bg(theme::alpha::SURFACE),
+            );
+        let inner = block.inner(panel);
+        block.render(panel, frame);
+
+        if inner.is_empty() {
+            return;
+        }
+
+        let lines = vec![
+            Line::from_spans([Span::styled(
+                "A 2–3 minute auto-play tour across key screens.",
+                Style::new().fg(theme::fg::PRIMARY),
+            )]),
+            Line::from_spans([Span::styled(
+                "Press Enter or Space to start.",
+                Style::new().fg(theme::accent::INFO).bold(),
+            )]),
+            Line::from_spans([Span::styled(
+                "Controls while running: Space pause · ←/→ step · Esc exit · +/- speed",
+                Style::new().fg(theme::fg::MUTED),
+            )]),
+            Line::from_spans([Span::styled(
+                "Tip: You can restart anytime from the Tour tab.",
+                Style::new().fg(theme::fg::SECONDARY),
+            )]),
+        ];
+
+        Paragraph::new(Text::from_lines(lines))
+            .wrap(WrapMode::Word)
+            .render(inner, frame);
+    }
+
     /// Render the debug overlay in the top-right corner.
     fn render_debug_overlay(&self, frame: &mut Frame, area: Rect) {
         let overlay_width = 40u16.min(area.width.saturating_sub(4));
@@ -3297,7 +3320,18 @@ mod tests {
             kind: KeyEventKind::Press,
         });
         app.update(AppMsg::from(event));
-        assert_eq!(app.current_screen, ScreenId::CodeExplorer);
+        assert_eq!(app.current_screen, ScreenId::Shakespeare);
+    }
+
+    #[test]
+    fn guided_tour_resume_defaults_to_dashboard() {
+        let mut app = AppModel::new();
+        app.current_screen = ScreenId::GuidedTour;
+
+        app.start_tour(0, 1.0);
+        app.stop_tour(false, "test");
+
+        assert_eq!(app.current_screen, ScreenId::Dashboard);
     }
 
     #[test]
@@ -3394,19 +3428,26 @@ mod tests {
         let mut app = AppModel::new();
         assert_eq!(app.current_screen, ScreenId::Dashboard);
 
-        for i in 1..screens::screen_ids().len() {
+        let ids = screens::screen_ids();
+        let start_idx = ids
+            .iter()
+            .position(|id| *id == app.current_screen)
+            .unwrap_or(0);
+        for offset in 1..ids.len() {
             app.update(AppMsg::NextScreen);
-            assert_eq!(app.current_screen, screens::screen_ids()[i]);
+            let expected = ids[(start_idx + offset) % ids.len()];
+            assert_eq!(app.current_screen, expected);
         }
-
-        // One more wraps to Dashboard.
-        app.update(AppMsg::NextScreen);
-        assert_eq!(app.current_screen, ScreenId::Dashboard);
+        let expected_end = ids[(start_idx + ids.len() - 1) % ids.len()];
+        assert_eq!(app.current_screen, expected_end);
+        if expected_end == ScreenId::GuidedTour {
+            assert!(app.tour.is_active());
+        }
     }
 
-    /// Verify Left/Right moves within current category.
+    /// Verify Left/Right cycles screens globally.
     #[test]
-    fn integration_left_right_within_category() {
+    fn integration_left_right_cycles_screens() {
         let mut app = AppModel::new();
         app.current_screen = ScreenId::Dashboard;
 
@@ -3416,10 +3457,7 @@ mod tests {
             kind: KeyEventKind::Press,
         });
         app.update(AppMsg::from(right));
-        assert_eq!(
-            app.current_screen,
-            screens::next_in_category(ScreenId::Dashboard)
-        );
+        assert_eq!(app.current_screen, ScreenId::Dashboard.next());
 
         let left = Event::Key(KeyEvent {
             code: KeyCode::Left,
@@ -3427,33 +3465,6 @@ mod tests {
             kind: KeyEventKind::Press,
         });
         app.update(AppMsg::from(left));
-        assert_eq!(app.current_screen, ScreenId::Dashboard);
-    }
-
-    /// Verify Shift+Left/Right jumps categories.
-    #[test]
-    fn integration_shift_left_right_category_jump() {
-        let mut app = AppModel::new();
-        app.current_screen = ScreenId::Dashboard;
-
-        let shift_right = Event::Key(KeyEvent {
-            code: KeyCode::Right,
-            modifiers: Modifiers::SHIFT,
-            kind: KeyEventKind::Press,
-        });
-        app.update(AppMsg::from(shift_right));
-        let expected = screens::first_in_category(screens::next_category(
-            screens::screen_category(ScreenId::Dashboard),
-        ))
-        .expect("next category has at least one screen");
-        assert_eq!(app.current_screen, expected);
-
-        let shift_left = Event::Key(KeyEvent {
-            code: KeyCode::Left,
-            modifiers: Modifiers::SHIFT,
-            kind: KeyEventKind::Press,
-        });
-        app.update(AppMsg::from(shift_left));
         assert_eq!(app.current_screen, ScreenId::Dashboard);
     }
 
@@ -3542,6 +3553,15 @@ mod tests {
     fn palette_toggle_favorite_and_filter() {
         let mut app = AppModel::new();
         app.command_palette.open();
+
+        for ch in "dashboard".chars() {
+            let event = Event::Key(KeyEvent {
+                code: KeyCode::Char(ch),
+                modifiers: Modifiers::NONE,
+                kind: KeyEventKind::Press,
+            });
+            app.update(AppMsg::from(event));
+        }
 
         let ctrl_f = Event::Key(KeyEvent {
             code: KeyCode::Char('f'),

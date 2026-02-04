@@ -70,21 +70,7 @@ pub fn render_guided_tour_overlay(state: &TourOverlayState<'_>, frame: &mut Fram
         return;
     }
 
-    if let Some(highlight) = state.highlight
-        && highlight.width > 1
-        && highlight.height > 1
-    {
-        let highlight_block = Block::new()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .style(
-                Style::new()
-                    .fg(theme::accent::WARNING)
-                    .bg(theme::with_alpha(theme::accent::WARNING, 18))
-                    .attrs(StyleFlags::BOLD),
-            );
-        highlight_block.render(highlight, frame);
-    }
+    // Highlights are intentionally disabled (always off) per user preference.
 
     let width = area.width.min(56);
     let height = area.height.min(14);
@@ -178,6 +164,11 @@ pub fn render_guided_tour_overlay(state: &TourOverlayState<'_>, frame: &mut Fram
             Style::new().fg(theme::accent::WARNING).italic(),
         )]));
     }
+
+    lines.push(Line::from_spans([Span::styled(
+        "Controls: Space pause · ←/→ step · Esc exit",
+        Style::new().fg(theme::fg::MUTED),
+    )]));
 
     let mut remaining_rows = inner.height.saturating_sub(lines.len() as u16) as usize;
     if remaining_rows >= 2 {
@@ -517,7 +508,11 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
     // Build content strings
     let position_str = format!("[{}/{}]", state.screen_index + 1, state.screen_count);
     let theme_str = format!("  {}", state.theme_name);
-    let center_str = format!("tick:{} frm:{}", state.tick_count, state.frame_count);
+    let nav_hint = "Tab: next section · Shift+Tab: prev";
+    let metrics_str = format!("tick:{} frm:{}", state.tick_count, state.frame_count);
+    let center_full = format!("{nav_hint} │ {metrics_str}");
+    let center_compact = nav_hint.to_string();
+    let mut center_str = center_full;
     let dims_str = format!("{}x{}", state.terminal_width, state.terminal_height);
     let time_str = format!("{:02}:{:02}", mins, secs);
 
@@ -537,11 +532,16 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
         + theme_str.len()
         + a11y_label.len()
         + undo_label.len();
-    let center_content_len = center_str.len();
+    let mut center_content_len = center_str.len();
     let right_content_len = dims_str.len() + 1 + time_str.len() + 1;
 
     let available = area.width as usize;
-    let total_content = left_content_len + center_content_len + right_content_len;
+    let mut total_content = left_content_len + center_content_len + right_content_len;
+    if total_content > available {
+        center_str = center_compact;
+        center_content_len = center_str.len();
+        total_content = left_content_len + center_content_len + right_content_len;
+    }
 
     // Build spans for the line
     let mut spans = Vec::with_capacity(12);
@@ -570,7 +570,7 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
             spans.push(Span::styled(" ".repeat(left_pad), pad_style));
         }
 
-        // Center segment: metrics
+        // Center segment: nav hint (+ metrics when space allows)
         spans.push(Span::styled(center_str, dim_style));
 
         // Right padding
@@ -770,16 +770,7 @@ pub fn render_help_overlay(
         )
         .global_entry_categorized("Tab / L", "Next screen", HelpCategory::Navigation)
         .global_entry_categorized("S-Tab / H", "Previous screen", HelpCategory::Navigation)
-        .global_entry_categorized(
-            "← / →",
-            "Prev/next screen (category)",
-            HelpCategory::Navigation,
-        )
-        .global_entry_categorized(
-            "Shift+← / Shift+→",
-            "Jump categories",
-            HelpCategory::Navigation,
-        )
+        .global_entry_categorized("← / →", "Previous/next screen", HelpCategory::Navigation)
         // View
         .global_entry_categorized("?", "Toggle this help overlay", HelpCategory::View)
         .global_entry_categorized("A", "Toggle A11y panel", HelpCategory::View)
@@ -963,8 +954,8 @@ mod tests {
 
         render_tab_bar(ScreenId::Shakespeare, &mut frame, area);
 
-        // The Shakespeare tab should have the accent background color
-        // Find the tab by scanning for '2' (Shakespeare is key 2)
+        // The Shakespeare tab should have the accent background color.
+        // With Guided Tour + Dashboard ahead of it, Shakespeare is key 3.
         let mut found_accent = false;
         let base_bg: PackedRgba = theme::bg::DEEP.into();
         let surface_bg: PackedRgba = theme::alpha::SURFACE.into();
@@ -1057,7 +1048,7 @@ mod tests {
         assert!(hit.is_some(), "First tab should be a registered hit region");
         if let Some((id, _region, _data)) = hit {
             let screen = screen_from_hit_id(id);
-            assert_eq!(screen, Some(ScreenId::Dashboard));
+            assert_eq!(screen, Some(ScreenId::GuidedTour));
         }
     }
 

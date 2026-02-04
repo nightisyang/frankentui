@@ -785,7 +785,7 @@ impl QueueingScheduler {
 
         let mut remaining_time = delta_time;
         let mut now = self.current_time;
-        self.stats.total_processing_time += delta_time;
+        let mut processed_time = 0.0;
 
         while remaining_time > 0.0 {
             // Get or select next job
@@ -803,6 +803,7 @@ impl QueueingScheduler {
             job.remaining_time -= process_time;
             remaining_time -= process_time;
             now += process_time;
+            processed_time += process_time;
 
             if job.is_complete() {
                 // Job completed
@@ -817,6 +818,7 @@ impl QueueingScheduler {
             }
         }
 
+        self.stats.total_processing_time += processed_time;
         self.current_time = now;
         // Recompute priorities for aged jobs
         self.refresh_priorities();

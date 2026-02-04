@@ -23,6 +23,7 @@ pub mod terminal_model;
 mod text_width {
     use unicode_display_width::width as unicode_display_width;
     use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthChar;
 
     #[inline]
     fn ascii_width(text: &str) -> Option<usize> {
@@ -90,6 +91,16 @@ mod text_width {
         }
         if grapheme.chars().all(is_zero_width_codepoint) {
             return 0;
+        }
+        let mut chars = grapheme.chars();
+        if let Some(first) = chars.next()
+            && chars.next().is_none()
+        {
+            let width = UnicodeWidthChar::width(first).unwrap_or(1);
+            if width == 1 && is_probable_emoji(first) {
+                return 2;
+            }
+            return width;
         }
         if has_emoji_presentation_selector(grapheme) || grapheme.chars().any(is_probable_emoji) {
             return 2;

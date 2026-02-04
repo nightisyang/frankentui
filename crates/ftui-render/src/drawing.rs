@@ -206,13 +206,25 @@ impl Draw for Buffer {
 
         let mut cx = x;
         for grapheme in text.graphemes(true) {
-            let width = grapheme_width(grapheme);
-            if width == 0 {
-                continue;
-            }
-
             if cx >= max_x {
                 break;
+            }
+
+            let mut chars = grapheme.chars();
+            let Some(first) = chars.next() else {
+                continue;
+            };
+            let is_multi = chars.next().is_some();
+
+            // If we can't render the full grapheme, fall back to the first char
+            // and keep the fallback cell width to avoid visual gaps.
+            let width = if is_multi {
+                CellContent::from_char(first).width()
+            } else {
+                grapheme_width(grapheme)
+            };
+            if width == 0 {
+                continue;
             }
 
             // Don't start a wide char if it won't fit
@@ -220,18 +232,13 @@ impl Draw for Buffer {
                 break;
             }
 
-            // Fallback for multi-char graphemes (e.g. emoji, combining)
-            // Since we can't intern without a pool, we use the first char.
-            // This is imperfect but safe.
-            if let Some(c) = grapheme.chars().next() {
-                let cell = Cell {
-                    content: CellContent::from_char(c),
-                    fg: base_cell.fg,
-                    bg: base_cell.bg,
-                    attrs: base_cell.attrs,
-                };
-                self.set(cx, y, cell);
-            }
+            let cell = Cell {
+                content: CellContent::from_char(first),
+                fg: base_cell.fg,
+                bg: base_cell.bg,
+                attrs: base_cell.attrs,
+            };
+            self.set(cx, y, cell);
 
             cx = cx.saturating_add(width as u16);
         }
