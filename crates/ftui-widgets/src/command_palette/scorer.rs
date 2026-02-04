@@ -1889,6 +1889,43 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
+    fn conformal_tie_breaks_by_match_type() {
+        let mut exact = MatchResult::no_match();
+        exact.score = 0.5;
+        exact.match_type = MatchType::Exact;
+
+        let mut prefix = MatchResult::no_match();
+        prefix.score = 0.5;
+        prefix.match_type = MatchType::Prefix;
+
+        let mut word_start = MatchResult::no_match();
+        word_start.score = 0.5;
+        word_start.match_type = MatchType::WordStart;
+
+        let mut substring = MatchResult::no_match();
+        substring.score = 0.5;
+        substring.match_type = MatchType::Substring;
+
+        let ranker = ConformalRanker::new();
+        let ranked = ranker.rank(vec![substring, word_start, prefix, exact]);
+        let order: Vec<MatchType> = ranked
+            .items
+            .iter()
+            .map(|item| item.result.match_type)
+            .collect();
+
+        assert_eq!(
+            order,
+            vec![
+                MatchType::Exact,
+                MatchType::Prefix,
+                MatchType::WordStart,
+                MatchType::Substring
+            ]
+        );
+    }
+
+    #[test]
     fn conformal_empty_input() {
         let ranker = ConformalRanker::new();
         let ranked = ranker.rank(Vec::new());

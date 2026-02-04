@@ -13,7 +13,7 @@ use ftui_core::event::{
 };
 use ftui_core::geometry::Rect;
 use ftui_core::terminal_capabilities::TerminalProfile;
-use ftui_demo_showcase::app::{AppModel, ScreenId};
+use ftui_demo_showcase::app::{AppModel, AppMsg, ScreenId};
 use ftui_demo_showcase::screens::Screen;
 use ftui_demo_showcase::theme::{ScopedThemeLock, ThemeId};
 use ftui_harness::assert_snapshot;
@@ -49,6 +49,15 @@ fn ctrl_press(code: KeyCode) -> Event {
 
 fn mouse_move(x: u16, y: u16) -> Event {
     Event::Mouse(MouseEvent::new(MouseEventKind::Moved, x, y))
+}
+
+fn snapshot_app(app: &mut AppModel, width: u16, height: u16, name: &str) {
+    app.terminal_width = width;
+    app.terminal_height = height;
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(width, height, &mut pool);
+    app.view(&mut frame);
+    assert_snapshot!(name, &frame.buffer);
 }
 
 fn terminal_caps_env() -> ftui_demo_showcase::screens::terminal_capabilities::EnvSnapshot {
@@ -956,6 +965,90 @@ fn app_all_screens_80x24() {
         let name = format!("app_{:?}_80x24", id).to_lowercase();
         assert_snapshot!(&name, &frame.buffer);
     }
+}
+
+#[test]
+fn app_palette_empty_80x24() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut app = AppModel::new();
+    app.command_palette.open();
+    snapshot_app(&mut app, 80, 24, "app_palette_empty_80x24");
+}
+
+#[test]
+fn app_palette_empty_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut app = AppModel::new();
+    app.command_palette.open();
+    snapshot_app(&mut app, 120, 40, "app_palette_empty_120x40");
+}
+
+#[test]
+fn app_palette_filtered_80x24() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut app = AppModel::new();
+    app.command_palette.open();
+    let ctrl_1 = Event::Key(KeyEvent {
+        code: KeyCode::Char('1'),
+        modifiers: Modifiers::CTRL,
+        kind: KeyEventKind::Press,
+    });
+    app.update(AppMsg::from(ctrl_1));
+    snapshot_app(&mut app, 80, 24, "app_palette_filtered_80x24");
+}
+
+#[test]
+fn app_palette_filtered_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut app = AppModel::new();
+    app.command_palette.open();
+    let ctrl_1 = Event::Key(KeyEvent {
+        code: KeyCode::Char('1'),
+        modifiers: Modifiers::CTRL,
+        kind: KeyEventKind::Press,
+    });
+    app.update(AppMsg::from(ctrl_1));
+    snapshot_app(&mut app, 120, 40, "app_palette_filtered_120x40");
+}
+
+#[test]
+fn app_palette_favorites_80x24() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut app = AppModel::new();
+    app.command_palette.open();
+    let ctrl_f = Event::Key(KeyEvent {
+        code: KeyCode::Char('f'),
+        modifiers: Modifiers::CTRL,
+        kind: KeyEventKind::Press,
+    });
+    app.update(AppMsg::from(ctrl_f));
+    let ctrl_shift_f = Event::Key(KeyEvent {
+        code: KeyCode::Char('F'),
+        modifiers: Modifiers::CTRL | Modifiers::SHIFT,
+        kind: KeyEventKind::Press,
+    });
+    app.update(AppMsg::from(ctrl_shift_f));
+    snapshot_app(&mut app, 80, 24, "app_palette_favorites_80x24");
+}
+
+#[test]
+fn app_palette_favorites_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut app = AppModel::new();
+    app.command_palette.open();
+    let ctrl_f = Event::Key(KeyEvent {
+        code: KeyCode::Char('f'),
+        modifiers: Modifiers::CTRL,
+        kind: KeyEventKind::Press,
+    });
+    app.update(AppMsg::from(ctrl_f));
+    let ctrl_shift_f = Event::Key(KeyEvent {
+        code: KeyCode::Char('F'),
+        modifiers: Modifiers::CTRL | Modifiers::SHIFT,
+        kind: KeyEventKind::Press,
+    });
+    app.update(AppMsg::from(ctrl_shift_f));
+    snapshot_app(&mut app, 120, 40, "app_palette_favorites_120x40");
 }
 
 // ============================================================================

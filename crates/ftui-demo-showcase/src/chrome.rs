@@ -606,7 +606,11 @@ pub fn render_help_overlay(
         )
         .global_entry_categorized("Tab / L", "Next screen", HelpCategory::Navigation)
         .global_entry_categorized("S-Tab / H", "Previous screen", HelpCategory::Navigation)
-        .global_entry_categorized("← / →", "Prev/next screen (category)", HelpCategory::Navigation)
+        .global_entry_categorized(
+            "← / →",
+            "Prev/next screen (category)",
+            HelpCategory::Navigation,
+        )
         .global_entry_categorized(
             "Shift+← / Shift+→",
             "Jump categories",
@@ -627,6 +631,22 @@ pub fn render_help_overlay(
             "A11y: high contrast, reduced motion, large text",
             HelpCategory::Global,
         )
+        .global_entry_categorized(
+            "Ctrl+1..6",
+            "Palette: filter by category",
+            HelpCategory::Global,
+        )
+        .global_entry_categorized(
+            "Ctrl+0",
+            "Palette: clear category filter",
+            HelpCategory::Global,
+        )
+        .global_entry_categorized("Ctrl+F", "Palette: toggle favorite", HelpCategory::Global)
+        .global_entry_categorized(
+            "Ctrl+Shift+F",
+            "Palette: favorites only",
+            HelpCategory::Global,
+        )
         .global_entry_categorized("q / Ctrl+C", "Quit application", HelpCategory::Global);
 
     // Add screen-specific bindings as contextual entries under a custom category.
@@ -636,13 +656,46 @@ pub fn render_help_overlay(
             hints.contextual_entry_categorized(entry.key, entry.action, screen_category.clone());
     }
 
+    let legend_width = {
+        let mut width = "Categories:".len();
+        for category in ScreenCategory::ALL {
+            width += 1 + category.short_label().len();
+        }
+        width
+    };
+    let show_legend = inner.height >= 8 && inner.width.saturating_sub(2) as usize >= legend_width;
+    let reserved_rows = if show_legend { 2 } else { 1 };
+    let content_height = inner.height.saturating_sub(reserved_rows);
     let content_area = Rect::new(
         inner.x + 1,
         inner.y,
         inner.width.saturating_sub(2),
-        inner.height.saturating_sub(1), // leave room for footer
+        content_height,
     );
-    Widget::render(&hints, content_area, frame);
+    if content_height > 0 {
+        Widget::render(&hints, content_area, frame);
+    }
+
+    if show_legend && content_height < inner.height {
+        let legend_y = inner.y + content_height;
+        let legend_area = Rect::new(inner.x + 1, legend_y, inner.width.saturating_sub(2), 1);
+        let mut spans = Vec::with_capacity(ScreenCategory::ALL.len() * 2 + 2);
+        spans.push(Span::styled(
+            "Categories:",
+            Style::new().fg(theme::fg::MUTED).attrs(StyleFlags::BOLD),
+        ));
+        for category in ScreenCategory::ALL {
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                category.short_label(),
+                Style::new()
+                    .fg(category_accent(*category))
+                    .attrs(StyleFlags::BOLD),
+            ));
+        }
+        let line = Line::from_spans(spans);
+        Paragraph::new(Text::from_lines([line])).render(legend_area, frame);
+    }
 
     // Footer hint at bottom
     let footer_y = overlay_area.bottom().saturating_sub(1);

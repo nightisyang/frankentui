@@ -1,0 +1,24 @@
+ Tour │ Core │ Visuals │ Interact │ Text │ Systems │                            
+ Dash │ Inline │                                                                
+╭──────────────────────────────────Dashboard───────────────────────────────────╮
+│FRANKENTUI DASHBOARD                                                          │
+│╭─────────Plasm┌────────────── Command Palette ───────────────┐               │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│>Type to search...                            │               │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│> [App] Quit  Exit the application            │               │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [Visuals] Data Viz  Dense charts and small-…│               │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [Core] Advanced  Advanced widget patterns a…│               │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [Text] Markdown  Markdown rendering with st…│               │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [Tour] Dashboard  Cinematic overview of key…│               │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [Core] Layout Lab  Hands-on layout experime…│               │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [Text] Log Search  Search and filter logs w…│               │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [Text] Shakespeare  Live search over Shakes…│               │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [Systems] Performance  Render performance m…│               │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [Systems] Async Tasks  Async tasks and job …│               │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [Systems] VOI Overlay  Value-of-information…│               │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [Tour] Inline Mode  Inline mode story and s…│               │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿└──────────────────────────────────────────────┘               │
+││Click → Visual Effects⣿⣿⣿│FPS:0 78x19                                        │
+│╰─────────────────────────╯                                                   │
+│t:theme q:quit                                                                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Dashboard [1/36]  Cyberpunk Aurora          tick:0 frm:0           80x24 00:00 

@@ -8,8 +8,9 @@
 //! help/debug overlays).
 
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::env;
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -261,11 +262,69 @@ impl A11yTelemetryHooks {
 }
 
 // ---------------------------------------------------------------------------
+// Command Palette Diagnostics (bd-iuvb.16)
+// ---------------------------------------------------------------------------
+
+/// Global counter for palette JSONL logs.
+static PALETTE_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Return the palette JSONL log path if enabled.
+fn palette_log_path() -> Option<String> {
+    env::var("FTUI_PALETTE_REPORT_PATH").ok()
+}
+
+/// Return the palette run id (for E2E correlation).
+fn palette_run_id() -> String {
+    env::var("FTUI_PALETTE_RUN_ID").unwrap_or_else(|_| "unknown".to_string())
+}
+
+fn json_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+/// Emit a palette JSONL entry to the report path (best-effort).
+fn emit_palette_jsonl(
+    action: &str,
+    query: &str,
+    selected_screen: Option<ScreenId>,
+    category: Option<screens::ScreenCategory>,
+    outcome: &str,
+) {
+    let Some(path) = palette_log_path() else {
+        return;
+    };
+
+    let seq = PALETTE_LOG_SEQ.fetch_add(1, Ordering::Relaxed);
+    let ts_us = seq.saturating_mul(16_667);
+    let run_id = palette_run_id();
+    let screen_label = selected_screen.map(|id| id.title()).unwrap_or("none");
+    let category_label = category.map(|cat| cat.label()).unwrap_or("none");
+
+    let json = format!(
+        "{{\"seq\":{seq},\"ts_us\":{ts_us},\"run_id\":\"{}\",\"action\":\"{}\",\"query\":\"{}\",\"selected_screen\":\"{}\",\"category\":\"{}\",\"outcome\":\"{}\"}}",
+        json_escape(&run_id),
+        json_escape(action),
+        json_escape(query),
+        json_escape(screen_label),
+        json_escape(category_label),
+        json_escape(outcome)
+    );
+
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{json}");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ScreenId
 // ---------------------------------------------------------------------------
 
 /// Identifies which demo screen is active.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScreenId {
     /// System dashboard with live widgets.
     Dashboard,
@@ -903,6 +962,12 @@ pub struct AppModel {
     pub base_theme: theme::ThemeId,
     /// Command palette for instant action search (Ctrl+K).
     pub command_palette: CommandPalette,
+    /// Screen favorites for palette filtering.
+    screen_favorites: HashSet<ScreenId>,
+    /// Active palette category filter (palette-only).
+    palette_category_filter: Option<screens::ScreenCategory>,
+    /// Whether palette is filtered to favorites only.
+    palette_favorites_only: bool,
     /// Global tick counter (incremented every 100ms).
     pub tick_count: u64,
     /// Total frames rendered.
@@ -953,8 +1018,7 @@ impl AppModel {
             theme::set_motion_scale(1.0);
             theme::set_large_text(false);
         }
-        let mut palette = CommandPalette::new().with_max_visible(12);
-        Self::register_palette_actions(&mut palette);
+        let palette = CommandPalette::new().with_max_visible(12);
         let mut voi_config = InlineAutoRemeasureConfig::default().voi;
         voi_config.enable_logging = true;
         voi_config.max_log_entries = 96;
@@ -971,6 +1035,9 @@ impl AppModel {
             a11y_panel_visible: false,
             base_theme,
             command_palette: palette,
+            screen_favorites: HashSet::new(),
+            palette_category_filter: None,
+            palette_favorites_only: false,
             tick_count: 0,
             frame_count: 0,
             terminal_width: 0,
@@ -987,6 +1054,7 @@ impl AppModel {
             history: HistoryManager::default(),
             a11y_telemetry: None,
         };
+        app.refresh_palette_actions();
         app.screens
             .accessibility_panel
             .sync_a11y(app.a11y, app.base_theme);
@@ -1050,19 +1118,44 @@ impl AppModel {
         }
     }
 
-    /// Register all palette actions (screens + global commands).
-    fn register_palette_actions(palette: &mut CommandPalette) {
+    /// Build all palette actions (screens + global commands) with filters.
+    fn build_palette_actions(
+        category_filter: Option<screens::ScreenCategory>,
+        favorites_only: bool,
+        favorites: &HashSet<ScreenId>,
+    ) -> Vec<ftui_widgets::command_palette::ActionItem> {
         use ftui_widgets::command_palette::ActionItem;
+
+        let mut actions = Vec::new();
 
         // Screen navigation actions
         for meta in screens::screen_registry() {
+            if let Some(filter) = category_filter
+                && meta.category != filter
+            {
+                continue;
+            }
+
+            let is_favorite = favorites.contains(&meta.id);
+            if favorites_only && !is_favorite {
+                continue;
+            }
+
+            let display_title = if is_favorite {
+                format!("* {}", meta.title)
+            } else {
+                meta.title.to_string()
+            };
             let action_id = format!("screen:{}", meta.title.to_lowercase().replace(' ', "_"));
-            let mut tags: Vec<&str> = Vec::with_capacity(meta.palette_tags.len() + 2);
+            let mut tags: Vec<&str> = Vec::with_capacity(meta.palette_tags.len() + 3);
             tags.extend_from_slice(meta.palette_tags);
             tags.push("screen");
             tags.push("navigate");
-            palette.register_action(
-                ActionItem::new(&action_id, format!("Go to {}", meta.title))
+            if is_favorite {
+                tags.push("favorite");
+            }
+            actions.push(
+                ActionItem::new(&action_id, display_title)
                     .with_description(meta.blurb)
                     .with_tags(&tags)
                     .with_category(meta.category.label()),
@@ -1070,42 +1163,83 @@ impl AppModel {
         }
 
         // Global commands
-        palette.register_action(
+        actions.push(
             ActionItem::new("cmd:toggle_help", "Toggle Help")
                 .with_description("Show or hide the keyboard shortcuts overlay")
                 .with_tags(&["help", "shortcuts"])
                 .with_category("View"),
         );
-        palette.register_action(
+        actions.push(
             ActionItem::new("cmd:toggle_debug", "Toggle Debug Overlay")
                 .with_description("Show or hide the debug information panel")
                 .with_tags(&["debug", "info"])
                 .with_category("View"),
         );
-        palette.register_action(
+        actions.push(
             ActionItem::new("cmd:toggle_perf_hud", "Toggle Performance HUD")
                 .with_description("Show or hide the performance metrics overlay")
                 .with_tags(&["performance", "hud", "fps", "metrics", "budget"])
                 .with_category("View"),
         );
-        palette.register_action(
+        actions.push(
             ActionItem::new("cmd:toggle_evidence_ledger", "Toggle Evidence Ledger")
                 .with_description("Show VOI decisions with posterior math (Galaxy-Brain)")
                 .with_tags(&["evidence", "bayes", "voi", "debug", "galaxy-brain"])
                 .with_category("View"),
         );
-        palette.register_action(
+        actions.push(
             ActionItem::new("cmd:cycle_theme", "Cycle Theme")
                 .with_description("Switch to the next color theme")
                 .with_tags(&["theme", "colors", "appearance"])
                 .with_category("View"),
         );
-        palette.register_action(
+        actions.push(
             ActionItem::new("cmd:quit", "Quit")
                 .with_description("Exit the application")
                 .with_tags(&["exit", "close"])
                 .with_category("App"),
         );
+
+        actions
+    }
+
+    /// Refresh palette actions using current filters/favorites.
+    fn refresh_palette_actions(&mut self) {
+        let actions = Self::build_palette_actions(
+            self.palette_category_filter,
+            self.palette_favorites_only,
+            &self.screen_favorites,
+        );
+        self.command_palette.replace_actions(actions);
+    }
+
+    /// Resolve a screen action ID (screen:<name>) to ScreenId.
+    fn screen_id_from_action_id(action_id: &str) -> Option<ScreenId> {
+        let screen_name = action_id.strip_prefix("screen:")?;
+        screens::screen_registry()
+            .iter()
+            .find(|meta| meta.title.to_lowercase().replace(' ', "_") == screen_name)
+            .map(|meta| meta.id)
+    }
+
+    /// Current palette selection resolved to a ScreenId, if any.
+    fn selected_palette_screen(&self) -> Option<ScreenId> {
+        self.command_palette
+            .selected_action()
+            .and_then(|action| Self::screen_id_from_action_id(&action.id))
+    }
+
+    /// Toggle favorite for the currently selected palette screen (if any).
+    fn toggle_selected_favorite(&mut self) {
+        let Some(action) = self.command_palette.selected_action() else {
+            return;
+        };
+        let Some(screen_id) = Self::screen_id_from_action_id(&action.id) else {
+            return;
+        };
+        if !self.screen_favorites.insert(screen_id) {
+            self.screen_favorites.remove(&screen_id);
+        }
     }
 
     fn handle_msg(&mut self, msg: AppMsg, source: EventSource) -> Cmd<AppMsg> {
@@ -1358,6 +1492,102 @@ impl AppModel {
 
                 // When the command palette is visible, route events to it first.
                 if self.command_palette.is_visible() {
+                    if let Event::Key(KeyEvent {
+                        code,
+                        modifiers,
+                        kind: KeyEventKind::Press,
+                        ..
+                    }) = &event
+                        && modifiers.contains(Modifiers::CTRL)
+                    {
+                        match *code {
+                            // Toggle favorite on selected screen.
+                            KeyCode::Char('f') => {
+                                let query = self.command_palette.query().to_string();
+                                let selected = self.selected_palette_screen();
+                                let log_screen = selected.unwrap_or(self.current_screen);
+                                let log_category = screens::screen_category(log_screen);
+                                let outcome = if selected.is_some() {
+                                    "ok"
+                                } else {
+                                    "no_selection"
+                                };
+                                self.toggle_selected_favorite();
+                                self.refresh_palette_actions();
+                                emit_palette_jsonl(
+                                    "toggle_favorite",
+                                    &query,
+                                    Some(log_screen),
+                                    Some(log_category),
+                                    outcome,
+                                );
+                                return Cmd::None;
+                            }
+                            // Toggle favorites-only filter (Ctrl+Shift+F).
+                            KeyCode::Char('F') if modifiers.contains(Modifiers::SHIFT) => {
+                                let query = self.command_palette.query().to_string();
+                                let log_screen = self
+                                    .selected_palette_screen()
+                                    .unwrap_or(self.current_screen);
+                                let log_category = screens::screen_category(log_screen);
+                                self.palette_favorites_only = !self.palette_favorites_only;
+                                self.refresh_palette_actions();
+                                let outcome = if self.palette_favorites_only {
+                                    "on"
+                                } else {
+                                    "off"
+                                };
+                                emit_palette_jsonl(
+                                    "toggle_favorites_only",
+                                    &query,
+                                    Some(log_screen),
+                                    Some(log_category),
+                                    outcome,
+                                );
+                                return Cmd::None;
+                            }
+                            // Clear category filter (Ctrl+0).
+                            KeyCode::Char('0') => {
+                                let query = self.command_palette.query().to_string();
+                                let log_screen = self
+                                    .selected_palette_screen()
+                                    .unwrap_or(self.current_screen);
+                                self.palette_category_filter = None;
+                                self.refresh_palette_actions();
+                                emit_palette_jsonl(
+                                    "clear_category_filter",
+                                    &query,
+                                    Some(log_screen),
+                                    None,
+                                    "ok",
+                                );
+                                return Cmd::None;
+                            }
+                            // Set category filter (Ctrl+1..6).
+                            KeyCode::Char(ch @ '1'..='6') => {
+                                let idx = (ch as usize) - ('1' as usize);
+                                if let Some(category) =
+                                    screens::ScreenCategory::ALL.get(idx).copied()
+                                {
+                                    let query = self.command_palette.query().to_string();
+                                    let log_screen = self
+                                        .selected_palette_screen()
+                                        .unwrap_or(self.current_screen);
+                                    self.palette_category_filter = Some(category);
+                                    self.refresh_palette_actions();
+                                    emit_palette_jsonl(
+                                        "set_category_filter",
+                                        &query,
+                                        Some(log_screen),
+                                        Some(category),
+                                        "ok",
+                                    );
+                                    return Cmd::None;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     if let Some(action) = self.command_palette.handle_event(&event) {
                         return self.execute_palette_action(action);
                     }
@@ -1410,7 +1640,16 @@ impl AppModel {
                         (KeyCode::Char('c'), Modifiers::CTRL) => return Cmd::Quit,
                         // Command palette (Ctrl+K)
                         (KeyCode::Char('k'), Modifiers::CTRL) => {
+                            let log_screen = self.current_screen;
+                            let log_category = screens::screen_category(log_screen);
                             self.command_palette.open();
+                            emit_palette_jsonl(
+                                "open",
+                                self.command_palette.query(),
+                                Some(log_screen),
+                                Some(log_category),
+                                "ok",
+                            );
                             return Cmd::None;
                         }
                         // Help
@@ -1824,27 +2063,50 @@ impl AppModel {
     /// Execute an action returned by the command palette.
     fn execute_palette_action(&mut self, action: PaletteAction) -> Cmd<AppMsg> {
         match action {
-            PaletteAction::Dismiss => Cmd::None,
+            PaletteAction::Dismiss => {
+                let log_screen = self.current_screen;
+                let log_category = screens::screen_category(log_screen);
+                emit_palette_jsonl(
+                    "dismiss",
+                    self.command_palette.query(),
+                    Some(log_screen),
+                    Some(log_category),
+                    "ok",
+                );
+                Cmd::None
+            }
             PaletteAction::Execute(id) => {
+                let query = self.command_palette.query().to_string();
+                let (log_screen, log_category, outcome) =
+                    if let Some(sid) = Self::screen_id_from_action_id(&id) {
+                        (sid, screens::screen_category(sid), "screen")
+                    } else {
+                        (
+                            self.current_screen,
+                            screens::screen_category(self.current_screen),
+                            "command",
+                        )
+                    };
+                emit_palette_jsonl(
+                    "execute",
+                    &query,
+                    Some(log_screen),
+                    Some(log_category),
+                    outcome,
+                );
                 // Screen navigation: "screen:<name>"
-                if let Some(screen_name) = id.strip_prefix("screen:") {
-                    for meta in screens::screen_registry() {
-                        let expected = meta.title.to_lowercase().replace(' ', "_");
-                        if expected == screen_name {
-                            let sid = meta.id;
-                            let from = self.current_screen.title();
-                            self.current_screen = sid;
-                            self.screens.action_timeline.record_command_event(
-                                self.tick_count,
-                                "Switch screen (palette)",
-                                vec![
-                                    ("from".to_string(), from.to_string()),
-                                    ("to".to_string(), sid.title().to_string()),
-                                ],
-                            );
-                            return Cmd::None;
-                        }
-                    }
+                if let Some(sid) = Self::screen_id_from_action_id(&id) {
+                    let from = self.current_screen.title();
+                    self.current_screen = sid;
+                    self.screens.action_timeline.record_command_event(
+                        self.tick_count,
+                        "Switch screen (palette)",
+                        vec![
+                            ("from".to_string(), from.to_string()),
+                            ("to".to_string(), sid.title().to_string()),
+                        ],
+                    );
+                    return Cmd::None;
                 }
                 // Global commands
                 match id.as_str() {
@@ -2882,6 +3144,70 @@ mod tests {
         // One action per screen + 6 global commands (quit, help, theme, debug, perf_hud, evidence_ledger)
         let expected = screens::screen_registry().len() + 6;
         assert_eq!(app.command_palette.action_count(), expected);
+    }
+
+    #[test]
+    fn palette_category_filter_ctrl_numbers() {
+        let mut app = AppModel::new();
+        app.command_palette.open();
+
+        let ctrl_1 = Event::Key(KeyEvent {
+            code: KeyCode::Char('1'),
+            modifiers: Modifiers::CTRL,
+            kind: KeyEventKind::Press,
+        });
+        app.update(AppMsg::from(ctrl_1));
+        assert_eq!(
+            app.palette_category_filter,
+            Some(screens::ScreenCategory::Tour)
+        );
+        let tour_count = screens::screen_registry()
+            .iter()
+            .filter(|meta| meta.category == screens::ScreenCategory::Tour)
+            .count();
+        assert_eq!(app.command_palette.action_count(), tour_count + 6);
+
+        let ctrl_0 = Event::Key(KeyEvent {
+            code: KeyCode::Char('0'),
+            modifiers: Modifiers::CTRL,
+            kind: KeyEventKind::Press,
+        });
+        app.update(AppMsg::from(ctrl_0));
+        assert_eq!(app.palette_category_filter, None);
+        assert_eq!(
+            app.command_palette.action_count(),
+            screens::screen_registry().len() + 6
+        );
+    }
+
+    #[test]
+    fn palette_toggle_favorite_and_filter() {
+        let mut app = AppModel::new();
+        app.command_palette.open();
+
+        let ctrl_f = Event::Key(KeyEvent {
+            code: KeyCode::Char('f'),
+            modifiers: Modifiers::CTRL,
+            kind: KeyEventKind::Press,
+        });
+        app.update(AppMsg::from(ctrl_f));
+        assert!(app.screen_favorites.contains(&ScreenId::Dashboard));
+
+        let ctrl_shift_f = Event::Key(KeyEvent {
+            code: KeyCode::Char('F'),
+            modifiers: Modifiers::CTRL | Modifiers::SHIFT,
+            kind: KeyEventKind::Press,
+        });
+        app.update(AppMsg::from(ctrl_shift_f.clone()));
+        assert!(app.palette_favorites_only);
+        assert_eq!(app.command_palette.action_count(), 1 + 6);
+
+        app.update(AppMsg::from(ctrl_shift_f));
+        assert!(!app.palette_favorites_only);
+        assert_eq!(
+            app.command_palette.action_count(),
+            screens::screen_registry().len() + 6
+        );
     }
 
     #[test]

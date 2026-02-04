@@ -19,6 +19,7 @@
 # 14. Widget builder export (bd-iuvb.10)
 # 15. Determinism lab report (bd-iuvb.2)
 # 16. Hyperlink playground JSONL (bd-iuvb.14)
+# 17. Command palette JSONL (bd-iuvb.16)
 #
 # Usage:
 #   ./scripts/demo_showcase_e2e.sh              # Run all tests
@@ -244,7 +245,7 @@ run_in_pty() {
 if $QUICK; then
     TOTAL_STEPS=3
 else
-    TOTAL_STEPS=16  # Updated: added Layout Inspector + Terminal Caps + i18n + Widget Builder + Determinism Lab + Hyperlink Playground
+    TOTAL_STEPS=17  # Updated: added Layout Inspector + Terminal Caps + i18n + Widget Builder + Determinism Lab + Hyperlink Playground + Command Palette
 fi
 
 echo "=============================================="
@@ -1232,6 +1233,126 @@ PY
         STEP_STATUSES+=("FAIL")
     fi
 
+    # ────────────────────────────────────────────────────────────────────────
+    # Step 17: Command Palette JSONL (bd-iuvb.16)
+    #
+    # Opens the palette, runs a query, executes an action, toggles favorite,
+    # and emits JSONL diagnostics for E2E verification.
+    # ────────────────────────────────────────────────────────────────────────
+    log_step "command palette (bd-iuvb.16)"
+    log_info "Running command palette flow and validating JSONL..."
+    PAL_LOG="$LOG_DIR/17_palette.log"
+    PAL_REPORT="$LOG_DIR/17_palette_report_${TIMESTAMP}.jsonl"
+    PAL_JSONL="$LOG_DIR/17_palette_summary.jsonl"
+    STEP_NAMES+=("command palette")
+
+    pal_start=$(date +%s%N)
+    {
+        echo "=== Command Palette (bd-iuvb.16) ==="
+        echo "Report path: $PAL_REPORT"
+        echo ""
+
+        pal_cmd="stty rows 24 cols 80 2>/dev/null; (sleep 0.5; printf '\\x0b' > /dev/tty; sleep 0.2; printf 'dash' > /dev/tty; sleep 0.2; printf '\\r' > /dev/tty; sleep 0.3; printf '\\x0b' > /dev/tty; sleep 0.2; printf '\\x06' > /dev/tty; sleep 0.2; printf '\\x1b' > /dev/tty) & FTUI_PALETTE_REPORT_PATH=\"$PAL_REPORT\" FTUI_PALETTE_RUN_ID=\"$TIMESTAMP\" FTUI_DEMO_EXIT_AFTER_MS=2400 FTUI_DEMO_SCREEN=1 timeout 8 $DEMO_BIN"
+
+        if run_in_pty "$pal_cmd" 2>&1; then
+            pal_exit=0
+        else
+            pal_exit=$?
+        fi
+
+        if [ "$pal_exit" -eq 124 ]; then
+            pal_outcome="timeout"
+        elif [ "$pal_exit" -eq 0 ]; then
+            pal_outcome="pass"
+        else
+            pal_outcome="fail"
+        fi
+
+        pal_report_ok=false
+        if [ -s "$PAL_REPORT" ]; then
+            pal_report_ok=true
+        else
+            echo "Report file missing or empty: $PAL_REPORT"
+            pal_outcome="no_report"
+        fi
+
+        pal_parse_ok=false
+        if $pal_report_ok; then
+            if python3 - "$PAL_REPORT" "$PAL_JSONL" "$TIMESTAMP" "$pal_outcome" "$pal_exit" <<'PY'
+import json
+import sys
+
+report_path, summary_path, run_id, outcome, exit_code = sys.argv[1:6]
+
+with open(report_path, "r", encoding="utf-8") as handle:
+    lines = [line for line in handle if line.strip()]
+if not lines:
+    raise SystemExit("Report JSONL is empty")
+
+required = {"run_id", "action", "query", "selected_screen", "category", "outcome"}
+missing_required = 0
+actions = set()
+for line in lines:
+    entry = json.loads(line)
+    actions.add(entry.get("action"))
+    if not required.issubset(entry.keys()):
+        missing_required += 1
+
+ok = len(lines) >= 2 and missing_required == 0 and ("execute" in actions)
+
+summary = {
+    "run_id": run_id,
+    "outcome": outcome,
+    "exit_code": int(exit_code),
+    "line_count": len(lines),
+    "actions": sorted([a for a in actions if a]),
+    "missing_required": missing_required,
+}
+
+with open(summary_path, "w", encoding="utf-8") as handle:
+    handle.write(json.dumps(summary) + "\\n")
+
+print(json.dumps(summary))
+sys.exit(0 if ok else 2)
+PY
+            then
+                pal_parse_ok=true
+            else
+                pal_parse_ok=false
+            fi
+        fi
+
+        pal_exit_ok=true
+        if [ "$pal_exit" -ne 0 ] && [ "$pal_exit" -ne 124 ]; then
+            pal_exit_ok=false
+        fi
+
+        pal_success=true
+        if ! $pal_exit_ok; then pal_success=false; fi
+        if ! $pal_report_ok; then pal_success=false; fi
+        if ! $pal_parse_ok; then pal_success=false; fi
+
+        echo "Outcome: $pal_outcome"
+        echo "Summary JSONL: $PAL_JSONL"
+
+        $pal_success
+    } > "$PAL_LOG" 2>&1
+    pal_exit=$?
+    pal_end=$(date +%s%N)
+    pal_dur_ms=$(( (pal_end - pal_start) / 1000000 ))
+    pal_dur_s=$(echo "scale=2; $pal_dur_ms / 1000" | bc 2>/dev/null || echo "${pal_dur_ms}ms")
+    STEP_DURATIONS+=("${pal_dur_s}s")
+
+    if [ $pal_exit -eq 0 ]; then
+        log_pass "Command palette flow passed in ${pal_dur_s}s"
+        PASS_COUNT=$((PASS_COUNT + 1))
+        STEP_STATUSES+=("PASS")
+    else
+        log_fail "Command palette flow failed. See: $PAL_LOG"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        STEP_STATUSES+=("FAIL")
+    fi
+
 else
     # No PTY support — skip all smoke/interactive tests
     for step in "Smoke test (alt-screen)" "Smoke test (inline)" \
@@ -1239,7 +1360,7 @@ else
                 "Resize (SIGWINCH) test" "VisualEffects backdrop" \
                 "Layout Inspector" "Terminal caps report" "i18n stress report" \
                 "Widget builder export" "Determinism lab report" \
-                "Hyperlink playground"; do
+                "Hyperlink playground" "command palette"; do
         skip_step "$step" "$SMOKE_REASON"
     done
 fi
