@@ -256,13 +256,19 @@ mod tests {
         }
 
         fn output(&self) -> Vec<u8> {
-            self.inner.lock().unwrap().clone()
+            self.inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone()
         }
     }
 
     impl Write for TestWriter {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.inner.lock().unwrap().write(buf)
+            self.inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .write(buf)
         }
 
         fn flush(&mut self) -> io::Result<()> {

@@ -586,6 +586,8 @@ pub struct ProgramConfig {
     pub resize_coalescer: CoalescerConfig,
     /// Resize handling behavior (immediate/throttled).
     pub resize_behavior: ResizeBehavior,
+    /// Forced terminal size override (when set, resize events are ignored).
+    pub forced_size: Option<(u16, u16)>,
     /// Enable mouse support.
     pub mouse: bool,
     /// Enable bracketed paste.
@@ -618,6 +620,7 @@ impl Default for ProgramConfig {
             poll_timeout: Duration::from_millis(100),
             resize_coalescer: CoalescerConfig::default(),
             resize_behavior: ResizeBehavior::Throttled,
+            forced_size: None,
             mouse: false,
             bracketed_paste: true,
             focus_reporting: false,
@@ -734,6 +737,20 @@ impl ProgramConfig {
     /// Set the resize handling behavior.
     pub fn with_resize_behavior(mut self, behavior: ResizeBehavior) -> Self {
         self.resize_behavior = behavior;
+        self
+    }
+
+    /// Force a fixed terminal size (cols, rows). Resize events are ignored.
+    pub fn with_forced_size(mut self, width: u16, height: u16) -> Self {
+        let width = width.max(1);
+        let height = height.max(1);
+        self.forced_size = Some((width, height));
+        self
+    }
+
+    /// Clear any forced terminal size override.
+    pub fn without_forced_size(mut self) -> Self {
+        self.forced_size = None;
         self
     }
 
@@ -1477,6 +1494,8 @@ pub struct Program<M: Model, W: Write + Send = Stdout> {
     width: u16,
     /// Current terminal height.
     height: u16,
+    /// Forced terminal size override (when set, resize events are ignored).
+    forced_size: Option<(u16, u16)>,
     /// Poll timeout when no tick is scheduled.
     poll_timeout: Duration,
     /// Frame budget configuration.
@@ -1570,8 +1589,10 @@ impl<M: Model> Program<M, Stdout> {
             writer = writer.with_render_trace(recorder);
         }
 
-        // Get terminal size for initial frame
-        let (w, h) = session.size().unwrap_or((80, 24));
+        // Get terminal size for initial frame (or forced size override).
+        let (w, h) = config
+            .forced_size
+            .unwrap_or_else(|| session.size().unwrap_or((80, 24)));
         let width = w.max(1);
         let height = h.max(1);
         writer.set_size(width, height);
@@ -1615,6 +1636,7 @@ impl<M: Model> Program<M, Stdout> {
             widget_refresh_plan: WidgetRefreshPlan::new(),
             width,
             height,
+            forced_size: config.forced_size,
             poll_timeout: config.poll_timeout,
             budget,
             conformal_predictor,
@@ -1828,6 +1850,18 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                     behavior = ?self.resize_behavior,
                     "Resize event received"
                 );
+                if let Some((forced_width, forced_height)) = self.forced_size {
+                    debug!(
+                        forced_width,
+                        forced_height, "Resize ignored due to forced size override"
+                    );
+                    self.fairness_guard.event_processed(
+                        fairness_event_type,
+                        event_start.elapsed(),
+                        Instant::now(),
+                    );
+                    return Ok(());
+                }
                 // Clamp to minimum 1 to prevent Buffer::new panic on zero dimensions
                 let width = width.max(1);
                 let height = height.max(1);
@@ -2023,6 +2057,9 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                 // until an async runtime or task scheduler is added.
                 for c in cmds {
                     self.execute_cmd(c)?;
+                    if !self.running {
+                        break;
+                    }
                 }
             }
             Cmd::Sequence(cmds) => {

@@ -218,6 +218,9 @@ impl<M: Model> ProgramSimulator<M> {
                 self.command_log.push(CmdRecord::Batch(count));
                 for c in cmds {
                     self.execute_cmd(c);
+                    if !self.running {
+                        break;
+                    }
                 }
             }
             Cmd::Sequence(cmds) => {

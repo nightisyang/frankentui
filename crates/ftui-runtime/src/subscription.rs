@@ -344,35 +344,6 @@ impl<M: Send + 'static> Subscription<M> for Every<M> {
     }
 }
 
-/// A mock subscription for testing.
-///
-/// Immediately sends all queued messages and then stops.
-pub struct MockSubscription<M: Send + 'static> {
-    id: SubId,
-    messages: Vec<M>,
-}
-
-impl<M: Send + Clone + 'static> MockSubscription<M> {
-    /// Create a mock subscription that sends the given messages.
-    pub fn new(id: SubId, messages: Vec<M>) -> Self {
-        Self { id, messages }
-    }
-}
-
-impl<M: Send + Clone + 'static> Subscription<M> for MockSubscription<M> {
-    fn id(&self) -> SubId {
-        self.id
-    }
-
-    fn run(&self, sender: mpsc::Sender<M>, _stop: StopSignal) {
-        for msg in &self.messages {
-            if sender.send(msg.clone()).is_err() {
-                break;
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,6 +352,50 @@ mod tests {
     enum TestMsg {
         Tick,
         Value(i32),
+    }
+
+    struct ChannelSubscription<M: Send + 'static> {
+        id: SubId,
+        receiver: mpsc::Receiver<M>,
+        poll: Duration,
+    }
+
+    impl<M: Send + 'static> ChannelSubscription<M> {
+        fn new(id: SubId, receiver: mpsc::Receiver<M>) -> Self {
+            Self {
+                id,
+                receiver,
+                poll: Duration::from_millis(5),
+            }
+        }
+    }
+
+    impl<M: Send + 'static> Subscription<M> for ChannelSubscription<M> {
+        fn id(&self) -> SubId {
+            self.id
+        }
+
+        fn run(&self, sender: mpsc::Sender<M>, stop: StopSignal) {
+            loop {
+                if stop.is_stopped() {
+                    break;
+                }
+                match self.receiver.recv_timeout(self.poll) {
+                    Ok(msg) => {
+                        if sender.send(msg).is_err() {
+                            break;
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        }
+    }
+
+    fn channel_subscription(id: SubId) -> (ChannelSubscription<TestMsg>, mpsc::Sender<TestMsg>) {
+        let (tx, rx) = mpsc::channel();
+        (ChannelSubscription::new(id, rx), tx)
     }
 
     #[test]
@@ -410,12 +425,20 @@ mod tests {
     }
 
     #[test]
-    fn mock_subscription_sends_messages() {
-        let sub = MockSubscription::new(1, vec![TestMsg::Value(1), TestMsg::Value(2)]);
+    fn channel_subscription_forwards_messages() {
+        let (sub, event_tx) = channel_subscription(1);
         let (tx, rx) = mpsc::channel();
-        let (signal, _trigger) = StopSignal::new();
+        let (signal, trigger) = StopSignal::new();
 
-        sub.run(tx, signal);
+        let handle = thread::spawn(move || {
+            sub.run(tx, signal);
+        });
+
+        event_tx.send(TestMsg::Value(1)).unwrap();
+        event_tx.send(TestMsg::Value(2)).unwrap();
+        thread::sleep(Duration::from_millis(10));
+        trigger.stop();
+        handle.join().unwrap();
 
         let msgs: Vec<_> = rx.try_iter().collect();
         assert_eq!(msgs, vec![TestMsg::Value(1), TestMsg::Value(2)]);
@@ -458,10 +481,11 @@ mod tests {
     #[test]
     fn subscription_manager_starts_subscriptions() {
         let mut mgr = SubscriptionManager::<TestMsg>::new();
-        let subs: Vec<Box<dyn Subscription<TestMsg>>> =
-            vec![Box::new(MockSubscription::new(1, vec![TestMsg::Value(42)]))];
+        let (sub, event_tx) = channel_subscription(1);
+        let subs: Vec<Box<dyn Subscription<TestMsg>>> = vec![Box::new(sub)];
 
         mgr.reconcile(subs);
+        event_tx.send(TestMsg::Value(42)).unwrap();
 
         // Give the thread a moment to send
         thread::sleep(Duration::from_millis(20));
@@ -473,12 +497,17 @@ mod tests {
     #[test]
     fn subscription_manager_dedupes_duplicate_ids() {
         let mut mgr = SubscriptionManager::<TestMsg>::new();
-        let subs: Vec<Box<dyn Subscription<TestMsg>>> = vec![
-            Box::new(MockSubscription::new(7, vec![TestMsg::Value(1)])),
-            Box::new(MockSubscription::new(7, vec![TestMsg::Value(2)])),
-        ];
+        let (sub_a, tx_a) = channel_subscription(7);
+        let (sub_b, tx_b) = channel_subscription(7);
+        let subs: Vec<Box<dyn Subscription<TestMsg>>> = vec![Box::new(sub_a), Box::new(sub_b)];
 
         mgr.reconcile(subs);
+
+        tx_a.send(TestMsg::Value(1)).unwrap();
+        assert!(
+            tx_b.send(TestMsg::Value(2)).is_err(),
+            "Duplicate subscription should be dropped"
+        );
 
         thread::sleep(Duration::from_millis(20));
         let msgs = mgr.drain_messages();
@@ -613,37 +642,43 @@ mod tests {
     }
 
     #[test]
-    fn mock_subscription_empty_messages() {
-        let sub = MockSubscription::<TestMsg>::new(1, vec![]);
+    fn channel_subscription_no_messages_without_events() {
+        let (sub, _event_tx) = channel_subscription(1);
         let (tx, rx) = mpsc::channel();
-        let (signal, _trigger) = StopSignal::new();
+        let (signal, trigger) = StopSignal::new();
 
-        sub.run(tx, signal);
+        let handle = thread::spawn(move || {
+            sub.run(tx, signal);
+        });
+
+        thread::sleep(Duration::from_millis(10));
+        trigger.stop();
+        handle.join().unwrap();
 
         let msgs: Vec<_> = rx.try_iter().collect();
         assert!(msgs.is_empty());
     }
 
     #[test]
-    fn mock_subscription_id_is_preserved() {
-        let sub = MockSubscription::<TestMsg>::new(42, vec![]);
+    fn channel_subscription_id_is_preserved() {
+        let (sub, _tx) = channel_subscription(42);
         assert_eq!(sub.id(), 42);
     }
 
     #[test]
-    fn mock_subscription_stops_on_disconnected_receiver() {
-        let sub = MockSubscription::new(
-            1,
-            vec![TestMsg::Value(1), TestMsg::Value(2), TestMsg::Value(3)],
-        );
-        let (tx, rx) = mpsc::channel();
+    fn channel_subscription_stops_on_disconnected_receiver() {
+        let (sub, event_tx) = channel_subscription(1);
+        let (tx, _rx) = mpsc::channel();
         let (signal, _trigger) = StopSignal::new();
 
-        // Drop receiver before running
-        drop(rx);
+        drop(event_tx);
 
-        // Should not panic, just return
-        sub.run(tx, signal);
+        let handle = thread::spawn(move || {
+            sub.run(tx, signal);
+        });
+
+        let result = handle.join();
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -717,12 +752,12 @@ mod tests {
     #[test]
     fn subscription_manager_drain_messages_returns_all() {
         let mut mgr = SubscriptionManager::<TestMsg>::new();
-        let subs: Vec<Box<dyn Subscription<TestMsg>>> = vec![Box::new(MockSubscription::new(
-            1,
-            vec![TestMsg::Value(1), TestMsg::Value(2)],
-        ))];
+        let (sub, event_tx) = channel_subscription(1);
+        let subs: Vec<Box<dyn Subscription<TestMsg>>> = vec![Box::new(sub)];
 
         mgr.reconcile(subs);
+        event_tx.send(TestMsg::Value(1)).unwrap();
+        event_tx.send(TestMsg::Value(2)).unwrap();
         thread::sleep(Duration::from_millis(20));
 
         let msgs = mgr.drain_messages();
@@ -738,21 +773,19 @@ mod tests {
     #[test]
     fn subscription_manager_replaces_subscription_with_different_id() {
         let mut mgr = SubscriptionManager::<TestMsg>::new();
+        let (sub1, tx1) = channel_subscription(1);
 
         // Start with ID 1
-        mgr.reconcile(vec![Box::new(MockSubscription::new(
-            1,
-            vec![TestMsg::Value(1)],
-        ))]);
+        mgr.reconcile(vec![Box::new(sub1)]);
+        tx1.send(TestMsg::Value(1)).unwrap();
         thread::sleep(Duration::from_millis(20));
         let msgs1 = mgr.drain_messages();
         assert_eq!(msgs1, vec![TestMsg::Value(1)]);
 
         // Replace with ID 2
-        mgr.reconcile(vec![Box::new(MockSubscription::new(
-            2,
-            vec![TestMsg::Value(2)],
-        ))]);
+        let (sub2, tx2) = channel_subscription(2);
+        mgr.reconcile(vec![Box::new(sub2)]);
+        tx2.send(TestMsg::Value(2)).unwrap();
         thread::sleep(Duration::from_millis(20));
         let msgs2 = mgr.drain_messages();
         assert_eq!(msgs2, vec![TestMsg::Value(2)]);
@@ -761,13 +794,16 @@ mod tests {
     #[test]
     fn subscription_manager_multiple_subscriptions() {
         let mut mgr = SubscriptionManager::<TestMsg>::new();
-        let subs: Vec<Box<dyn Subscription<TestMsg>>> = vec![
-            Box::new(MockSubscription::new(1, vec![TestMsg::Value(10)])),
-            Box::new(MockSubscription::new(2, vec![TestMsg::Value(20)])),
-            Box::new(MockSubscription::new(3, vec![TestMsg::Value(30)])),
-        ];
+        let (sub1, tx1) = channel_subscription(1);
+        let (sub2, tx2) = channel_subscription(2);
+        let (sub3, tx3) = channel_subscription(3);
+        let subs: Vec<Box<dyn Subscription<TestMsg>>> =
+            vec![Box::new(sub1), Box::new(sub2), Box::new(sub3)];
 
         mgr.reconcile(subs);
+        tx1.send(TestMsg::Value(10)).unwrap();
+        tx2.send(TestMsg::Value(20)).unwrap();
+        tx3.send(TestMsg::Value(30)).unwrap();
         thread::sleep(Duration::from_millis(30));
 
         let mut msgs = mgr.drain_messages();

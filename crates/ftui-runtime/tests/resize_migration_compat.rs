@@ -687,12 +687,13 @@ fn simulation_compare_bocpd_vs_heuristic() {
         ("oscillatory", build_events_oscillatory()),
     ];
 
+    let tick_ms = 8;
     for (name, events) in scenarios {
         let last_event = events.last().map(|(t, _)| *t).unwrap_or(0);
         let end_ms = last_event + base.hard_deadline_ms + 200;
 
-        let metrics_heuristic = run_simulation(cfg_heuristic.clone(), &events, 8, end_ms);
-        let metrics_bocpd = run_simulation(cfg_bocpd.clone(), &events, 8, end_ms);
+        let metrics_heuristic = run_simulation(cfg_heuristic.clone(), &events, tick_ms, end_ms);
+        let metrics_bocpd = run_simulation(cfg_bocpd.clone(), &events, tick_ms, end_ms);
 
         eprintln!(
             "{{\"test\":\"resize_coalescer_sim\",\"scenario\":\"{}\",\"mode\":\"heuristic\",\"applies\":{},\"forced\":{},\"decisions\":{},\"mean_ms\":{:.2},\"p95_ms\":{:.2},\"max_ms\":{:.2}}}",
@@ -715,7 +716,8 @@ fn simulation_compare_bocpd_vs_heuristic() {
             metrics_bocpd.max_coalesce_ms
         );
 
-        let bound = base.hard_deadline_ms as f64 + 1.0;
+        // Tick granularity means an apply can land up to `tick_ms` after the deadline.
+        let bound = base.hard_deadline_ms as f64 + tick_ms as f64;
         assert!(
             metrics_heuristic.max_coalesce_ms <= bound,
             "heuristic max coalesce exceeded deadline: {:.2} > {:.2}",

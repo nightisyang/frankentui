@@ -71,7 +71,7 @@ pub use render_trace::{
 };
 pub use simulator::ProgramSimulator;
 pub use string_model::{StringModel, StringModelAdapter};
-pub use subscription::{Every, MockSubscription, StopSignal, SubId, Subscription};
+pub use subscription::{Every, StopSignal, SubId, Subscription};
 pub use terminal_writer::{ScreenMode, TerminalWriter, UiAnchor};
 pub use voi_telemetry::{
     clear_inline_auto_voi_snapshot, inline_auto_voi_snapshot, set_inline_auto_voi_snapshot,
