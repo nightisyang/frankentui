@@ -18,7 +18,9 @@ pub const FRACBITS: i32 = 16;
 pub const FRACUNIT: i32 = 1 << FRACBITS;
 
 /// Player constants.
-pub const PLAYER_HEIGHT: f32 = 41.0;
+/// Full body height for passage checking (56 map units in original Doom).
+pub const PLAYER_HEIGHT: f32 = 56.0;
+/// Eye level above floor (41 map units in original Doom).
 pub const PLAYER_VIEW_HEIGHT: f32 = 41.0;
 pub const PLAYER_RADIUS: f32 = 16.0;
 pub const PLAYER_MAX_MOVE: f32 = 30.0;

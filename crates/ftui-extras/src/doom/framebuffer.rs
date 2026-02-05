@@ -114,10 +114,7 @@ impl DoomFramebuffer {
                 // Map painter x to framebuffer x
                 let fb_x = (px * self.width) / pw;
                 let color = self.get_pixel(fb_x, fb_y);
-                // Only draw non-black pixels (skip transparent/background)
-                if color.0 != 0 {
-                    painter.point_colored(px as i32, py as i32, color);
-                }
+                painter.point_colored(px as i32, py as i32, color);
             }
         }
     }

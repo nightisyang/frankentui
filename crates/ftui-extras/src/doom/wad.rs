@@ -99,7 +99,7 @@ impl WadFile {
     /// Find a lump index by name, starting search after `start_index`.
     pub fn find_lump_after(&self, name: &str, start_index: usize) -> Option<usize> {
         let upper = name.to_uppercase();
-        (start_index..self.directory.len()).find(|&i| self.directory[i].name_str() == upper)
+        (start_index + 1..self.directory.len()).find(|&i| self.directory[i].name_str() == upper)
     }
 
     /// Get raw lump data by directory index.

@@ -200,28 +200,36 @@ impl Player {
 
                     // Check if gap is passable
                     if step > PLAYER_STEP_HEIGHT || min_ceil - self.floor_z < PLAYER_HEIGHT {
-                        // This is a blocking two-sided line
-                        if geometry::circle_intersects_segment(
-                            new_x,
-                            new_y,
-                            PLAYER_RADIUS,
-                            map.vertices[linedef.v1].x,
-                            map.vertices[linedef.v1].y,
-                            map.vertices[linedef.v2].x,
-                            map.vertices[linedef.v2].y,
-                        ) {
-                            // Try sliding
-                            let vx = map.vertices[linedef.v2].x - map.vertices[linedef.v1].x;
-                            let vy = map.vertices[linedef.v2].y - map.vertices[linedef.v1].y;
-                            let len = (vx * vx + vy * vy).sqrt();
-                            if len > 0.0 {
-                                let nx = -vy / len;
-                                let ny = vx / len;
-                                let dot = self.mom_x * nx + self.mom_y * ny;
-                                self.mom_x -= dot * nx;
-                                self.mom_y -= dot * ny;
-                            }
+                        // Impassable two-sided line: check per-axis like solid walls
+                        let x1 = map.vertices[linedef.v1].x;
+                        let y1 = map.vertices[linedef.v1].y;
+                        let x2 = map.vertices[linedef.v2].x;
+                        let y2 = map.vertices[linedef.v2].y;
+
+                        if !blocked_x
+                            && geometry::circle_intersects_segment(
+                                new_x,
+                                self.y,
+                                PLAYER_RADIUS,
+                                x1,
+                                y1,
+                                x2,
+                                y2,
+                            )
+                        {
                             blocked_x = true;
+                        }
+                        if !blocked_y
+                            && geometry::circle_intersects_segment(
+                                self.x,
+                                new_y,
+                                PLAYER_RADIUS,
+                                x1,
+                                y1,
+                                x2,
+                                y2,
+                            )
+                        {
                             blocked_y = true;
                         }
                     }

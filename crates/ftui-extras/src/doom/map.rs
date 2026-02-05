@@ -247,7 +247,7 @@ impl DoomMap {
             .map(|s| Seg {
                 v1: s.v1 as usize,
                 v2: s.v2 as usize,
-                angle: (s.angle as f32) * std::f32::consts::PI / 16384.0,
+                angle: (s.angle as f32) * std::f32::consts::PI / 32768.0,
                 linedef: s.linedef as usize,
                 direction: s.direction,
                 offset: s.offset as f32,

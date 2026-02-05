@@ -112,8 +112,8 @@ impl DoomPalette {
     #[inline]
     pub fn light_factor(&self, light_level: u8, distance: f32) -> f32 {
         let base = light_level as f32 / 255.0;
-        // Distance fog: attenuate by distance
-        let dist_atten = 1.0 / (1.0 + distance / 400.0);
+        // Distance fog: gentle attenuation (1000 unit half-distance)
+        let dist_atten = 1.0 / (1.0 + distance / 1000.0);
         (base * dist_atten).clamp(0.0, 1.0)
     }
 }

@@ -158,10 +158,10 @@ impl DoomEngine {
 
     /// Run one game tick (35 Hz).
     fn game_tick(&mut self) {
-        if let Some(map) = &self.map {
-            // Clone map reference data needed for tick
-            let map_clone = map.clone();
-            self.player.tick(&map_clone);
+        // Split borrow: take map out temporarily to avoid &self + &mut self.player conflict
+        if let Some(map) = self.map.take() {
+            self.player.tick(&map);
+            self.map = Some(map);
         }
     }
 
@@ -174,11 +174,12 @@ impl DoomEngine {
         }
 
         // Render the scene
-        if let Some(map) = &self.map {
-            let map_ref = map.clone();
+        // Split borrow: take map out to avoid &self.map + &mut self.renderer conflict
+        if let Some(map) = self.map.take() {
             self.renderer
-                .render(&mut self.framebuffer, &map_ref, &self.player, &self.palette);
+                .render(&mut self.framebuffer, &map, &self.player, &self.palette);
             self.last_stats = self.renderer.stats.clone();
+            self.map = Some(map);
         } else {
             // No map loaded: show test pattern
             self.render_no_map();
@@ -281,21 +282,21 @@ impl DoomEngine {
                 // Sky
                 for y in 0..top {
                     let sky_t = y as f32 / (h as f32 / 2.0);
-                    let sr = (40.0 + 60.0 * sky_t) as u8;
-                    let sg = (60.0 + 80.0 * sky_t) as u8;
-                    let sb = (140.0 + 60.0 * sky_t) as u8;
+                    let sr = (80.0 + 80.0 * sky_t) as u8;
+                    let sg = (120.0 + 80.0 * sky_t) as u8;
+                    let sb = (200.0 + 40.0 * sky_t.min(1.0)) as u8;
                     self.framebuffer
                         .set_pixel(x, y, PackedRgba::rgb(sr, sg, sb));
                 }
 
                 // Floor
                 for y in bottom..h {
-                    let floor_t = (y - bottom) as f32 / (h - bottom) as f32;
-                    let fr = (40.0 + 40.0 * floor_t) as u8;
-                    let fg = (35.0 + 35.0 * floor_t) as u8;
-                    let fb = (30.0 + 30.0 * floor_t) as u8;
+                    let floor_t = (y - bottom) as f32 / (h - bottom).max(1) as f32;
+                    let fr = (70.0 + 50.0 * floor_t) as u8;
+                    let fg = (60.0 + 40.0 * floor_t) as u8;
+                    let fb_c = (50.0 + 30.0 * floor_t) as u8;
                     self.framebuffer
-                        .set_pixel(x, y, PackedRgba::rgb(fr, fg, fb));
+                        .set_pixel(x, y, PackedRgba::rgb(fr, fg, fb_c));
                 }
             }
         }
@@ -482,9 +483,9 @@ fn generate_test_map() -> DoomMap {
     let mut subsectors = Vec::new();
     let mut nodes = Vec::new();
 
-    // Room dimensions
-    let room_size = 512.0f32;
-    let corridor_width = 128.0f32;
+    // Room dimensions (keep small so walls are visible from player start)
+    let room_size = 256.0f32;
+    let corridor_width = 64.0f32;
     let wall_height = 128.0f32;
 
     // Sector 0: Main room
@@ -596,11 +597,11 @@ fn generate_test_map() -> DoomMap {
     }); // 13
     vertices.push(Vertex {
         x: corridor_width,
-        y: -room_size - 256.0,
+        y: -room_size - 128.0,
     }); // 14
     vertices.push(Vertex {
         x: -corridor_width,
-        y: -room_size - 256.0,
+        y: -room_size - 128.0,
     }); // 15
 
     // Sidedefs for main room walls (sector 0)
@@ -873,7 +874,7 @@ fn generate_test_map() -> DoomMap {
         dx: 0.0,
         dy: 1.0,
         bbox_right: [room_size * 2.0, -corridor_width, room_size, corridor_width],
-        bbox_left: [room_size * 2.0, -room_size - 256.0, -room_size, room_size],
+        bbox_left: [room_size * 2.0, -room_size - 128.0, -room_size, room_size],
         right_child: NodeChild::SubSector(1), // Corridor
         left_child: NodeChild::Node(1),
     });
@@ -885,7 +886,7 @@ fn generate_test_map() -> DoomMap {
         dx: 1.0,
         dy: 0.0,
         bbox_right: [room_size * 2.0, 0.0, -room_size, room_size],
-        bbox_left: [0.0, -room_size - 256.0, -room_size, room_size],
+        bbox_left: [0.0, -room_size - 128.0, -room_size, room_size],
         right_child: NodeChild::Node(2),
         left_child: NodeChild::Node(3),
     });
@@ -911,7 +912,7 @@ fn generate_test_map() -> DoomMap {
         bbox_right: [0.0, -room_size, -room_size, room_size],
         bbox_left: [
             -room_size,
-            -room_size - 256.0,
+            -room_size - 128.0,
             -corridor_width,
             corridor_width,
         ],

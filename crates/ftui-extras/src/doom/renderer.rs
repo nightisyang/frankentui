@@ -46,16 +46,16 @@ const WALL_COLORS: [[u8; 3]; 8] = [
     [110, 110, 130], // Steel blue
 ];
 
-/// Sky gradient colors.
-const SKY_TOP: [u8; 3] = [40, 60, 140];
-const SKY_BOTTOM: [u8; 3] = [100, 140, 200];
+/// Sky gradient colors (bright blue sky).
+const SKY_TOP: [u8; 3] = [80, 120, 200];
+const SKY_BOTTOM: [u8; 3] = [160, 200, 240];
 
 /// Floor gradient colors.
-const FLOOR_NEAR: [u8; 3] = [80, 70, 60];
-const FLOOR_FAR: [u8; 3] = [40, 35, 30];
+const FLOOR_NEAR: [u8; 3] = [120, 100, 80];
+const FLOOR_FAR: [u8; 3] = [70, 60, 50];
 
 /// Ceiling color.
-const CEILING_COLOR: [u8; 3] = [60, 60, 70];
+const CEILING_COLOR: [u8; 3] = [100, 100, 120];
 
 /// The main BSP renderer.
 #[derive(Debug)]
@@ -140,7 +140,6 @@ impl DoomRenderer {
 
         // BSP front-to-back traversal
         let width = self.width;
-        let _height = self.height;
         let half_width = self.half_width;
         let half_height = self.half_height;
         let projection = self.projection;
@@ -290,35 +289,23 @@ impl DoomRenderer {
                     let g = (base_g as f32 * light_factor) as u8;
                     let b = (base_b as f32 * light_factor) as u8;
 
-                    // Draw the wall column
-                    fb.draw_column(
-                        x,
-                        draw_top as u32,
-                        draw_bottom as u32,
-                        PackedRgba::rgb(r, g, b),
-                    );
-
                     // Draw ceiling above wall (if not sky)
-                    if draw_top > clip_top {
-                        let ceil_light = light_factor * 0.7;
+                    if draw_top > clip_top && !front.is_sky_ceiling() {
+                        let ceil_light = light_factor * 0.85;
                         let cr = (CEILING_COLOR[0] as f32 * ceil_light) as u8;
                         let cg = (CEILING_COLOR[1] as f32 * ceil_light) as u8;
                         let cb = (CEILING_COLOR[2] as f32 * ceil_light) as u8;
-                        if front.is_sky_ceiling() {
-                            // Sky columns already drawn in background
-                        } else {
-                            fb.draw_column(
-                                x,
-                                clip_top as u32,
-                                draw_top as u32,
-                                PackedRgba::rgb(cr, cg, cb),
-                            );
-                        }
+                        fb.draw_column(
+                            x,
+                            clip_top as u32,
+                            draw_top as u32,
+                            PackedRgba::rgb(cr, cg, cb),
+                        );
                     }
 
                     // Draw floor below wall
                     if draw_bottom < clip_bottom {
-                        let floor_light = light_factor * 0.5;
+                        let floor_light = light_factor * 0.75;
                         let fr = (FLOOR_NEAR[0] as f32 * floor_light) as u8;
                         let fg = (FLOOR_NEAR[1] as f32 * floor_light) as u8;
                         let fbl = (FLOOR_NEAR[2] as f32 * floor_light) as u8;
@@ -330,58 +317,68 @@ impl DoomRenderer {
                         );
                     }
 
-                    // Update clipping
+                    // Update clipping and draw wall portions
                     if is_solid {
+                        // Solid wall: draw full wall column
+                        fb.draw_column(
+                            x,
+                            draw_top as u32,
+                            draw_bottom as u32,
+                            PackedRgba::rgb(r, g, b),
+                        );
+
                         column_clips[x as usize].solid = true;
                         *solid_count += 1;
-                    } else {
-                        // Two-sided: update clip range
-                        if let Some(back) = back_sector {
-                            let back_ceil = back.ceiling_height - player_view_z;
-                            let back_floor = back.floor_height - player_view_z;
+                    } else if let Some(back) = back_sector {
+                        // Two-sided: only draw upper/lower wall portions,
+                        // leave middle open so the back sector is visible.
+                        let back_ceil = back.ceiling_height - player_view_z;
+                        let back_floor = back.floor_height - player_view_z;
 
-                            // Upper wall (if back ceiling is lower)
-                            if back.ceiling_height < front.ceiling_height {
-                                let upper_bottom =
-                                    half_height - back_ceil * inv_depth + pitch_offset;
-                                let ub = (upper_bottom as i32).max(clip_top).min(clip_bottom);
+                        // Upper wall (if back ceiling is lower than front ceiling)
+                        if back.ceiling_height < front.ceiling_height {
+                            let upper_bottom = half_height - back_ceil * inv_depth + pitch_offset;
+                            let ub = (upper_bottom as i32).max(clip_top).min(clip_bottom);
 
-                                // Draw upper wall
-                                if draw_top < ub {
-                                    let ur = (base_r as f32 * light_factor * 0.85) as u8;
-                                    let ug = (base_g as f32 * light_factor * 0.85) as u8;
-                                    let ubr = (base_b as f32 * light_factor * 0.85) as u8;
-                                    fb.draw_column(
-                                        x,
-                                        draw_top as u32,
-                                        ub as u32,
-                                        PackedRgba::rgb(ur, ug, ubr),
-                                    );
-                                }
-
-                                column_clips[x as usize].top = ub;
+                            if draw_top < ub {
+                                let ur = (base_r as f32 * light_factor * 0.85) as u8;
+                                let ug = (base_g as f32 * light_factor * 0.85) as u8;
+                                let ubr = (base_b as f32 * light_factor * 0.85) as u8;
+                                fb.draw_column(
+                                    x,
+                                    draw_top as u32,
+                                    ub as u32,
+                                    PackedRgba::rgb(ur, ug, ubr),
+                                );
                             }
 
-                            // Lower wall (if back floor is higher)
-                            if back.floor_height > front.floor_height {
-                                let lower_top = half_height - back_floor * inv_depth + pitch_offset;
-                                let lt = (lower_top as i32).max(clip_top).min(clip_bottom);
+                            column_clips[x as usize].top = ub;
+                        }
 
-                                // Draw lower wall
-                                if lt < draw_bottom {
-                                    let lr = (base_r as f32 * light_factor * 0.7) as u8;
-                                    let lg = (base_g as f32 * light_factor * 0.7) as u8;
-                                    let lb = (base_b as f32 * light_factor * 0.7) as u8;
-                                    fb.draw_column(
-                                        x,
-                                        lt as u32,
-                                        draw_bottom as u32,
-                                        PackedRgba::rgb(lr, lg, lb),
-                                    );
-                                }
+                        // Lower wall (if back floor is higher than front floor)
+                        if back.floor_height > front.floor_height {
+                            let lower_top = half_height - back_floor * inv_depth + pitch_offset;
+                            let lt = (lower_top as i32).max(clip_top).min(clip_bottom);
 
-                                column_clips[x as usize].bottom = lt;
+                            if lt < draw_bottom {
+                                let lr = (base_r as f32 * light_factor * 0.7) as u8;
+                                let lg = (base_g as f32 * light_factor * 0.7) as u8;
+                                let lb = (base_b as f32 * light_factor * 0.7) as u8;
+                                fb.draw_column(
+                                    x,
+                                    lt as u32,
+                                    draw_bottom as u32,
+                                    PackedRgba::rgb(lr, lg, lb),
+                                );
                             }
+
+                            column_clips[x as usize].bottom = lt;
+                        }
+
+                        // Mark column solid if the two-sided gap has closed
+                        if column_clips[x as usize].top >= column_clips[x as usize].bottom {
+                            column_clips[x as usize].solid = true;
+                            *solid_count += 1;
                         }
                     }
                 }
