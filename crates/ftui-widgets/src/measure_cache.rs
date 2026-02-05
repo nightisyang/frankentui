@@ -77,7 +77,7 @@
 //!
 //! # Cache Eviction
 //!
-//! The cache uses LRU (Least Recently Used) eviction when at capacity.
+//! The cache uses LFU (Least Frequently Used) eviction when at capacity.
 //! Access count tracks usage; least-accessed entries are evicted first.
 
 use std::collections::HashMap;
@@ -151,7 +151,7 @@ struct CacheEntry {
     constraints: SizeConstraints,
     /// Generation when this entry was created/updated.
     generation: u64,
-    /// Access count for LRU eviction.
+    /// Access count for LFU eviction.
     access_count: u32,
 }
 
@@ -175,7 +175,7 @@ pub struct CacheStats {
 ///
 /// # Capacity
 ///
-/// The cache has a fixed maximum capacity. When full, the least recently used
+/// The cache has a fixed maximum capacity. When full, the least frequently used
 /// entries are evicted to make room for new ones.
 ///
 /// # Generation-Based Invalidation
@@ -199,7 +199,7 @@ impl MeasureCache {
     ///
     /// # Arguments
     ///
-    /// * `max_entries` - Maximum number of entries before LRU eviction occurs.
+    /// * `max_entries` - Maximum number of entries before LFU eviction occurs.
     ///   A typical value is 100-1000 depending on widget complexity.
     ///
     /// # Example
@@ -269,7 +269,7 @@ impl MeasureCache {
 
         // Evict if at capacity
         if self.entries.len() >= self.max_entries {
-            self.evict_lru();
+            self.evict_lfu();
         }
 
         // Insert new entry
@@ -383,8 +383,8 @@ impl MeasureCache {
         self.max_entries
     }
 
-    /// Evict the least recently used entry.
-    fn evict_lru(&mut self) {
+    /// Evict the least frequently used entry.
+    fn evict_lfu(&mut self) {
         // Find entry with lowest access_count
         if let Some(key) = self
             .entries
@@ -549,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn lru_eviction_works() {
+    fn lfu_eviction_works() {
         let mut cache = MeasureCache::new(2); // Small cache
 
         // Insert two entries

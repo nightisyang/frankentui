@@ -323,6 +323,59 @@ mod tests {
     }
 
     #[test]
+    fn arrows_env_override_disables_unicode_arrows() {
+        let env = map_env(&[(ENV_GLYPH_ARROWS, "0"), ("TERM", "wezterm")]);
+        let caps = TerminalCapabilities::modern();
+        let policy = GlyphPolicy::from_env_with(get_env(&env), &caps);
+
+        assert!(!policy.unicode_arrows);
+    }
+
+    #[test]
+    fn ascii_mode_forces_arrows_off_even_if_override_true() {
+        let env = map_env(&[
+            (ENV_GLYPH_MODE, "ascii"),
+            (ENV_GLYPH_ARROWS, "1"),
+            ("TERM", "wezterm"),
+        ]);
+        let caps = TerminalCapabilities::modern();
+        let policy = GlyphPolicy::from_env_with(get_env(&env), &caps);
+
+        assert_eq!(policy.mode, GlyphMode::Ascii);
+        assert!(!policy.unicode_arrows);
+    }
+
+    #[test]
+    fn emoji_env_override_true_ignores_caps_and_double_width() {
+        let env = map_env(&[(ENV_GLYPH_EMOJI, "1"), ("TERM", "dumb")]);
+        let mut caps = TerminalCapabilities::modern();
+        caps.unicode_emoji = false;
+        caps.double_width = false;
+        let policy = GlyphPolicy::from_env_with(get_env(&env), &caps);
+
+        assert!(policy.emoji);
+    }
+
+    #[test]
+    fn policy_to_json_serializes_expected_flags() {
+        let env = map_env(&[
+            (ENV_GLYPH_MODE, "unicode"),
+            (ENV_GLYPH_EMOJI, "0"),
+            (ENV_GLYPH_LINE_DRAWING, "1"),
+            (ENV_GLYPH_ARROWS, "0"),
+            (ENV_GLYPH_DOUBLE_WIDTH, "1"),
+            ("FTUI_TEXT_CJK_WIDTH", "1"),
+        ]);
+        let caps = TerminalCapabilities::modern();
+        let policy = GlyphPolicy::from_env_with(get_env(&env), &caps);
+
+        assert_eq!(
+            policy.to_json(),
+            r#"{"glyph_mode":"unicode","emoji":false,"cjk_width":true,"double_width":true,"unicode_line_drawing":false,"unicode_arrows":false}"#
+        );
+    }
+
+    #[test]
     fn glyph_double_width_env_overrides_cjk_width() {
         let env = map_env(&[(ENV_GLYPH_DOUBLE_WIDTH, "0"), ("FTUI_TEXT_CJK_WIDTH", "1")]);
         let caps = TerminalCapabilities::modern();

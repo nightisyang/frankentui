@@ -49,6 +49,25 @@ Notes:
 - Purpose: inline graphics.
 - Feature-gated; not required for kernel correctness.
 
+## Glyph Policy Overrides
+
+FrankenTUI centralizes glyph decisions (Unicode vs ASCII, emoji, line drawing,
+arrows, and double-width handling) in `GlyphPolicy`. You can force deterministic
+overrides via environment variables:
+
+- `FTUI_GLYPH_MODE=unicode|ascii` — force overall glyph mode.
+- `FTUI_GLYPH_EMOJI=1|0` — enable/disable emoji (ignored in ASCII mode).
+- `FTUI_NO_EMOJI=1|0` — legacy alias (`1` disables emoji).
+- `FTUI_GLYPH_LINE_DRAWING=1|0` — enable/disable Unicode box drawing glyphs.
+- `FTUI_GLYPH_ARROWS=1|0` — enable/disable Unicode arrows/symbols.
+- `FTUI_GLYPH_DOUBLE_WIDTH=1|0` — override double-width glyph support.
+
+Notes:
+- Overrides are deterministic and applied before rendering.
+- `FTUI_GLYPH_MODE=ascii` forces line drawing/arrows/emoji off regardless of
+  other flags.
+- If double-width is disabled, emoji defaults off unless explicitly overridden.
+
 ## Multiplexer Notes
 
 ### tmux

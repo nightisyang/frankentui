@@ -1492,144 +1492,154 @@ impl<W: Write> TerminalWriter<W> {
         cursor: Option<(u16, u16)>,
         cursor_visible: bool,
     ) -> io::Result<FrameEmitStats> {
-        let visible_height = ui_height.min(self.term_height);
-        let ui_y_start = self.ui_start_row();
-        let current_region = InlineRegion {
-            start: ui_y_start,
-            height: visible_height,
-        };
+        let result = (|| -> io::Result<FrameEmitStats> {
+            let visible_height = ui_height.min(self.term_height);
+            let ui_y_start = self.ui_start_row();
+            let current_region = InlineRegion {
+                start: ui_y_start,
+                height: visible_height,
+            };
 
-        // Activate scroll region if strategy calls for it
-        {
-            let _span = debug_span!("ftui.render.scroll_region").entered();
+            // Activate scroll region if strategy calls for it
+            {
+                let _span = debug_span!("ftui.render.scroll_region").entered();
+                if visible_height > 0 {
+                    match self.inline_strategy {
+                        InlineStrategy::ScrollRegion => {
+                            self.activate_scroll_region(visible_height)?;
+                        }
+                        InlineStrategy::Hybrid => {
+                            self.activate_scroll_region(visible_height)?;
+                        }
+                        InlineStrategy::OverlayRedraw => {}
+                    }
+                } else if self.scroll_region_active {
+                    self.deactivate_scroll_region()?;
+                }
+            }
+
+            // Begin sync output if available
+            if self.capabilities.sync_output && !self.in_sync_block {
+                self.writer().write_all(SYNC_BEGIN)?;
+                self.in_sync_block = true;
+            }
+
+            // Save cursor (DEC save)
+            self.writer().write_all(CURSOR_SAVE)?;
+            self.cursor_saved = true;
+
+            self.clear_inline_region_diff(current_region)?;
+
+            let mut diff_strategy = DiffStrategy::FullRedraw;
+            let mut diff_us = 0u64;
+            let mut emit_stats = EmitStats {
+                diff_cells: 0,
+                diff_runs: 0,
+            };
+
             if visible_height > 0 {
-                match self.inline_strategy {
-                    InlineStrategy::ScrollRegion => {
-                        self.activate_scroll_region(visible_height)?;
+                // If this is a full redraw (no previous buffer), we must clear the
+                // entire UI region first to ensure we aren't diffing against garbage.
+                if self.prev_buffer.is_none() {
+                    self.clear_rows(ui_y_start, visible_height)?;
+                } else {
+                    // If the buffer is shorter than the visible height, clear the remaining rows
+                    // to prevent ghosting from previous larger buffers.
+                    let buf_height = buffer.height().min(visible_height);
+                    if buf_height < visible_height {
+                        let clear_start = ui_y_start.saturating_add(buf_height);
+                        let clear_height = visible_height.saturating_sub(buf_height);
+                        self.clear_rows(clear_start, clear_height)?;
                     }
-                    InlineStrategy::Hybrid => {
-                        self.activate_scroll_region(visible_height)?;
-                    }
-                    InlineStrategy::OverlayRedraw => {}
                 }
-            } else if self.scroll_region_active {
-                self.deactivate_scroll_region()?;
+
+                // Compute diff
+                let diff_start = if self.timing_enabled {
+                    Some(Instant::now())
+                } else {
+                    None
+                };
+                let decision = {
+                    let _span = debug_span!("ftui.render.diff_compute").entered();
+                    self.decide_diff(buffer)
+                };
+                if let Some(start) = diff_start {
+                    diff_us = start.elapsed().as_micros() as u64;
+                }
+                diff_strategy = decision.strategy;
+
+                // Emit diff
+                {
+                    let _span = debug_span!("ftui.render.emit").entered();
+                    if decision.has_diff {
+                        let diff = std::mem::take(&mut self.diff_scratch);
+                        let result =
+                            self.emit_diff(buffer, &diff, Some(visible_height), ui_y_start);
+                        self.diff_scratch = diff;
+                        emit_stats = result?;
+                    } else {
+                        emit_stats =
+                            self.emit_full_redraw(buffer, Some(visible_height), ui_y_start)?;
+                    }
+                }
             }
-        }
 
-        // Begin sync output if available
-        if self.capabilities.sync_output && !self.in_sync_block {
-            self.writer().write_all(SYNC_BEGIN)?;
-            self.in_sync_block = true;
-        }
+            // Reset style so subsequent log output doesn't inherit UI styling.
+            self.writer().write_all(b"\x1b[0m")?;
 
-        // Save cursor (DEC save)
-        self.writer().write_all(CURSOR_SAVE)?;
-        self.cursor_saved = true;
+            // Restore cursor
+            self.writer().write_all(CURSOR_RESTORE)?;
+            self.cursor_saved = false;
 
-        self.clear_inline_region_diff(current_region)?;
-
-        let mut diff_strategy = DiffStrategy::FullRedraw;
-        let mut diff_us = 0u64;
-        let mut emit_stats = EmitStats {
-            diff_cells: 0,
-            diff_runs: 0,
-        };
-
-        if visible_height > 0 {
-            // If this is a full redraw (no previous buffer), we must clear the
-            // entire UI region first to ensure we aren't diffing against garbage.
-            if self.prev_buffer.is_none() {
-                self.clear_rows(ui_y_start, visible_height)?;
+            if cursor_visible {
+                // Apply requested cursor position (relative to UI)
+                if let Some((cx, cy)) = cursor
+                    && cy < visible_height
+                {
+                    // Move to UI start + cursor y
+                    let abs_y = ui_y_start.saturating_add(cy);
+                    write!(
+                        self.writer(),
+                        "\x1b[{};{}H",
+                        abs_y.saturating_add(1),
+                        cx.saturating_add(1)
+                    )?;
+                }
+                self.set_cursor_visibility(true)?;
             } else {
-                // If the buffer is shorter than the visible height, clear the remaining rows
-                // to prevent ghosting from previous larger buffers.
-                let buf_height = buffer.height().min(visible_height);
-                if buf_height < visible_height {
-                    let clear_start = ui_y_start.saturating_add(buf_height);
-                    let clear_height = visible_height.saturating_sub(buf_height);
-                    self.clear_rows(clear_start, clear_height)?;
-                }
+                self.set_cursor_visibility(false)?;
             }
 
-            // Compute diff
-            let diff_start = if self.timing_enabled {
-                Some(Instant::now())
+            // End sync output
+            if self.in_sync_block {
+                self.writer().write_all(SYNC_END)?;
+                self.in_sync_block = false;
+            }
+
+            self.writer().flush()?;
+            self.last_inline_region = if visible_height > 0 {
+                Some(current_region)
             } else {
                 None
             };
-            let decision = {
-                let _span = debug_span!("ftui.render.diff_compute").entered();
-                self.decide_diff(buffer)
-            };
-            if let Some(start) = diff_start {
-                diff_us = start.elapsed().as_micros() as u64;
+
+            if self.timing_enabled {
+                self.last_present_timings = Some(PresentTimings { diff_us });
             }
-            diff_strategy = decision.strategy;
 
-            // Emit diff
-            {
-                let _span = debug_span!("ftui.render.emit").entered();
-                if decision.has_diff {
-                    let diff = std::mem::take(&mut self.diff_scratch);
-                    let result = self.emit_diff(buffer, &diff, Some(visible_height), ui_y_start);
-                    self.diff_scratch = diff;
-                    emit_stats = result?;
-                } else {
-                    emit_stats = self.emit_full_redraw(buffer, Some(visible_height), ui_y_start)?;
-                }
-            }
+            Ok(FrameEmitStats {
+                diff_strategy,
+                diff_cells: emit_stats.diff_cells,
+                diff_runs: emit_stats.diff_runs,
+                ui_height: visible_height,
+            })
+        })();
+
+        if result.is_err() {
+            self.best_effort_inline_cleanup();
         }
 
-        // Reset style so subsequent log output doesn't inherit UI styling.
-        self.writer().write_all(b"\x1b[0m")?;
-
-        // Restore cursor
-        self.writer().write_all(CURSOR_RESTORE)?;
-        self.cursor_saved = false;
-
-        if cursor_visible {
-            // Apply requested cursor position (relative to UI)
-            if let Some((cx, cy)) = cursor
-                && cy < visible_height
-            {
-                // Move to UI start + cursor y
-                let abs_y = ui_y_start.saturating_add(cy);
-                write!(
-                    self.writer(),
-                    "\x1b[{};{}H",
-                    abs_y.saturating_add(1),
-                    cx.saturating_add(1)
-                )?;
-            }
-            self.set_cursor_visibility(true)?;
-        } else {
-            self.set_cursor_visibility(false)?;
-        }
-
-        // End sync output
-        if self.in_sync_block {
-            self.writer().write_all(SYNC_END)?;
-            self.in_sync_block = false;
-        }
-
-        self.writer().flush()?;
-        self.last_inline_region = if visible_height > 0 {
-            Some(current_region)
-        } else {
-            None
-        };
-
-        if self.timing_enabled {
-            self.last_present_timings = Some(PresentTimings { diff_us });
-        }
-
-        Ok(FrameEmitStats {
-            diff_strategy,
-            diff_cells: emit_stats.diff_cells,
-            diff_runs: emit_stats.diff_runs,
-            ui_height: visible_height,
-        })
+        result
     }
 
     /// Present UI in alternate screen mode (simpler, no cursor gymnastics).
@@ -2247,6 +2257,33 @@ impl<W: Write> TerminalWriter<W> {
             vec![]
         };
         self.pool.gc(&buffers);
+    }
+
+    /// Best-effort cleanup when inline present fails mid-frame.
+    ///
+    /// This restores sync/cursor/scroll-region state without terminating the writer.
+    fn best_effort_inline_cleanup(&mut self) {
+        let Some(ref mut writer) = self.writer else {
+            return;
+        };
+
+        // Emit restorations unconditionally: write errors can occur after bytes
+        // were partially written, so internal flags may be stale.
+        if self.capabilities.sync_output {
+            let _ = writer.write_all(SYNC_END);
+        }
+        self.in_sync_block = false;
+
+        let _ = writer.write_all(CURSOR_RESTORE);
+        self.cursor_saved = false;
+
+        let _ = writer.write_all(b"\x1b[r");
+        self.scroll_region_active = false;
+
+        let _ = writer.write_all(b"\x1b[0m");
+        let _ = writer.write_all(b"\x1b[?25h");
+        self.cursor_visible = true;
+        let _ = writer.flush();
     }
 
     /// Internal cleanup on drop.

@@ -903,6 +903,9 @@ impl TerminalCapabilities {
         let term = env.term.as_str();
         let term_program = env.term_program.as_str();
         let colorterm = env.colorterm.as_str();
+        let term_lower = term.to_ascii_lowercase();
+        let term_program_lower = term_program.to_ascii_lowercase();
+        let colorterm_lower = colorterm.to_ascii_lowercase();
 
         // Windows Terminal detection
         let is_windows_terminal = env.wt_session;
@@ -914,33 +917,34 @@ impl TerminalCapabilities {
         let is_dumb = term == "dumb" || (term.is_empty() && !is_windows_terminal);
 
         // Kitty detection
-        let is_kitty = env.kitty_window_id || term.contains("kitty");
+        let is_kitty = env.kitty_window_id || term_lower.contains("kitty");
 
         // Check if running in a modern terminal
-        let is_modern_terminal = MODERN_TERMINALS
-            .iter()
-            .any(|t| term_program.contains(t) || term.contains(&t.to_lowercase()))
-            || is_windows_terminal;
+        let is_modern_terminal = MODERN_TERMINALS.iter().any(|t| {
+            let t_lower = t.to_ascii_lowercase();
+            term_program_lower.contains(&t_lower) || term_lower.contains(&t_lower)
+        }) || is_windows_terminal;
 
         // True color detection
         let true_color = !env.no_color
             && !is_dumb
-            && (colorterm.contains("truecolor")
-                || colorterm.contains("24bit")
+            && (colorterm_lower.contains("truecolor")
+                || colorterm_lower.contains("24bit")
                 || is_modern_terminal
                 || is_kitty);
 
         // 256-color detection
         let colors_256 = !env.no_color
             && !is_dumb
-            && (true_color || term.contains("256color") || term.contains("256"));
+            && (true_color || term_lower.contains("256color") || term_lower.contains("256"));
 
         // Synchronized output detection
         let sync_output = !is_dumb
             && (is_kitty
-                || SYNC_OUTPUT_TERMINALS
-                    .iter()
-                    .any(|t| term_program.contains(t)));
+                || SYNC_OUTPUT_TERMINALS.iter().any(|t| {
+                    let t_lower = t.to_ascii_lowercase();
+                    term_program_lower.contains(&t_lower)
+                }));
 
         // OSC 8 hyperlinks detection
         let osc8_hyperlinks = !env.no_color && !is_dumb && is_modern_terminal;
@@ -950,9 +954,10 @@ impl TerminalCapabilities {
 
         // Kitty keyboard protocol (kitty + other compatible terminals)
         let kitty_keyboard = is_kitty
-            || KITTY_KEYBOARD_TERMINALS
-                .iter()
-                .any(|t| term_program.contains(t) || term.contains(&t.to_lowercase()));
+            || KITTY_KEYBOARD_TERMINALS.iter().any(|t| {
+                let t_lower = t.to_ascii_lowercase();
+                term_program_lower.contains(&t_lower) || term_lower.contains(&t_lower)
+            });
 
         // Focus events (available in most modern terminals)
         let focus_events = !is_dumb && (is_modern_terminal || is_kitty);

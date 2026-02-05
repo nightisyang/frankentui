@@ -314,6 +314,12 @@ impl TelemetryConfig {
     where
         F: FnMut(&str) -> Option<String>,
     {
+        let exporter_raw = get("OTEL_TRACES_EXPORTER");
+        let exporters = exporter_raw
+            .as_deref()
+            .map(Self::parse_exporter_list)
+            .unwrap_or_default();
+
         // Step 1: Check for SDK disabled
         if get("OTEL_SDK_DISABLED")
             .map(|v| v.eq_ignore_ascii_case("true"))
@@ -323,17 +329,12 @@ impl TelemetryConfig {
         }
 
         // Step 2: Check for exporter=none
-        if get("OTEL_TRACES_EXPORTER")
-            .map(|v| v.eq_ignore_ascii_case("none"))
-            .unwrap_or(false)
-        {
+        if exporters.len() == 1 && exporters[0] == "none" {
             return Self::disabled(EnabledReason::ExporterNone);
         }
 
         // Step 3: Determine if telemetry should be enabled
-        let explicit_otlp = get("OTEL_TRACES_EXPORTER")
-            .map(|v| v.eq_ignore_ascii_case("otlp"))
-            .unwrap_or(false);
+        let explicit_otlp = exporters.iter().any(|v| v == "otlp");
         let has_otel_endpoint = get("OTEL_EXPORTER_OTLP_ENDPOINT").is_some();
         let has_ftui_endpoint = get("FTUI_OTEL_HTTP_ENDPOINT").is_some();
 
@@ -448,6 +449,14 @@ impl TelemetryConfig {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    fn parse_exporter_list(input: &str) -> Vec<String> {
+        input
+            .split(',')
+            .map(|value| value.trim().to_ascii_lowercase())
+            .filter(|value| !value.is_empty())
+            .collect()
     }
 
     /// Check if telemetry is enabled.
@@ -576,9 +585,7 @@ impl TelemetryConfig {
                     .with_tonic()
                     .with_endpoint(endpoint);
                 if !self.headers.is_empty() {
-                    use opentelemetry_otlp::tonic_types::metadata::{
-                        MetadataKey, MetadataMap, MetadataValue,
-                    };
+                    use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
                     let mut metadata = MetadataMap::with_capacity(self.headers.len());
                     for (key, value) in &self.headers {
                         let key = key.trim();
@@ -586,12 +593,13 @@ impl TelemetryConfig {
                             continue;
                         }
                         let lower_key = key.to_ascii_lowercase();
-                        if let (Ok(meta_key), Ok(meta_value)) = (
-                            MetadataKey::from_str(&lower_key),
-                            MetadataValue::from_str(value),
-                        ) {
-                            metadata.insert(meta_key, meta_value);
-                        }
+                        let Ok(meta_key) = MetadataKey::from_str(&lower_key) else {
+                            continue;
+                        };
+                        let Ok(meta_value) = MetadataValue::from_str(value) else {
+                            continue;
+                        };
+                        metadata.insert(meta_key, meta_value);
                     }
                     builder = builder.with_metadata(metadata);
                 }
@@ -625,7 +633,10 @@ impl TelemetryConfig {
         // Build the provider with configured span processor.
         let mut provider_builder = SdkTracerProvider::builder();
         if !resource_kvs.is_empty() {
-            provider_builder = provider_builder.with_resource(Resource::new(resource_kvs));
+            let resource = Resource::builder_empty()
+                .with_attributes(resource_kvs)
+                .build();
+            provider_builder = provider_builder.with_resource(resource);
         }
         let provider = match self.processor {
             SpanProcessorKind::Simple => provider_builder.with_simple_exporter(exporter).build(),
@@ -1725,6 +1736,27 @@ mod in_memory_exporter_tests {
         let config = TelemetryConfig::disabled(EnabledReason::DefaultDisabled);
         assert!(!config.is_enabled());
         assert_eq!(config.enabled_reason, EnabledReason::DefaultDisabled);
+    }
+
+    #[test]
+    fn test_config_enables_with_otlp_in_exporter_list() {
+        let env = HashMap::from([(
+            "OTEL_TRACES_EXPORTER".to_string(),
+            "otlp,console".to_string(),
+        )]);
+
+        let config = TelemetryConfig::from_env_with(|key| env.get(key).cloned());
+        assert!(config.is_enabled());
+        assert_eq!(config.enabled_reason, EnabledReason::ExplicitOtlp);
+    }
+
+    #[test]
+    fn test_config_disabled_when_exporter_list_none_only() {
+        let env = HashMap::from([("OTEL_TRACES_EXPORTER".to_string(), "none".to_string())]);
+
+        let config = TelemetryConfig::from_env_with(|key| env.get(key).cloned());
+        assert!(!config.is_enabled());
+        assert_eq!(config.enabled_reason, EnabledReason::ExporterNone);
     }
 
     #[test]

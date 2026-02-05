@@ -966,6 +966,9 @@ impl StatefulWidget for LogViewer {
             return;
         }
 
+        // Keep Virtualized's visible_count in sync even in filtered mode.
+        let _ = self.virt.visible_range(area.height);
+
         // Update state with current viewport info
         state.last_viewport_height = area.height;
 
@@ -2182,5 +2185,90 @@ mod tests {
         log.push("new line");
         assert!(!log.auto_scroll_enabled());
         assert!(!log.is_at_bottom());
+    }
+
+    #[test]
+    fn test_search_match_rate_hint_ratio() {
+        let mut log = LogViewer::new(100);
+        assert_eq!(log.search_match_rate_hint(), 0.0);
+
+        log.set_filter(Some("ERR"));
+        log.search("ERR");
+
+        log.push("ERR one");
+        log.push("INFO skip");
+        log.push("ERR two");
+        log.push("WARN skip");
+
+        assert_eq!(log.filter_stats().incremental_checks, 4);
+        assert_eq!(log.filter_stats().incremental_search_matches, 2);
+        assert_eq!(log.search_match_rate_hint(), 0.5);
+    }
+
+    #[test]
+    fn test_render_char_wrap_splits_lines() {
+        let mut log = LogViewer::new(10).wrap_mode(LogWrapMode::CharWrap);
+        log.push("abcdefghij");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 3, &mut pool);
+        let mut state = LogViewerState::default();
+        log.render(Rect::new(0, 0, 5, 3), &mut frame, &mut state);
+
+        assert_eq!(line_text(&frame, 0, 5), "abcde");
+        assert_eq!(line_text(&frame, 1, 5), "fghij");
+    }
+
+    #[test]
+    fn test_render_scroll_indicator_when_not_at_bottom() {
+        let mut log = LogViewer::new(100);
+        for i in 0..5 {
+            log.push(format!("line {}", i));
+        }
+
+        log.scroll_to_top();
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 2, &mut pool);
+        let mut state = LogViewerState::default();
+        log.render(Rect::new(0, 0, 10, 2), &mut frame, &mut state);
+
+        let indicator = " 3 ";
+        let bottom_line = line_text(&frame, 1, 10);
+        assert_eq!(&bottom_line[7..10], indicator);
+    }
+
+    #[test]
+    fn test_render_search_indicator_when_active() {
+        let mut log = LogViewer::new(100);
+        for i in 0..5 {
+            log.push(format!("line {}", i));
+        }
+        log.search("line");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(12, 2, &mut pool);
+        let mut state = LogViewerState::default();
+        log.render(Rect::new(0, 0, 12, 2), &mut frame, &mut state);
+
+        let indicator = " 1/5 ";
+        let bottom_line = line_text(&frame, 1, 12);
+        assert_eq!(&bottom_line[0..indicator.len()], indicator);
+    }
+
+    #[test]
+    fn test_search_ascii_case_insensitive_ranges_long_needle() {
+        let ranges = search_ascii_case_insensitive_ranges("hi", "hello");
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn test_search_ascii_case_insensitive_ranges_large_work_fallback() {
+        let mut haystack = "a".repeat(500);
+        haystack.push_str("HELLO");
+        haystack.push_str(&"b".repeat(500));
+
+        let ranges = search_ascii_case_insensitive_ranges(&haystack, "hello");
+        assert_eq!(ranges, vec![(500, 505)]);
     }
 }
