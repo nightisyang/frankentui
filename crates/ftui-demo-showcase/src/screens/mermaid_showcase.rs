@@ -609,7 +609,7 @@ impl MermaidShowcaseScreen {
             KeyCode::Char('g') => Some(MermaidShowcaseAction::ToggleGlyphMode),
             KeyCode::Char('s') => Some(MermaidShowcaseAction::ToggleStyles),
             KeyCode::Char('w') => Some(MermaidShowcaseAction::CycleWrapMode),
-            KeyCode::Esc => Some(MermaidShowcaseAction::CollapsePanels),
+            KeyCode::Escape => Some(MermaidShowcaseAction::CollapsePanels),
             _ => None,
         }
     }
@@ -1010,5 +1010,586 @@ impl Screen for MermaidShowcaseScreen {
 
     fn tab_label(&self) -> &'static str {
         "Mermaid"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ftui_core::event::{KeyEventKind, Modifiers};
+
+    fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: Modifiers::NONE,
+            kind: KeyEventKind::Press,
+        }
+    }
+
+    fn new_state() -> MermaidShowcaseState {
+        MermaidShowcaseState::new()
+    }
+
+    fn new_screen() -> MermaidShowcaseScreen {
+        MermaidShowcaseScreen::new()
+    }
+
+    // --- State initialization ---
+
+    #[test]
+    fn state_defaults() {
+        let s = new_state();
+        assert_eq!(s.selected_index, 0);
+        assert_eq!(s.layout_mode, LayoutMode::Auto);
+        assert_eq!(s.viewport_zoom, 1.0);
+        assert_eq!(s.viewport_pan, (0, 0));
+        assert!(s.styles_enabled);
+        assert!(s.metrics_visible);
+        assert!(s.controls_visible);
+        assert_eq!(s.render_epoch, 0);
+        assert!(!s.samples.is_empty());
+    }
+
+    #[test]
+    fn screen_default_impl() {
+        let screen = MermaidShowcaseScreen::default();
+        assert_eq!(screen.state.selected_index, 0);
+    }
+
+    // --- Sample navigation ---
+
+    #[test]
+    fn next_sample_wraps() {
+        let mut s = new_state();
+        let len = s.samples.len();
+        s.selected_index = len - 1;
+        let epoch = s.render_epoch;
+        s.apply_action(MermaidShowcaseAction::NextSample);
+        assert_eq!(s.selected_index, 0);
+        assert_eq!(s.render_epoch, epoch + 1);
+    }
+
+    #[test]
+    fn prev_sample_wraps() {
+        let mut s = new_state();
+        let epoch = s.render_epoch;
+        s.apply_action(MermaidShowcaseAction::PrevSample);
+        assert_eq!(s.selected_index, s.samples.len() - 1);
+        assert_eq!(s.render_epoch, epoch + 1);
+    }
+
+    #[test]
+    fn next_prev_roundtrip() {
+        let mut s = new_state();
+        s.apply_action(MermaidShowcaseAction::NextSample);
+        s.apply_action(MermaidShowcaseAction::NextSample);
+        s.apply_action(MermaidShowcaseAction::PrevSample);
+        assert_eq!(s.selected_index, 1);
+    }
+
+    #[test]
+    fn first_sample() {
+        let mut s = new_state();
+        s.selected_index = 5;
+        s.apply_action(MermaidShowcaseAction::FirstSample);
+        assert_eq!(s.selected_index, 0);
+    }
+
+    #[test]
+    fn last_sample() {
+        let mut s = new_state();
+        s.apply_action(MermaidShowcaseAction::LastSample);
+        assert_eq!(s.selected_index, s.samples.len() - 1);
+    }
+
+    #[test]
+    fn selected_sample_returns_current() {
+        let s = new_state();
+        let sample = s.selected_sample().unwrap();
+        assert_eq!(sample.name, "Flow Basic");
+    }
+
+    // --- Refresh ---
+
+    #[test]
+    fn refresh_bumps_epoch() {
+        let mut s = new_state();
+        let epoch = s.render_epoch;
+        s.apply_action(MermaidShowcaseAction::Refresh);
+        assert_eq!(s.render_epoch, epoch + 1);
+    }
+
+    // --- Zoom controls ---
+
+    #[test]
+    fn zoom_in() {
+        let mut s = new_state();
+        s.apply_action(MermaidShowcaseAction::ZoomIn);
+        assert!((s.viewport_zoom - 1.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn zoom_out() {
+        let mut s = new_state();
+        s.apply_action(MermaidShowcaseAction::ZoomOut);
+        assert!((s.viewport_zoom - 0.9).abs() < 0.01);
+    }
+
+    #[test]
+    fn zoom_clamps_max() {
+        let mut s = new_state();
+        s.viewport_zoom = ZOOM_MAX;
+        s.apply_action(MermaidShowcaseAction::ZoomIn);
+        assert!((s.viewport_zoom - ZOOM_MAX).abs() < 0.01);
+    }
+
+    #[test]
+    fn zoom_clamps_min() {
+        let mut s = new_state();
+        s.viewport_zoom = ZOOM_MIN;
+        s.apply_action(MermaidShowcaseAction::ZoomOut);
+        assert!((s.viewport_zoom - ZOOM_MIN).abs() < 0.01);
+    }
+
+    #[test]
+    fn zoom_reset() {
+        let mut s = new_state();
+        s.viewport_zoom = 2.5;
+        s.viewport_pan = (10, 20);
+        s.apply_action(MermaidShowcaseAction::ZoomReset);
+        assert!((s.viewport_zoom - 1.0).abs() < f32::EPSILON);
+        assert_eq!(s.viewport_pan, (0, 0));
+    }
+
+    #[test]
+    fn fit_to_view() {
+        let mut s = new_state();
+        s.viewport_zoom = 2.0;
+        s.viewport_pan = (5, 5);
+        s.apply_action(MermaidShowcaseAction::FitToView);
+        assert!((s.viewport_zoom - 1.0).abs() < f32::EPSILON);
+        assert_eq!(s.viewport_pan, (0, 0));
+    }
+
+    // --- Layout mode ---
+
+    #[test]
+    fn layout_mode_cycles() {
+        let mut s = new_state();
+        assert_eq!(s.layout_mode, LayoutMode::Auto);
+        s.apply_action(MermaidShowcaseAction::ToggleLayoutMode);
+        assert_eq!(s.layout_mode, LayoutMode::Dense);
+        s.apply_action(MermaidShowcaseAction::ToggleLayoutMode);
+        assert_eq!(s.layout_mode, LayoutMode::Spacious);
+        s.apply_action(MermaidShowcaseAction::ToggleLayoutMode);
+        assert_eq!(s.layout_mode, LayoutMode::Auto);
+    }
+
+    #[test]
+    fn layout_mode_bumps_epoch() {
+        let mut s = new_state();
+        let epoch = s.render_epoch;
+        s.apply_action(MermaidShowcaseAction::ToggleLayoutMode);
+        assert_eq!(s.render_epoch, epoch + 1);
+    }
+
+    #[test]
+    fn layout_mode_as_str() {
+        assert_eq!(LayoutMode::Auto.as_str(), "Auto");
+        assert_eq!(LayoutMode::Dense.as_str(), "Dense");
+        assert_eq!(LayoutMode::Spacious.as_str(), "Spacious");
+    }
+
+    // --- Force relayout ---
+
+    #[test]
+    fn force_relayout_bumps_epoch() {
+        let mut s = new_state();
+        let epoch = s.render_epoch;
+        s.apply_action(MermaidShowcaseAction::ForceRelayout);
+        assert_eq!(s.render_epoch, epoch + 1);
+    }
+
+    // --- Metrics toggle ---
+
+    #[test]
+    fn toggle_metrics() {
+        let mut s = new_state();
+        assert!(s.metrics_visible);
+        s.apply_action(MermaidShowcaseAction::ToggleMetrics);
+        assert!(!s.metrics_visible);
+        s.apply_action(MermaidShowcaseAction::ToggleMetrics);
+        assert!(s.metrics_visible);
+    }
+
+    // --- Controls toggle ---
+
+    #[test]
+    fn toggle_controls() {
+        let mut s = new_state();
+        assert!(s.controls_visible);
+        s.apply_action(MermaidShowcaseAction::ToggleControls);
+        assert!(!s.controls_visible);
+        s.apply_action(MermaidShowcaseAction::ToggleControls);
+        assert!(s.controls_visible);
+    }
+
+    // --- Tier cycling ---
+
+    #[test]
+    fn tier_cycles() {
+        let mut s = new_state();
+        assert_eq!(s.tier, MermaidTier::Auto);
+        s.apply_action(MermaidShowcaseAction::CycleTier);
+        assert_eq!(s.tier, MermaidTier::Rich);
+        s.apply_action(MermaidShowcaseAction::CycleTier);
+        assert_eq!(s.tier, MermaidTier::Normal);
+        s.apply_action(MermaidShowcaseAction::CycleTier);
+        assert_eq!(s.tier, MermaidTier::Compact);
+        s.apply_action(MermaidShowcaseAction::CycleTier);
+        assert_eq!(s.tier, MermaidTier::Auto);
+    }
+
+    #[test]
+    fn tier_bumps_epoch() {
+        let mut s = new_state();
+        let epoch = s.render_epoch;
+        s.apply_action(MermaidShowcaseAction::CycleTier);
+        assert_eq!(s.render_epoch, epoch + 1);
+    }
+
+    // --- Glyph mode ---
+
+    #[test]
+    fn glyph_mode_toggles() {
+        let mut s = new_state();
+        assert_eq!(s.glyph_mode, MermaidGlyphMode::Unicode);
+        s.apply_action(MermaidShowcaseAction::ToggleGlyphMode);
+        assert_eq!(s.glyph_mode, MermaidGlyphMode::Ascii);
+        s.apply_action(MermaidShowcaseAction::ToggleGlyphMode);
+        assert_eq!(s.glyph_mode, MermaidGlyphMode::Unicode);
+    }
+
+    #[test]
+    fn glyph_mode_bumps_epoch() {
+        let mut s = new_state();
+        let epoch = s.render_epoch;
+        s.apply_action(MermaidShowcaseAction::ToggleGlyphMode);
+        assert_eq!(s.render_epoch, epoch + 1);
+    }
+
+    // --- Styles ---
+
+    #[test]
+    fn styles_toggle() {
+        let mut s = new_state();
+        assert!(s.styles_enabled);
+        s.apply_action(MermaidShowcaseAction::ToggleStyles);
+        assert!(!s.styles_enabled);
+        s.apply_action(MermaidShowcaseAction::ToggleStyles);
+        assert!(s.styles_enabled);
+    }
+
+    #[test]
+    fn styles_bumps_epoch() {
+        let mut s = new_state();
+        let epoch = s.render_epoch;
+        s.apply_action(MermaidShowcaseAction::ToggleStyles);
+        assert_eq!(s.render_epoch, epoch + 1);
+    }
+
+    // --- Wrap mode ---
+
+    #[test]
+    fn wrap_mode_cycles() {
+        let mut s = new_state();
+        assert_eq!(s.wrap_mode, MermaidWrapMode::WordChar);
+        s.apply_action(MermaidShowcaseAction::CycleWrapMode);
+        assert_eq!(s.wrap_mode, MermaidWrapMode::None);
+        s.apply_action(MermaidShowcaseAction::CycleWrapMode);
+        assert_eq!(s.wrap_mode, MermaidWrapMode::Word);
+        s.apply_action(MermaidShowcaseAction::CycleWrapMode);
+        assert_eq!(s.wrap_mode, MermaidWrapMode::Char);
+        s.apply_action(MermaidShowcaseAction::CycleWrapMode);
+        assert_eq!(s.wrap_mode, MermaidWrapMode::WordChar);
+    }
+
+    #[test]
+    fn wrap_mode_bumps_epoch() {
+        let mut s = new_state();
+        let epoch = s.render_epoch;
+        s.apply_action(MermaidShowcaseAction::CycleWrapMode);
+        assert_eq!(s.render_epoch, epoch + 1);
+    }
+
+    // --- Collapse panels (Esc) ---
+
+    #[test]
+    fn collapse_panels() {
+        let mut s = new_state();
+        assert!(s.controls_visible);
+        assert!(s.metrics_visible);
+        s.apply_action(MermaidShowcaseAction::CollapsePanels);
+        assert!(!s.controls_visible);
+        assert!(!s.metrics_visible);
+    }
+
+    #[test]
+    fn collapse_panels_idempotent() {
+        let mut s = new_state();
+        s.controls_visible = false;
+        s.metrics_visible = false;
+        s.apply_action(MermaidShowcaseAction::CollapsePanels);
+        assert!(!s.controls_visible);
+        assert!(!s.metrics_visible);
+    }
+
+    // --- Key mapping ---
+
+    #[test]
+    fn key_j_maps_to_next() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('j')));
+        assert!(matches!(action, Some(MermaidShowcaseAction::NextSample)));
+    }
+
+    #[test]
+    fn key_down_maps_to_next() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Down));
+        assert!(matches!(action, Some(MermaidShowcaseAction::NextSample)));
+    }
+
+    #[test]
+    fn key_k_maps_to_prev() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('k')));
+        assert!(matches!(action, Some(MermaidShowcaseAction::PrevSample)));
+    }
+
+    #[test]
+    fn key_up_maps_to_prev() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Up));
+        assert!(matches!(action, Some(MermaidShowcaseAction::PrevSample)));
+    }
+
+    #[test]
+    fn key_home_maps_to_first() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Home));
+        assert!(matches!(action, Some(MermaidShowcaseAction::FirstSample)));
+    }
+
+    #[test]
+    fn key_end_maps_to_last() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::End));
+        assert!(matches!(action, Some(MermaidShowcaseAction::LastSample)));
+    }
+
+    #[test]
+    fn key_enter_maps_to_refresh() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Enter));
+        assert!(matches!(action, Some(MermaidShowcaseAction::Refresh)));
+    }
+
+    #[test]
+    fn key_plus_maps_to_zoom_in() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('+')));
+        assert!(matches!(action, Some(MermaidShowcaseAction::ZoomIn)));
+    }
+
+    #[test]
+    fn key_equals_maps_to_zoom_in() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('=')));
+        assert!(matches!(action, Some(MermaidShowcaseAction::ZoomIn)));
+    }
+
+    #[test]
+    fn key_minus_maps_to_zoom_out() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('-')));
+        assert!(matches!(action, Some(MermaidShowcaseAction::ZoomOut)));
+    }
+
+    #[test]
+    fn key_zero_maps_to_zoom_reset() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('0')));
+        assert!(matches!(action, Some(MermaidShowcaseAction::ZoomReset)));
+    }
+
+    #[test]
+    fn key_f_maps_to_fit() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('f')));
+        assert!(matches!(action, Some(MermaidShowcaseAction::FitToView)));
+    }
+
+    #[test]
+    fn key_l_maps_to_layout() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('l')));
+        assert!(matches!(
+            action,
+            Some(MermaidShowcaseAction::ToggleLayoutMode)
+        ));
+    }
+
+    #[test]
+    fn key_r_maps_to_relayout() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('r')));
+        assert!(matches!(action, Some(MermaidShowcaseAction::ForceRelayout)));
+    }
+
+    #[test]
+    fn key_m_maps_to_metrics() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('m')));
+        assert!(matches!(action, Some(MermaidShowcaseAction::ToggleMetrics)));
+    }
+
+    #[test]
+    fn key_c_maps_to_controls() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('c')));
+        assert!(matches!(
+            action,
+            Some(MermaidShowcaseAction::ToggleControls)
+        ));
+    }
+
+    #[test]
+    fn key_t_maps_to_tier() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('t')));
+        assert!(matches!(action, Some(MermaidShowcaseAction::CycleTier)));
+    }
+
+    #[test]
+    fn key_g_maps_to_glyph() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('g')));
+        assert!(matches!(
+            action,
+            Some(MermaidShowcaseAction::ToggleGlyphMode)
+        ));
+    }
+
+    #[test]
+    fn key_s_maps_to_styles() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('s')));
+        assert!(matches!(action, Some(MermaidShowcaseAction::ToggleStyles)));
+    }
+
+    #[test]
+    fn key_w_maps_to_wrap() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('w')));
+        assert!(matches!(action, Some(MermaidShowcaseAction::CycleWrapMode)));
+    }
+
+    #[test]
+    fn key_esc_maps_to_collapse() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Escape));
+        assert!(matches!(
+            action,
+            Some(MermaidShowcaseAction::CollapsePanels)
+        ));
+    }
+
+    #[test]
+    fn unknown_key_returns_none() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('x')));
+        assert!(action.is_none());
+    }
+
+    #[test]
+    fn release_event_ignored() {
+        let screen = new_screen();
+        let event = KeyEvent {
+            code: KeyCode::Char('j'),
+            modifiers: Modifiers::NONE,
+            kind: KeyEventKind::Release,
+        };
+        assert!(screen.handle_key(&event).is_none());
+    }
+
+    // --- Screen trait ---
+
+    #[test]
+    fn keybindings_list_not_empty() {
+        let screen = new_screen();
+        let bindings = screen.keybindings();
+        assert!(bindings.len() >= 14);
+    }
+
+    #[test]
+    fn keybindings_include_esc() {
+        let screen = new_screen();
+        let bindings = screen.keybindings();
+        assert!(bindings.iter().any(|h| h.key == "Esc"));
+    }
+
+    #[test]
+    fn title_and_tab_label() {
+        let screen = new_screen();
+        assert_eq!(screen.title(), "Mermaid Showcase");
+        assert_eq!(screen.tab_label(), "Mermaid");
+    }
+
+    // --- Integration: key press through update ---
+
+    #[test]
+    fn update_applies_key_action() {
+        let mut screen = new_screen();
+        let event = Event::Key(press(KeyCode::Char('j')));
+        screen.update(&event);
+        assert_eq!(screen.state.selected_index, 1);
+    }
+
+    #[test]
+    fn update_ignores_non_key_events() {
+        let mut screen = new_screen();
+        let event = Event::Tick;
+        screen.update(&event);
+        assert_eq!(screen.state.selected_index, 0);
+    }
+
+    // --- Sample library ---
+
+    #[test]
+    fn default_samples_non_empty() {
+        assert!(!DEFAULT_SAMPLES.is_empty());
+    }
+
+    #[test]
+    fn each_sample_has_source() {
+        for sample in DEFAULT_SAMPLES {
+            assert!(
+                !sample.source.is_empty(),
+                "sample {} has empty source",
+                sample.name
+            );
+        }
+    }
+
+    #[test]
+    fn each_sample_has_kind() {
+        for sample in DEFAULT_SAMPLES {
+            assert!(
+                !sample.kind.is_empty(),
+                "sample {} has empty kind",
+                sample.name
+            );
+        }
     }
 }
