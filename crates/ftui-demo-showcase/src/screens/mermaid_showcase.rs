@@ -330,10 +330,10 @@ impl SampleRegistry {
         DEFAULT_SAMPLES
             .iter()
             .filter(|s| {
-                family.map_or(true, |f| s.family == f)
-                    && complexity.map_or(true, |c| s.complexity == c)
-                    && max_width.map_or(true, |w| s.default_size.width <= w)
-                    && max_height.map_or(true, |h| s.default_size.height <= h)
+                family.is_none_or(|f| s.family == f)
+                    && complexity.is_none_or(|c| s.complexity == c)
+                    && max_width.is_none_or(|w| s.default_size.width <= w)
+                    && max_height.is_none_or(|h| s.default_size.height <= h)
             })
             .collect()
     }
