@@ -40,8 +40,18 @@
 
 #[cfg(feature = "diagram")]
 use crate::diagram;
+#[cfg(feature = "diagram")]
+use crate::mermaid::{MermaidCompatibilityMatrix, MermaidConfig, MermaidFallbackPolicy};
 #[cfg(feature = "syntax")]
 use crate::syntax::{HighlightTheme, SyntaxHighlighter};
+#[cfg(feature = "diagram")]
+use crate::{mermaid_layout, mermaid_render};
+#[cfg(feature = "diagram")]
+use ftui_core::geometry::Rect;
+#[cfg(feature = "diagram")]
+use ftui_render::buffer::Buffer;
+#[cfg(feature = "diagram")]
+use ftui_render::cell::Cell;
 use ftui_render::cell::PackedRgba;
 use ftui_style::{Style, TableEffectScope, TableSection, TableTheme};
 use ftui_text::text::{Line, Span, Text};
@@ -1184,6 +1194,13 @@ struct RenderState<'t> {
     table_state: Option<TableState>,
 }
 
+#[cfg(feature = "diagram")]
+const MERMAID_MIN_WIDTH: u16 = 24;
+#[cfg(feature = "diagram")]
+const MERMAID_MIN_HEIGHT: u16 = 8;
+#[cfg(feature = "diagram")]
+const MERMAID_MAX_HEIGHT: u16 = 40;
+
 impl<'t> RenderState<'t> {
     fn new(
         theme: &'t MarkdownTheme,
@@ -2094,23 +2111,14 @@ impl<'t> RenderState<'t> {
         if let Some(ref lang_str) = lang {
             let lang_lower = lang_lower.as_deref().unwrap_or("");
 
-            // Mermaid diagrams - show with diagram indicator
+            // Mermaid diagrams - render via Mermaid pipeline when enabled.
             if lang_lower == "mermaid" {
-                self.lines.push(Line::styled(
-                    String::from("┌─ 📊 Mermaid Diagram ─┐"),
-                    self.theme.admonition_note,
-                ));
-                for line_text in code.lines() {
-                    self.lines.push(Line::styled(
-                        format!("│ {line_text}"),
-                        self.theme.code_block,
-                    ));
+                #[cfg(feature = "diagram")]
+                {
+                    if self.render_mermaid_block(&code) {
+                        return;
+                    }
                 }
-                self.lines.push(Line::styled(
-                    String::from("└─────────────────────┘"),
-                    self.theme.admonition_note,
-                ));
-                return;
             }
 
             // Math code blocks (alternative to $$ syntax)
@@ -2201,6 +2209,60 @@ impl<'t> RenderState<'t> {
         }
     }
 
+    #[cfg(feature = "diagram")]
+    fn render_mermaid_block(&mut self, source: &str) -> bool {
+        let config = MermaidConfig::from_env();
+        if !config.enabled {
+            return false;
+        }
+
+        let matrix = MermaidCompatibilityMatrix::default();
+        let policy = MermaidFallbackPolicy::default();
+        let parsed = crate::mermaid::parse_with_diagnostics(source);
+        let ir_parse = crate::mermaid::normalize_ast_to_ir(&parsed.ast, &config, &matrix, &policy);
+        let mut errors = parsed.errors;
+        errors.extend(ir_parse.errors);
+
+        let (width, height) = self.mermaid_dimensions(source);
+        let mut buf = Buffer::new(width, height);
+        let area = Rect::from_size(width, height);
+
+        let layout = mermaid_layout::layout_diagram(&ir_parse.ir, &config);
+        let _plan =
+            mermaid_render::render_diagram_adaptive(&layout, &ir_parse.ir, &config, area, &mut buf);
+
+        if !errors.is_empty() {
+            let has_content = !ir_parse.ir.nodes.is_empty()
+                || !ir_parse.ir.edges.is_empty()
+                || !ir_parse.ir.labels.is_empty()
+                || !ir_parse.ir.clusters.is_empty();
+            if has_content {
+                mermaid_render::render_mermaid_error_overlay(
+                    &errors, source, &config, area, &mut buf,
+                );
+            } else {
+                mermaid_render::render_mermaid_error_panel(
+                    &errors, source, &config, area, &mut buf,
+                );
+            }
+        }
+
+        self.lines.extend(mermaid_buffer_to_lines(&buf));
+        true
+    }
+
+    #[cfg(feature = "diagram")]
+    fn mermaid_dimensions(&self, source: &str) -> (u16, u16) {
+        let base_width = self.table_max_width.unwrap_or(self.rule_width);
+        let width = base_width.max(MERMAID_MIN_WIDTH);
+        let mut height = width.saturating_mul(2) / 3;
+        height = height.max(MERMAID_MIN_HEIGHT);
+        let line_hint = source.lines().count().saturating_add(4);
+        let line_hint = u16::try_from(line_hint).unwrap_or(u16::MAX);
+        height = height.max(line_hint).min(MERMAID_MAX_HEIGHT);
+        (width, height)
+    }
+
     fn in_footnote_definition(&self) -> bool {
         self.current_footnote.is_some()
     }
@@ -2249,6 +2311,66 @@ impl<'t> RenderState<'t> {
         }
         Text::from_lines(self.lines)
     }
+}
+
+#[cfg(feature = "diagram")]
+fn mermaid_buffer_to_lines(buf: &Buffer) -> Vec<Line> {
+    let mut lines = Vec::with_capacity(buf.height() as usize);
+    for y in 0..buf.height() {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        let mut current_style: Option<Style> = None;
+        let mut current_text = String::new();
+
+        for x in 0..buf.width() {
+            let cell = buf.get(x, y).expect("buffer cell");
+            let is_continuation = cell.content.is_continuation();
+            let ch = if cell.content.is_empty() || is_continuation {
+                ' '
+            } else {
+                cell.content.as_char().unwrap_or(' ')
+            };
+            let style = if is_continuation {
+                current_style.unwrap_or_else(|| mermaid_style_from_cell(cell))
+            } else {
+                mermaid_style_from_cell(cell)
+            };
+
+            if let Some(existing) = current_style {
+                if existing != style {
+                    if !current_text.is_empty() {
+                        spans.push(Span::styled(std::mem::take(&mut current_text), existing));
+                    }
+                    current_style = Some(style);
+                }
+            } else {
+                current_style = Some(style);
+            }
+
+            current_text.push(ch);
+        }
+
+        if let Some(style) = current_style
+            && !current_text.is_empty()
+        {
+            spans.push(Span::styled(current_text, style));
+        }
+
+        lines.push(Line::from_spans(spans));
+    }
+    lines
+}
+
+#[cfg(feature = "diagram")]
+fn mermaid_style_from_cell(cell: &Cell) -> Style {
+    let mut style = Style::new().fg(cell.fg);
+    if cell.bg.a() > 0 {
+        style = style.bg(cell.bg);
+    }
+    let flags: ftui_style::StyleFlags = cell.attrs.flags().into();
+    if !flags.is_empty() {
+        style = style.attrs(flags);
+    }
+    style
 }
 
 // ---------------------------------------------------------------------------
@@ -2349,6 +2471,25 @@ mod tests {
         let text = render_markdown(md);
         let content = plain(&text);
         assert!(content.contains("fn main()"));
+    }
+
+    #[cfg(feature = "diagram")]
+    #[test]
+    fn render_mermaid_code_block_renders_diagram() {
+        if !crate::mermaid::MermaidConfig::from_env().enabled {
+            return;
+        }
+        let md = "```mermaid\ngraph TD\nA-->B\n```";
+        let renderer = MarkdownRenderer::default().rule_width(60);
+        let text = renderer.render(md);
+        let content = plain(&text);
+        assert!(!content.contains("A-->B"));
+        assert!(!content.contains("Mermaid Diagram"));
+        assert!(
+            content
+                .chars()
+                .any(|c| matches!(c, '┌' | '┐' | '└' | '┘' | '─' | '│' | '+' | '*'))
+        );
     }
 
     #[cfg(feature = "diagram")]

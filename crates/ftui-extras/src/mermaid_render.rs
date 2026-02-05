@@ -17,8 +17,9 @@ use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::drawing::{BorderChars, Draw};
 
 use crate::mermaid::{
-    DiagramType, LinkSanitizeOutcome, MermaidConfig, MermaidDiagramIr, MermaidError,
-    MermaidErrorMode, MermaidFidelity, MermaidGlyphMode, MermaidLinkMode, MermaidTier,
+    DiagramType, IrPieEntry, LinkSanitizeOutcome, MermaidConfig, MermaidDiagramIr, MermaidError,
+    MermaidErrorMode, MermaidFidelity, MermaidGlyphMode, MermaidLinkMode, MermaidStrokeDash,
+    MermaidTier, ResolvedMermaidStyle, resolve_styles,
 };
 use crate::mermaid_layout::{
     DiagramLayout, LayoutClusterBox, LayoutEdgePath, LayoutNodeBox, LayoutRect,
@@ -40,6 +41,8 @@ struct GlyphPalette {
     arrow_left: char,
     arrow_up: char,
     arrow_down: char,
+    dot_h: char,
+    dot_v: char,
 }
 
 impl GlyphPalette {
@@ -54,6 +57,8 @@ impl GlyphPalette {
         arrow_left: '◀',
         arrow_up: '▲',
         arrow_down: '▼',
+        dot_h: '┄',
+        dot_v: '┆',
     };
 
     const ASCII: Self = Self {
@@ -67,6 +72,8 @@ impl GlyphPalette {
         arrow_left: '<',
         arrow_up: '^',
         arrow_down: 'v',
+        dot_h: '.',
+        dot_v: ':',
     };
 
     fn for_mode(mode: MermaidGlyphMode) -> Self {
@@ -220,6 +227,32 @@ fn reserve_legend_area(area: Rect) -> (Rect, Option<Rect>) {
     (diagram_area, Some(legend_area))
 }
 
+fn reserve_pie_legend_area(area: Rect, max_label_width: usize) -> (Rect, Option<Rect>) {
+    let min_legend_width = 10u16;
+    let desired_width = (max_label_width.max(8) as u16).saturating_add(4);
+    let legend_width = desired_width.max(min_legend_width).min(area.width / 2);
+    if area.width <= legend_width + 6 {
+        return (area, None);
+    }
+    let pie_width = area.width.saturating_sub(legend_width + 1);
+    if pie_width < 6 {
+        return (area, None);
+    }
+    let pie_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: pie_width,
+        height: area.height,
+    };
+    let legend_area = Rect {
+        x: pie_area.x + pie_area.width + 1,
+        y: area.y,
+        width: area.width.saturating_sub(pie_width + 1),
+        height: area.height,
+    };
+    (pie_area, Some(legend_area))
+}
+
 // ── Viewport mapping ────────────────────────────────────────────────────
 
 /// Maps abstract layout coordinates to terminal cell positions.
@@ -285,7 +318,19 @@ const EDGE_FG: PackedRgba = PackedRgba::rgb(150, 150, 150);
 const LABEL_FG: PackedRgba = PackedRgba::WHITE;
 const CLUSTER_FG: PackedRgba = PackedRgba::rgb(100, 160, 220);
 const CLUSTER_TITLE_FG: PackedRgba = PackedRgba::rgb(100, 160, 220);
+#[allow(dead_code)] // Used by upcoming pie chart rendering
+const PIE_SLICE_COLORS: [PackedRgba; 8] = [
+    PackedRgba::rgb(231, 76, 60),
+    PackedRgba::rgb(46, 204, 113),
+    PackedRgba::rgb(52, 152, 219),
+    PackedRgba::rgb(241, 196, 15),
+    PackedRgba::rgb(155, 89, 182),
+    PackedRgba::rgb(26, 188, 156),
+    PackedRgba::rgb(230, 126, 34),
+    PackedRgba::rgb(149, 165, 166),
+];
 const DEFAULT_EDGE_LABEL_WIDTH: usize = 16;
+const STATE_CONTAINER_CLASS: &str = "state_container";
 
 // ── Edge line style ──────────────────────────────────────────────────
 
@@ -294,6 +339,7 @@ const DEFAULT_EDGE_LABEL_WIDTH: usize = 16;
 enum EdgeLineStyle {
     Solid,
     Dashed,
+    Dotted,
     Thick,
 }
 
@@ -301,6 +347,8 @@ enum EdgeLineStyle {
 fn detect_edge_style(arrow: &str) -> EdgeLineStyle {
     if arrow.contains("-.") || arrow.contains(".-") {
         EdgeLineStyle::Dashed
+    } else if arrow.contains("..") {
+        EdgeLineStyle::Dotted
     } else if arrow.contains("==") {
         EdgeLineStyle::Thick
     } else {
@@ -308,11 +356,25 @@ fn detect_edge_style(arrow: &str) -> EdgeLineStyle {
     }
 }
 
+fn edge_line_style(arrow: &str, style: Option<&ResolvedMermaidStyle>) -> EdgeLineStyle {
+    if let Some(style) = style
+        && let Some(dash) = style.properties.stroke_dash
+    {
+        return match dash {
+            MermaidStrokeDash::Solid => EdgeLineStyle::Solid,
+            MermaidStrokeDash::Dashed => EdgeLineStyle::Dashed,
+            MermaidStrokeDash::Dotted => EdgeLineStyle::Dotted,
+        };
+    }
+    detect_edge_style(arrow)
+}
+
 // ── MermaidRenderer ─────────────────────────────────────────────────────
 
 /// Renders a [`DiagramLayout`] into a terminal [`Buffer`].
 pub struct MermaidRenderer {
     palette: GlyphPalette,
+    glyph_mode: MermaidGlyphMode,
 }
 
 impl MermaidRenderer {
@@ -321,6 +383,7 @@ impl MermaidRenderer {
     pub fn new(config: &MermaidConfig) -> Self {
         Self {
             palette: GlyphPalette::for_mode(config.glyph_mode),
+            glyph_mode: config.glyph_mode,
         }
     }
 
@@ -329,6 +392,14 @@ impl MermaidRenderer {
     pub fn with_mode(mode: MermaidGlyphMode) -> Self {
         Self {
             palette: GlyphPalette::for_mode(mode),
+            glyph_mode: mode,
+        }
+    }
+
+    fn outline_char(&self) -> char {
+        match self.glyph_mode {
+            MermaidGlyphMode::Ascii => '*',
+            MermaidGlyphMode::Unicode => '●',
         }
     }
 
@@ -340,10 +411,20 @@ impl MermaidRenderer {
         area: Rect,
         buf: &mut Buffer,
     ) {
+        if ir.diagram_type == DiagramType::Pie {
+            let max_label_width = if area.width > 4 {
+                (area.width / 2) as usize
+            } else {
+                0
+            };
+            self.render_pie(ir, area, max_label_width, buf);
+            return;
+        }
         if layout.nodes.is_empty() || area.is_empty() {
             return;
         }
 
+        let resolved_styles = resolve_styles(ir);
         let vp = Viewport::fit(&layout.bounding_box, area);
 
         // Render order: clusters (background) → edges → nodes → labels.
@@ -351,7 +432,7 @@ impl MermaidRenderer {
         if ir.diagram_type == DiagramType::Sequence {
             self.render_sequence_lifelines(layout, &vp, buf);
         }
-        self.render_edges(&layout.edges, ir, &vp, buf);
+        self.render_edges(&layout.edges, ir, &vp, &resolved_styles.edge_styles, buf);
         self.render_nodes(&layout.nodes, ir, &vp, buf);
     }
 
@@ -363,10 +444,15 @@ impl MermaidRenderer {
         plan: &RenderPlan,
         buf: &mut Buffer,
     ) {
+        if ir.diagram_type == DiagramType::Pie {
+            self.render_pie(ir, plan.diagram_area, plan.max_label_width, buf);
+            return;
+        }
         if layout.nodes.is_empty() || plan.diagram_area.is_empty() {
             return;
         }
 
+        let resolved_styles = resolve_styles(ir);
         let vp = Viewport::fit(&layout.bounding_box, plan.diagram_area);
 
         // Render order: clusters (background) → edges → nodes.
@@ -376,8 +462,290 @@ impl MermaidRenderer {
         if ir.diagram_type == DiagramType::Sequence {
             self.render_sequence_lifelines(layout, &vp, buf);
         }
-        self.render_edges_with_plan(&layout.edges, ir, &vp, plan, buf);
+        self.render_edges_with_plan(
+            &layout.edges,
+            ir,
+            &vp,
+            &resolved_styles.edge_styles,
+            plan,
+            buf,
+        );
         self.render_nodes_with_plan(&layout.nodes, ir, &vp, plan, buf);
+        if let Some(legend_area) = plan.legend_area {
+            let footnotes = crate::mermaid_layout::build_link_footnotes(&ir.links, &ir.nodes);
+            self.render_legend_footnotes(legend_area, &footnotes, buf);
+        }
+    }
+
+    /// Render a pie chart diagram.
+    fn render_pie(
+        &self,
+        ir: &MermaidDiagramIr,
+        area: Rect,
+        max_label_width: usize,
+        buf: &mut Buffer,
+    ) {
+        if area.is_empty() || ir.pie_entries.is_empty() {
+            return;
+        }
+
+        let mut content_area = area;
+        if let Some(title_id) = ir.pie_title
+            && let Some(title) = ir.labels.get(title_id.0).map(|l| l.text.as_str())
+            && content_area.height > 0
+        {
+            let title_cell = Cell::from_char(' ').with_fg(LABEL_FG);
+            let mut title_text = title.to_string();
+            if max_label_width > 0 {
+                title_text = truncate_label(&title_text, max_label_width);
+            }
+            let title_width = display_width(&title_text).min(content_area.width as usize) as u16;
+            let title_x = content_area
+                .x
+                .saturating_add(content_area.width.saturating_sub(title_width) / 2);
+            let max_x = content_area.x + content_area.width.saturating_sub(1);
+            buf.print_text_clipped(title_x, content_area.y, &title_text, title_cell, max_x);
+            content_area = Rect {
+                x: content_area.x,
+                y: content_area.y.saturating_add(1),
+                width: content_area.width,
+                height: content_area.height.saturating_sub(1),
+            };
+        }
+
+        if content_area.is_empty() {
+            return;
+        }
+
+        let entries: Vec<&IrPieEntry> = ir.pie_entries.iter().filter(|e| e.value > 0.0).collect();
+        if entries.is_empty() {
+            return;
+        }
+        let total: f64 = entries.iter().map(|e| e.value).sum();
+        if total <= 0.0 {
+            return;
+        }
+
+        let use_legend = entries.len() > 6 || content_area.width < 20 || content_area.height < 10;
+        let (pie_area, legend_area) = if use_legend {
+            reserve_pie_legend_area(content_area, max_label_width)
+        } else {
+            (content_area, None)
+        };
+
+        if pie_area.is_empty() {
+            return;
+        }
+
+        let rx = (f64::from(pie_area.width).max(2.0) - 2.0) / 2.0;
+        let ry = (f64::from(pie_area.height).max(2.0) - 2.0) / 2.0;
+        let radius = rx.min(ry);
+        if radius <= 0.0 {
+            return;
+        }
+        let cx = f64::from(pie_area.x) + f64::from(pie_area.width) / 2.0;
+        let cy = f64::from(pie_area.y) + f64::from(pie_area.height) / 2.0;
+
+        let tau = std::f64::consts::TAU;
+        let mut slice_ranges = Vec::with_capacity(entries.len());
+        let mut cursor = 0.0;
+        for entry in &entries {
+            let portion = entry.value / total;
+            let end = (cursor + portion * tau).min(tau);
+            slice_ranges.push((cursor, end));
+            cursor = end;
+        }
+
+        let fill_char = match self.glyph_mode {
+            MermaidGlyphMode::Unicode => '█',
+            MermaidGlyphMode::Ascii => '#',
+        };
+
+        for y in 0..pie_area.height {
+            for x in 0..pie_area.width {
+                let cell_x = pie_area.x + x;
+                let cell_y = pie_area.y + y;
+                let fx = f64::from(cell_x) + 0.5;
+                let fy = f64::from(cell_y) + 0.5;
+                let dx = (fx - cx) / rx;
+                let dy = (fy - cy) / ry;
+                if dx * dx + dy * dy <= 1.0 {
+                    let angle = ((-dy).atan2(dx) - std::f64::consts::FRAC_PI_2).rem_euclid(tau);
+                    let mut idx = 0usize;
+                    while idx < slice_ranges.len() && angle > slice_ranges[idx].1 {
+                        idx += 1;
+                    }
+                    if idx >= entries.len() {
+                        idx = entries.len() - 1;
+                    }
+                    let color = PIE_SLICE_COLORS[idx % PIE_SLICE_COLORS.len()];
+                    buf.set(cell_x, cell_y, Cell::from_char(fill_char).with_fg(color));
+                }
+            }
+        }
+
+        if let Some(legend) = legend_area {
+            self.render_pie_legend(ir, &entries, legend, max_label_width, buf);
+        } else {
+            self.render_pie_leader_labels(
+                ir,
+                &entries,
+                &slice_ranges,
+                (cx, cy),
+                radius,
+                pie_area,
+                max_label_width,
+                buf,
+            );
+        }
+    }
+
+    fn render_pie_legend(
+        &self,
+        ir: &MermaidDiagramIr,
+        entries: &[&IrPieEntry],
+        legend: Rect,
+        max_label_width: usize,
+        buf: &mut Buffer,
+    ) {
+        if legend.is_empty() || legend.width < 3 {
+            return;
+        }
+        let label_cell = Cell::from_char(' ').with_fg(LABEL_FG);
+        let mark_char = match self.glyph_mode {
+            MermaidGlyphMode::Unicode => '■',
+            MermaidGlyphMode::Ascii => '#',
+        };
+        let max_x = legend.x + legend.width.saturating_sub(1);
+        let mut y = legend.y;
+        for (idx, entry) in entries.iter().enumerate() {
+            if y >= legend.y + legend.height {
+                break;
+            }
+            let color = PIE_SLICE_COLORS[idx % PIE_SLICE_COLORS.len()];
+            buf.set(legend.x, y, Cell::from_char(mark_char).with_fg(color));
+            let text = self.pie_entry_label_text(ir, entry, idx, max_label_width);
+            buf.print_text_clipped(legend.x.saturating_add(2), y, &text, label_cell, max_x);
+            y = y.saturating_add(1);
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_pie_leader_labels(
+        &self,
+        ir: &MermaidDiagramIr,
+        entries: &[&IrPieEntry],
+        slice_ranges: &[(f64, f64)],
+        center: (f64, f64),
+        radius: f64,
+        area: Rect,
+        max_label_width: usize,
+        buf: &mut Buffer,
+    ) {
+        let label_cell = Cell::from_char(' ').with_fg(LABEL_FG);
+        let line_cell = Cell::from_char(' ').with_fg(EDGE_FG);
+        let leader_char = self.palette.dot_h;
+        let area_x0 = area.x as i32;
+        let area_x1 = (area.x + area.width).saturating_sub(1) as i32;
+        let area_y0 = area.y as i32;
+        let area_y1 = (area.y + area.height).saturating_sub(1) as i32;
+        let mut occupied: Vec<(u16, u16, u16)> = Vec::new();
+
+        for (idx, entry) in entries.iter().enumerate() {
+            let (start, end) = slice_ranges[idx];
+            let mid = (start + end) / 2.0;
+            let theta = mid + std::f64::consts::FRAC_PI_2;
+            let dx = theta.cos();
+            let dy = -theta.sin();
+            let anchor_x = center.0 + dx * (radius + 1.0);
+            let anchor_y = center.1 + dy * (radius + 1.0);
+            let ax = anchor_x.round() as i32;
+            let ay = anchor_y.round() as i32;
+
+            let text = self.pie_entry_label_text(ir, entry, idx, max_label_width);
+            if text.is_empty() {
+                continue;
+            }
+            let text_width = display_width(&text) as i32;
+            if text_width == 0 {
+                continue;
+            }
+
+            let right_side = dx >= 0.0;
+            let label_x = if right_side {
+                ax + 1
+            } else {
+                ax - text_width - 1
+            };
+            let label_y = ay;
+            let label_x1 = label_x + text_width - 1;
+
+            if label_y < area_y0 || label_y > area_y1 || label_x < area_x0 || label_x1 > area_x1 {
+                continue;
+            }
+
+            if occupied.iter().any(|(y, x0, x1)| {
+                *y == label_y as u16 && !(label_x1 < i32::from(*x0) || label_x > i32::from(*x1))
+            }) {
+                continue;
+            }
+
+            let line_y = label_y as u16;
+            let ax_clamped = ax.clamp(area_x0, area_x1);
+            if right_side {
+                let line_start = ax_clamped;
+                let line_end = label_x - 1;
+                if line_start <= line_end && line_end >= area_x0 {
+                    for x in line_start..=line_end {
+                        if x >= area_x0 && x <= area_x1 {
+                            buf.set(x as u16, line_y, line_cell.with_char(leader_char));
+                        }
+                    }
+                }
+            } else {
+                let line_start = label_x1 + 1;
+                let line_end = ax_clamped;
+                if line_start <= line_end && line_start <= area_x1 {
+                    for x in line_start..=line_end {
+                        if x >= area_x0 && x <= area_x1 {
+                            buf.set(x as u16, line_y, line_cell.with_char(leader_char));
+                        }
+                    }
+                }
+            }
+
+            buf.print_text_clipped(
+                label_x as u16,
+                line_y,
+                &text,
+                label_cell,
+                area.x + area.width.saturating_sub(1),
+            );
+            occupied.push((line_y, label_x as u16, label_x1 as u16));
+        }
+    }
+
+    fn pie_entry_label_text(
+        &self,
+        ir: &MermaidDiagramIr,
+        entry: &IrPieEntry,
+        idx: usize,
+        max_label_width: usize,
+    ) -> String {
+        let base = ir
+            .labels
+            .get(entry.label.0)
+            .map(|label| label.text.clone())
+            .unwrap_or_else(|| format!("slice {}", idx + 1));
+        let mut text = if ir.pie_show_data {
+            format!("{}: {}", base, entry.value_text)
+        } else {
+            base
+        };
+        if max_label_width > 0 {
+            text = truncate_label(&text, max_label_width);
+        }
+        text
     }
 
     /// Render edges respecting the fidelity plan.
@@ -386,6 +754,7 @@ impl MermaidRenderer {
         edges: &[LayoutEdgePath],
         ir: &MermaidDiagramIr,
         vp: &Viewport,
+        edge_styles: &[ResolvedMermaidStyle],
         plan: &RenderPlan,
         buf: &mut Buffer,
     ) {
@@ -400,7 +769,7 @@ impl MermaidRenderer {
             let line_style = ir
                 .edges
                 .get(edge_path.edge_idx)
-                .map(|e| detect_edge_style(&e.arrow))
+                .map(|e| edge_line_style(&e.arrow, edge_styles.get(edge_path.edge_idx)))
                 .unwrap_or(EdgeLineStyle::Solid);
 
             for pair in waypoints.windows(2) {
@@ -441,6 +810,17 @@ impl MermaidRenderer {
         let fill_cell = Cell::from_char(' ');
 
         for node in nodes {
+            let ir_node = match ir.nodes.get(node.node_idx) {
+                Some(node) => node,
+                None => continue,
+            };
+            if ir_node
+                .classes
+                .iter()
+                .any(|class| class == STATE_CONTAINER_CLASS)
+            {
+                continue;
+            }
             let cell_rect = vp.to_cell_rect(&node.rect);
 
             if plan.fidelity == MermaidFidelity::Outline {
@@ -449,7 +829,7 @@ impl MermaidRenderer {
                     node.rect.x + node.rect.width / 2.0,
                     node.rect.y + node.rect.height / 2.0,
                 );
-                buf.set(cx, cy, border_cell.with_char('●'));
+                buf.set(cx, cy, border_cell.with_char(self.outline_char()));
                 continue;
             }
 
@@ -463,7 +843,6 @@ impl MermaidRenderer {
 
             // Labels only if plan allows.
             if plan.show_node_labels
-                && let Some(ir_node) = ir.nodes.get(node.node_idx)
                 && let Some(label_id) = ir_node.label
                 && let Some(label) = ir.labels.get(label_id.0)
             {
@@ -533,6 +912,7 @@ impl MermaidRenderer {
         edges: &[LayoutEdgePath],
         ir: &MermaidDiagramIr,
         vp: &Viewport,
+        edge_styles: &[ResolvedMermaidStyle],
         buf: &mut Buffer,
     ) {
         let edge_cell = Cell::from_char(' ').with_fg(EDGE_FG);
@@ -547,7 +927,7 @@ impl MermaidRenderer {
             let line_style = ir
                 .edges
                 .get(edge_path.edge_idx)
-                .map(|e| detect_edge_style(&e.arrow))
+                .map(|e| edge_line_style(&e.arrow, edge_styles.get(edge_path.edge_idx)))
                 .unwrap_or(EdgeLineStyle::Solid);
 
             // Draw line segments between consecutive waypoints.
@@ -660,6 +1040,7 @@ impl MermaidRenderer {
         match style {
             EdgeLineStyle::Solid => self.draw_line_segment(x0, y0, x1, y1, cell, buf),
             EdgeLineStyle::Dashed => self.draw_dashed_segment(x0, y0, x1, y1, cell, buf),
+            EdgeLineStyle::Dotted => self.draw_dotted_segment(x0, y0, x1, y1, cell, buf),
             EdgeLineStyle::Thick => {
                 // Thick uses double-line border chars if available, otherwise solid.
                 self.draw_line_segment(x0, y0, x1, y1, cell, buf);
@@ -696,9 +1077,14 @@ impl MermaidRenderer {
             }
         } else {
             // Diagonal dashed — L-bend with every other cell blank.
+            // Skip the corner position in both loops to avoid OR-merging all
+            // four directions into a cross (`┼`); the corner is drawn below.
             let lo_x = x0.min(x1);
             let hi_x = x0.max(x1);
             for (i, x) in (lo_x..=hi_x).enumerate() {
+                if x == x1 {
+                    continue;
+                }
                 if i % 2 == 0 {
                     self.merge_line_cell(x, y0, LINE_LEFT | LINE_RIGHT, cell, buf);
                 }
@@ -706,6 +1092,9 @@ impl MermaidRenderer {
             let lo_y = y0.min(y1);
             let hi_y = y0.max(y1);
             for (i, y) in (lo_y..=hi_y).enumerate() {
+                if y == y0 {
+                    continue;
+                }
                 if i % 2 == 0 {
                     self.merge_line_cell(x1, y, LINE_UP | LINE_DOWN, cell, buf);
                 }
@@ -714,6 +1103,72 @@ impl MermaidRenderer {
             let vert_bit = if y1 >= y0 { LINE_DOWN } else { LINE_UP };
             self.merge_line_cell(x1, y0, horiz_bit | vert_bit, cell, buf);
         }
+    }
+
+    /// Draw a dotted line segment (dot glyphs along the path).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_dotted_segment(
+        &self,
+        x0: u16,
+        y0: u16,
+        x1: u16,
+        y1: u16,
+        cell: Cell,
+        buf: &mut Buffer,
+    ) {
+        if y0 == y1 {
+            let lo = x0.min(x1);
+            let hi = x0.max(x1);
+            for x in lo..=hi {
+                self.set_dot_or_merge(x, y0, true, cell, buf);
+            }
+        } else if x0 == x1 {
+            let lo = y0.min(y1);
+            let hi = y0.max(y1);
+            for y in lo..=hi {
+                self.set_dot_or_merge(x0, y, false, cell, buf);
+            }
+        } else {
+            let lo_x = x0.min(x1);
+            let hi_x = x0.max(x1);
+            for x in lo_x..=hi_x {
+                if x == x1 {
+                    continue;
+                }
+                self.set_dot_or_merge(x, y0, true, cell, buf);
+            }
+            let lo_y = y0.min(y1);
+            let hi_y = y0.max(y1);
+            for y in lo_y..=hi_y {
+                if y == y0 {
+                    continue;
+                }
+                self.set_dot_or_merge(x1, y, false, cell, buf);
+            }
+            let horiz_bit = if x1 >= x0 { LINE_LEFT } else { LINE_RIGHT };
+            let vert_bit = if y1 >= y0 { LINE_DOWN } else { LINE_UP };
+            self.merge_line_cell(x1, y0, horiz_bit | vert_bit, cell, buf);
+        }
+    }
+
+    fn set_dot_or_merge(&self, x: u16, y: u16, horizontal: bool, cell: Cell, buf: &mut Buffer) {
+        if let Some(existing) = buf.get(x, y).and_then(|c| c.content.as_char())
+            && self.line_bits_for_char(existing).is_some()
+        {
+            let bits = if horizontal {
+                LINE_LEFT | LINE_RIGHT
+            } else {
+                LINE_UP | LINE_DOWN
+            };
+            self.merge_line_cell(x, y, bits, cell, buf);
+            return;
+        }
+        let dot = if horizontal {
+            self.palette.dot_h
+        } else {
+            self.palette.dot_v
+        };
+        buf.set(x, y, cell.with_char(dot));
     }
 
     /// Draw a single line segment between two cell positions.
@@ -813,6 +1268,17 @@ impl MermaidRenderer {
         let fill_cell = Cell::from_char(' ');
 
         for node in nodes {
+            let ir_node = match ir.nodes.get(node.node_idx) {
+                Some(node) => node,
+                None => continue,
+            };
+            if ir_node
+                .classes
+                .iter()
+                .any(|class| class == STATE_CONTAINER_CLASS)
+            {
+                continue;
+            }
             let cell_rect = vp.to_cell_rect(&node.rect);
             if cell_rect.width < 2 || cell_rect.height < 2 {
                 // Too small for a box; render as a single char.
@@ -824,8 +1290,7 @@ impl MermaidRenderer {
             buf.draw_box(cell_rect, self.palette.border, border_cell, fill_cell);
 
             // Render label (and class compartments if applicable) inside the node.
-            if let Some(ir_node) = ir.nodes.get(node.node_idx)
-                && let Some(label_id) = ir_node.label
+            if let Some(label_id) = ir_node.label
                 && let Some(label) = ir.labels.get(label_id.0)
             {
                 if !ir_node.members.is_empty() {
@@ -839,6 +1304,52 @@ impl MermaidRenderer {
                 } else {
                     self.render_node_label(cell_rect, &label.text, buf);
                 }
+            }
+        }
+    }
+
+    fn render_legend_footnotes(&self, area: Rect, footnotes: &[String], buf: &mut Buffer) {
+        if area.is_empty() || footnotes.is_empty() {
+            return;
+        }
+
+        let max_lines = area.height as usize;
+        if max_lines == 0 {
+            return;
+        }
+        let max_width = area.width as usize;
+        if max_width == 0 {
+            return;
+        }
+
+        buf.fill(area, Cell::from_char(' '));
+
+        let cell = Cell::from_char(' ').with_fg(EDGE_FG);
+        let max_x = area.right();
+        let mut y = area.y;
+
+        if footnotes.len() > max_lines {
+            let visible = max_lines.saturating_sub(1);
+            for line in footnotes.iter().take(visible) {
+                let rendered = truncate_line_to_width(line, max_width);
+                buf.print_text_clipped(area.x, y, &rendered, cell, max_x);
+                y = y.saturating_add(1);
+            }
+            let remaining = footnotes.len().saturating_sub(visible);
+            if y < area.bottom() {
+                let marker = match self.glyph_mode {
+                    MermaidGlyphMode::Ascii => "...",
+                    MermaidGlyphMode::Unicode => "…",
+                };
+                let overflow_line = format!("{marker} +{remaining} more");
+                let rendered = truncate_line_to_width(&overflow_line, max_width);
+                buf.print_text_clipped(area.x, y, &rendered, cell, max_x);
+            }
+        } else {
+            for line in footnotes.iter().take(max_lines) {
+                let rendered = truncate_line_to_width(line, max_width);
+                buf.print_text_clipped(area.x, y, &rendered, cell, max_x);
+                y = y.saturating_add(1);
             }
         }
     }
@@ -981,24 +1492,17 @@ impl MermaidRenderer {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-/// Truncate a label to fit within `max_chars`, adding ellipsis if needed.
-fn truncate_label(text: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
+/// Truncate a label to fit within `max_width` display columns, adding
+/// ellipsis if needed. Uses terminal display width (not char count) so
+/// that CJK and other wide characters are measured correctly.
+fn truncate_label(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
         return String::new();
     }
-    let char_count = text.chars().count();
-    if char_count <= max_chars {
+    if display_width(text) <= max_width {
         return text.to_string();
     }
-    if max_chars == 1 {
-        return text
-            .chars()
-            .next()
-            .map_or_else(String::new, |c| c.to_string());
-    }
-    let mut result: String = text.chars().take(max_chars.saturating_sub(1)).collect();
-    result.push('…');
-    result
+    append_ellipsis(text, max_width)
 }
 
 /// Force an ellipsis suffix, respecting display width.
@@ -1085,6 +1589,18 @@ fn wrap_text(text: &str, max_width: usize) -> Vec<String> {
     lines
 }
 
+#[allow(dead_code)]
+fn truncate_line_to_width(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if display_width(text) <= max_width {
+        text.to_string()
+    } else {
+        append_ellipsis(text, max_width)
+    }
+}
+
 // ── Convenience API ─────────────────────────────────────────────────────
 
 /// Render a mermaid diagram into a buffer area using default settings.
@@ -1116,7 +1632,393 @@ pub fn render_diagram_adaptive(
     let plan = select_render_plan(config, layout, ir, area);
     let renderer = MermaidRenderer::new(config);
     renderer.render_with_plan(layout, ir, &plan, buf);
+    if config.debug_overlay {
+        render_debug_overlay(layout, ir, &plan, area, buf);
+        let info = collect_overlay_info(layout, ir, &plan);
+        emit_overlay_jsonl(config, &info, area);
+    }
+    emit_render_jsonl(config, ir, layout, &plan, area);
     plan
+}
+
+
+// ── ER Cardinality Rendering (bd-1rnqg) ────────────────────────────
+
+/// Parsed ER cardinality markers for the two endpoints of a relationship.
+struct ErCardinality<'a> {
+    left: &'a str,
+    right: &'a str,
+}
+
+/// Parse ER cardinality markers from an arrow string.
+///
+/// ER arrows have the form `<left_marker><connector><right_marker>` where:
+/// - `||` = exactly one, `o|`/`|o` = zero or one, `{` or `}` = many,
+///   `o{`/`}o` = zero or many, `|{`/`{|` = one or many.
+/// - Connector is `--`, `..`, or `==`.
+///
+/// Returns `None` if the arrow doesn't contain a valid ER pattern.
+fn parse_er_cardinality(arrow: &str) -> Option<ErCardinality<'_>> {
+    // Find the connector (center portion): --, .., or ==
+    let connectors = ["--", "..", "=="];
+    for conn in connectors {
+        if let Some(pos) = arrow.find(conn) {
+            let left = &arrow[..pos];
+            let right = &arrow[pos + conn.len()..];
+            if !left.is_empty() && !right.is_empty() {
+                return Some(ErCardinality { left, right });
+            }
+        }
+    }
+    None
+}
+
+/// Convert an ER cardinality marker to a compact display label.
+fn cardinality_label(marker: &str) -> &'static str {
+    match marker {
+        "||" => "1",
+        "o|" | "|o" => "0..1",
+        "o{" | "}o" => "0..*",
+        "|{" | "{|" => "1..*",
+        _ => marker.chars().next().map_or("", |c| match c {
+            '|' => "1",
+            'o' => "0",
+            '{' | '}' => "*",
+            _ => "",
+        }),
+    }
+}
+
+/// Render ER cardinality labels near the endpoints of an edge.
+fn render_er_cardinality(
+    edge_path: &LayoutEdgePath,
+    arrow: &str,
+    vp: &Viewport,
+    buf: &mut Buffer,
+) {
+    let Some(card) = parse_er_cardinality(arrow) else {
+        return;
+    };
+
+    let label_cell = Cell::from_char(' ').with_fg(CARDINALITY_FG);
+    let waypoints: Vec<(u16, u16)> = edge_path
+        .waypoints
+        .iter()
+        .map(|p| vp.to_cell(p.x, p.y))
+        .collect();
+
+    if waypoints.len() < 2 {
+        return;
+    }
+
+    // Left cardinality: near the first waypoint (source entity).
+    let left_text = cardinality_label(card.left);
+    if !left_text.is_empty() {
+        let (x, y) = waypoints[0];
+        // Offset by 1 cell toward the second waypoint direction.
+        let (nx, ny) = waypoints[1];
+        let (lx, ly) = cardinality_offset(x, y, nx, ny);
+        buf.print_text_clipped(lx, ly, left_text, label_cell, lx + left_text.len() as u16);
+    }
+
+    // Right cardinality: near the last waypoint (target entity).
+    let right_text = cardinality_label(card.right);
+    if !right_text.is_empty() {
+        let last = waypoints.len() - 1;
+        let (x, y) = waypoints[last];
+        let (px, py) = waypoints[last - 1];
+        let (rx, ry) = cardinality_offset(x, y, px, py);
+        buf.print_text_clipped(rx, ry, right_text, label_cell, rx + right_text.len() as u16);
+    }
+}
+
+/// Offset a cardinality label position perpendicular to the edge direction.
+fn cardinality_offset(at_x: u16, at_y: u16, toward_x: u16, toward_y: u16) -> (u16, u16) {
+    let dx = toward_x as i32 - at_x as i32;
+    let dy = toward_y as i32 - at_y as i32;
+
+    // Place label perpendicular to edge, offset by 1 cell.
+    if dx.abs() > dy.abs() {
+        // Horizontal edge: place label above.
+        (at_x, at_y.saturating_sub(1))
+    } else {
+        // Vertical edge: place label to the right.
+        (at_x.saturating_add(1), at_y)
+    }
+}
+
+// ── Debug Overlay (bd-4cwfj) ────────────────────────────────────────
+
+/// Diagnostic data collected for the debug overlay panel.
+#[derive(Debug, Clone)]
+pub struct DebugOverlayInfo {
+    pub fidelity: MermaidFidelity,
+    pub crossings: usize,
+    pub bends: usize,
+    pub ranks: usize,
+    pub max_rank_width: usize,
+    pub score: f64,
+    pub symmetry: f64,
+    pub compactness: f64,
+    pub nodes: usize,
+    pub edges: usize,
+    pub clusters: usize,
+    pub budget_exceeded: bool,
+    pub ir_hash_hex: String,
+}
+
+/// Overlay colors — semi-transparent tints to avoid obscuring the diagram.
+const CARDINALITY_FG: PackedRgba = PackedRgba::rgb(180, 200, 140);
+
+const OVERLAY_PANEL_BG: PackedRgba = PackedRgba::rgba(20, 20, 40, 200);
+const OVERLAY_LABEL_FG: PackedRgba = PackedRgba::rgb(140, 180, 220);
+const OVERLAY_VALUE_FG: PackedRgba = PackedRgba::rgb(220, 220, 240);
+const OVERLAY_WARN_FG: PackedRgba = PackedRgba::rgb(255, 180, 80);
+const OVERLAY_BBOX_FG: PackedRgba = PackedRgba::rgb(60, 80, 120);
+const OVERLAY_RANK_FG: PackedRgba = PackedRgba::rgb(50, 70, 100);
+
+/// Collect diagnostic metrics for the overlay panel.
+fn collect_overlay_info(
+    layout: &DiagramLayout,
+    ir: &MermaidDiagramIr,
+    plan: &RenderPlan,
+) -> DebugOverlayInfo {
+    let obj = crate::mermaid_layout::evaluate_layout(layout);
+    let ir_hash = crate::mermaid::hash_ir(ir);
+    DebugOverlayInfo {
+        fidelity: plan.fidelity,
+        crossings: layout.stats.crossings,
+        bends: obj.bends,
+        ranks: layout.stats.ranks,
+        max_rank_width: layout.stats.max_rank_width,
+        score: obj.score,
+        symmetry: obj.symmetry,
+        compactness: obj.compactness,
+        nodes: layout.nodes.len(),
+        edges: layout.edges.len(),
+        clusters: layout.clusters.len(),
+        budget_exceeded: layout.stats.budget_exceeded,
+        ir_hash_hex: format!("{:08x}", ir_hash & 0xFFFF_FFFF),
+    }
+}
+
+/// Render the debug overlay panel in the top-right corner of the area.
+///
+/// The panel is a compact stats box showing layout quality metrics,
+/// fidelity tier, and guard status. Renders on top of the diagram.
+fn render_debug_overlay(
+    layout: &DiagramLayout,
+    ir: &MermaidDiagramIr,
+    plan: &RenderPlan,
+    area: Rect,
+    buf: &mut Buffer,
+) {
+    let info = collect_overlay_info(layout, ir, plan);
+
+    // Build panel lines.
+    let lines = build_overlay_lines(&info);
+
+    // Panel dimensions.
+    let panel_w = lines
+        .iter()
+        .map(|(l, v)| l.len() + v.len() + 2)
+        .max()
+        .unwrap_or(20) as u16
+        + 2;
+    let panel_h = lines.len() as u16 + 2; // +2 for border
+
+    // Position: top-right corner with 1-cell padding.
+    if area.width < panel_w + 2 || area.height < panel_h + 1 {
+        return; // Not enough space for overlay.
+    }
+    let px = area.x + area.width - panel_w - 1;
+    let py = area.y + 1;
+
+    let panel_rect = Rect::new(px, py, panel_w, panel_h);
+
+    // Draw panel background.
+    let bg_cell = Cell::from_char(' ').with_bg(OVERLAY_PANEL_BG);
+    buf.draw_rect_filled(panel_rect, bg_cell);
+
+    // Draw panel border.
+    let border_cell = Cell::from_char(' ')
+        .with_fg(OVERLAY_LABEL_FG)
+        .with_bg(OVERLAY_PANEL_BG);
+    buf.draw_border(panel_rect, BorderChars::SQUARE, border_cell);
+
+    // Render each stat line.
+    let content_x = px + 1;
+    let mut cy = py + 1;
+    for (label, value) in &lines {
+        let fg = if label.contains('!') {
+            OVERLAY_WARN_FG
+        } else {
+            OVERLAY_LABEL_FG
+        };
+        let label_cell = Cell::from_char(' ').with_fg(fg).with_bg(OVERLAY_PANEL_BG);
+        buf.print_text_clipped(content_x, cy, label, label_cell, px + panel_w - 1);
+
+        let val_x = content_x + label.len() as u16;
+        let val_cell = Cell::from_char(' ')
+            .with_fg(OVERLAY_VALUE_FG)
+            .with_bg(OVERLAY_PANEL_BG);
+        buf.print_text_clipped(val_x, cy, value, val_cell, px + panel_w - 1);
+
+        cy += 1;
+    }
+
+    // Draw faint bounding box outline around the diagram content area.
+    render_overlay_bbox(layout, area, buf);
+
+    // Draw faint rank boundary lines.
+    render_overlay_ranks(layout, area, buf);
+}
+
+/// Build the lines of label-value pairs for the overlay panel.
+fn build_overlay_lines(info: &DebugOverlayInfo) -> Vec<(String, String)> {
+    let mut lines = Vec::with_capacity(10);
+    lines.push(("Tier: ".to_string(), info.fidelity.as_str().to_string()));
+    lines.push(("Nodes: ".to_string(), info.nodes.to_string()));
+    lines.push(("Edges: ".to_string(), info.edges.to_string()));
+    if info.clusters > 0 {
+        lines.push(("Clusters: ".to_string(), info.clusters.to_string()));
+    }
+    lines.push(("Crossings: ".to_string(), info.crossings.to_string()));
+    lines.push(("Bends: ".to_string(), info.bends.to_string()));
+    lines.push((
+        "Ranks: ".to_string(),
+        format!("{} (w={})", info.ranks, info.max_rank_width),
+    ));
+    lines.push(("Score: ".to_string(), format!("{:.1}", info.score)));
+    lines.push((
+        "Sym/Comp: ".to_string(),
+        format!("{:.2}/{:.2}", info.symmetry, info.compactness),
+    ));
+    lines.push(("Hash: ".to_string(), info.ir_hash_hex.clone()));
+    if info.budget_exceeded {
+        lines.push(("! Budget: ".to_string(), "EXCEEDED".to_string()));
+    }
+    lines
+}
+
+/// Render a faint bounding box outline around the diagram area.
+fn render_overlay_bbox(layout: &DiagramLayout, area: Rect, buf: &mut Buffer) {
+    let vp = Viewport::fit(&layout.bounding_box, area);
+    let bb = &layout.bounding_box;
+
+    let tl = vp.to_cell(bb.x, bb.y);
+    let br = vp.to_cell(bb.x + bb.width, bb.y + bb.height);
+
+    let bbox_w = br.0.saturating_sub(tl.0).max(1);
+    let bbox_h = br.1.saturating_sub(tl.1).max(1);
+
+    if bbox_w < 3 || bbox_h < 2 {
+        return;
+    }
+
+    let bbox_rect = Rect::new(tl.0, tl.1, bbox_w, bbox_h);
+    let cell = Cell::from_char(' ').with_fg(OVERLAY_BBOX_FG);
+    buf.draw_border(bbox_rect, BorderChars::SQUARE, cell);
+}
+
+/// Render faint horizontal lines at rank boundaries.
+fn render_overlay_ranks(layout: &DiagramLayout, area: Rect, buf: &mut Buffer) {
+    if layout.nodes.is_empty() || layout.stats.ranks < 2 {
+        return;
+    }
+
+    let vp = Viewport::fit(&layout.bounding_box, area);
+
+    // Collect min/max y per rank.
+    let mut rank_bounds: Vec<(f64, f64)> = Vec::new();
+    for node in &layout.nodes {
+        let r = node.rank;
+        if r >= rank_bounds.len() {
+            rank_bounds.resize(r + 1, (f64::MAX, f64::MIN));
+        }
+        let top = node.rect.y;
+        let bot = node.rect.y + node.rect.height;
+        if top < rank_bounds[r].0 {
+            rank_bounds[r].0 = top;
+        }
+        if bot > rank_bounds[r].1 {
+            rank_bounds[r].1 = bot;
+        }
+    }
+
+    // Draw faint lines at midpoints between consecutive ranks.
+    let cell = Cell::from_char('┈').with_fg(OVERLAY_RANK_FG);
+    for pair in rank_bounds.windows(2) {
+        let gap_y = (pair[0].1 + pair[1].0) / 2.0;
+        let (left, cy) = vp.to_cell(layout.bounding_box.x, gap_y);
+        let (right, _) = vp.to_cell(layout.bounding_box.x + layout.bounding_box.width, gap_y);
+        let w = right.saturating_sub(left);
+        if w > 0 && cy < area.y + area.height {
+            buf.draw_horizontal_line(left, cy, w, cell);
+        }
+    }
+}
+
+/// Emit a debug-overlay evidence event to the JSONL log.
+fn emit_overlay_jsonl(config: &MermaidConfig, info: &DebugOverlayInfo, area: Rect) {
+    let Some(path) = config.log_path.as_deref() else {
+        return;
+    };
+    let json = serde_json::json!({
+        "event": "debug_overlay",
+        "fidelity": info.fidelity.as_str(),
+        "crossings": info.crossings,
+        "bends": info.bends,
+        "ranks": info.ranks,
+        "max_rank_width": info.max_rank_width,
+        "score": info.score,
+        "symmetry": info.symmetry,
+        "compactness": info.compactness,
+        "nodes": info.nodes,
+        "edges": info.edges,
+        "clusters": info.clusters,
+        "budget_exceeded": info.budget_exceeded,
+        "ir_hash": info.ir_hash_hex,
+        "area": {
+            "cols": area.width,
+            "rows": area.height,
+        },
+    });
+    let _ = crate::mermaid::append_jsonl_line(path, &json.to_string());
+}
+
+/// Emit a render-stage evidence event to the JSONL log (bd-12d5s).
+fn emit_render_jsonl(
+    config: &MermaidConfig,
+    ir: &MermaidDiagramIr,
+    layout: &DiagramLayout,
+    plan: &RenderPlan,
+    area: Rect,
+) {
+    let Some(path) = config.log_path.as_deref() else {
+        return;
+    };
+    let ir_hash = crate::mermaid::hash_ir(ir);
+    let json = serde_json::json!({
+        "event": "mermaid_render",
+        "ir_hash": format!("0x{:016x}", ir_hash),
+        "diagram_type": ir.diagram_type.as_str(),
+        "fidelity": plan.fidelity.as_str(),
+        "show_node_labels": plan.show_node_labels,
+        "show_edge_labels": plan.show_edge_labels,
+        "show_clusters": plan.show_clusters,
+        "max_label_width": plan.max_label_width,
+        "area": {
+            "cols": area.width,
+            "rows": area.height,
+        },
+        "nodes": layout.nodes.len(),
+        "edges": layout.edges.len(),
+        "clusters": layout.clusters.len(),
+        "link_mode": config.link_mode.as_str(),
+        "legend_height": plan.legend_area.map_or(0, |r| r.height),
+    });
+    let _ = crate::mermaid::append_jsonl_line(path, &json.to_string());
 }
 
 // ── Error Rendering ───────────────────────────────────────────────────
@@ -1470,10 +2372,11 @@ fn emit_error_render_jsonl(
 mod tests {
     use super::*;
     use crate::mermaid::{
-        DiagramType, GraphDirection, IrEdge, IrEndpoint, IrLabel, IrLabelId, IrNode,
-        MermaidCompatibilityMatrix, MermaidConfig, MermaidDiagramMeta, MermaidErrorMode,
-        MermaidFallbackPolicy, MermaidGuardReport, MermaidInitConfig, MermaidInitParse,
-        MermaidSupportLevel, MermaidThemeOverrides, NodeShape, Position, Span, normalize_ast_to_ir,
+        DiagramType, GraphDirection, IrEdge, IrEndpoint, IrLabel, IrLabelId, IrLink, IrNode,
+        IrNodeId, LinkKind, LinkSanitizeOutcome, MermaidCompatibilityMatrix, MermaidConfig,
+        MermaidDiagramMeta, MermaidErrorMode, MermaidFallbackPolicy, MermaidGuardReport,
+        MermaidInitConfig, MermaidInitParse, MermaidLinkMode, MermaidSupportLevel,
+        MermaidThemeOverrides, NodeShape, Position, Span, normalize_ast_to_ir,
         parse_with_diagnostics,
     };
     use crate::mermaid_layout::{LayoutPoint, LayoutStats, layout_diagram};
@@ -1559,6 +2462,9 @@ mod tests {
             ports: vec![],
             clusters: vec![],
             labels,
+            pie_entries: vec![],
+            pie_title: None,
+            pie_show_data: false,
             style_refs: vec![],
             links: vec![],
             meta: MermaidDiagramMeta {
@@ -1810,7 +2716,11 @@ mod tests {
 
     #[test]
     fn truncate_label_unicode_safe() {
-        assert_eq!(truncate_label("漢字テスト", 3), "漢字…");
+        // Each CJK char is 2 cells wide; ellipsis is 1 cell.
+        // max_width=3 → target 2 cells for text → "漢" (2) + "…" (1) = 3
+        assert_eq!(truncate_label("漢字テスト", 3), "漢…");
+        // max_width=5 → target 4 cells → "漢字" (4) + "…" (1) = 5
+        assert_eq!(truncate_label("漢字テスト", 5), "漢字…");
     }
 
     #[test]
@@ -2071,6 +2981,16 @@ mod tests {
     }
 
     #[test]
+    fn edge_style_prefers_resolved_dash() {
+        let mut style = ResolvedMermaidStyle::default();
+        style.properties.stroke_dash = Some(MermaidStrokeDash::Dotted);
+        assert_eq!(edge_line_style("-->", Some(&style)), EdgeLineStyle::Dotted);
+
+        style.properties.stroke_dash = Some(MermaidStrokeDash::Dashed);
+        assert_eq!(edge_line_style("-->", Some(&style)), EdgeLineStyle::Dashed);
+    }
+
+    #[test]
     fn dashed_segment_skips_every_other_cell() {
         let renderer = MermaidRenderer::with_mode(MermaidGlyphMode::Unicode);
         let cell = Cell::from_char(' ').with_fg(EDGE_FG);
@@ -2085,6 +3005,16 @@ mod tests {
             (4..=6).contains(&line_count),
             "dashed should draw ~half the cells, got {line_count}"
         );
+    }
+
+    #[test]
+    fn dotted_segment_uses_dot_glyph() {
+        let renderer = MermaidRenderer::with_mode(MermaidGlyphMode::Unicode);
+        let cell = Cell::from_char(' ').with_fg(EDGE_FG);
+        let mut buf = Buffer::new(6, 3);
+        renderer.draw_dotted_segment(0, 1, 4, 1, cell, &mut buf);
+
+        assert_eq!(buf.get(0, 1).unwrap().content.as_char(), Some('┄'));
     }
 
     // ── wrap_text tests ─────────────────────────────────────────────────
@@ -2296,6 +3226,55 @@ mod tests {
     }
 
     #[test]
+    fn render_plan_renders_link_footnotes() {
+        let mut ir = make_ir(2, vec![(0, 1)]);
+        ir.links.push(IrLink {
+            kind: LinkKind::Link,
+            target: IrNodeId(0),
+            url: "https://example.com".to_string(),
+            tooltip: None,
+            sanitize_outcome: LinkSanitizeOutcome::Allowed,
+            span: Span {
+                start: Position {
+                    line: 1,
+                    col: 1,
+                    byte: 0,
+                },
+                end: Position {
+                    line: 1,
+                    col: 1,
+                    byte: 0,
+                },
+            },
+        });
+        let layout = make_layout(2, vec![(0, 1)]);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let config = MermaidConfig {
+            enable_links: true,
+            link_mode: MermaidLinkMode::Footnote,
+            ..Default::default()
+        };
+        let plan = select_render_plan(&config, &layout, &ir, area);
+        assert!(
+            plan.legend_area.is_some(),
+            "expected legend area reserved for footnotes"
+        );
+        let renderer = MermaidRenderer::new(&config);
+        let mut buf = Buffer::new(80, 24);
+        renderer.render_with_plan(&layout, &ir, &plan, &mut buf);
+        let text = buffer_to_text(&buf);
+        assert!(
+            text.contains("https://example.com"),
+            "expected footnote URL in rendered legend"
+        );
+    }
+
+    #[test]
     fn legend_area_reserved_for_links() {
         let (diagram, legend) = reserve_legend_area(Rect {
             x: 0,
@@ -2372,6 +3351,13 @@ mod tests {
                 ch.is_some() && ch != Some(' ')
             })
         })
+    }
+
+    #[test]
+    fn e2e_pie_renders_content() {
+        let source = "pie showData\ntitle Pets\n\"Dogs\": 386\n\"Cats\": 85\n\"Rats\": 15\n";
+        let (buf, _plan) = e2e_render(source, 40, 16);
+        assert!(buf_has_content(&buf), "pie should render content");
     }
 
     // -- graph_small at three sizes --
@@ -2467,6 +3453,77 @@ mod tests {
             "expected Normal or Rich for large graph at 200x60, got {:?}",
             plan.fidelity
         );
+    }
+
+    // -- mindmap_basic at two sizes + snapshots --
+
+    #[test]
+    fn e2e_mindmap_basic_80x24() {
+        let source = include_str!("../tests/fixtures/mermaid/mindmap_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 80, 24);
+        assert!(buf_has_content(&buf), "mindmap should render at 80x24");
+        let arrowheads = count_char_in_buf(&buf, '▶')
+            + count_char_in_buf(&buf, '◀')
+            + count_char_in_buf(&buf, '▲')
+            + count_char_in_buf(&buf, '▼');
+        assert_eq!(arrowheads, 0, "mindmap edges should not have arrowheads");
+    }
+
+    #[test]
+    fn e2e_mindmap_basic_120x40() {
+        let source = include_str!("../tests/fixtures/mermaid/mindmap_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 120, 40);
+        assert!(buf_has_content(&buf), "mindmap should render at 120x40");
+    }
+
+    #[test]
+    fn snapshot_mindmap_basic_80x24() {
+        let source = include_str!("../tests/fixtures/mermaid/mindmap_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 80, 24);
+        assert_buffer_snapshot_text("mermaid_mindmap_basic_80x24", &buf);
+    }
+
+    #[test]
+    fn snapshot_mindmap_basic_120x40() {
+        let source = include_str!("../tests/fixtures/mermaid/mindmap_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 120, 40);
+        assert_buffer_snapshot_text("mermaid_mindmap_basic_120x40", &buf);
+    }
+
+    #[test]
+    fn e2e_mindmap_emits_jsonl_logs() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static LOG_COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let idx = LOG_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let log_path = format!(
+            "/tmp/ftui_test_mindmap_jsonl_{}_{}.jsonl",
+            std::process::id(),
+            idx
+        );
+
+        let source = include_str!("../tests/fixtures/mermaid/mindmap_basic.mmd");
+        let parsed = parse_with_diagnostics(source);
+        let config = MermaidConfig {
+            log_path: Some(log_path.clone()),
+            ..MermaidConfig::default()
+        };
+        let matrix = MermaidCompatibilityMatrix::default();
+        let policy = MermaidFallbackPolicy::default();
+        let ir_parse = normalize_ast_to_ir(&parsed.ast, &config, &matrix, &policy);
+        let layout = layout_diagram(&ir_parse.ir, &config);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 24,
+        };
+        let mut buf = Buffer::new(80, 24);
+        let _plan = render_diagram_adaptive(&layout, &ir_parse.ir, &config, area, &mut buf);
+        let log_content = std::fs::read_to_string(&log_path).expect("read log");
+        assert!(log_content.contains("layout_metrics"));
+        assert!(log_content.contains("mermaid_render"));
+        assert!(log_content.contains("\"diagram_type\":\"mindmap\""));
     }
 
     // -- Pipeline validation tests --
@@ -2739,15 +3796,6 @@ mod tests {
         let ir_parse = normalize_ast_to_ir(&parsed.ast, &config, &matrix, &policy);
         let layout = layout_diagram(&ir_parse.ir, &config);
         // Find the Foo node and check its height is > default 3.0.
-        eprintln!(
-            "=== DEBUG: nodes = {:?}",
-            ir_parse
-                .ir
-                .nodes
-                .iter()
-                .map(|n| (&n.id, &n.members))
-                .collect::<Vec<_>>()
-        );
         let foo_idx = ir_parse
             .ir
             .nodes
@@ -2756,10 +3804,156 @@ mod tests {
             .expect("Foo node should exist");
         if let Some(layout_node) = layout.nodes.iter().find(|ln| ln.node_idx == foo_idx) {
             assert!(
-                layout_node.rect.height >= 3.0,
+                layout_node.rect.height > 3.0,
                 "class with members should have at least default height, got {}",
                 layout_node.rect.height
             );
         }
+    }
+
+    // ── Debug Overlay Tests (bd-4cwfj) ──────────────────────────────────
+
+    #[test]
+    fn overlay_info_collects_metrics() {
+        let ir = make_ir(4, vec![(0, 1), (1, 2), (2, 3)]);
+        let layout = make_layout(4, vec![(0, 1), (1, 2), (2, 3)]);
+        let plan = RenderPlan {
+            fidelity: MermaidFidelity::Normal,
+            show_node_labels: true,
+            show_edge_labels: true,
+            show_clusters: true,
+            max_label_width: 48,
+            diagram_area: Rect::new(0, 0, 80, 24),
+            legend_area: None,
+        };
+        let info = collect_overlay_info(&layout, &ir, &plan);
+        assert_eq!(info.fidelity, MermaidFidelity::Normal);
+        assert_eq!(info.nodes, 4);
+        assert_eq!(info.edges, 3);
+        assert!(!info.ir_hash_hex.is_empty());
+    }
+
+    #[test]
+    fn overlay_lines_include_core_metrics() {
+        let info = DebugOverlayInfo {
+            fidelity: MermaidFidelity::Rich,
+            crossings: 3,
+            bends: 7,
+            ranks: 4,
+            max_rank_width: 3,
+            score: 42.5,
+            symmetry: 0.85,
+            compactness: 0.72,
+            nodes: 10,
+            edges: 12,
+            clusters: 2,
+            budget_exceeded: false,
+            ir_hash_hex: "abcd1234".to_string(),
+        };
+        let lines = build_overlay_lines(&info);
+        // Must include tier, nodes, edges, clusters, crossings, bends, ranks, score, sym/comp, hash.
+        assert!(lines.len() >= 10);
+        assert_eq!(lines[0].1, "rich");
+        assert!(lines.iter().any(|(l, _)| l.contains("Crossings")));
+        assert!(lines.iter().any(|(l, _)| l.contains("Hash")));
+    }
+
+    #[test]
+    fn overlay_lines_show_budget_warning() {
+        let info = DebugOverlayInfo {
+            fidelity: MermaidFidelity::Compact,
+            crossings: 0,
+            bends: 0,
+            ranks: 1,
+            max_rank_width: 1,
+            score: 0.0,
+            symmetry: 1.0,
+            compactness: 1.0,
+            nodes: 1,
+            edges: 0,
+            clusters: 0,
+            budget_exceeded: true,
+            ir_hash_hex: "00000000".to_string(),
+        };
+        let lines = build_overlay_lines(&info);
+        assert!(
+            lines
+                .iter()
+                .any(|(l, v)| l.contains("Budget") && v == "EXCEEDED")
+        );
+    }
+
+    #[test]
+    fn overlay_renders_without_crash() {
+        let ir = make_ir(3, vec![(0, 1), (1, 2)]);
+        let layout = make_layout(3, vec![(0, 1), (1, 2)]);
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::new(80, 24);
+        let plan = RenderPlan {
+            fidelity: MermaidFidelity::Normal,
+            show_node_labels: true,
+            show_edge_labels: true,
+            show_clusters: true,
+            max_label_width: 48,
+            diagram_area: area,
+            legend_area: None,
+        };
+        // Should not panic.
+        render_debug_overlay(&layout, &ir, &plan, area, &mut buf);
+    }
+
+    #[test]
+    fn overlay_skipped_when_area_too_small() {
+        let ir = make_ir(2, vec![(0, 1)]);
+        let layout = make_layout(2, vec![(0, 1)]);
+        let area = Rect::new(0, 0, 10, 5); // Very small.
+        let mut buf = Buffer::new(10, 5);
+        let plan = RenderPlan {
+            fidelity: MermaidFidelity::Outline,
+            show_node_labels: false,
+            show_edge_labels: false,
+            show_clusters: false,
+            max_label_width: 0,
+            diagram_area: area,
+            legend_area: None,
+        };
+        // Should not panic even with tiny area.
+        render_debug_overlay(&layout, &ir, &plan, area, &mut buf);
+    }
+
+    #[test]
+    fn overlay_adaptive_renders_with_debug_enabled() {
+        let ir = make_ir(3, vec![(0, 1), (1, 2)]);
+        let layout = layout_diagram(&ir, &MermaidConfig::default());
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::new(80, 24);
+        let config = MermaidConfig {
+            debug_overlay: true,
+            ..MermaidConfig::default()
+        };
+        let plan = render_diagram_adaptive(&layout, &ir, &config, area, &mut buf);
+        assert_eq!(plan.fidelity, MermaidFidelity::Normal);
+    }
+
+    #[test]
+    fn overlay_bbox_renders_at_reasonable_size() {
+        let ir = make_ir(4, vec![(0, 1), (1, 2), (2, 3)]);
+        let layout = layout_diagram(&ir, &MermaidConfig::default());
+        let area = Rect::new(0, 0, 120, 40);
+        let mut buf = Buffer::new(120, 40);
+        // Render the bounding box overlay alone.
+        render_overlay_bbox(&layout, area, &mut buf);
+        // No crash is success; bounding box should be drawn.
+    }
+
+    #[test]
+    fn overlay_ranks_renders_at_reasonable_size() {
+        let ir = make_ir(4, vec![(0, 1), (1, 2), (2, 3)]);
+        let layout = layout_diagram(&ir, &MermaidConfig::default());
+        let area = Rect::new(0, 0, 120, 40);
+        let mut buf = Buffer::new(120, 40);
+        // Render rank boundary overlay alone.
+        render_overlay_ranks(&layout, area, &mut buf);
+        // No crash is success.
     }
 }
