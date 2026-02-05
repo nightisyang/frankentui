@@ -480,9 +480,20 @@ impl<W: Write> Presenter<W> {
 
             for span in plan.spans() {
                 self.move_cursor_optimal(span.x0, span.y)?;
-                for x in span.x0..=span.x1 {
-                    let cell = buffer.get_unchecked(x, span.y);
+                // Hot path: avoid recomputing `y * width + x` for every cell.
+                let row = buffer.row_cells(span.y);
+                let start = span.x0 as usize;
+                let end = span.x1 as usize;
+                debug_assert!(start <= end);
+                debug_assert!(end < row.len());
+
+                let mut x = span.x0;
+                let mut idx = start;
+                while idx <= end {
+                    let cell = &row[idx];
                     self.emit_cell(x, cell, pool, links)?;
+                    x += 1;
+                    idx += 1;
                 }
             }
         }
@@ -534,9 +545,20 @@ impl<W: Write> Presenter<W> {
 
             for span in plan.spans() {
                 self.move_cursor_optimal(span.x0, span.y)?;
-                for x in span.x0..=span.x1 {
-                    let cell = buffer.get_unchecked(x, span.y);
+                // Hot path: avoid recomputing `y * width + x` for every cell.
+                let row = buffer.row_cells(span.y);
+                let start = span.x0 as usize;
+                let end = span.x1 as usize;
+                debug_assert!(start <= end);
+                debug_assert!(end < row.len());
+
+                let mut x = span.x0;
+                let mut idx = start;
+                while idx <= end {
+                    let cell = &row[idx];
                     self.emit_cell(x, cell, pool, links)?;
+                    x += 1;
+                    idx += 1;
                 }
             }
         }
