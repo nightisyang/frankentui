@@ -29,7 +29,7 @@ use ftui_render::drawing::{BorderChars, Draw};
 
 use crate::determinism;
 use crate::screens::{Cmd, Event, Frame, HelpEntry, Screen};
-use crate::test_logging::{TEST_JSONL_SCHEMA, escape_json, jsonl_enabled};
+use crate::test_logging::{escape_json, jsonl_enabled};
 
 // ── Layout constants ────────────────────────────────────────────────
 
@@ -868,6 +868,17 @@ const MEGA_TELEMETRY_BOOL_FIELDS: &[&str] = &[
 ///
 /// Returns `Ok(())` if the line is valid, or `Err(reason)` with a
 /// human-readable explanation of the first validation failure.
+///
+/// Checks:
+/// - Valid JSON object
+/// - Schema version matches `MEGA_TELEMETRY_SCHEMA`
+/// - Event type is `"mermaid_mega_recompute"`
+/// - All required fields present and non-null
+/// - All nullable fields present (may be null)
+/// - Boolean fields are actually booleans
+/// - Non-negative numeric fields are numbers >= 0
+/// - Zoom is positive
+/// - Timing fields (when non-null) are non-negative
 pub fn validate_mega_telemetry_line(line: &str) -> Result<(), String> {
     let value: serde_json::Value =
         serde_json::from_str(line).map_err(|e| format!("invalid JSON: {e}"))?;
@@ -916,34 +927,66 @@ pub fn validate_mega_telemetry_line(line: &str) -> Result<(), String> {
         }
     }
 
-    // Validate trigger value.
-    if let Some(trigger) = obj.get("trigger").and_then(|v| v.as_str()) {
-        if !MEGA_TELEMETRY_VALID_TRIGGERS.contains(&trigger) {
-            return Err(format!(
-                "invalid trigger value: \"{}\": expected one of {:?}",
-                trigger, MEGA_TELEMETRY_VALID_TRIGGERS
-            ));
+    // Validate boolean fields are actually booleans.
+    for &field in MEGA_TELEMETRY_BOOL_FIELDS {
+        if let Some(v) = obj.get(field)
+            && !v.is_boolean()
+        {
+            return Err(format!("field \"{field}\" must be boolean, got {v}"));
         }
     }
 
-    // Validate numeric ranges.
-    if let Some(total) = obj.get("total_ms").and_then(|v| v.as_f64()) {
-        if total < 0.0 {
-            return Err(format!("total_ms must be non-negative, got {total}"));
+    // Validate non-negative numeric fields.
+    for &field in MEGA_TELEMETRY_NONNEG_FIELDS {
+        if let Some(v) = obj.get(field)
+            && !v.is_null()
+        {
+            let n = v
+                .as_f64()
+                .ok_or_else(|| format!("field \"{field}\" must be a number, got {v}"))?;
+            if n < 0.0 {
+                return Err(format!("field \"{field}\" must be non-negative, got {n}"));
+            }
         }
     }
 
-    if let Some(ratio) = obj.get("cache_hit_ratio").and_then(|v| v.as_f64()) {
-        if !(0.0..=1.0).contains(&ratio) {
-            return Err(format!(
-                "cache_hit_ratio must be in [0.0, 1.0], got {ratio}"
-            ));
+    // Validate zoom is positive.
+    if let Some(zoom) = obj.get("zoom").and_then(|v| v.as_f64())
+        && zoom <= 0.0
+    {
+        return Err(format!("zoom must be positive, got {zoom}"));
+    }
+
+    // Validate timing fields are non-negative when present.
+    for &field in &["parse_ms", "layout_ms", "render_ms"] {
+        if let Some(v) = obj.get(field)
+            && let Some(n) = v.as_f64()
+            && n < 0.0
+        {
+            return Err(format!("{field} must be non-negative, got {n}"));
         }
     }
 
-    if let Some(zoom) = obj.get("zoom").and_then(|v| v.as_f64()) {
-        if zoom <= 0.0 {
-            return Err(format!("zoom must be positive, got {zoom}"));
+    // Validate string fields are actually strings.
+    for &field in &[
+        "schema_version",
+        "event",
+        "timestamp",
+        "screen_mode",
+        "sample",
+        "diagram_type",
+        "layout_mode",
+        "tier",
+        "glyph_mode",
+        "render_mode",
+        "wrap_mode",
+        "palette",
+        "comparison_layout_mode",
+    ] {
+        if let Some(v) = obj.get(field)
+            && !v.is_string()
+        {
+            return Err(format!("field \"{field}\" must be a string, got {v}"));
         }
     }
 
@@ -1812,6 +1855,7 @@ impl MermaidMegaShowcaseScreen {
         let _ = writeln!(std::io::stderr(), "{line}");
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn recompute_jsonl_line(
         &self,
         cache: &MegaRenderCache,
@@ -1840,8 +1884,9 @@ impl MermaidMegaShowcaseScreen {
         json.push_str(&format!(",\"event\":\"{}\"", MEGA_JSONL_EVENT));
         json.push_str(&format!(",\"seq\":{seq}"));
         json.push_str(&format!(",\"timestamp\":\"{}\"", escape_json(&timestamp)));
-        if let Some(run_id) = run_id {
-            json.push_str(&format!(",\"run_id\":\"{}\"", escape_json(run_id)));
+        match run_id {
+            Some(id) => json.push_str(&format!(",\"run_id\":\"{}\"", escape_json(id))),
+            None => json.push_str(",\"run_id\":null"),
         }
         json.push_str(&format!(",\"seed\":{seed}"));
         json.push_str(&format!(
@@ -5007,5 +5052,611 @@ mod tests {
         );
         crate::test_logging::validate_mega_recompute_jsonl_schema(&line)
             .expect("mega recompute JSONL schema");
+    }
+
+    // ── Telemetry schema validator tests (bd-3oaig.20) ─────────────
+
+    /// Sample JSONL fixture: full recompute with layout stats.
+    const SAMPLE_JSONL_FULL: &str = concat!(
+        r#"{"schema_version":"ftui-mega-telemetry-v1","event":"mermaid_mega_recompute","#,
+        r#""seq":0,"timestamp":"2026-02-05T12:00:00Z","run_id":"test-run-1","seed":42,"#,
+        r#""screen_mode":"alt","sample":"Flow Basic","diagram_type":"flowchart","#,
+        r#""layout_mode":"Auto","tier":"Normal","glyph_mode":"Unicode","#,
+        r#""render_mode":"Auto","wrap_mode":"None","palette":"Default","#,
+        r#""styles_enabled":true,"comparison_enabled":false,"comparison_layout_mode":"Auto","#,
+        r#""viewport_cols":120,"viewport_rows":40,"render_cols":120,"render_rows":40,"#,
+        r#""zoom":1.000,"pan_x":0,"pan_y":0,"#,
+        r#""analysis_epoch":1,"layout_epoch":1,"render_epoch":1,"#,
+        r#""analysis_ran":true,"layout_ran":true,"render_ran":true,"#,
+        r#""cache_hits":0,"cache_misses":1,"cache_hit":false,"debounce_skips":0,"#,
+        r#""layout_budget_exceeded":false,"#,
+        r#""parse_ms":0.5,"layout_ms":2.1,"render_ms":1.3,"#,
+        r#""node_count":5,"edge_count":4,"error_count":0,"#,
+        r#""layout_iterations":12,"layout_iterations_max":200,"#,
+        r#""layout_budget_exceeded_layout":false,"layout_crossings":0,"#,
+        r#""layout_ranks":3,"layout_max_rank_width":2,"#,
+        r#""layout_total_bends":2,"layout_position_variance":1.5}"#,
+    );
+
+    /// Sample JSONL fixture: cache hit with null layout stats.
+    const SAMPLE_JSONL_CACHE_HIT: &str = concat!(
+        r#"{"schema_version":"ftui-mega-telemetry-v1","event":"mermaid_mega_recompute","#,
+        r#""seq":1,"timestamp":"2026-02-05T12:00:01Z","run_id":"test-run-1","seed":42,"#,
+        r#""screen_mode":"alt","sample":"Flow Basic","diagram_type":"flowchart","#,
+        r#""layout_mode":"Auto","tier":"Normal","glyph_mode":"Unicode","#,
+        r#""render_mode":"Auto","wrap_mode":"None","palette":"Default","#,
+        r#""styles_enabled":true,"comparison_enabled":false,"comparison_layout_mode":"Auto","#,
+        r#""viewport_cols":120,"viewport_rows":40,"render_cols":120,"render_rows":40,"#,
+        r#""zoom":1.000,"pan_x":0,"pan_y":0,"#,
+        r#""analysis_epoch":1,"layout_epoch":1,"render_epoch":2,"#,
+        r#""analysis_ran":false,"layout_ran":false,"render_ran":true,"#,
+        r#""cache_hits":1,"cache_misses":1,"cache_hit":false,"debounce_skips":0,"#,
+        r#""layout_budget_exceeded":false,"#,
+        r#""parse_ms":null,"layout_ms":null,"render_ms":0.8,"#,
+        r#""node_count":5,"edge_count":4,"error_count":0,"#,
+        r#""layout_iterations":null,"layout_iterations_max":null,"#,
+        r#""layout_budget_exceeded_layout":null,"layout_crossings":null,"#,
+        r#""layout_ranks":null,"layout_max_rank_width":null,"#,
+        r#""layout_total_bends":null,"layout_position_variance":null}"#,
+    );
+
+    #[test]
+    fn validate_sample_fixture_full() {
+        validate_mega_telemetry_line(SAMPLE_JSONL_FULL).expect("full fixture should validate");
+    }
+
+    #[test]
+    fn validate_sample_fixture_cache_hit() {
+        validate_mega_telemetry_line(SAMPLE_JSONL_CACHE_HIT)
+            .expect("cache-hit fixture should validate");
+    }
+
+    #[test]
+    fn validate_rejects_invalid_json() {
+        let result = validate_mega_telemetry_line("not json at all");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid JSON"));
+    }
+
+    #[test]
+    fn validate_rejects_non_object() {
+        let result = validate_mega_telemetry_line("[1, 2, 3]");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("JSON object"));
+    }
+
+    #[test]
+    fn validate_rejects_wrong_schema_version() {
+        let line = SAMPLE_JSONL_FULL.replace("ftui-mega-telemetry-v1", "ftui-mega-telemetry-v99");
+        let result = validate_mega_telemetry_line(&line);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("schema_version mismatch"));
+    }
+
+    #[test]
+    fn validate_rejects_wrong_event_type() {
+        let line = SAMPLE_JSONL_FULL.replace("mermaid_mega_recompute", "wrong_event");
+        let result = validate_mega_telemetry_line(&line);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("event type mismatch"));
+    }
+
+    #[test]
+    fn validate_rejects_missing_required_field() {
+        // Remove the "zoom" required field.
+        let line = SAMPLE_JSONL_FULL.replace(r#","zoom":1.000"#, "");
+        let result = validate_mega_telemetry_line(&line);
+        assert!(result.is_err(), "missing zoom should fail validation");
+    }
+
+    #[test]
+    fn validate_rejects_missing_nullable_field() {
+        // Remove the nullable "layout_position_variance" field.
+        let line = SAMPLE_JSONL_FULL.replace(r#","layout_position_variance":1.5"#, "");
+        let result = validate_mega_telemetry_line(&line);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("layout_position_variance"));
+    }
+
+    #[test]
+    fn validate_rejects_negative_zoom() {
+        let line = SAMPLE_JSONL_FULL.replace(r#""zoom":1.000"#, r#""zoom":-0.5"#);
+        let result = validate_mega_telemetry_line(&line);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("zoom must be positive"));
+    }
+
+    #[test]
+    fn validate_rejects_boolean_as_string() {
+        let line = SAMPLE_JSONL_FULL.replace(r#""analysis_ran":true"#, r#""analysis_ran":"true""#);
+        let result = validate_mega_telemetry_line(&line);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be boolean"));
+    }
+
+    #[test]
+    fn validate_multi_line_jsonl() {
+        let content = format!("{}\n{}\n", SAMPLE_JSONL_FULL, SAMPLE_JSONL_CACHE_HIT);
+        let errors = validate_mega_telemetry_jsonl(&content);
+        assert!(
+            errors.is_empty(),
+            "multi-line JSONL should validate: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn validate_multi_line_reports_bad_line() {
+        let content = format!(
+            "{}\nnot json\n{}\n",
+            SAMPLE_JSONL_FULL, SAMPLE_JSONL_CACHE_HIT
+        );
+        let errors = validate_mega_telemetry_jsonl(&content);
+        assert_eq!(errors.len(), 1, "should report exactly one bad line");
+        assert_eq!(errors[0].0, 2, "bad line should be line 2");
+    }
+
+    #[test]
+    fn validate_emitted_line_with_formal_validator() {
+        let screen = MermaidMegaShowcaseScreen::new();
+        let area = Rect::new(0, 0, 120, 40);
+        screen.ensure_render_cache(area);
+
+        let viewport = screen.target_viewport_size(area);
+        let zoom = screen.state.viewport_zoom;
+        let render_cols = (f32::from(viewport.0) * zoom)
+            .round()
+            .clamp(1.0, f32::from(u16::MAX)) as u16;
+        let render_rows = (f32::from(viewport.1) * zoom)
+            .round()
+            .clamp(1.0, f32::from(u16::MAX)) as u16;
+
+        let flags = MegaRecomputeFlags {
+            analysis_ran: true,
+            layout_ran: true,
+            render_ran: true,
+        };
+        let cache = screen.cache.borrow();
+        let line = screen.recompute_jsonl_line(
+            &cache,
+            0,
+            Some("test-run"),
+            99,
+            "alt",
+            flags,
+            viewport,
+            (render_cols, render_rows),
+        );
+        // Validate with BOTH the simple and formal validators.
+        crate::test_logging::validate_mega_recompute_jsonl_schema(&line)
+            .expect("simple validator should pass");
+        validate_mega_telemetry_line(&line).expect("formal validator should pass");
+    }
+
+    #[test]
+    fn validate_emitted_line_without_run_id() {
+        let screen = MermaidMegaShowcaseScreen::new();
+        let area = Rect::new(0, 0, 80, 24);
+        screen.ensure_render_cache(area);
+
+        let viewport = screen.target_viewport_size(area);
+        let zoom = screen.state.viewport_zoom;
+        let render_cols = (f32::from(viewport.0) * zoom)
+            .round()
+            .clamp(1.0, f32::from(u16::MAX)) as u16;
+        let render_rows = (f32::from(viewport.1) * zoom)
+            .round()
+            .clamp(1.0, f32::from(u16::MAX)) as u16;
+
+        let flags = MegaRecomputeFlags {
+            analysis_ran: true,
+            layout_ran: true,
+            render_ran: true,
+        };
+        let cache = screen.cache.borrow();
+        let line = screen.recompute_jsonl_line(
+            &cache,
+            0,
+            None, // No run_id
+            0,
+            "inline",
+            flags,
+            viewport,
+            (render_cols, render_rows),
+        );
+        // run_id is nullable, so validation should still pass.
+        validate_mega_telemetry_line(&line).expect("line without run_id should validate");
+    }
+
+    #[test]
+    fn validate_negative_timing_rejected() {
+        let line = SAMPLE_JSONL_FULL.replace(r#""parse_ms":0.5"#, r#""parse_ms":-1.0"#);
+        let result = validate_mega_telemetry_line(&line);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("non-negative"));
+    }
+
+    #[test]
+    fn sample_fixture_field_count() {
+        // Verify the sample fixtures contain exactly the expected number of fields.
+        let value: serde_json::Value =
+            serde_json::from_str(SAMPLE_JSONL_FULL).expect("fixture should parse");
+        let obj = value.as_object().expect("fixture should be object");
+        let total_expected =
+            MEGA_TELEMETRY_REQUIRED_FIELDS.len() + MEGA_TELEMETRY_NULLABLE_FIELDS.len();
+        assert_eq!(
+            obj.len(),
+            total_expected,
+            "full fixture should have exactly {total_expected} fields, got {}",
+            obj.len()
+        );
+    }
+
+    /// Helper: build a minimal valid JSONL line that passes the schema validator.
+    fn make_valid_mega_jsonl() -> String {
+        let mut parts = Vec::new();
+        parts.push(format!(
+            "\"schema_version\":\"{}\",\"event\":\"mermaid_mega_recompute\"",
+            MEGA_TELEMETRY_SCHEMA
+        ));
+        parts.push(r#""seq":1,"timestamp":"2026-02-05T12:00:00.000Z","seed":42"#.to_string());
+        parts.push(
+            r#""screen_mode":"alt","sample":"basic_flow","diagram_type":"flowchart""#.to_string(),
+        );
+        parts.push(r#""layout_mode":"dense","tier":"Full","glyph_mode":"Unicode""#.to_string());
+        parts
+            .push(r#""render_mode":"Cell","wrap_mode":"Truncate","palette":"Default""#.to_string());
+        parts.push(r#""styles_enabled":true,"comparison_enabled":false"#.to_string());
+        parts.push(r#""comparison_layout_mode":"dense""#.to_string());
+        parts.push(r#""viewport_cols":120,"viewport_rows":40"#.to_string());
+        parts.push(r#""render_cols":120,"render_rows":40"#.to_string());
+        parts.push(r#""zoom":1.0,"pan_x":0,"pan_y":0"#.to_string());
+        parts.push(r#""analysis_epoch":1,"layout_epoch":1,"render_epoch":1"#.to_string());
+        parts.push(r#""analysis_ran":true,"layout_ran":true,"render_ran":true"#.to_string());
+        parts.push(r#""cache_hits":0,"cache_misses":1,"cache_hit":false"#.to_string());
+        parts.push(r#""debounce_skips":0,"layout_budget_exceeded":false"#.to_string());
+        parts.push(r#""parse_ms":1.5,"layout_ms":2.0,"render_ms":0.8"#.to_string());
+        parts.push(r#""node_count":5,"edge_count":4,"error_count":0"#.to_string());
+        parts.push(r#""run_id":"test-run-1""#.to_string());
+        parts.push(r#""layout_iterations":3,"layout_iterations_max":10"#.to_string());
+        parts.push(r#""layout_budget_exceeded_layout":false"#.to_string());
+        parts.push(r#""layout_crossings":0,"layout_ranks":3"#.to_string());
+        parts.push(r#""layout_max_rank_width":2,"layout_total_bends":1"#.to_string());
+        parts.push(r#""layout_position_variance":0.5"#.to_string());
+        format!("{{{}}}", parts.join(","))
+    }
+
+    #[test]
+    fn validate_mega_telemetry_accepts_valid_line() {
+        let line = make_valid_mega_jsonl();
+        validate_mega_telemetry_line(&line).expect("valid line should pass validation");
+    }
+
+    #[test]
+    fn validate_mega_telemetry_rejects_invalid_json() {
+        let result = validate_mega_telemetry_line("not json at all");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid JSON"));
+    }
+
+    #[test]
+    fn validate_mega_telemetry_rejects_non_object() {
+        let result = validate_mega_telemetry_line("[1,2,3]");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("JSON object"));
+    }
+
+    #[test]
+    fn validate_mega_telemetry_rejects_wrong_schema_version() {
+        let mut obj: serde_json::Value = serde_json::from_str(&make_valid_mega_jsonl()).unwrap();
+        obj["schema_version"] = serde_json::json!("wrong-version");
+        let result = validate_mega_telemetry_line(&obj.to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("schema_version mismatch"));
+    }
+
+    #[test]
+    fn validate_mega_telemetry_rejects_wrong_event() {
+        let mut obj: serde_json::Value = serde_json::from_str(&make_valid_mega_jsonl()).unwrap();
+        obj["event"] = serde_json::json!("wrong_event");
+        let result = validate_mega_telemetry_line(&obj.to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("event type mismatch"));
+    }
+
+    #[test]
+    fn validate_mega_telemetry_rejects_missing_required_field() {
+        let mut obj: serde_json::Value = serde_json::from_str(&make_valid_mega_jsonl()).unwrap();
+        obj.as_object_mut().unwrap().remove("sample");
+        let result = validate_mega_telemetry_line(&obj.to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("sample"));
+    }
+
+    #[test]
+    fn validate_mega_telemetry_rejects_null_required_field() {
+        let mut obj: serde_json::Value = serde_json::from_str(&make_valid_mega_jsonl()).unwrap();
+        obj["sample"] = serde_json::Value::Null;
+        let result = validate_mega_telemetry_line(&obj.to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("null"));
+    }
+
+    #[test]
+    fn validate_mega_telemetry_rejects_missing_nullable_field() {
+        let mut obj: serde_json::Value = serde_json::from_str(&make_valid_mega_jsonl()).unwrap();
+        obj.as_object_mut().unwrap().remove("run_id");
+        let result = validate_mega_telemetry_line(&obj.to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("run_id"));
+    }
+
+    #[test]
+    fn validate_mega_telemetry_accepts_null_nullable_field() {
+        let mut obj: serde_json::Value = serde_json::from_str(&make_valid_mega_jsonl()).unwrap();
+        obj["run_id"] = serde_json::Value::Null;
+        obj["parse_ms"] = serde_json::Value::Null;
+        obj["layout_ms"] = serde_json::Value::Null;
+        obj["render_ms"] = serde_json::Value::Null;
+        obj["layout_iterations"] = serde_json::Value::Null;
+        obj["layout_iterations_max"] = serde_json::Value::Null;
+        obj["layout_budget_exceeded_layout"] = serde_json::Value::Null;
+        obj["layout_crossings"] = serde_json::Value::Null;
+        obj["layout_ranks"] = serde_json::Value::Null;
+        obj["layout_max_rank_width"] = serde_json::Value::Null;
+        obj["layout_total_bends"] = serde_json::Value::Null;
+        obj["layout_position_variance"] = serde_json::Value::Null;
+        obj["node_count"] = serde_json::Value::Null;
+        obj["edge_count"] = serde_json::Value::Null;
+        obj["error_count"] = serde_json::Value::Null;
+        validate_mega_telemetry_line(&obj.to_string())
+            .expect("null nullable fields should be accepted");
+    }
+
+    #[test]
+    fn validate_mega_telemetry_rejects_non_boolean_bool_field() {
+        let mut obj: serde_json::Value = serde_json::from_str(&make_valid_mega_jsonl()).unwrap();
+        obj["analysis_ran"] = serde_json::json!("yes");
+        let result = validate_mega_telemetry_line(&obj.to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("analysis_ran"));
+    }
+
+    #[test]
+    fn validate_mega_telemetry_rejects_negative_nonneg_field() {
+        let mut obj: serde_json::Value = serde_json::from_str(&make_valid_mega_jsonl()).unwrap();
+        obj["seq"] = serde_json::json!(-1);
+        let result = validate_mega_telemetry_line(&obj.to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("non-negative"));
+    }
+
+    #[test]
+    fn validate_mega_telemetry_rejects_zero_zoom() {
+        let mut obj: serde_json::Value = serde_json::from_str(&make_valid_mega_jsonl()).unwrap();
+        obj["zoom"] = serde_json::json!(0.0);
+        let result = validate_mega_telemetry_line(&obj.to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("zoom"));
+    }
+
+    #[test]
+    fn validate_mega_telemetry_rejects_negative_timing() {
+        let mut obj: serde_json::Value = serde_json::from_str(&make_valid_mega_jsonl()).unwrap();
+        obj["parse_ms"] = serde_json::json!(-1.0);
+        let result = validate_mega_telemetry_line(&obj.to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("parse_ms"));
+    }
+
+    #[test]
+    fn validate_mega_telemetry_rejects_non_string_string_field() {
+        let mut obj: serde_json::Value = serde_json::from_str(&make_valid_mega_jsonl()).unwrap();
+        obj["diagram_type"] = serde_json::json!(42);
+        let result = validate_mega_telemetry_line(&obj.to_string());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("diagram_type"));
+    }
+
+    #[test]
+    fn validate_mega_telemetry_jsonl_multi_line() {
+        let valid = make_valid_mega_jsonl();
+        let content = format!("{valid}\n{valid}\n\n{valid}\n");
+        let errors = validate_mega_telemetry_jsonl(&content);
+        assert!(errors.is_empty(), "all valid lines should pass: {errors:?}");
+    }
+
+    #[test]
+    fn validate_mega_telemetry_jsonl_mixed_valid_invalid() {
+        let valid = make_valid_mega_jsonl();
+        let content = format!("{valid}\nnot-json\n{valid}\n");
+        let errors = validate_mega_telemetry_jsonl(&content);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].0, 2); // line 2 (1-indexed)
+    }
+
+    #[test]
+    fn mega_recompute_event_to_jsonl_produces_valid_json() {
+        let event = MegaRecomputeEvent {
+            schema_version: MEGA_TELEMETRY_SCHEMA,
+            event: "mermaid_mega_recompute",
+            seq: 0,
+            sample: "test_flow".to_string(),
+            sample_idx: 0,
+            diagram_type: "flowchart".to_string(),
+            trigger: "initial".to_string(),
+            layout_mode: "dense".to_string(),
+            tier: "Full".to_string(),
+            glyph_mode: "Unicode".to_string(),
+            render_mode: "Cell".to_string(),
+            wrap_mode: "Truncate".to_string(),
+            palette: "Default".to_string(),
+            viewport_cols: 80,
+            viewport_rows: 24,
+            zoom: 1.0,
+            parse_ms: Some(1.0),
+            layout_ms: Some(2.0),
+            render_ms: Some(0.5),
+            total_ms: 3.5,
+            analysis_ran: true,
+            layout_ran: true,
+            render_ran: true,
+            node_count: 3,
+            edge_count: 2,
+            cluster_count: 0,
+            label_count: 3,
+            cache_hits: 0,
+            cache_misses: 1,
+            cache_hit_ratio: 0.0,
+            debounce_skips: 0,
+            layout_iterations: Some(5),
+            layout_budget_exceeded: false,
+            crossings: Some(0),
+            total_bends: Some(1),
+            position_variance: Some(0.25),
+            ranks: Some(3),
+            max_rank_width: Some(2),
+            error_count: 0,
+        };
+        let line = event.to_jsonl();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&line).expect("to_jsonl should produce valid JSON");
+        let obj = parsed.as_object().unwrap();
+
+        assert_eq!(obj["schema_version"], MEGA_TELEMETRY_SCHEMA);
+        assert_eq!(obj["event"], "mermaid_mega_recompute");
+        assert_eq!(obj["seq"], 0);
+        assert_eq!(obj["sample"], "test_flow");
+        assert_eq!(obj["trigger"], "initial");
+        assert_eq!(obj["viewport_cols"], 80);
+        assert_eq!(obj["zoom"], 1.0);
+        assert_eq!(obj["analysis_ran"], true);
+        assert_eq!(obj["node_count"], 3);
+        assert_eq!(obj["cache_misses"], 1);
+        assert_eq!(obj["crossings"], 0);
+        assert!(obj["layout_iterations"].as_u64().is_some());
+    }
+
+    #[test]
+    fn mega_recompute_event_null_optional_fields() {
+        let event = MegaRecomputeEvent {
+            schema_version: MEGA_TELEMETRY_SCHEMA,
+            event: "mermaid_mega_recompute",
+            seq: 1,
+            sample: "empty".to_string(),
+            sample_idx: 0,
+            diagram_type: "flowchart".to_string(),
+            trigger: "resize".to_string(),
+            layout_mode: "dense".to_string(),
+            tier: "Fast".to_string(),
+            glyph_mode: "ASCII".to_string(),
+            render_mode: "Cell".to_string(),
+            wrap_mode: "Truncate".to_string(),
+            palette: "Default".to_string(),
+            viewport_cols: 40,
+            viewport_rows: 10,
+            zoom: 2.0,
+            parse_ms: None,
+            layout_ms: None,
+            render_ms: None,
+            total_ms: 0.0,
+            analysis_ran: false,
+            layout_ran: false,
+            render_ran: false,
+            node_count: 0,
+            edge_count: 0,
+            cluster_count: 0,
+            label_count: 0,
+            cache_hits: 5,
+            cache_misses: 0,
+            cache_hit_ratio: 1.0,
+            debounce_skips: 2,
+            layout_iterations: None,
+            layout_budget_exceeded: false,
+            crossings: None,
+            total_bends: None,
+            position_variance: None,
+            ranks: None,
+            max_rank_width: None,
+            error_count: 0,
+        };
+        let line = event.to_jsonl();
+        let parsed: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let obj = parsed.as_object().unwrap();
+
+        assert!(obj["parse_ms"].is_null());
+        assert!(obj["layout_ms"].is_null());
+        assert!(obj["render_ms"].is_null());
+        assert!(obj["layout_iterations"].is_null());
+        assert!(obj["crossings"].is_null());
+        assert!(obj["total_bends"].is_null());
+        assert!(obj["position_variance"].is_null());
+        assert!(obj["ranks"].is_null());
+        assert!(obj["max_rank_width"].is_null());
+    }
+
+    #[test]
+    fn mega_telemetry_schema_constant_stable() {
+        assert_eq!(MEGA_TELEMETRY_SCHEMA, "ftui-mega-telemetry-v1");
+    }
+
+    #[test]
+    fn mega_telemetry_valid_triggers_non_empty() {
+        assert!(!MEGA_TELEMETRY_VALID_TRIGGERS.is_empty());
+        assert!(MEGA_TELEMETRY_VALID_TRIGGERS.contains(&"initial"));
+        assert!(MEGA_TELEMETRY_VALID_TRIGGERS.contains(&"resize"));
+        assert!(MEGA_TELEMETRY_VALID_TRIGGERS.contains(&"zoom"));
+    }
+
+    #[test]
+    fn mega_telemetry_required_fields_non_empty() {
+        assert!(MEGA_TELEMETRY_REQUIRED_FIELDS.len() > 10);
+        assert!(MEGA_TELEMETRY_REQUIRED_FIELDS.contains(&"schema_version"));
+        assert!(MEGA_TELEMETRY_REQUIRED_FIELDS.contains(&"event"));
+        assert!(MEGA_TELEMETRY_REQUIRED_FIELDS.contains(&"seq"));
+    }
+
+    #[test]
+    fn mega_telemetry_nullable_fields_non_empty() {
+        assert!(!MEGA_TELEMETRY_NULLABLE_FIELDS.is_empty());
+        assert!(MEGA_TELEMETRY_NULLABLE_FIELDS.contains(&"parse_ms"));
+        assert!(MEGA_TELEMETRY_NULLABLE_FIELDS.contains(&"layout_ms"));
+        assert!(MEGA_TELEMETRY_NULLABLE_FIELDS.contains(&"render_ms"));
+    }
+
+    #[test]
+    fn mega_telemetry_recompute_jsonl_line_passes_validator() {
+        let screen = MermaidMegaShowcaseScreen::new();
+        let area = Rect::new(0, 0, 120, 40);
+        screen.ensure_render_cache(area);
+
+        let viewport = screen.target_viewport_size(area);
+        let zoom = screen.state.viewport_zoom;
+        let render_cols = (f32::from(viewport.0) * zoom)
+            .round()
+            .clamp(1.0, f32::from(u16::MAX)) as u16;
+        let render_rows = (f32::from(viewport.1) * zoom)
+            .round()
+            .clamp(1.0, f32::from(u16::MAX)) as u16;
+
+        let flags = MegaRecomputeFlags {
+            analysis_ran: true,
+            layout_ran: true,
+            render_ran: true,
+        };
+        let cache = screen.cache.borrow();
+        let line = screen.recompute_jsonl_line(
+            &cache,
+            42,
+            Some("test-run"),
+            99,
+            "alt",
+            flags,
+            viewport,
+            (render_cols, render_rows),
+        );
+
+        // Must pass the structured validator too.
+        validate_mega_telemetry_line(&line)
+            .expect("recompute_jsonl_line output should pass structured validator");
     }
 }

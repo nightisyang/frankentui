@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 #![allow(dead_code)]
+#![recursion_limit = "256"]
 
 //! FrankenTUI Demo Showcase library.
 //!

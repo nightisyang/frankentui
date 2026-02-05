@@ -1,0 +1,24 @@
+Mermaid Showca╭─────────────── Help (? to close) ────────────────╮ Viewport: aut
+╭───────Sample│  Navigation─────────────────────Viewport─────────│─────────────╮
+│> Flow Basic │        j / Down  Next sample                     │             │
+│  Flow Subgra│          k / Up  Previous sample                 │             │
+│  Flow Dense │      Home / End  First / last sample             │OK           │
+│  Flow Long L│           Enter  Re-render sample              Ye│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿ │
+│  Flow Unicod│             Tab  Select next node             ⢐⢶⢾│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿ │
+│  Flow Styles│           S-Tab  Select previous nodek⣦⣤⣄⣀ ⢀⡠⠊⠁⠈ │             │
+│  Sequence Mi│               /  Enter search mode⠿⣿⣿⡿⠿⠟⠛⠋⠉⠑⠢⡀   │             │
+│  Sequence Ch│  Render Config                               ⠈⢑⣼⣼│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿ │
+│  Sequence De│               l  Cycle layout mode              ⢸│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿ │
+│  Class Basic│               r  Force re-layout               No│Fix          │
+│  Class Membe│               t  Cycle tier                      │             │
+│  State Basic│               g  Toggle glyph mode               │             │
+│  State Compo│               b  Cycle render mode───────────────│─────────────╯
+│  ER Basic [e│               s  Toggle styles──Metrics──────────│─────────────╮
+│  Gantt Basic│               w  Cycle wrap mode                 │             │
+│  Mindmap See│           p / P  Cycle palette                   │             │
+│  Mindmap Dee│  ViewportRender: 0.00 ms                         │             │
+│  Pie Basic [│           + / -  Zoom in / out                   │             │
+│  Pie Many [p│               0  Reset zoom                      │             │
+│  Gitgraph Ba│               f  Fit to viewport                 │             │
+╰─────────────│    ... more below────────────────────────────────│─────────────╯
+j/k sample  En╰──────────────────────────────────────────────────╯              

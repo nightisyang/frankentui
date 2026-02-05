@@ -2793,6 +2793,14 @@ fn mermaid_showcase_help_overlay_60x20() {
     mermaid_showcase_snapshot(&mut screen, 60, 20, "mermaid_showcase_help_overlay_60x20");
 }
 
+#[test]
+fn mermaid_showcase_help_overlay_80x24() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen = ftui_demo_showcase::screens::mermaid_showcase::MermaidShowcaseScreen::new();
+    screen.update(&press(KeyCode::Char('?')));
+    mermaid_showcase_snapshot(&mut screen, 80, 24, "mermaid_showcase_help_overlay_80x24");
+}
+
 // ============================================================================
 // Mermaid Mega Showcase
 // ============================================================================
@@ -2923,6 +2931,16 @@ fn mega_showcase_help_overlay_120x40() {
         ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
     screen.update(&press(KeyCode::Char('?')));
     mega_showcase_snapshot(&mut screen, 120, 40, "mega_showcase_help_overlay_120x40");
+}
+
+// Help overlay at 80x24 — compact mode with truncation.
+#[test]
+fn mega_showcase_help_overlay_80x24() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen =
+        ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
+    screen.update(&press(KeyCode::Char('?')));
+    mega_showcase_snapshot(&mut screen, 80, 24, "mega_showcase_help_overlay_80x24");
 }
 
 // Panels collapsed via Escape.

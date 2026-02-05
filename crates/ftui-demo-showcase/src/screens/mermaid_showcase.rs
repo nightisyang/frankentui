@@ -19,8 +19,6 @@ use ftui_extras::mermaid_layout;
 use ftui_extras::mermaid_render;
 use ftui_layout::{Constraint, Flex};
 use ftui_render::buffer::Buffer;
-use ftui_render::cell::{Cell, PackedRgba};
-use ftui_render::drawing::{BorderChars, Draw};
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::Style;
