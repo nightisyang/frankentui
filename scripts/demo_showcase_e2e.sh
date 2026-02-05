@@ -1020,8 +1020,196 @@ if $CAN_SMOKE; then
                 "screen=${label} screen_num=${screen_num} keys=${keys_display} mode=${mode} cols=${cols} rows=${rows} seed=${seed_val} hash_key=${hash_key} hash=${hash} duration_ms=${dur_ms} exit=${exit_code} outcome=${outcome}"
         }
 
+        run_table_theme_case() {
+            local cols="${1:-80}"
+            local rows="${2:-24}"
+            local label="table_theme_gallery"
+            local screen_num=11
+            local log_file="$LOG_DIR/11d_${label}.log"
+            local report_jsonl="$LOG_DIR/11d_${label}.jsonl"
+            local export_file="$LOG_DIR/11d_${label}_export.json"
+            local clipboard_file="$LOG_DIR/11d_${label}_clipboard.json"
+            local keys_display="v l s e i"
+            local case_name="data_viz_tables"
+            local action="gallery_e2e"
+            local details="screen=${screen_num} keys=${keys_display} cols=${cols} rows=${rows} report=${report_jsonl} export=${export_file} clipboard=${clipboard_file}"
+
+            : > "$report_jsonl"
+
+            local cmd="stty rows ${rows} cols ${cols} 2>/dev/null; (sleep 1.2; printf 'v'; sleep 0.2; printf 'l'; sleep 0.2; printf 's'; sleep 0.2; printf 'e'; sleep 0.4; printf 'i') & FTUI_TABLE_THEME_REPORT_PATH='${report_jsonl}' FTUI_TABLE_THEME_EXPORT_PATH='${export_file}' FTUI_TABLE_THEME_IMPORT_PATH='${export_file}' FTUI_TABLE_THEME_CLIPBOARD='${clipboard_file}' FTUI_DEMO_EXIT_AFTER_MS=4500 FTUI_DEMO_SCREEN=${screen_num} timeout 12 $DEMO_BIN"
+            local start_ms dur_ms exit_code outcome status hash
+
+            echo "--- ${label} (screen ${screen_num}, keys=${keys_display}) ---"
+            jsonl_case_step_start "$case_name" "$label" "$action" "$details"
+            start_ms=$(e2e_now_ms)
+            if run_in_pty "$cmd" > "$log_file" 2>&1; then
+                exit_code=0
+            else
+                exit_code=$?
+            fi
+            dur_ms=$(( $(e2e_now_ms) - start_ms ))
+
+            if [ "$exit_code" -eq 124 ] || [ "$exit_code" -eq 0 ]; then
+                outcome="pass"
+                status="pass"
+            else
+                outcome="fail"
+                status="fail"
+                data_failures=$((data_failures + 1))
+            fi
+
+            hash=$(sha256sum "$log_file" | awk '{print $1}')
+            local seed_val="${E2E_CONTEXT_SEED:-${E2E_SEED:-0}}"
+            local mode="${E2E_CONTEXT_MODE:-alt}"
+            local hash_key
+            hash_key="$(e2e_hash_key "$mode" "$cols" "$rows" "$seed_val")"
+            jsonl_case_step_end "$case_name" "$label" "$status" "$dur_ms" "$action" "$details"
+            jsonl_assert "data_screen_${label}" "$status" \
+                "screen=${label} screen_num=${screen_num} keys=${keys_display} mode=${mode} cols=${cols} rows=${rows} seed=${seed_val} hash_key=${hash_key} hash=${hash} duration_ms=${dur_ms} exit=${exit_code} outcome=${outcome}"
+
+            if [[ ! -s "$report_jsonl" ]]; then
+                jsonl_assert "table_theme_report_present" "fail" "path=${report_jsonl}"
+                data_failures=$((data_failures + 1))
+                return 1
+            fi
+
+            jsonl_assert "artifact_table_theme_report" "pass" "path=${report_jsonl}"
+            jsonl_assert "artifact_table_theme_export" "pass" "path=${export_file}"
+            jsonl_assert "artifact_table_theme_clipboard" "pass" "path=${clipboard_file}"
+            if [[ ! -f "$export_file" ]]; then
+                data_failures=$((data_failures + 1))
+            fi
+            if [[ ! -f "$clipboard_file" ]]; then
+                data_failures=$((data_failures + 1))
+            fi
+
+            local export_hash=""
+            local clipboard_hash=""
+            if [[ -f "$export_file" ]]; then
+                export_hash="$(sha256sum "$export_file" | awk '{print $1}')"
+            fi
+            if [[ -f "$clipboard_file" ]]; then
+                clipboard_hash="$(sha256sum "$clipboard_file" | awk '{print $1}')"
+            fi
+
+            if command -v jq >/dev/null 2>&1; then
+                local preview_modes
+                preview_modes="$(jq -r 'select(.event=="table_theme_gallery") | .preview_mode' "$report_jsonl" | sort -u | tr '\n' ' ')"
+                if [[ "$preview_modes" == *"Markdown"* && "$preview_modes" == *"Widget"* ]]; then
+                    jsonl_assert "table_theme_preview_modes" "pass" "modes=${preview_modes}"
+                else
+                    jsonl_assert "table_theme_preview_modes" "fail" "modes=${preview_modes}"
+                    data_failures=$((data_failures + 1))
+                fi
+
+                local markdown_hash=""
+                local widget_hash=""
+                markdown_hash="$(jq -r 'select(.event=="table_theme_gallery" and .preset_index == .selected_index and .preview_mode=="Markdown") | .style_hash' "$report_jsonl" | tail -n 1)"
+                widget_hash="$(jq -r 'select(.event=="table_theme_gallery" and .preset_index == .selected_index and .preview_mode=="Widget") | .style_hash' "$report_jsonl" | tail -n 1)"
+                if [[ -n "$markdown_hash" && -n "$widget_hash" && "$markdown_hash" == "$widget_hash" ]]; then
+                    jsonl_assert "table_theme_markdown_widget_parity" "pass" "markdown=${markdown_hash} widget=${widget_hash}"
+                else
+                    jsonl_assert "table_theme_markdown_widget_parity" "fail" "markdown=${markdown_hash} widget=${widget_hash}"
+                    data_failures=$((data_failures + 1))
+                fi
+
+                if jq -e 'select(.event=="table_theme_save")' "$report_jsonl" >/dev/null 2>&1; then
+                    jsonl_assert "table_theme_save_event" "pass" "ok"
+                else
+                    jsonl_assert "table_theme_save_event" "fail" "missing save event"
+                    data_failures=$((data_failures + 1))
+                fi
+
+                if jq -e 'select(.event=="table_theme_export")' "$report_jsonl" >/dev/null 2>&1; then
+                    jsonl_assert "table_theme_export_event" "pass" "export_sha256=${export_hash}"
+                else
+                    jsonl_assert "table_theme_export_event" "fail" "missing export event"
+                    data_failures=$((data_failures + 1))
+                fi
+
+                if jq -e 'select(.event=="table_theme_import")' "$report_jsonl" >/dev/null 2>&1; then
+                    jsonl_assert "table_theme_import_event" "pass" "ok"
+                else
+                    jsonl_assert "table_theme_import_event" "fail" "missing import event"
+                    data_failures=$((data_failures + 1))
+                fi
+
+                local seed_json="null"
+                if [[ -n "${seed_val:-}" ]]; then seed_json="${seed_val}"; fi
+                jq -c \
+                    --arg schema_version "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}" \
+                    --arg type "table_theme_gallery" \
+                    --arg run_id "$RUN_ID" \
+                    --arg hash "$hash" \
+                    --argjson seed "$seed_json" \
+                    --argjson screen_id "$screen_num" \
+                    --arg preview_modes "$preview_modes" \
+                    'select(.event=="table_theme_gallery" and .preset_index == .selected_index) |
+                        . as $line |
+                        ($line.column_widths // []) as $widths |
+                        {schema_version:$schema_version,
+                         type:$type,
+                         timestamp:$line.timestamp,
+                         run_id:$run_id,
+                         seed:$seed,
+                         screen_id:$screen_id,
+                         screen:"table_theme_gallery",
+                         preview_modes:$preview_modes,
+                         preset_id:$line.preset_id,
+                         preset_name:$line.preset_name,
+                         preview_mode:$line.preview_mode,
+                         phase:$line.phase,
+                         highlight_target:(if $line.highlight_row then "row" else "none" end),
+                         resolved_style_hash:$line.style_hash,
+                         effects_hash:$line.effects_hash,
+                         column_widths:$widths,
+                         table_dims:{
+                            cols:($widths | length),
+                            rows:5,
+                            width:(if ($widths | length) > 0 then ($widths | add) + (($widths | length) - 1) else 0 end),
+                            height:5
+                         },
+                         terminal_size:{cols:$line.screen_width, rows:$line.screen_height},
+                         output_hash:$hash,
+                         checksum:$hash,
+                         demo_run_id:$line.run_id}' "$report_jsonl" | while IFS= read -r line; do
+                    jsonl_emit "$line"
+                done
+
+                jq -c \
+                    --arg schema_version "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}" \
+                    --arg type "table_theme_action" \
+                    --arg run_id "$RUN_ID" \
+                    --arg hash "$hash" \
+                    --arg export_sha "$export_hash" \
+                    --arg clipboard_sha "$clipboard_hash" \
+                    --argjson seed "$seed_json" \
+                    'select(.event=="table_theme_save" or .event=="table_theme_export" or .event=="table_theme_import") |
+                        {schema_version:$schema_version,
+                         type:$type,
+                         timestamp:.timestamp,
+                         run_id:$run_id,
+                         seed:$seed,
+                         action:.event,
+                         preset_name:.preset_name,
+                         style_hash:.style_hash,
+                         effects_hash:.effects_hash,
+                         effect_count:.effect_count,
+                         file_path:.file_path,
+                         clipboard_path:.clipboard_path,
+                         export_sha256:(if .event=="table_theme_export" and $export_sha != "" then $export_sha else null end),
+                         clipboard_sha256:(if .event=="table_theme_export" and $clipboard_sha != "" then $clipboard_sha else null end),
+                         output_hash:$hash,
+                         checksum:$hash}' "$report_jsonl" | while IFS= read -r line; do
+                    jsonl_emit "$line"
+                done
+            else
+                jsonl_assert "table_theme_jsonl_parse" "skipped" "jq missing"
+            fi
+        }
+
         run_data_case "data_viz" 8 $'\x1b[C\x1b[D' 80 24
-        run_data_case "table_theme_gallery" 11 "v" 80 24
+        run_table_theme_case 80 24
         run_data_case "widget_gallery" 5 "j" 80 24
 
         echo ""

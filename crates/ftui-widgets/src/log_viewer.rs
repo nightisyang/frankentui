@@ -136,6 +136,8 @@ pub struct FilterStats {
     pub full_rescan_lines: u64,
     /// Search matches added incrementally on push.
     pub incremental_search_matches: u64,
+    /// Lines checked incrementally for search matches.
+    pub incremental_search_checks: u64,
 }
 
 impl FilterStats {
@@ -298,6 +300,7 @@ impl LogViewer {
             if let Some(ref mut search) = self.search {
                 let should_check = self.filter.is_none() || filter_matched;
                 if should_check {
+                    self.filter_stats.incremental_search_checks += 1;
                     let ranges = find_match_ranges(
                         &plain,
                         &search.query,
@@ -756,10 +759,10 @@ impl LogViewer {
     #[must_use]
     pub fn search_match_rate_hint(&self) -> f64 {
         let stats = &self.filter_stats;
-        if stats.incremental_checks == 0 {
+        if stats.incremental_search_checks == 0 {
             return 0.0;
         }
-        stats.incremental_search_matches as f64 / stats.incremental_checks as f64
+        stats.incremental_search_matches as f64 / stats.incremental_search_checks as f64
     }
 
     /// Render a single line with optional wrapping and search highlighting.
@@ -2201,8 +2204,9 @@ mod tests {
         log.push("WARN skip");
 
         assert_eq!(log.filter_stats().incremental_checks, 4);
+        assert_eq!(log.filter_stats().incremental_search_checks, 2);
         assert_eq!(log.filter_stats().incremental_search_matches, 2);
-        assert_eq!(log.search_match_rate_hint(), 0.5);
+        assert_eq!(log.search_match_rate_hint(), 1.0);
     }
 
     #[test]

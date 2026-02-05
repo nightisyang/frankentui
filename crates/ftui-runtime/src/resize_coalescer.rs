@@ -77,6 +77,12 @@ fn fnv_hash_bytes(hash: &mut u64, bytes: &[u8]) {
     }
 }
 
+#[inline]
+fn duration_since_or_zero(now: Instant, earlier: Instant) -> Duration {
+    now.checked_duration_since(earlier)
+        .unwrap_or(Duration::ZERO)
+}
+
 fn default_resize_run_id() -> String {
     format!("resize-{}", std::process::id())
 }
@@ -763,7 +769,7 @@ impl ResizeCoalescer {
         self.update_regime(now);
 
         // Calculate dt
-        let dt = self.last_event.map(|t| now.duration_since(t));
+        let dt = self.last_event.map(|t| duration_since_or_zero(now, t));
         let dt_ms = dt.map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0);
         self.last_event = Some(now);
 
@@ -785,7 +791,7 @@ impl ResizeCoalescer {
         }
 
         // Check hard deadline
-        let time_since_render = now.duration_since(self.last_render);
+        let time_since_render = duration_since_or_zero(now, self.last_render);
         if time_since_render >= Duration::from_millis(self.config.hard_deadline_ms) {
             return self.apply_pending_at(now, true);
         }
@@ -829,7 +835,7 @@ impl ResizeCoalescer {
         }
 
         // Check hard deadline
-        let time_since_render = now.duration_since(self.last_render);
+        let time_since_render = duration_since_or_zero(now, self.last_render);
         if time_since_render >= Duration::from_millis(self.config.hard_deadline_ms) {
             return self.apply_pending_at(now, true);
         }
@@ -838,7 +844,7 @@ impl ResizeCoalescer {
 
         // Check if enough time has passed since last event
         if let Some(last_event) = self.last_event {
-            let since_last_event = now.duration_since(last_event);
+            let since_last_event = duration_since_or_zero(now, last_event);
             if since_last_event >= Duration::from_millis(delay_ms) {
                 return self.apply_pending_at(now, false);
             }
@@ -865,7 +871,7 @@ impl ResizeCoalescer {
 
         let delay_ms = self.current_delay_ms();
 
-        let elapsed = now.duration_since(last_event);
+        let elapsed = duration_since_or_zero(now, last_event);
         let target = Duration::from_millis(delay_ms);
 
         if elapsed >= target {
@@ -1078,7 +1084,7 @@ impl ResizeCoalescer {
 
         let coalesce_time = self
             .window_start
-            .map(|s| now.duration_since(s))
+            .map(|s| duration_since_or_zero(now, s))
             .unwrap_or(Duration::ZERO);
         let coalesce_ms = coalesce_time.as_secs_f64() * 1000.0;
 
@@ -1184,7 +1190,10 @@ impl ResizeCoalescer {
         }
 
         let first = *self.event_times.front().unwrap();
-        let window_duration = now.duration_since(first);
+        let window_duration = match now.checked_duration_since(first) {
+            Some(duration) => duration,
+            None => return 0.0,
+        };
 
         // Enforce a minimum duration of 1ms to prevent divide-by-zero or instability
         // and to correctly reflect high rates for near-instantaneous bursts.
@@ -1211,17 +1220,18 @@ impl ResizeCoalescer {
 
         let elapsed_ms = self
             .log_start
-            .map(|t| now.duration_since(t).as_secs_f64() * 1000.0)
+            .map(|t| duration_since_or_zero(now, t).as_secs_f64() * 1000.0)
             .unwrap_or(0.0);
 
         let dt_ms = dt_ms_override
             .or_else(|| {
                 self.last_event
-                    .map(|t| now.duration_since(t).as_secs_f64() * 1000.0)
+                    .map(|t| duration_since_or_zero(now, t).as_secs_f64() * 1000.0)
             })
             .unwrap_or(0.0);
 
-        let time_since_render_ms = now.duration_since(self.last_render).as_secs_f64() * 1000.0;
+        let time_since_render_ms =
+            duration_since_or_zero(now, self.last_render).as_secs_f64() * 1000.0;
 
         let applied_size =
             if action == "apply" || action == "apply_forced" || action == "apply_immediate" {
@@ -1622,7 +1632,7 @@ mod tests {
         let last_event_ms = schedule
             .last()
             .map(|(time, _, _)| {
-                u64::try_from(time.duration_since(base).as_millis()).unwrap_or(u64::MAX)
+                u64::try_from(duration_since_or_zero(*time, base).as_millis()).unwrap_or(u64::MAX)
             })
             .unwrap_or(0);
         let end_ms = last_event_ms

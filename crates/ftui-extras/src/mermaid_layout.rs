@@ -337,14 +337,25 @@ fn build_rank_buckets(ranks: &[usize]) -> Vec<Vec<usize>> {
 }
 
 /// Compute barycenter of a node relative to the previous rank.
-fn barycenter(_node: usize, prev_order: &[usize], neighbors: &[usize]) -> f64 {
+fn order_positions(order: &[usize], n: usize) -> Vec<usize> {
+    let mut positions = vec![usize::MAX; n];
+    for (pos, &node) in order.iter().enumerate() {
+        if node < n {
+            positions[node] = pos;
+        }
+    }
+    positions
+}
+
+fn barycenter(prev_pos: &[usize], neighbors: &[usize]) -> f64 {
     if neighbors.is_empty() {
         return f64::MAX;
     }
     let mut sum = 0.0;
     let mut count = 0usize;
     for &nb in neighbors {
-        if let Some(pos) = prev_order.iter().position(|&x| x == nb) {
+        let pos = prev_pos.get(nb).copied().unwrap_or(usize::MAX);
+        if pos != usize::MAX {
             sum += pos as f64;
             count += 1;
         }
@@ -369,12 +380,12 @@ fn barycenter_sweep_forward(
     if r == 0 || r >= rank_order.len() {
         return;
     }
-    let prev = rank_order[r - 1].clone();
+    let prev_pos = order_positions(&rank_order[r - 1], graph.n);
 
     let scored: Vec<(usize, f64)> = rank_order[r]
         .iter()
         .map(|&v| {
-            let bc = barycenter(v, &prev, &graph.rev[v]);
+            let bc = barycenter(&prev_pos, &graph.rev[v]);
             (v, bc)
         })
         .collect();
@@ -402,12 +413,12 @@ fn barycenter_sweep_backward(
     if r + 1 >= rank_order.len() {
         return;
     }
-    let next = rank_order[r + 1].clone();
+    let next_pos = order_positions(&rank_order[r + 1], graph.n);
 
     let scored: Vec<(usize, f64)> = rank_order[r]
         .iter()
         .map(|&v| {
-            let bc = barycenter(v, &next, &graph.adj[v]);
+            let bc = barycenter(&next_pos, &graph.adj[v]);
             (v, bc)
         })
         .collect();
@@ -474,33 +485,84 @@ fn cluster_sort_key(
 
 /// Count edge crossings between two adjacent ranks.
 fn count_crossings(rank_a: &[usize], rank_b: &[usize], graph: &LayoutGraph) -> usize {
+    struct Fenwick {
+        tree: Vec<usize>,
+    }
+
+    impl Fenwick {
+        fn new(size: usize) -> Self {
+            Self {
+                tree: vec![0; size.saturating_add(1)],
+            }
+        }
+
+        fn add(&mut self, idx: usize, value: usize) {
+            let mut i = idx.saturating_add(1);
+            while i < self.tree.len() {
+                self.tree[i] = self.tree[i].saturating_add(value);
+                i += i & i.wrapping_neg();
+            }
+        }
+
+        /// Sum of counts in [0, idx).
+        fn sum(&self, idx: usize) -> usize {
+            let mut acc = 0usize;
+            let mut i = idx.min(self.tree.len().saturating_sub(1));
+            while i > 0 {
+                acc = acc.saturating_add(self.tree[i]);
+                i &= i - 1;
+            }
+            acc
+        }
+    }
+
     // Build position maps.
-    let mut pos_b = vec![0usize; graph.n];
+    let mut pos_b = vec![usize::MAX; graph.n];
+    let mut in_b = vec![false; graph.n];
     for (i, &v) in rank_b.iter().enumerate() {
         pos_b[v] = i;
+        in_b[v] = true;
     }
 
     // Collect all edges between rank_a and rank_b as (pos_a, pos_b) pairs.
     let mut edges: Vec<(usize, usize)> = Vec::new();
     for (i, &u) in rank_a.iter().enumerate() {
         for &v in &graph.adj[u] {
-            if rank_b.contains(&v) {
+            if in_b[v] {
                 edges.push((i, pos_b[v]));
             }
         }
     }
 
-    // Count inversions (crossings) by brute force for small sizes,
-    // which is sufficient for terminal diagrams.
-    let mut crossings = 0;
-    for i in 0..edges.len() {
-        for j in (i + 1)..edges.len() {
-            let (a1, b1) = edges[i];
-            let (a2, b2) = edges[j];
-            if (a1 < a2 && b1 > b2) || (a1 > a2 && b1 < b2) {
-                crossings += 1;
-            }
+    if edges.len() < 2 {
+        return 0;
+    }
+
+    // Count inversions using a Fenwick tree (O(E log V)).
+    // We process edges grouped by pos_a so edges sharing the same
+    // source do not contribute crossings.
+    let mut crossings = 0usize;
+    let mut bit = Fenwick::new(rank_b.len());
+    let mut total_seen = 0usize;
+    let mut idx = 0usize;
+    while idx < edges.len() {
+        let current_a = edges[idx].0;
+        let mut end = idx + 1;
+        while end < edges.len() && edges[end].0 == current_a {
+            end += 1;
         }
+
+        for &(_, b) in &edges[idx..end] {
+            let prefix_inclusive = bit.sum(b.saturating_add(1));
+            crossings = crossings.saturating_add(total_seen.saturating_sub(prefix_inclusive));
+        }
+
+        for &(_, b) in &edges[idx..end] {
+            bit.add(b, 1);
+            total_seen = total_seen.saturating_add(1);
+        }
+
+        idx = end;
     }
     crossings
 }
@@ -510,6 +572,22 @@ fn total_crossings(rank_order: &[Vec<usize>], graph: &LayoutGraph) -> usize {
     let mut total = 0;
     for r in 0..rank_order.len().saturating_sub(1) {
         total += count_crossings(&rank_order[r], &rank_order[r + 1], graph);
+    }
+    total
+}
+
+/// Total crossings with early-exit once `limit` is reached.
+fn total_crossings_with_limit(
+    rank_order: &[Vec<usize>],
+    graph: &LayoutGraph,
+    limit: usize,
+) -> usize {
+    let mut total = 0usize;
+    for r in 0..rank_order.len().saturating_sub(1) {
+        total = total.saturating_add(count_crossings(&rank_order[r], &rank_order[r + 1], graph));
+        if total >= limit {
+            break;
+        }
     }
     total
 }
@@ -545,7 +623,7 @@ fn minimize_crossings(
             barycenter_sweep_backward(rank_order, graph, r, cluster_map);
         }
 
-        let crossings = total_crossings(rank_order, graph);
+        let crossings = total_crossings_with_limit(rank_order, graph, best_crossings);
         if crossings < best_crossings {
             best_crossings = crossings;
             best_order = rank_order.clone();
@@ -1045,7 +1123,7 @@ fn layout_sequence_diagram(
     };
 
     let obj = evaluate_layout(&layout);
-    emit_layout_metrics_jsonl(config, &layout, &obj);
+    emit_layout_metrics_jsonl(config, &layout, &obj, crate::mermaid::hash_ir(ir));
 
     layout
 }
@@ -1222,7 +1300,7 @@ pub fn layout_diagram_with_spacing(
 
     // Emit aesthetic metrics to evidence log (bd-19cll).
     let obj = evaluate_layout(&layout);
-    emit_layout_metrics_jsonl(config, &layout, &obj);
+    emit_layout_metrics_jsonl(config, &layout, &obj, crate::mermaid::hash_ir(ir));
 
     layout
 }
@@ -1535,6 +1613,7 @@ fn emit_layout_metrics_jsonl(
     config: &MermaidConfig,
     layout: &DiagramLayout,
     obj: &LayoutObjective,
+    ir_hash: u64,
 ) {
     let Some(path) = config.log_path.as_deref() else {
         return;
@@ -1544,6 +1623,7 @@ fn emit_layout_metrics_jsonl(
     let score_rich = obj.compute_score_with(&AestheticWeights::rich());
     let json = serde_json::json!({
         "event": "layout_metrics",
+        "ir_hash": format!("0x{:016x}", ir_hash),
         "nodes": layout.nodes.len(),
         "edges": layout.edges.len(),
         "ranks": layout.stats.ranks,
@@ -2736,7 +2816,7 @@ fn measure_text(text: &str, config: &LabelPlacementConfig) -> (f64, f64, bool) {
 
     // Handle text that doesn't end with a newline but has content.
     if lines.is_empty() {
-        lines.push(text.len().min(max_chars_per_line));
+        lines.push(text.chars().count().min(max_chars_per_line));
     }
 
     let was_truncated = lines.len() > config.max_lines
@@ -3210,7 +3290,7 @@ pub fn compute_legend_layout(
         let entry_rect = LayoutRect {
             x: origin_x + config.padding,
             y: current_y,
-            width: display_text.len() as f64 * config.char_width,
+            width: display_text.chars().count() as f64 * config.char_width,
             height: config.line_height,
         };
 
@@ -4142,6 +4222,49 @@ mod tests {
         );
     }
 
+    #[test]
+    #[ignore = "perf harness: run manually for profiling"]
+    fn perf_large_graph_layout() {
+        // Heavier deterministic workload for profiling layout hot paths.
+        // Run with:
+        // cargo test -p ftui-extras --features diagram perf_large_graph_layout --release -- --ignored --nocapture
+        let node_count = 200usize;
+        let names: Vec<String> = (0..node_count).map(|i| format!("N{i}")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+
+        let mut edges: Vec<(usize, usize)> = Vec::new();
+        for i in 0..node_count {
+            if i + 1 < node_count {
+                edges.push((i, i + 1));
+            }
+            if i + 2 < node_count {
+                edges.push((i, i + 2));
+            }
+            if i + 10 < node_count {
+                edges.push((i, i + 10));
+            }
+            let mirror = node_count - 1 - i;
+            if i < mirror {
+                edges.push((i, mirror));
+            }
+        }
+        edges.sort_unstable();
+        edges.dedup();
+
+        let ir = make_simple_ir(&refs, &edges, GraphDirection::TB);
+        let mut config = default_config();
+        config.layout_iteration_budget = 200;
+
+        let mut checksum = 0usize;
+        for _ in 0..20 {
+            let layout = layout_diagram(&ir, &config);
+            checksum = checksum.wrapping_add(layout.nodes.len());
+            checksum = checksum.wrapping_add(layout.stats.crossings);
+            checksum = checksum.wrapping_add(layout.stats.total_bends);
+        }
+        std::hint::black_box(checksum);
+    }
+
     // ── A* routing tests ─────────────────────────────────────────────
 
     #[test]
@@ -4634,7 +4757,7 @@ mod tests {
 
     fn assert_edges_in_bounds(layout: &DiagramLayout) {
         let bb = &layout.bounding_box;
-        let m = 10.0;
+        let m = 0.01;
         for e in &layout.edges {
             for (i, wp) in e.waypoints.iter().enumerate() {
                 assert!(
@@ -5082,7 +5205,7 @@ mod tests {
     }
 
     #[test]
-    fn prop_no_pairwise_overlaps_random() {
+    fn prop_no_same_rank_overlaps_random() {
         for seed in 10_000..10_020 {
             let ir = make_random_ir(seed, 8, 25, GraphDirection::TB);
             let layout = layout_diagram(&ir, &default_config());
@@ -5091,7 +5214,7 @@ mod tests {
     }
 
     #[test]
-    fn prop_no_pairwise_overlaps_all_dirs() {
+    fn prop_no_same_rank_overlaps_all_dirs() {
         for dir in [
             GraphDirection::TB,
             GraphDirection::BT,
@@ -5197,7 +5320,7 @@ mod tests {
     }
 
     #[test]
-    fn guard_degrade_pairwise_no_overlap() {
+    fn guard_degrade_same_rank_no_overlap() {
         for seed in 12_000..12_010 {
             let ir = make_random_ir(seed, 8, 25, GraphDirection::TB);
             let mut config = default_config();
@@ -5291,6 +5414,9 @@ mod tests {
             let mut layout = layout_diagram(&ir, &default_config());
             let (routed, _) = route_all_edges(&ir, &layout, &default_config(), &w);
             layout.edges = routed;
+            // Recompute bounding box to include new A*-routed waypoints.
+            layout.bounding_box =
+                compute_bounding_box(&layout.nodes, &layout.clusters, &layout.edges);
 
             assert_no_same_rank_overlaps(&layout);
             assert_all_nodes_in_bounds(&layout);

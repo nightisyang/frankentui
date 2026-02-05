@@ -401,6 +401,88 @@
         "decision_hash": "string",
         "phase_len": "number"
       }
+    },
+    "table_theme_gallery": {
+      "required": [
+        "screen_id",
+        "preset_id",
+        "phase",
+        "highlight_target",
+        "resolved_style_hash",
+        "column_widths",
+        "table_dims",
+        "terminal_size",
+        "checksum"
+      ],
+      "optional": [
+        "screen",
+        "preview_modes",
+        "preset_name",
+        "preview_mode",
+        "effects_hash",
+        "output_hash",
+        "demo_run_id"
+      ],
+      "types": {
+        "screen_id": "number",
+        "screen": "string",
+        "preview_modes": "string",
+        "preset_id": "string",
+        "preset_name": "string",
+        "preview_mode": "string",
+        "phase": "number",
+        "highlight_target": "string",
+        "resolved_style_hash": "string",
+        "effects_hash": "string",
+        "column_widths": "array",
+        "table_dims": "object",
+        "terminal_size": "object",
+        "output_hash": "string",
+        "checksum": "string",
+        "demo_run_id": "string"
+      }
+    },
+    "table_theme_action": {
+      "required": [
+        "action",
+        "preset_name",
+        "style_hash",
+        "effects_hash",
+        "effect_count",
+        "output_hash",
+        "checksum"
+      ],
+      "optional": [
+        "file_path",
+        "clipboard_path",
+        "export_sha256",
+        "clipboard_sha256"
+      ],
+      "types": {
+        "action": "string",
+        "preset_name": "string",
+        "style_hash": "string",
+        "effects_hash": "string",
+        "effect_count": "number",
+        "file_path": [
+          "string",
+          "null"
+        ],
+        "clipboard_path": [
+          "string",
+          "null"
+        ],
+        "export_sha256": [
+          "string",
+          "null"
+        ],
+        "clipboard_sha256": [
+          "string",
+          "null"
+        ],
+        "output_hash": "string",
+        "checksum": "string"
+      }
     }
   }
 }

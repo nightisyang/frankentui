@@ -2092,10 +2092,16 @@ impl<W: Write> TerminalWriter<W> {
     /// below UI for top-anchored). The cursor is explicitly positioned in the log
     /// region before writing to prevent UI corruption.
     ///
+    /// If the UI consumes the entire terminal height, there is no log region
+    /// available and the write becomes a no-op.
+    ///
     /// In AltScreen mode, logs are typically not shown (returns Ok silently).
     pub fn write_log(&mut self, text: &str) -> io::Result<()> {
         match self.screen_mode {
             ScreenMode::Inline { ui_height } => {
+                if !self.position_cursor_for_log(ui_height)? {
+                    return Ok(());
+                }
                 // Invalidate state if we are not using a scroll region, as the log write
                 // might scroll the terminal and shift/corrupt the UI region.
                 if !self.scroll_region_active {
@@ -2104,13 +2110,15 @@ impl<W: Write> TerminalWriter<W> {
                     self.reset_diff_strategy();
                 }
 
-                // Position cursor in the log region before writing.
-                // This ensures log output never corrupts the UI region.
-                self.position_cursor_for_log(ui_height)?;
                 self.writer().write_all(text.as_bytes())?;
                 self.writer().flush()
             }
             ScreenMode::InlineAuto { .. } => {
+                // InlineAuto: use effective_ui_height for positioning.
+                let ui_height = self.effective_ui_height();
+                if !self.position_cursor_for_log(ui_height)? {
+                    return Ok(());
+                }
                 // Invalidate state if we are not using a scroll region.
                 if !self.scroll_region_active {
                     self.prev_buffer = None;
@@ -2118,9 +2126,6 @@ impl<W: Write> TerminalWriter<W> {
                     self.reset_diff_strategy();
                 }
 
-                // InlineAuto: use effective_ui_height for positioning.
-                let ui_height = self.effective_ui_height();
-                self.position_cursor_for_log(ui_height)?;
                 self.writer().write_all(text.as_bytes())?;
                 self.writer().flush()
             }
@@ -2138,11 +2143,11 @@ impl<W: Write> TerminalWriter<W> {
     /// For top-anchored UI: log region is below the UI (rows ui_height + 1 to term_height).
     ///
     /// Positions at the bottom row of the log region so newlines cause scrolling.
-    fn position_cursor_for_log(&mut self, ui_height: u16) -> io::Result<()> {
+    fn position_cursor_for_log(&mut self, ui_height: u16) -> io::Result<bool> {
         let visible_height = ui_height.min(self.term_height);
         if visible_height >= self.term_height {
             // No log region available when UI fills the terminal
-            return Ok(());
+            return Ok(false);
         }
 
         let log_row = match self.ui_anchor {
@@ -2160,7 +2165,7 @@ impl<W: Write> TerminalWriter<W> {
 
         // Move to the target row, column 1 (1-indexed)
         write!(self.writer(), "\x1b[{};1H", log_row)?;
-        Ok(())
+        Ok(true)
     }
 
     /// Clear the screen.
@@ -3489,9 +3494,8 @@ mod tests {
             writer.write_log("should still write\n").unwrap();
         }
 
-        // Text should still be written (no positioning since no log region)
-        let output_str = String::from_utf8_lossy(&output);
-        assert!(output_str.contains("should still write"));
+        // No cursor positioning and no output when there is no log region.
+        assert!(output.is_empty());
     }
 
     #[test]

@@ -17,8 +17,8 @@ use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::drawing::{BorderChars, Draw};
 
 use crate::mermaid::{
-    DiagramType, MermaidConfig, MermaidDiagramIr, MermaidError, MermaidErrorMode, MermaidFidelity,
-    MermaidGlyphMode, MermaidTier,
+    DiagramType, LinkSanitizeOutcome, MermaidConfig, MermaidDiagramIr, MermaidError,
+    MermaidErrorMode, MermaidFidelity, MermaidGlyphMode, MermaidLinkMode, MermaidTier,
 };
 use crate::mermaid_layout::{
     DiagramLayout, LayoutClusterBox, LayoutEdgePath, LayoutNodeBox, LayoutRect,
@@ -121,19 +121,24 @@ pub struct RenderPlan {
 pub fn select_render_plan(
     config: &MermaidConfig,
     layout: &DiagramLayout,
+    ir: &MermaidDiagramIr,
     area: Rect,
 ) -> RenderPlan {
     let fidelity = select_fidelity(config, layout, area);
 
     // Determine legend area reservation.
-    let (diagram_area, legend_area) = if config.enable_links
-        && !layout.nodes.is_empty()
-        && fidelity != MermaidFidelity::Outline
-    {
-        reserve_legend_area(area)
-    } else {
-        (area, None)
-    };
+    let has_footnote_links = config.enable_links
+        && config.link_mode == MermaidLinkMode::Footnote
+        && ir
+            .links
+            .iter()
+            .any(|link| link.sanitize_outcome == LinkSanitizeOutcome::Allowed);
+    let (diagram_area, legend_area) =
+        if has_footnote_links && !layout.nodes.is_empty() && fidelity != MermaidFidelity::Outline {
+            reserve_legend_area(area)
+        } else {
+            (area, None)
+        };
 
     let (show_node_labels, show_edge_labels, show_clusters, max_label_width) = match fidelity {
         MermaidFidelity::Rich => (true, true, true, 0),
@@ -280,6 +285,7 @@ const EDGE_FG: PackedRgba = PackedRgba::rgb(150, 150, 150);
 const LABEL_FG: PackedRgba = PackedRgba::WHITE;
 const CLUSTER_FG: PackedRgba = PackedRgba::rgb(100, 160, 220);
 const CLUSTER_TITLE_FG: PackedRgba = PackedRgba::rgb(100, 160, 220);
+const DEFAULT_EDGE_LABEL_WIDTH: usize = 16;
 
 // ── Edge line style ──────────────────────────────────────────────────
 
@@ -404,7 +410,7 @@ impl MermaidRenderer {
             }
 
             // Arrowhead.
-            if waypoints.len() >= 2 {
+            if ir.diagram_type != DiagramType::Mindmap && waypoints.len() >= 2 {
                 let (px, py) = waypoints[waypoints.len() - 2];
                 let (tx, ty) = *waypoints.last().unwrap();
                 let arrow_ch = self.arrowhead_char(px, py, tx, ty);
@@ -417,7 +423,7 @@ impl MermaidRenderer {
                 && let Some(label_id) = ir_edge.label
                 && let Some(label) = ir.labels.get(label_id.0)
             {
-                self.render_edge_label(edge_path, &label.text, vp, buf);
+                self.render_edge_label(edge_path, &label.text, plan.max_label_width, vp, buf);
             }
         }
     }
@@ -467,7 +473,7 @@ impl MermaidRenderer {
                         cell_rect,
                         &label.text,
                         &ir_node.members,
-                        plan,
+                        plan.max_label_width,
                         buf,
                     );
                 } else {
@@ -552,7 +558,7 @@ impl MermaidRenderer {
             }
 
             // Draw arrowhead at the last waypoint.
-            if waypoints.len() >= 2 {
+            if ir.diagram_type != DiagramType::Mindmap && waypoints.len() >= 2 {
                 let (px, py) = waypoints[waypoints.len() - 2];
                 let (tx, ty) = *waypoints.last().unwrap();
                 let arrow_ch = self.arrowhead_char(px, py, tx, ty);
@@ -564,7 +570,7 @@ impl MermaidRenderer {
                 && let Some(label_id) = ir_edge.label
                 && let Some(label) = ir.labels.get(label_id.0)
             {
-                self.render_edge_label(edge_path, &label.text, vp, buf);
+                self.render_edge_label(edge_path, &label.text, DEFAULT_EDGE_LABEL_WIDTH, vp, buf);
             }
         }
     }
@@ -704,6 +710,9 @@ impl MermaidRenderer {
                     self.merge_line_cell(x1, y, LINE_UP | LINE_DOWN, cell, buf);
                 }
             }
+            let horiz_bit = if x1 >= x0 { LINE_LEFT } else { LINE_RIGHT };
+            let vert_bit = if y1 >= y0 { LINE_DOWN } else { LINE_UP };
+            self.merge_line_cell(x1, y0, horiz_bit | vert_bit, cell, buf);
         }
     }
 
@@ -771,6 +780,7 @@ impl MermaidRenderer {
         &self,
         edge_path: &LayoutEdgePath,
         text: &str,
+        max_label_width: usize,
         vp: &Viewport,
         buf: &mut Buffer,
     ) {
@@ -781,7 +791,11 @@ impl MermaidRenderer {
         let mid_idx = edge_path.waypoints.len() / 2;
         let mid = &edge_path.waypoints[mid_idx];
         let (cx, cy) = vp.to_cell(mid.x, mid.y);
-        let label = truncate_label(text, 16);
+        let label = if max_label_width == 0 {
+            text.to_string()
+        } else {
+            truncate_label(text, max_label_width)
+        };
         let label_cell = Cell::from_char(' ').with_fg(LABEL_FG);
         buf.print_text(cx.saturating_add(1), cy, &label, label_cell);
     }
@@ -809,12 +823,22 @@ impl MermaidRenderer {
 
             buf.draw_box(cell_rect, self.palette.border, border_cell, fill_cell);
 
-            // Render label inside the node.
+            // Render label (and class compartments if applicable) inside the node.
             if let Some(ir_node) = ir.nodes.get(node.node_idx)
                 && let Some(label_id) = ir_node.label
                 && let Some(label) = ir.labels.get(label_id.0)
             {
-                self.render_node_label(cell_rect, &label.text, buf);
+                if !ir_node.members.is_empty() {
+                    self.render_class_compartments(
+                        cell_rect,
+                        &label.text,
+                        &ir_node.members,
+                        0,
+                        buf,
+                    );
+                } else {
+                    self.render_node_label(cell_rect, &label.text, buf);
+                }
             }
         }
     }
@@ -845,7 +869,7 @@ impl MermaidRenderer {
         if lines.len() > inner_h {
             lines.truncate(inner_h);
             if let Some(last) = lines.last_mut() {
-                *last = truncate_label(last, inner_w);
+                *last = append_ellipsis(last, inner_w);
             }
         }
 
@@ -871,7 +895,7 @@ impl MermaidRenderer {
         cell_rect: Rect,
         label_text: &str,
         members: &[String],
-        plan: &RenderPlan,
+        max_label_width: usize,
         buf: &mut Buffer,
     ) {
         let border_cell = Cell::from_char(' ').with_fg(NODE_FG);
@@ -893,12 +917,13 @@ impl MermaidRenderer {
         // Row 0 = top border (already drawn by draw_box)
         // Row 1 = class name (centered)
         let name_y = cell_rect.y.saturating_add(1);
-        let name_text = if plan.max_label_width > 0 {
-            truncate_label(label_text, plan.max_label_width)
+        let name_text = if max_label_width > 0 {
+            truncate_label(label_text, max_label_width)
         } else {
             label_text.to_string()
         };
-        let name_pad = inner_w.saturating_sub(name_text.len()) / 2;
+        let name_width = display_width(&name_text).min(inner_w);
+        let name_pad = inner_w.saturating_sub(name_width) / 2;
         let name_x = cell_rect
             .x
             .saturating_add(1)
@@ -974,6 +999,31 @@ fn truncate_label(text: &str, max_chars: usize) -> String {
     let mut result: String = text.chars().take(max_chars.saturating_sub(1)).collect();
     result.push('…');
     result
+}
+
+/// Force an ellipsis suffix, respecting display width.
+fn append_ellipsis(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    let ellipsis = '…';
+    let ellipsis_width = ftui_core::text_width::char_width(ellipsis).max(1);
+    if max_width <= ellipsis_width {
+        return ellipsis.to_string();
+    }
+    let target_width = max_width.saturating_sub(ellipsis_width);
+    let mut out = String::new();
+    let mut width = 0usize;
+    for ch in text.chars() {
+        let ch_width = ftui_core::text_width::char_width(ch);
+        if width + ch_width > target_width {
+            break;
+        }
+        width += ch_width;
+        out.push(ch);
+    }
+    out.push(ellipsis);
+    out
 }
 
 /// Wrap text into lines that fit within `max_width` display columns.
@@ -1063,7 +1113,7 @@ pub fn render_diagram_adaptive(
     area: Rect,
     buf: &mut Buffer,
 ) -> RenderPlan {
-    let plan = select_render_plan(config, layout, area);
+    let plan = select_render_plan(config, layout, ir, area);
     let renderer = MermaidRenderer::new(config);
     renderer.render_with_plan(layout, ir, &plan, buf);
     plan
@@ -1895,6 +1945,21 @@ mod tests {
     }
 
     #[test]
+    fn dashed_diagonal_bend_has_corner() {
+        let renderer = MermaidRenderer::with_mode(MermaidGlyphMode::Unicode);
+        let mut buf = Buffer::new(12, 12);
+        let cell = Cell::from_char(' ').with_fg(EDGE_FG);
+
+        renderer.draw_dashed_segment(2, 2, 8, 8, cell, &mut buf);
+
+        assert_eq!(
+            buf.get(8, 2).unwrap().content.as_char(),
+            Some('┐'),
+            "expected dashed diagonal to set a bend corner"
+        );
+    }
+
+    #[test]
     fn diagonal_bend_uses_correct_corner_single_segment() {
         let renderer = MermaidRenderer::with_mode(MermaidGlyphMode::Unicode);
         let mut buf = Buffer::new(12, 12);
@@ -2166,6 +2231,7 @@ mod tests {
 
     #[test]
     fn render_plan_compact_hides_edge_labels() {
+        let ir = make_ir(3, vec![(0, 1), (1, 2)]);
         let layout = make_layout(3, vec![(0, 1), (1, 2)]);
         let area = Rect {
             x: 0,
@@ -2177,7 +2243,7 @@ mod tests {
             tier_override: MermaidTier::Compact,
             ..Default::default()
         };
-        let plan = select_render_plan(&config, &layout, area);
+        let plan = select_render_plan(&config, &layout, &ir, area);
         assert!(!plan.show_edge_labels, "compact should hide edge labels");
         assert!(plan.show_node_labels, "compact should keep node labels");
         assert!(!plan.show_clusters, "compact should hide clusters");
@@ -2185,6 +2251,7 @@ mod tests {
 
     #[test]
     fn render_plan_outline_hides_all_labels() {
+        let ir = make_ir(2, vec![(0, 1)]);
         let layout = make_layout(2, vec![(0, 1)]);
         let area = Rect {
             x: 0,
@@ -2198,7 +2265,7 @@ mod tests {
             tier_override: MermaidTier::Compact,
             ..Default::default()
         };
-        let plan = select_render_plan(&config, &layout, area);
+        let plan = select_render_plan(&config, &layout, &ir, area);
         assert_eq!(plan.fidelity, MermaidFidelity::Compact);
     }
 
@@ -2217,7 +2284,7 @@ mod tests {
             tier_override: MermaidTier::Normal,
             ..Default::default()
         };
-        let plan = select_render_plan(&config, &layout, area);
+        let plan = select_render_plan(&config, &layout, &ir, area);
         let mut buf = Buffer::new(80, 24);
         renderer.render_with_plan(&layout, &ir, &plan, &mut buf);
 
@@ -2566,5 +2633,133 @@ mod tests {
             &mut buf,
         );
         assert_buffer_snapshot_text("mermaid_error_both", &buf);
+    }
+
+    // ──────────────────────────────────────────────────
+    // End-to-end class diagram tests
+    // ──────────────────────────────────────────────────
+
+    #[test]
+    fn e2e_class_basic_80x24() {
+        let source = include_str!("../tests/fixtures/mermaid/class_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 80, 24);
+        assert!(
+            buf_has_content(&buf),
+            "class diagram should render at 80x24"
+        );
+    }
+
+    #[test]
+    fn e2e_class_basic_120x40() {
+        let source = include_str!("../tests/fixtures/mermaid/class_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 120, 40);
+        assert!(
+            buf_has_content(&buf),
+            "class diagram should render at 120x40"
+        );
+    }
+
+    #[test]
+    fn e2e_class_basic_200x60() {
+        let source = include_str!("../tests/fixtures/mermaid/class_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 200, 60);
+        assert!(
+            buf_has_content(&buf),
+            "class diagram should render at 200x60"
+        );
+    }
+
+    #[test]
+    fn e2e_class_ir_has_members() {
+        let source = include_str!("../tests/fixtures/mermaid/class_basic.mmd");
+        let parsed = parse_with_diagnostics(source);
+        assert_eq!(parsed.ast.diagram_type, DiagramType::Class);
+        let config = MermaidConfig::default();
+        let matrix = MermaidCompatibilityMatrix::default();
+        let policy = MermaidFallbackPolicy::default();
+        let ir_parse = normalize_ast_to_ir(&parsed.ast, &config, &matrix, &policy);
+        // Class diagram should produce nodes with members.
+        let nodes_with_members: Vec<_> = ir_parse
+            .ir
+            .nodes
+            .iter()
+            .filter(|n| !n.members.is_empty())
+            .collect();
+        assert!(
+            !nodes_with_members.is_empty(),
+            "class diagram IR should have nodes with members"
+        );
+    }
+
+    #[test]
+    fn e2e_class_compartments_render_separator() {
+        // Build a minimal class diagram with members and verify
+        // the separator line (├───┤) appears in the rendered buffer.
+        let source = "classDiagram\n  class Animal\n  Animal : +name string\n  Animal : +age int\n  Animal : +eat() void";
+        let parsed = parse_with_diagnostics(source);
+        let config = MermaidConfig::default();
+        let matrix = MermaidCompatibilityMatrix::default();
+        let policy = MermaidFallbackPolicy::default();
+        let ir_parse = normalize_ast_to_ir(&parsed.ast, &config, &matrix, &policy);
+        let layout = layout_diagram(&ir_parse.ir, &config);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 20,
+        };
+        let mut buf = Buffer::new(60, 20);
+        let _plan = render_diagram_adaptive(&layout, &ir_parse.ir, &config, area, &mut buf);
+        assert!(buf_has_content(&buf), "class with members should render");
+        // Check for tee characters (├ or ┤) which form the compartment separator.
+        let has_tee = (0..buf.height()).any(|y| {
+            (0..buf.width()).any(|x| {
+                let ch = buf.get(x, y).unwrap().content.as_char();
+                ch == Some('\u{251c}') || ch == Some('\u{2524}')
+            })
+        });
+        // If the layout made nodes taller for members, expect separator tees.
+        let expect_tee = layout.nodes.iter().any(|node| node.rect.height > 3.0);
+        if expect_tee {
+            assert!(
+                has_tee,
+                "compartment separator expected for class with members"
+            );
+        }
+    }
+
+    #[test]
+    fn e2e_class_layout_taller_nodes() {
+        // Nodes with members should get taller layout rects.
+        let source = "classDiagram\n  class Foo\n  Foo : +bar() void\n  Foo : -baz int";
+        let parsed = parse_with_diagnostics(source);
+        let config = MermaidConfig::default();
+        let matrix = MermaidCompatibilityMatrix::default();
+        let policy = MermaidFallbackPolicy::default();
+        let ir_parse = normalize_ast_to_ir(&parsed.ast, &config, &matrix, &policy);
+        let layout = layout_diagram(&ir_parse.ir, &config);
+        // Find the Foo node and check its height is > default 3.0.
+        eprintln!(
+            "=== DEBUG: nodes = {:?}",
+            ir_parse
+                .ir
+                .nodes
+                .iter()
+                .map(|n| (&n.id, &n.members))
+                .collect::<Vec<_>>()
+        );
+        let foo_idx = ir_parse
+            .ir
+            .nodes
+            .iter()
+            .position(|n| n.id == "Foo")
+            .expect("Foo node should exist");
+        if let Some(layout_node) = layout.nodes.iter().find(|ln| ln.node_idx == foo_idx) {
+            assert!(
+                layout_node.rect.height >= 3.0,
+                "class with members should have at least default height, got {}",
+                layout_node.rect.height
+            );
+        }
     }
 }

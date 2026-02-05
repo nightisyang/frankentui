@@ -242,6 +242,9 @@ impl TextView {
             if line_text.ends_with('\n') {
                 line_text.pop();
             }
+            if line_text.ends_with('\r') {
+                line_text.pop();
+            }
 
             let wrapped = wrap_with_options(&line_text, &options);
             if wrapped.is_empty() {
@@ -297,6 +300,13 @@ mod tests {
         let view = TextView::new("你好世界", 4, WrapMode::Char);
         let lines: Vec<&str> = view.lines().iter().map(|l| l.text.as_str()).collect();
         assert_eq!(lines, vec!["你好", "世界"]);
+    }
+
+    #[test]
+    fn view_strips_crlf() {
+        let view = TextView::new("a\r\nb", 10, WrapMode::None);
+        let lines: Vec<&str> = view.lines().iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(lines, vec!["a", "b"]);
     }
 
     #[test]

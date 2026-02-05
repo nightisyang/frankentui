@@ -1,4 +1,77 @@
 {
   "registry_version": "e2e-hash-registry-v1",
-  "entries": []
+  "entries": [
+    {
+      "event_type": "span_diff_case",
+      "hash_key": "altscreen-160x60-seed0",
+      "field": "diff_hash",
+      "value": "548529d1e46b861ad61a1898e599ca017aa7e3003358c0a6fc7a246fc4e37c79",
+      "case": "span_diff_run1",
+      "step": null,
+      "note": "source_status=failed"
+    },
+    {
+      "event_type": "span_diff_case",
+      "hash_key": "altscreen-160x60-seed0",
+      "field": "diff_hash",
+      "value": "9b5ccc0251ea129a482895a1d6172f3f90674e9a3d11b1ba3c674da5a941bb5b",
+      "case": "span_diff_run2",
+      "step": null,
+      "note": "source_status=failed"
+    },
+    {
+      "event_type": "tile_skip_case",
+      "hash_key": "altscreen-200x60-seed0",
+      "field": "diff_hash",
+      "value": "737ae45bff05e062fcf9bd07f1fa1e249f5d0b808e215d46c20ae3311f0f0e38",
+      "case": "tile_skip_run1",
+      "step": null,
+      "note": "source_status=failed"
+    },
+    {
+      "event_type": "tile_skip_case",
+      "hash_key": "altscreen-200x60-seed0",
+      "field": "diff_hash",
+      "value": "c99d3d70140fdb70cbae4f332d60f2c7b41c5c1a39bb9f50c74ffe424fdd878d",
+      "case": "tile_skip_run2",
+      "step": null,
+      "note": "source_status=failed"
+    },
+    {
+      "event_type": "selector_case",
+      "hash_key": "altscreen-160x60-seed0",
+      "field": "decision_hash",
+      "value": "24553e05709b5d5eda84615e2eb5a3a96e2ac623c9cdd996edecc8814075ecc8",
+      "case": "selector_storm_run1",
+      "step": null,
+      "note": "source_status=failed"
+    },
+    {
+      "event_type": "selector_case",
+      "hash_key": "altscreen-160x60-seed0",
+      "field": "decision_hash",
+      "value": "e7dd5a976126300af7a929c338fdc1c28d9c0b7d38ab805429d8cbb12195f638",
+      "case": "selector_storm_run2",
+      "step": null,
+      "note": "source_status=failed"
+    },
+    {
+      "event_type": "budgeted_refresh_case",
+      "hash_key": "inline-120x40-seed0",
+      "field": "widget_refresh_hash",
+      "value": "d9fefe9f7cc899a8efd6bde66920a97777eec6c46a2090486ce676d922b8f55f",
+      "case": "budgeted_refresh_run1",
+      "step": null,
+      "note": "source_status=failed"
+    },
+    {
+      "event_type": "budgeted_refresh_case",
+      "hash_key": "inline-120x40-seed0",
+      "field": "widget_refresh_hash",
+      "value": "d9fefe9f7cc899a8efd6bde66920a97777eec6c46a2090486ce676d922b8f55f",
+      "case": "budgeted_refresh_run2",
+      "step": null,
+      "note": "source_status=failed"
+    }
+  ]
 }

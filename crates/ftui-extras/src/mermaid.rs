@@ -726,6 +726,389 @@ fn fnv1a_hash_bytes(hash: &mut u64, bytes: &[u8]) {
     }
 }
 
+#[inline]
+fn fnv1a_hash_u64(hash: &mut u64, val: u64) {
+    fnv1a_hash_bytes(hash, &val.to_le_bytes());
+}
+
+#[inline]
+fn fnv1a_hash_usize(hash: &mut u64, val: usize) {
+    fnv1a_hash_bytes(hash, &(val as u64).to_le_bytes());
+}
+
+#[inline]
+fn fnv1a_hash_str(hash: &mut u64, s: &str) {
+    fnv1a_hash_usize(hash, s.len());
+    fnv1a_hash_bytes(hash, s.as_bytes());
+}
+
+#[inline]
+fn fnv1a_hash_bool(hash: &mut u64, b: bool) {
+    fnv1a_hash_bytes(hash, &[u8::from(b)]);
+}
+
+/// Compute a deterministic FNV1a hash of a `MermaidDiagramIr`.
+///
+/// The hash captures structural identity: node ids, shapes, labels, edges,
+/// clusters, ports, style refs, and links. Span information is excluded
+/// since it does not affect layout/render output.
+#[must_use]
+pub fn hash_ir(ir: &MermaidDiagramIr) -> u64 {
+    let mut h = FNV1A_OFFSET;
+
+    // Diagram type + direction
+    fnv1a_hash_str(&mut h, ir.diagram_type.as_str());
+    fnv1a_hash_str(&mut h, ir.direction.as_str());
+
+    // Nodes
+    fnv1a_hash_usize(&mut h, ir.nodes.len());
+    for node in &ir.nodes {
+        fnv1a_hash_str(&mut h, &node.id);
+        fnv1a_hash_bool(&mut h, node.label.is_some());
+        if let Some(lid) = node.label {
+            fnv1a_hash_usize(&mut h, lid.0);
+        }
+        fnv1a_hash_str(&mut h, node.shape.as_str());
+        fnv1a_hash_usize(&mut h, node.classes.len());
+        for c in &node.classes {
+            fnv1a_hash_str(&mut h, c);
+        }
+        fnv1a_hash_bool(&mut h, node.style_ref.is_some());
+        if let Some(sr) = node.style_ref {
+            fnv1a_hash_usize(&mut h, sr.0);
+        }
+        fnv1a_hash_bool(&mut h, node.implicit);
+        fnv1a_hash_usize(&mut h, node.members.len());
+        for m in &node.members {
+            fnv1a_hash_str(&mut h, m);
+        }
+    }
+
+    // Labels
+    fnv1a_hash_usize(&mut h, ir.labels.len());
+    for label in &ir.labels {
+        fnv1a_hash_str(&mut h, &label.text);
+    }
+
+    // Edges
+    fnv1a_hash_usize(&mut h, ir.edges.len());
+    for edge in &ir.edges {
+        match edge.from {
+            IrEndpoint::Node(nid) => {
+                fnv1a_hash_bytes(&mut h, &[0]);
+                fnv1a_hash_usize(&mut h, nid.0);
+            }
+            IrEndpoint::Port(pid) => {
+                fnv1a_hash_bytes(&mut h, &[1]);
+                fnv1a_hash_usize(&mut h, pid.0);
+            }
+        }
+        match edge.to {
+            IrEndpoint::Node(nid) => {
+                fnv1a_hash_bytes(&mut h, &[0]);
+                fnv1a_hash_usize(&mut h, nid.0);
+            }
+            IrEndpoint::Port(pid) => {
+                fnv1a_hash_bytes(&mut h, &[1]);
+                fnv1a_hash_usize(&mut h, pid.0);
+            }
+        }
+        fnv1a_hash_str(&mut h, &edge.arrow);
+        fnv1a_hash_bool(&mut h, edge.label.is_some());
+        if let Some(lid) = edge.label {
+            fnv1a_hash_usize(&mut h, lid.0);
+        }
+        fnv1a_hash_bool(&mut h, edge.style_ref.is_some());
+        if let Some(sr) = edge.style_ref {
+            fnv1a_hash_usize(&mut h, sr.0);
+        }
+    }
+
+    // Clusters
+    fnv1a_hash_usize(&mut h, ir.clusters.len());
+    for cluster in &ir.clusters {
+        fnv1a_hash_usize(&mut h, cluster.id.0);
+        fnv1a_hash_bool(&mut h, cluster.title.is_some());
+        if let Some(lid) = cluster.title {
+            fnv1a_hash_usize(&mut h, lid.0);
+        }
+        fnv1a_hash_usize(&mut h, cluster.members.len());
+        for m in &cluster.members {
+            fnv1a_hash_usize(&mut h, m.0);
+        }
+    }
+
+    // Ports
+    fnv1a_hash_usize(&mut h, ir.ports.len());
+    for port in &ir.ports {
+        fnv1a_hash_usize(&mut h, port.node.0);
+        fnv1a_hash_str(&mut h, &port.name);
+    }
+
+    // Style refs
+    fnv1a_hash_usize(&mut h, ir.style_refs.len());
+    for sr in &ir.style_refs {
+        fnv1a_hash_str(&mut h, &sr.style);
+    }
+
+    // Links
+    fnv1a_hash_usize(&mut h, ir.links.len());
+    for link in &ir.links {
+        fnv1a_hash_usize(&mut h, link.target.0);
+        fnv1a_hash_str(&mut h, &link.url);
+    }
+
+    h
+}
+
+/// Compute a deterministic hash of layout-relevant `MermaidConfig` fields.
+///
+/// Only fields that influence layout/render output are included. Log path,
+/// enabled flag, etc. are excluded.
+#[must_use]
+pub fn hash_config_layout(config: &MermaidConfig) -> u64 {
+    let mut h = FNV1A_OFFSET;
+    fnv1a_hash_str(&mut h, config.glyph_mode.as_str());
+    fnv1a_hash_str(&mut h, config.tier_override.as_str());
+    fnv1a_hash_usize(&mut h, config.max_nodes);
+    fnv1a_hash_usize(&mut h, config.max_edges);
+    fnv1a_hash_usize(&mut h, config.route_budget);
+    fnv1a_hash_usize(&mut h, config.layout_iteration_budget);
+    fnv1a_hash_usize(&mut h, config.max_label_chars);
+    fnv1a_hash_usize(&mut h, config.max_label_lines);
+    fnv1a_hash_str(&mut h, config.wrap_mode.as_str());
+    fnv1a_hash_bool(&mut h, config.enable_styles);
+    fnv1a_hash_bool(&mut h, config.enable_links);
+    fnv1a_hash_str(&mut h, config.link_mode.as_str());
+    if let Some(ref cp) = config.capability_profile {
+        fnv1a_hash_bool(&mut h, true);
+        fnv1a_hash_str(&mut h, cp);
+    } else {
+        fnv1a_hash_bool(&mut h, false);
+    }
+    h
+}
+
+/// Full cache key for a diagram layout result.
+///
+/// Captures all inputs that affect determinism: IR structure, config,
+/// and init config hash (from init directives/theme).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DiagramCacheKey {
+    /// FNV1a hash of the `MermaidDiagramIr` structure.
+    pub ir_hash: u64,
+    /// FNV1a hash of layout-relevant `MermaidConfig` fields.
+    pub config_hash: u64,
+    /// FNV1a hash of init directives (from `MermaidInitConfig::checksum`).
+    pub init_config_hash: u64,
+}
+
+impl DiagramCacheKey {
+    /// Build a cache key from an IR, config, and init config hash.
+    #[must_use]
+    pub fn new(ir: &MermaidDiagramIr, config: &MermaidConfig, init_config_hash: u64) -> Self {
+        Self {
+            ir_hash: hash_ir(ir),
+            config_hash: hash_config_layout(config),
+            init_config_hash,
+        }
+    }
+
+    /// Combined key hash (for compact logging).
+    #[must_use]
+    pub fn combined_hash(&self) -> u64 {
+        let mut h = FNV1A_OFFSET;
+        fnv1a_hash_u64(&mut h, self.ir_hash);
+        fnv1a_hash_u64(&mut h, self.config_hash);
+        fnv1a_hash_u64(&mut h, self.init_config_hash);
+        h
+    }
+
+    /// Hex representation of the combined hash.
+    #[must_use]
+    pub fn combined_hash_hex(&self) -> String {
+        format!("0x{:016x}", self.combined_hash())
+    }
+}
+
+/// Bounded diagram layout cache.
+///
+/// Thread-safe, bounded LRU-style cache mapping `DiagramCacheKey` to
+/// `DiagramLayout`. The cache is keyed on IR + config + init hash so that
+/// any change to inputs invalidates the entry.
+pub struct DiagramCache {
+    entries: std::sync::Mutex<Vec<DiagramCacheEntry>>,
+    capacity: usize,
+    hits: std::sync::atomic::AtomicU64,
+    misses: std::sync::atomic::AtomicU64,
+}
+
+struct DiagramCacheEntry {
+    key: DiagramCacheKey,
+    layout: crate::mermaid_layout::DiagramLayout,
+    last_used: u64, // monotonic counter for LRU eviction
+}
+
+impl DiagramCache {
+    /// Create a new cache with the given capacity.
+    #[must_use]
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            entries: std::sync::Mutex::new(Vec::with_capacity(capacity.min(64))),
+            capacity: capacity.max(1),
+            hits: std::sync::atomic::AtomicU64::new(0),
+            misses: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// Look up a layout by cache key. Returns `Some` on hit.
+    pub fn get(&self, key: &DiagramCacheKey) -> Option<crate::mermaid_layout::DiagramLayout> {
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = entries.iter_mut().find(|e| e.key == *key) {
+            let counter = self.hits.load(std::sync::atomic::Ordering::Relaxed)
+                + self.misses.load(std::sync::atomic::Ordering::Relaxed);
+            entry.last_used = counter;
+            self.hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Some(entry.layout.clone())
+        } else {
+            self.misses
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            None
+        }
+    }
+
+    /// Insert a layout into the cache. Evicts LRU entry if at capacity.
+    pub fn insert(&self, key: DiagramCacheKey, layout: crate::mermaid_layout::DiagramLayout) {
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        // Update existing entry if present.
+        if let Some(entry) = entries.iter_mut().find(|e| e.key == key) {
+            let counter = self.hits.load(std::sync::atomic::Ordering::Relaxed)
+                + self.misses.load(std::sync::atomic::Ordering::Relaxed);
+            entry.layout = layout;
+            entry.last_used = counter;
+            return;
+        }
+        // Evict LRU if at capacity.
+        if entries.len() >= self.capacity
+            && let Some(idx) = entries
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, e)| e.last_used)
+                .map(|(i, _)| i)
+        {
+            entries.swap_remove(idx);
+        }
+        let counter = self.hits.load(std::sync::atomic::Ordering::Relaxed)
+            + self.misses.load(std::sync::atomic::Ordering::Relaxed);
+        entries.push(DiagramCacheEntry {
+            key,
+            layout,
+            last_used: counter,
+        });
+    }
+
+    /// Number of cache hits.
+    #[must_use]
+    pub fn hits(&self) -> u64 {
+        self.hits.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Number of cache misses.
+    #[must_use]
+    pub fn misses(&self) -> u64 {
+        self.misses.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Number of entries currently stored.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
+
+    /// Whether the cache is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Clear all entries and reset counters.
+    pub fn clear(&self) {
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        entries.clear();
+        self.hits.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.misses.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Emit a cache-lookup evidence event to the JSONL log.
+pub(crate) fn emit_cache_lookup_jsonl(
+    config: &MermaidConfig,
+    cache_key: &DiagramCacheKey,
+    hit: bool,
+    cache_size: usize,
+    cache_hits: u64,
+    cache_misses: u64,
+) {
+    let Some(path) = config.log_path.as_deref() else {
+        return;
+    };
+    let json = serde_json::json!({
+        "event": "cache_lookup",
+        "ir_hash": format!("0x{:016x}", cache_key.ir_hash),
+        "config_hash": format!("0x{:016x}", cache_key.config_hash),
+        "init_config_hash": format!("0x{:016x}", cache_key.init_config_hash),
+        "combined_key": cache_key.combined_hash_hex(),
+        "cache_hit": hit,
+        "cache_size": cache_size,
+        "total_hits": cache_hits,
+        "total_misses": cache_misses,
+    });
+    let _ = append_jsonl_line(path, &json.to_string());
+}
+
+/// Perform a cached layout: look up in cache, compute on miss, emit evidence.
+///
+/// If `config.cache_enabled` is false, always computes fresh layout.
+pub fn layout_diagram_cached(
+    ir: &MermaidDiagramIr,
+    config: &MermaidConfig,
+    init_config_hash: u64,
+    cache: &DiagramCache,
+) -> crate::mermaid_layout::DiagramLayout {
+    let cache_key = DiagramCacheKey::new(ir, config, init_config_hash);
+
+    if config.cache_enabled
+        && let Some(layout) = cache.get(&cache_key)
+    {
+        emit_cache_lookup_jsonl(
+            config,
+            &cache_key,
+            true,
+            cache.len(),
+            cache.hits(),
+            cache.misses(),
+        );
+        return layout;
+    }
+
+    let layout = crate::mermaid_layout::layout_diagram(ir, config);
+
+    if config.cache_enabled {
+        cache.insert(cache_key.clone(), layout.clone());
+    }
+
+    emit_cache_lookup_jsonl(
+        config,
+        &cache_key,
+        false,
+        cache.len(),
+        cache.hits(),
+        cache.misses(),
+    );
+
+    layout
+}
+
 fn validate_positive(field: &'static str, value: usize, errors: &mut Vec<MermaidConfigError>) {
     if value == 0 {
         errors.push(MermaidConfigError::new(
@@ -1824,6 +2207,8 @@ pub fn normalize_ast_to_ir(
     let mut implicit_warned = std::collections::HashSet::new();
     let mut style_refs = Vec::new();
     let mut node_style_drafts: Vec<(String, String, Span)> = Vec::new();
+    let mut mindmap_base_depth: Option<usize> = None;
+    let mut mindmap_stack: Vec<(usize, String)> = Vec::new();
 
     for (idx, statement) in ast.statements.iter().enumerate() {
         match statement {
@@ -1948,6 +2333,49 @@ pub fn normalize_ast_to_ir(
                     span: msg.span,
                     insertion_idx: idx,
                 });
+            }
+            Statement::MindmapNode(node) => {
+                let base = mindmap_base_depth.get_or_insert(node.depth);
+                let depth = node.depth.saturating_sub(*base);
+                let id = format!(
+                    "mindmap_{:04}_{:04}",
+                    node.span.start.line, node.span.start.col
+                );
+                let _ = upsert_node(
+                    &id,
+                    Some(&node.text),
+                    NodeShape::Rect,
+                    node.span,
+                    false,
+                    idx,
+                    &mut node_map,
+                    &mut node_drafts,
+                    &mut implicit_warned,
+                    &mut warnings,
+                );
+                if let Some(cluster_idx) = cluster_stack.last().copied() {
+                    cluster_drafts[cluster_idx].members.push(id.clone());
+                }
+                while let Some((stack_depth, _)) = mindmap_stack.last() {
+                    if *stack_depth >= depth {
+                        mindmap_stack.pop();
+                    } else {
+                        break;
+                    }
+                }
+                if let Some((_, parent_id)) = mindmap_stack.last() {
+                    edge_drafts.push(EdgeDraft {
+                        from: parent_id.clone(),
+                        from_port: None,
+                        to: id.clone(),
+                        to_port: None,
+                        arrow: "--".to_string(),
+                        label: None,
+                        span: node.span,
+                        insertion_idx: idx,
+                    });
+                }
+                mindmap_stack.push((depth, id));
             }
             Statement::ClassAssign {
                 targets,
@@ -3578,6 +4006,7 @@ pub fn parse_with_diagnostics(input: &str) -> MermaidParse {
     let mut statements = Vec::new();
     let mut saw_header = false;
     let mut errors = Vec::new();
+    let mut pending_note: Option<StateNotePending> = None;
     // Track ER entity attribute block: `ENTITY { type name constraint ... }`
     let mut er_entity_block: Option<String> = None;
 
@@ -3636,6 +4065,39 @@ pub fn parse_with_diagnostics(input: &str) -> MermaidParse {
         }
 
         let span = Span::at_line(line_no, line.len());
+
+        if let Some(note) = pending_note.as_mut() {
+            if trimmed.eq_ignore_ascii_case("end note") {
+                let text = note.lines.join("\n");
+                let note_id = format!(
+                    "__state_note_L{}_C{}",
+                    note.span.start.line, note.span.start.col
+                );
+                let label = if text.is_empty() { None } else { Some(text) };
+                statements.push(Statement::Node(Node {
+                    id: note_id.clone(),
+                    label,
+                    shape: NodeShape::Rect,
+                    span: note.span,
+                }));
+                statements.push(Statement::ClassAssign {
+                    targets: vec![note_id.clone()],
+                    classes: vec![STATE_NOTE_CLASS.to_string()],
+                    span: note.span,
+                });
+                statements.push(Statement::Edge(Edge {
+                    from: note.target.clone(),
+                    to: note_id,
+                    arrow: "-.->".to_string(),
+                    label: None,
+                    span: note.span,
+                }));
+                pending_note = None;
+            } else {
+                note.lines.push(normalize_ws(raw_line));
+            }
+            continue;
+        }
         if let Some(result) = parse_directive_statement(trimmed, span, diagram_type) {
             match result {
                 Ok(statement) => statements.push(statement),
@@ -3687,7 +4149,27 @@ pub fn parse_with_diagnostics(input: &str) -> MermaidParse {
                                 span,
                             }));
                             let after_brace = trimmed[brace_pos + 1..].trim();
-                            if after_brace != "}" {
+                            if let Some(close_pos) = after_brace.find('}') {
+                                // Inline block: `ENTITY { attrs... }`
+                                let inline_attrs = after_brace[..close_pos].trim();
+                                if !inline_attrs.is_empty() {
+                                    statements.push(Statement::ClassMember {
+                                        class: name.clone(),
+                                        member: normalize_ws(inline_attrs),
+                                        span,
+                                    });
+                                }
+                            } else if !after_brace.is_empty() {
+                                // Content after `{` but no `}` on this line:
+                                // treat as first attribute and open block.
+                                statements.push(Statement::ClassMember {
+                                    class: name.clone(),
+                                    member: normalize_ws(after_brace),
+                                    span,
+                                });
+                                er_entity_block = Some(name);
+                            } else {
+                                // Just `ENTITY {` — open block for subsequent lines.
                                 er_entity_block = Some(name);
                             }
                             continue;
@@ -3696,6 +4178,9 @@ pub fn parse_with_diagnostics(input: &str) -> MermaidParse {
                 }
                 if let Some(edge) = parse_edge(trimmed, span, er_mode) {
                     if let Some(node) = edge_node(trimmed, span, er_mode) {
+                        statements.push(Statement::Node(node));
+                    }
+                    if let Some(node) = edge_node_right(trimmed, span, er_mode) {
                         statements.push(Statement::Node(node));
                     }
                     statements.push(Statement::Edge(edge));
@@ -4517,6 +5002,173 @@ fn split_quoted_words(input: &str) -> Vec<String> {
     out
 }
 
+#[allow(dead_code)]
+const STATE_START_TOKEN: &str = "__state_start__";
+#[allow(dead_code)]
+const STATE_END_TOKEN: &str = "__state_end__";
+#[allow(dead_code)]
+const STATE_CONTAINER_CLASS: &str = "state_container";
+#[allow(dead_code)]
+const STATE_NOTE_CLASS: &str = "state_note";
+#[allow(dead_code)]
+const STATE_ENDPOINT_CLASS: &str = "state_endpoint";
+
+#[allow(dead_code)]
+#[derive(Debug)]
+struct StateNotePending {
+    target: String,
+    lines: Vec<String>,
+    span: Span,
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+struct StateDecl {
+    id: String,
+    label: Option<String>,
+    block_start: bool,
+}
+
+#[allow(dead_code)]
+fn is_state_star(text: &str) -> bool {
+    let mut cleaned = String::new();
+    for ch in text.chars() {
+        if !ch.is_whitespace() {
+            cleaned.push(ch);
+        }
+    }
+    cleaned == "[*]"
+}
+
+#[allow(dead_code)]
+fn parse_state_decl_line(line: &str) -> Option<StateDecl> {
+    let mut rest = strip_keyword(line, "state")?;
+    if rest.is_empty() {
+        return None;
+    }
+
+    let mut block_start = false;
+    if rest.ends_with('{') {
+        block_start = true;
+        rest = rest.trim_end_matches('{').trim();
+    }
+    if rest.is_empty() {
+        return None;
+    }
+
+    let lower = rest.to_ascii_lowercase();
+    if let Some(idx) = lower.find(" as ") {
+        let (left_raw, right_raw) = rest.split_at(idx);
+        let left = left_raw.trim();
+        let right = right_raw[4..].trim();
+        if left.is_empty() || right.is_empty() {
+            return None;
+        }
+        let left_has_quote = left.contains('"') || left.contains('\'');
+        let right_has_quote = right.contains('"') || right.contains('\'');
+        let (label_raw, id_raw) = if left_has_quote && !right_has_quote {
+            (left, right)
+        } else if right_has_quote && !left_has_quote {
+            (right, left)
+        } else {
+            (left, right)
+        };
+        let label = normalize_ws(label_raw.trim_matches(['"', '\'']));
+        let id = normalize_ws(id_raw);
+        if id.is_empty() {
+            return None;
+        }
+        let label = if label.is_empty() { None } else { Some(label) };
+        return Some(StateDecl {
+            id,
+            label,
+            block_start,
+        });
+    }
+
+    let id = normalize_ws(rest);
+    if id.is_empty() {
+        return None;
+    }
+    Some(StateDecl {
+        id: id.clone(),
+        label: Some(id),
+        block_start,
+    })
+}
+
+#[allow(dead_code)]
+fn parse_state_note_start(line: &str) -> Option<(String, Option<String>)> {
+    let rest = strip_keyword(line, "note")?;
+    if rest.is_empty() {
+        return None;
+    }
+    let (before, inline) = if let Some((left, right)) = rest.split_once(':') {
+        (left.trim(), Some(normalize_ws(right)))
+    } else {
+        (rest.trim(), None)
+    };
+    let tokens = split_quoted_words(before);
+    if tokens.is_empty() {
+        return None;
+    }
+    let mut target = None;
+    for (idx, tok) in tokens.iter().enumerate() {
+        if tok.eq_ignore_ascii_case("of") {
+            if let Some(next) = tokens.get(idx + 1) {
+                target = Some(normalize_ws(next));
+            }
+            break;
+        }
+    }
+    if target.is_none() {
+        target = Some(normalize_ws(&tokens[tokens.len() - 1]));
+    }
+    let target = target?;
+    if target.is_empty() {
+        return None;
+    }
+    Some((target, inline))
+}
+
+#[allow(dead_code)]
+fn parse_state_edge(line: &str, span: Span) -> Option<Edge> {
+    let (start, end, arrow) = find_arrow(line)?;
+    let left = line[..start].trim();
+    let right = line[end..].trim();
+    if left.is_empty() || right.is_empty() {
+        return None;
+    }
+
+    let (label, right_id) = if let Some((left_part, label_part)) = right.split_once(':') {
+        let label = normalize_ws(label_part);
+        let label = if label.is_empty() { None } else { Some(label) };
+        (label, left_part.trim())
+    } else {
+        let (label, rest) = split_label(right);
+        (label.map(normalize_ws), rest)
+    };
+
+    let from = if is_state_star(left) {
+        STATE_START_TOKEN.to_string()
+    } else {
+        parse_node_id(left)?
+    };
+    let to = if is_state_star(right_id) {
+        STATE_END_TOKEN.to_string()
+    } else {
+        parse_node_id(right_id)?
+    };
+
+    Some(Edge {
+        from,
+        to,
+        arrow: arrow.to_string(),
+        label,
+        span,
+    })
+}
+
 fn parse_header(line: &str) -> Option<(DiagramType, Option<GraphDirection>)> {
     let lower = line.trim().to_ascii_lowercase();
     if lower.starts_with("graph") || lower.starts_with("flowchart") {
@@ -4591,6 +5243,21 @@ fn edge_node(line: &str, span: Span, er_mode: bool) -> Option<Node> {
     };
     let left = line[..start].trim();
     parse_node(left, span)
+}
+
+fn edge_node_right(line: &str, span: Span, er_mode: bool) -> Option<Node> {
+    let (_, end, _) = if er_mode {
+        find_er_arrow(line)?
+    } else {
+        find_arrow(line)?
+    };
+    let right = line[end..].trim();
+    let (_, right_id) = if er_mode {
+        split_er_label(right)
+    } else {
+        split_label(right)
+    };
+    parse_node(right_id, span)
 }
 
 fn parse_node(line: &str, span: Span) -> Option<Node> {
@@ -4855,7 +5522,46 @@ fn find_arrow(line: &str) -> Option<(usize, usize, &str)> {
 }
 
 fn find_er_arrow(line: &str) -> Option<(usize, usize, &str)> {
-    find_arrow_with(line, is_er_arrow_char)
+    // Dedicated ER arrow finder: `{` and `}` are cardinality markers in ER
+    // arrows, NOT bracket delimiters. We skip bracket depth tracking and only
+    // track `[`/`]`/`(`/`)` for node label brackets (rare in ER, but safe).
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0usize;
+    let mut bracket_depth: usize = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '[' | '(' => {
+                bracket_depth += 1;
+                i += 1;
+            }
+            ']' | ')' => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                i += 1;
+            }
+            c if bracket_depth == 0 && is_er_arrow_char(c) => {
+                let start = i;
+                let mut j = i + 1;
+                while j < chars.len() && is_er_arrow_char(chars[j]) {
+                    j += 1;
+                }
+                if j - start >= 2 {
+                    let start_byte = line.char_indices().nth(start).map(|(idx, _)| idx)?;
+                    let end_byte = if j >= chars.len() {
+                        line.len()
+                    } else {
+                        line.char_indices().nth(j).map(|(idx, _)| idx)?
+                    };
+                    let arrow = &line[start_byte..end_byte];
+                    return Some((start_byte, end_byte, arrow));
+                }
+                i = j;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    None
 }
 
 fn find_arrow_with(line: &str, is_arrow: fn(char) -> bool) -> Option<(usize, usize, &str)> {
@@ -5235,6 +5941,38 @@ mod tests {
             .filter(|s| matches!(s, Statement::MindmapNode(_)))
             .count();
         assert_eq!(nodes, 2);
+    }
+
+    #[test]
+    fn normalize_mindmap_creates_edges() {
+        let ast =
+            parse("mindmap\n  Root\n    Child A\n      Leaf A1\n    Child B\n").expect("parse");
+        let config = MermaidConfig::default();
+        let normalized = normalize_ast_to_ir(
+            &ast,
+            &config,
+            &MermaidCompatibilityMatrix::default(),
+            &MermaidFallbackPolicy::default(),
+        );
+        assert_eq!(normalized.ir.nodes.len(), 4);
+        assert_eq!(normalized.ir.edges.len(), 3);
+        let labels: Vec<&str> = normalized
+            .ir
+            .nodes
+            .iter()
+            .filter_map(|node| {
+                node.label
+                    .map(|label| normalized.ir.labels[label.0].text.as_str())
+            })
+            .collect();
+        for expected in ["Root", "Child A", "Leaf A1", "Child B"] {
+            assert!(
+                labels.iter().any(|label| label == &expected),
+                "missing label: {}",
+                expected
+            );
+        }
+        assert!(normalized.errors.is_empty());
     }
 
     #[test]
@@ -6611,5 +7349,293 @@ mod tests {
 
         let d = ir.nodes.iter().find(|n| n.id == "D").unwrap();
         assert_eq!(d.shape, NodeShape::Circle);
+    }
+    // --- Determinism + Caching + Evidence Logs tests (bd-12d5s) ---
+
+    fn make_test_span() -> Span {
+        Span {
+            start: Position {
+                line: 0,
+                col: 0,
+                byte: 0,
+            },
+            end: Position {
+                line: 0,
+                col: 0,
+                byte: 0,
+            },
+        }
+    }
+
+    fn make_test_ir(node_ids: &[&str], edges: &[(usize, usize)]) -> MermaidDiagramIr {
+        let labels: Vec<IrLabel> = node_ids
+            .iter()
+            .map(|id| IrLabel {
+                text: id.to_string(),
+                span: make_test_span(),
+            })
+            .collect();
+
+        let nodes: Vec<IrNode> = node_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| IrNode {
+                id: id.to_string(),
+                label: Some(IrLabelId(i)),
+                shape: NodeShape::Rect,
+                classes: vec![],
+                style_ref: None,
+                span_primary: make_test_span(),
+                span_all: vec![],
+                implicit: false,
+                members: vec![],
+            })
+            .collect();
+
+        let ir_edges: Vec<IrEdge> = edges
+            .iter()
+            .map(|(from, to)| IrEdge {
+                from: IrEndpoint::Node(IrNodeId(*from)),
+                to: IrEndpoint::Node(IrNodeId(*to)),
+                arrow: "-->".to_string(),
+                label: None,
+                style_ref: None,
+                span: make_test_span(),
+            })
+            .collect();
+
+        MermaidDiagramIr {
+            diagram_type: DiagramType::Graph,
+            direction: GraphDirection::TD,
+            nodes,
+            edges: ir_edges,
+            ports: vec![],
+            clusters: vec![],
+            labels,
+            style_refs: vec![],
+            links: vec![],
+            meta: MermaidDiagramMeta {
+                diagram_type: DiagramType::Graph,
+                direction: GraphDirection::TD,
+                support_level: MermaidSupportLevel::Supported,
+                init: MermaidInitParse::default(),
+                theme_overrides: MermaidThemeOverrides::default(),
+                guard: MermaidGuardReport::default(),
+            },
+        }
+    }
+
+    #[test]
+    fn hash_ir_deterministic_same_input() {
+        let ir = make_test_ir(&["A", "B", "C"], &[(0, 1), (1, 2)]);
+        let h1 = hash_ir(&ir);
+        let h2 = hash_ir(&ir);
+        assert_eq!(h1, h2, "Same IR must produce identical hash");
+    }
+
+    #[test]
+    fn hash_ir_different_nodes_differ() {
+        let ir1 = make_test_ir(&["A", "B"], &[(0, 1)]);
+        let ir2 = make_test_ir(&["A", "C"], &[(0, 1)]);
+        assert_ne!(
+            hash_ir(&ir1),
+            hash_ir(&ir2),
+            "Different node IDs must produce different hashes"
+        );
+    }
+
+    #[test]
+    fn hash_ir_different_edges_differ() {
+        let ir1 = make_test_ir(&["A", "B", "C"], &[(0, 1)]);
+        let ir2 = make_test_ir(&["A", "B", "C"], &[(0, 2)]);
+        assert_ne!(
+            hash_ir(&ir1),
+            hash_ir(&ir2),
+            "Different edge targets must produce different hashes"
+        );
+    }
+
+    #[test]
+    fn hash_ir_extra_edge_differs() {
+        let ir1 = make_test_ir(&["A", "B", "C"], &[(0, 1)]);
+        let ir2 = make_test_ir(&["A", "B", "C"], &[(0, 1), (1, 2)]);
+        assert_ne!(hash_ir(&ir1), hash_ir(&ir2), "Extra edge must change hash");
+    }
+
+    #[test]
+    fn hash_config_layout_deterministic() {
+        let config = MermaidConfig::default();
+        let h1 = hash_config_layout(&config);
+        let h2 = hash_config_layout(&config);
+        assert_eq!(h1, h2, "Same config must produce identical hash");
+    }
+
+    #[test]
+    fn hash_config_layout_different_tier_differs() {
+        let mut c1 = MermaidConfig::default();
+        let mut c2 = MermaidConfig::default();
+        c1.tier_override = MermaidTier::Compact;
+        c2.tier_override = MermaidTier::Rich;
+        assert_ne!(
+            hash_config_layout(&c1),
+            hash_config_layout(&c2),
+            "Different tier must produce different hash"
+        );
+    }
+
+    #[test]
+    fn cache_key_combined_deterministic() {
+        let ir = make_test_ir(&["A", "B"], &[(0, 1)]);
+        let config = MermaidConfig::default();
+        let k1 = DiagramCacheKey::new(&ir, &config, 0);
+        let k2 = DiagramCacheKey::new(&ir, &config, 0);
+        assert_eq!(k1, k2);
+        assert_eq!(k1.combined_hash(), k2.combined_hash());
+    }
+
+    #[test]
+    fn cache_hit_and_miss() {
+        let cache = DiagramCache::new(4);
+        let ir = make_test_ir(&["A", "B"], &[(0, 1)]);
+        let config = MermaidConfig::default();
+        let key = DiagramCacheKey::new(&ir, &config, 0);
+
+        // Miss
+        assert!(cache.get(&key).is_none());
+        assert_eq!(cache.misses(), 1);
+        assert_eq!(cache.hits(), 0);
+
+        // Insert
+        let layout = crate::mermaid_layout::layout_diagram(&ir, &config);
+        cache.insert(key.clone(), layout.clone());
+        assert_eq!(cache.len(), 1);
+
+        // Hit
+        let cached = cache.get(&key);
+        assert!(cached.is_some());
+        assert_eq!(cache.hits(), 1);
+        assert_eq!(cache.misses(), 1);
+
+        // Verify cached layout matches original
+        let cached_layout = cached.unwrap();
+        assert_eq!(cached_layout.nodes.len(), layout.nodes.len());
+        assert_eq!(cached_layout.edges.len(), layout.edges.len());
+    }
+
+    #[test]
+    fn cache_eviction_at_capacity() {
+        let cache = DiagramCache::new(2);
+        let config = MermaidConfig::default();
+
+        let ir1 = make_test_ir(&["A", "B"], &[(0, 1)]);
+        let ir2 = make_test_ir(&["X", "Y"], &[(0, 1)]);
+        let ir3 = make_test_ir(&["P", "Q"], &[(0, 1)]);
+
+        let k1 = DiagramCacheKey::new(&ir1, &config, 0);
+        let k2 = DiagramCacheKey::new(&ir2, &config, 0);
+        let k3 = DiagramCacheKey::new(&ir3, &config, 0);
+
+        let l1 = crate::mermaid_layout::layout_diagram(&ir1, &config);
+        let l2 = crate::mermaid_layout::layout_diagram(&ir2, &config);
+        let l3 = crate::mermaid_layout::layout_diagram(&ir3, &config);
+
+        cache.insert(k1.clone(), l1);
+        cache.insert(k2.clone(), l2);
+        assert_eq!(cache.len(), 2);
+
+        // Insert third entry; should evict LRU
+        cache.insert(k3.clone(), l3);
+        assert_eq!(cache.len(), 2);
+
+        // Third entry must be present
+        assert!(cache.get(&k3).is_some());
+    }
+
+    #[test]
+    fn cache_clear_resets() {
+        let cache = DiagramCache::new(4);
+        let ir = make_test_ir(&["A", "B"], &[(0, 1)]);
+        let config = MermaidConfig::default();
+        let key = DiagramCacheKey::new(&ir, &config, 0);
+        let layout = crate::mermaid_layout::layout_diagram(&ir, &config);
+
+        cache.insert(key.clone(), layout);
+        assert_eq!(cache.len(), 1);
+        let _ = cache.get(&key);
+
+        cache.clear();
+        assert!(cache.is_empty());
+        assert_eq!(cache.hits(), 0);
+        assert_eq!(cache.misses(), 0);
+    }
+
+    #[test]
+    fn layout_determinism_same_ir_config() {
+        let ir = make_test_ir(&["A", "B", "C", "D"], &[(0, 1), (1, 2), (0, 3), (2, 3)]);
+        let config = MermaidConfig::default();
+        let layout1 = crate::mermaid_layout::layout_diagram(&ir, &config);
+        let layout2 = crate::mermaid_layout::layout_diagram(&ir, &config);
+
+        assert_eq!(
+            layout1.nodes.len(),
+            layout2.nodes.len(),
+            "Node count must be deterministic"
+        );
+        for (n1, n2) in layout1.nodes.iter().zip(layout2.nodes.iter()) {
+            assert_eq!(
+                n1.node_idx, n2.node_idx,
+                "Node index ordering must be deterministic"
+            );
+            assert!(
+                (n1.rect.x - n2.rect.x).abs() < f64::EPSILON
+                    && (n1.rect.y - n2.rect.y).abs() < f64::EPSILON,
+                "Node positions must be identical: idx={} ({},{}) vs ({},{})",
+                n1.node_idx,
+                n1.rect.x,
+                n1.rect.y,
+                n2.rect.x,
+                n2.rect.y,
+            );
+        }
+        assert_eq!(
+            layout1.stats.crossings, layout2.stats.crossings,
+            "Crossing count must be deterministic"
+        );
+    }
+
+    #[test]
+    fn layout_diagram_cached_hits_on_second_call() {
+        let ir = make_test_ir(&["A", "B"], &[(0, 1)]);
+        let config = MermaidConfig {
+            cache_enabled: true,
+            ..MermaidConfig::default()
+        };
+        let cache = DiagramCache::new(4);
+
+        let l1 = layout_diagram_cached(&ir, &config, 0, &cache);
+        assert_eq!(cache.hits(), 0);
+        assert_eq!(cache.misses(), 1);
+
+        let l2 = layout_diagram_cached(&ir, &config, 0, &cache);
+        assert_eq!(cache.hits(), 1);
+        assert_eq!(cache.misses(), 1);
+
+        assert_eq!(l1.nodes.len(), l2.nodes.len());
+    }
+
+    #[test]
+    fn layout_diagram_cached_disabled_skips_cache() {
+        let ir = make_test_ir(&["A", "B"], &[(0, 1)]);
+        let config = MermaidConfig {
+            cache_enabled: false,
+            ..MermaidConfig::default()
+        };
+        let cache = DiagramCache::new(4);
+
+        let _ = layout_diagram_cached(&ir, &config, 0, &cache);
+        let _ = layout_diagram_cached(&ir, &config, 0, &cache);
+
+        assert!(cache.is_empty(), "Cache must stay empty when disabled");
+        assert_eq!(cache.hits(), 0);
     }
 }

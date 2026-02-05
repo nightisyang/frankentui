@@ -85,7 +85,10 @@ impl GlyphPolicy {
         let mode = detect_mode(&get_env, caps);
         let (mut emoji, emoji_overridden) = detect_emoji(&get_env, caps, mode);
         let double_width = detect_double_width(&get_env, caps);
-        let cjk_width = text_width::cjk_width_from_env(|key| get_env(key));
+        let mut cjk_width = text_width::cjk_width_from_env(|key| get_env(key));
+        if !double_width {
+            cjk_width = false;
+        }
         if !double_width && !emoji_overridden {
             emoji = false;
         }
@@ -274,6 +277,28 @@ mod tests {
     }
 
     #[test]
+    fn legacy_no_emoji_override_disables() {
+        let env = map_env(&[(ENV_NO_EMOJI, "1"), ("TERM", "wezterm")]);
+        let caps = TerminalCapabilities::modern();
+        let policy = GlyphPolicy::from_env_with(get_env(&env), &caps);
+
+        assert!(!policy.emoji);
+    }
+
+    #[test]
+    fn glyph_emoji_override_wins_over_legacy_no_emoji() {
+        let env = map_env(&[
+            (ENV_GLYPH_EMOJI, "1"),
+            (ENV_NO_EMOJI, "1"),
+            ("TERM", "wezterm"),
+        ]);
+        let caps = TerminalCapabilities::modern();
+        let policy = GlyphPolicy::from_env_with(get_env(&env), &caps);
+
+        assert!(policy.emoji);
+    }
+
+    #[test]
     fn emoji_default_true_for_modern_term() {
         let env = map_env(&[("TERM", "xterm-256color")]);
         let caps = TerminalCapabilities::modern();
@@ -379,6 +404,16 @@ mod tests {
     fn glyph_double_width_env_overrides_cjk_width() {
         let env = map_env(&[(ENV_GLYPH_DOUBLE_WIDTH, "0"), ("FTUI_TEXT_CJK_WIDTH", "1")]);
         let caps = TerminalCapabilities::modern();
+        let policy = GlyphPolicy::from_env_with(get_env(&env), &caps);
+
+        assert!(!policy.cjk_width);
+    }
+
+    #[test]
+    fn caps_double_width_false_disables_cjk_width() {
+        let env = map_env(&[("FTUI_TEXT_CJK_WIDTH", "1")]);
+        let mut caps = TerminalCapabilities::modern();
+        caps.double_width = false;
         let policy = GlyphPolicy::from_env_with(get_env(&env), &caps);
 
         assert!(!policy.cjk_width);

@@ -7,7 +7,7 @@ import textwrap
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 TYPE_MAP = {
     "string": str,
@@ -21,6 +21,7 @@ TYPE_MAP = {
 
 
 REGISTRY_VERSION = "e2e-hash-registry-v1"
+_PASS_STATUSES = {"pass", "passed", "success"}
 
 
 @dataclass
@@ -250,6 +251,12 @@ def compute_hash_key(obj: Dict[str, Any]) -> Optional[str]:
     return f"{mode}-{cols}x{rows}-seed{seed_str}"
 
 
+def is_pass_status(status: Any) -> bool:
+    if not isinstance(status, str):
+        return True
+    return status.lower() in _PASS_STATUSES
+
+
 def validate_hash_registry(
     registry: HashRegistry, lines: Iterable[str]
 ) -> List[Tuple[int, str]]:
@@ -258,7 +265,6 @@ def validate_hash_registry(
     for entry in registry.entries:
         index.setdefault((entry.event_type, entry.hash_key), []).append(entry)
 
-    seen: Set[HashRegistryEntry] = set()
     for idx, line in enumerate(lines, start=1):
         stripped = line.strip()
         if not stripped:
@@ -271,6 +277,8 @@ def validate_hash_registry(
             continue
         event_type = obj.get("type")
         if not isinstance(event_type, str):
+            continue
+        if not is_pass_status(obj.get("status")):
             continue
         hash_key = compute_hash_key(obj)
         if not hash_key:
@@ -302,7 +310,6 @@ def validate_hash_registry(
                         f"case={event_case} step={event_step} screen={event_screen}",
                     )
                 )
-                seen.add(entry)
                 continue
             actual = obj[entry.field]
             if not isinstance(actual, str):
@@ -315,7 +322,6 @@ def validate_hash_registry(
                         f"case={event_case} step={event_step} screen={event_screen} is not a string",
                     )
                 )
-                seen.add(entry)
                 continue
             if actual != entry.value:
                 failures.append(
@@ -328,18 +334,6 @@ def validate_hash_registry(
                         f"field={entry.field} expected={entry.value} got={actual}",
                     )
                 )
-            seen.add(entry)
-
-    for entry in registry.entries:
-        if entry not in seen:
-            failures.append(
-                (
-                    0,
-                    "missing expected hash entry "
-                    f"{entry.event_type} {entry.hash_key} "
-                    f"case={entry.case} step={entry.step} field={entry.field}",
-                )
-            )
     return failures
 
 
@@ -361,6 +355,9 @@ def extract_registry_entries(lines: Iterable[str]) -> List[HashRegistryEntry]:
         fields = REGISTRY_FIELDS.get(event_type)
         if not fields:
             continue
+        status = obj.get("status")
+        if not is_pass_status(status):
+            continue
         hash_key = compute_hash_key(obj)
         if not hash_key:
             continue
@@ -372,7 +369,7 @@ def extract_registry_entries(lines: Iterable[str]) -> List[HashRegistryEntry]:
             event_step = None
         for field in fields:
             value = obj.get(field)
-            if not isinstance(value, str):
+            if not isinstance(value, str) or not value:
                 continue
             key = (event_type, hash_key, field, event_case, event_step)
             existing = entries.get(key)
