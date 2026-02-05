@@ -66,6 +66,12 @@ pub mod mermaid;
 #[cfg(feature = "diagram")]
 pub mod mermaid_layout;
 
+#[cfg(feature = "diagram")]
+pub mod diagram_layout;
+
+#[cfg(feature = "diagram")]
+pub mod mermaid_render;
+
 #[cfg(feature = "export")]
 pub mod export;
 

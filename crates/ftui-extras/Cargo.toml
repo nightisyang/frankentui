@@ -79,7 +79,7 @@ traceback = [
 ]
 stopwatch = []
 timer = []
-diagram = ["dep:unicode-segmentation", "dep:unicode-display-width", "dep:serde_json"]
+diagram = ["dep:unicode-segmentation", "dep:unicode-display-width", "dep:serde_json", "dep:ftui-core", "dep:ftui-render", "dep:ftui-style"]
 theme = ["dep:ftui-render", "dep:ftui-style"]
 text-effects = [
   "dep:ftui-core",
