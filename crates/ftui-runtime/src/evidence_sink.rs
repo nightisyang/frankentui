@@ -167,3 +167,121 @@ impl EvidenceSink {
         inner.writer.flush()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_version_stable() {
+        assert_eq!(EVIDENCE_SCHEMA_VERSION, "ftui-evidence-v1");
+    }
+
+    #[test]
+    fn config_default_is_disabled() {
+        let config = EvidenceSinkConfig::default();
+        assert!(!config.enabled);
+        assert!(config.flush_on_write);
+        assert!(matches!(
+            config.destination,
+            EvidenceSinkDestination::Stdout
+        ));
+    }
+
+    #[test]
+    fn config_disabled_matches_default() {
+        let config = EvidenceSinkConfig::disabled();
+        assert!(!config.enabled);
+    }
+
+    #[test]
+    fn config_enabled_stdout() {
+        let config = EvidenceSinkConfig::enabled_stdout();
+        assert!(config.enabled);
+        assert!(config.flush_on_write);
+        assert!(matches!(
+            config.destination,
+            EvidenceSinkDestination::Stdout
+        ));
+    }
+
+    #[test]
+    fn config_enabled_file() {
+        let config = EvidenceSinkConfig::enabled_file("/tmp/test.jsonl");
+        assert!(config.enabled);
+        assert!(config.flush_on_write);
+        assert!(matches!(
+            config.destination,
+            EvidenceSinkDestination::File(_)
+        ));
+    }
+
+    #[test]
+    fn config_builder_chain() {
+        let config = EvidenceSinkConfig::default()
+            .with_enabled(true)
+            .with_destination(EvidenceSinkDestination::Stdout)
+            .with_flush_on_write(false);
+        assert!(config.enabled);
+        assert!(!config.flush_on_write);
+    }
+
+    #[test]
+    fn destination_file_helper() {
+        let dest = EvidenceSinkDestination::file("/tmp/evidence.jsonl");
+        assert!(
+            matches!(dest, EvidenceSinkDestination::File(p) if p.to_str() == Some("/tmp/evidence.jsonl"))
+        );
+    }
+
+    #[test]
+    fn disabled_config_returns_none() {
+        let config = EvidenceSinkConfig::disabled();
+        let sink = EvidenceSink::from_config(&config).unwrap();
+        assert!(sink.is_none());
+    }
+
+    #[test]
+    fn enabled_file_sink_writes_jsonl() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let config = EvidenceSinkConfig::enabled_file(&path);
+        let sink = EvidenceSink::from_config(&config).unwrap().unwrap();
+
+        sink.write_jsonl(r#"{"event":"test","value":1}"#).unwrap();
+        sink.write_jsonl(r#"{"event":"test","value":2}"#).unwrap();
+        sink.flush().unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], r#"{"event":"test","value":1}"#);
+        assert_eq!(lines[1], r#"{"event":"test","value":2}"#);
+    }
+
+    #[test]
+    fn sink_is_clone_and_shared() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let config = EvidenceSinkConfig::enabled_file(&path);
+        let sink = EvidenceSink::from_config(&config).unwrap().unwrap();
+        let sink2 = sink.clone();
+
+        sink.write_jsonl(r#"{"from":"sink1"}"#).unwrap();
+        sink2.write_jsonl(r#"{"from":"sink2"}"#).unwrap();
+        sink.flush().unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn sink_debug_impl() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let config = EvidenceSinkConfig::enabled_file(tmp.path());
+        let sink = EvidenceSink::from_config(&config).unwrap().unwrap();
+        let debug = format!("{:?}", sink);
+        assert!(debug.contains("EvidenceSink"));
+    }
+}
