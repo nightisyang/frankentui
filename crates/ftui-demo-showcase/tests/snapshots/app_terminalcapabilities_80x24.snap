@@ -1,7 +1,7 @@
  1: Tour │ 2: Dash │ 3: Shakes │ 4: Code │ 5: Widgets │ 6: Layout │ 7: Forms    
 ╭────────────────────────────Terminal Capabilities─────────────────────────────╮
 │╭─────────────────────── Terminal Capability Explorer ───────────────────────╮│
-││Profile: detected | View: Matrix                                            ││
+││Profile: modern | View: Matrix                                              ││
 ││Color depth: truecolor | Mux: no | Sync output: yes                         ││
 ││Scroll region: yes | Hyperlinks: yes | Clipboard: yes | overrides: none     ││
 │╰────────────────────────────────────────────────────────────────────────────╯│

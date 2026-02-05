@@ -644,6 +644,8 @@ pub enum ScreenId {
     DeterminismLab,
     /// Hyperlink playground (OSC-8 + hit regions) (bd-iuvb.14).
     HyperlinkPlayground,
+    /// Drag-drop Kanban board (bd-iuvb.12).
+    KanbanBoard,
 }
 
 impl ScreenId {
@@ -714,6 +716,7 @@ impl ScreenId {
             Self::CommandPaletteLab => "CommandPaletteLab",
             Self::DeterminismLab => "DeterminismLab",
             Self::HyperlinkPlayground => "HyperlinkPlayground",
+            Self::KanbanBoard => "KanbanBoard",
         }
     }
 
@@ -850,6 +853,8 @@ pub struct ScreenStates {
     pub determinism_lab: screens::determinism_lab::DeterminismLab,
     /// Hyperlink playground screen state (bd-iuvb.14).
     pub hyperlink_playground: screens::hyperlink_playground::HyperlinkPlayground,
+    /// Kanban board screen state (bd-iuvb.12).
+    pub kanban_board: screens::kanban_board::KanbanBoard,
     /// Tracks whether each screen has errored during rendering.
     /// Indexed by `ScreenId::index()`.
     screen_errors: Vec<Option<String>>,
@@ -898,6 +903,7 @@ impl Default for ScreenStates {
             command_palette_lab: Default::default(),
             determinism_lab: Default::default(),
             hyperlink_playground: Default::default(),
+            kanban_board: Default::default(),
             screen_errors: vec![None; screens::screen_registry().len()],
             visual_effects_deterministic_tick_ms: None,
         }
@@ -1111,6 +1117,9 @@ impl ScreenStates {
             ScreenId::HyperlinkPlayground => {
                 self.hyperlink_playground.update(event);
             }
+            ScreenId::KanbanBoard => {
+                self.kanban_board.update(event);
+            }
         }
     }
 
@@ -1174,6 +1183,7 @@ impl ScreenStates {
             ScreenId::CommandPaletteLab => self.command_palette_lab.tick(tick_count),
             ScreenId::DeterminismLab => self.determinism_lab.tick(tick_count),
             ScreenId::HyperlinkPlayground => self.hyperlink_playground.tick(tick_count),
+            ScreenId::KanbanBoard => self.kanban_board.tick(tick_count),
         }
     }
 
@@ -1251,6 +1261,7 @@ impl ScreenStates {
                 ScreenId::CommandPaletteLab => self.command_palette_lab.view(frame, area),
                 ScreenId::DeterminismLab => self.determinism_lab.view(frame, area),
                 ScreenId::HyperlinkPlayground => self.hyperlink_playground.view(frame, area),
+                ScreenId::KanbanBoard => self.kanban_board.view(frame, area),
             }
         }));
 
@@ -3351,6 +3362,7 @@ impl AppModel {
             ScreenId::CommandPaletteLab => self.screens.command_palette_lab.keybindings(),
             ScreenId::DeterminismLab => self.screens.determinism_lab.keybindings(),
             ScreenId::HyperlinkPlayground => self.screens.hyperlink_playground.keybindings(),
+            ScreenId::KanbanBoard => self.screens.kanban_board.keybindings(),
         };
         if self.tour.is_active() {
             entries.push(screens::HelpEntry {

@@ -993,6 +993,7 @@ pub fn accent_for(id: ScreenId) -> theme::ColorToken {
         ScreenId::DeterminismLab => theme::screen_accent::PERFORMANCE,
         ScreenId::TableThemeGallery => theme::screen_accent::DATA_VIZ,
         ScreenId::ExplainabilityCockpit => theme::screen_accent::PERFORMANCE,
+        ScreenId::KanbanBoard => theme::screen_accent::ADVANCED,
     }
 }
 
