@@ -437,7 +437,7 @@ fn assign_layers(graph: &LayoutGraph, budget: &mut usize) -> Vec<usize> {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3: Crossing minimization — barycenter heuristic
+// Phase 3: Crossing minimization — barycenter heuristic + sifting refinement
 // ---------------------------------------------------------------------------
 
 fn count_crossings(layers: &[Vec<usize>], adj: &[Vec<usize>]) -> usize {
@@ -597,6 +597,32 @@ fn minimize_crossings(
         if best_crossings == 0 {
             break;
         }
+
+        // Sifting refinement: try repositioning individual nodes for further
+        // crossing reduction. Only run on layers with 3+ nodes and when budget
+        // permits. Sifting is more expensive than barycenter but finds better
+        // solutions for dense graphs.
+        if *budget > 0 && c > 0 {
+            let mut sift_improved = false;
+            for li in 0..num_layers {
+                if *budget == 0 {
+                    break;
+                }
+                if layers[li].len() >= 3 && sifting_sort(&mut layers, li, adj, budget) {
+                    sift_improved = true;
+                }
+            }
+            if sift_improved {
+                let c2 = count_crossings(&layers, adj);
+                if c2 < best_crossings {
+                    best_crossings = c2;
+                    best_layers = Some(layers.clone());
+                }
+                if best_crossings == 0 {
+                    break;
+                }
+            }
+        }
     }
 
     match best_layers {
@@ -686,6 +712,119 @@ fn barycenter_sort(
     bary.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
 
     layers[layer_idx] = bary.into_iter().map(|(v, _)| v).collect();
+}
+
+/// Count crossings between a single pair of adjacent layers.
+/// `layer_a` is the upper/source layer, `layer_b` is the lower/destination layer.
+fn count_crossings_pair(layer_a: &[usize], layer_b: &[usize], adj: &[Vec<usize>]) -> usize {
+    if layer_a.is_empty() || layer_b.is_empty() {
+        return 0;
+    }
+    let max_node = layer_b.iter().copied().max().unwrap_or(0) + 1;
+    let mut pos_b = vec![usize::MAX; max_node];
+    for (p, &v) in layer_b.iter().enumerate() {
+        if v < max_node {
+            pos_b[v] = p;
+        }
+    }
+    let mut edge_pairs: Vec<(usize, usize)> = Vec::new();
+    for (pa, &u) in layer_a.iter().enumerate() {
+        for &v in &adj[u] {
+            if v < max_node {
+                let pos = pos_b[v];
+                if pos != usize::MAX {
+                    edge_pairs.push((pa, pos));
+                }
+            }
+        }
+    }
+    edge_pairs.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    let mut seq: Vec<usize> = edge_pairs.iter().map(|&(_, b)| b).collect();
+    let mut buf = vec![0usize; seq.len()];
+    merge_sort_count_inversions(&mut seq, &mut buf)
+}
+
+/// Count crossings involving a specific layer: sum crossings with its adjacent
+/// layer pair(s) (the layer above and/or the layer below).
+fn count_crossings_at(layers: &[Vec<usize>], layer_idx: usize, adj: &[Vec<usize>]) -> usize {
+    let mut total = 0;
+    if layer_idx > 0 {
+        total += count_crossings_pair(&layers[layer_idx - 1], &layers[layer_idx], adj);
+    }
+    if layer_idx + 1 < layers.len() {
+        total += count_crossings_pair(&layers[layer_idx], &layers[layer_idx + 1], adj);
+    }
+    total
+}
+
+/// Sifting refinement pass for crossing minimization.
+///
+/// For each node in the target layer, removes it and tries reinserting it at
+/// every possible position, picking the position with the fewest crossings
+/// involving this layer's edges. This is O(n^2 * E_local) per layer but
+/// finds better solutions than barycenter alone for dense graphs.
+///
+/// Returns `true` if any improvement was made.
+fn sifting_sort(
+    layers: &mut [Vec<usize>],
+    layer_idx: usize,
+    adj: &[Vec<usize>],
+    budget: &mut usize,
+) -> bool {
+    let layer_len = layers[layer_idx].len();
+    if layer_len <= 2 {
+        return false; // No benefit for layers with 0-2 nodes
+    }
+
+    let mut improved = false;
+    // Process nodes in the order they appear in the layer
+    let node_order: Vec<usize> = layers[layer_idx].clone();
+
+    for node in node_order {
+        if *budget == 0 {
+            break;
+        }
+        // Budget: each sift costs proportional to layer size
+        *budget = budget.saturating_sub(1);
+
+        // Find and remove the node from its current position
+        let cur_pos = match layers[layer_idx].iter().position(|&v| v == node) {
+            Some(p) => p,
+            None => continue,
+        };
+        layers[layer_idx].remove(cur_pos);
+
+        // Baseline: crossings at the layer with the node removed (re-inserted at cur_pos)
+        layers[layer_idx].insert(cur_pos, node);
+        let baseline = count_crossings_at(layers, layer_idx, adj);
+        layers[layer_idx].remove(cur_pos);
+
+        // Try every position and find the one with minimum crossings
+        let len_without = layers[layer_idx].len();
+        let mut best_pos = cur_pos;
+        let mut best_crossings = baseline;
+
+        for pos in 0..=len_without {
+            if pos == cur_pos {
+                continue; // Already measured as baseline
+            }
+            layers[layer_idx].insert(pos, node);
+            let c = count_crossings_at(layers, layer_idx, adj);
+            layers[layer_idx].remove(pos);
+            if c < best_crossings {
+                best_crossings = c;
+                best_pos = pos;
+            }
+        }
+
+        // Reinsert at the best position
+        layers[layer_idx].insert(best_pos, node);
+        if best_pos != cur_pos {
+            improved = true;
+        }
+    }
+
+    improved
 }
 
 // ---------------------------------------------------------------------------
@@ -1909,5 +2048,176 @@ mod tests {
         }
         assert_eq!(l3.quality.crossings, 0);
         assert_close(l3.quality.total_score, 582.0833333333334, "g3 total_score");
+    }
+
+    // -- Sifting algorithm tests --
+
+    #[test]
+    fn sifting_produces_valid_permutation() {
+        // After sifting, the layer should contain the same nodes (just reordered)
+        let mut layers = vec![vec![0, 1, 2], vec![3, 4, 5, 6, 7], vec![8, 9]];
+        let adj = vec![
+            vec![3, 4], // 0 -> 3, 4
+            vec![5, 6], // 1 -> 5, 6
+            vec![7],    // 2 -> 7
+            vec![8],    // 3 -> 8
+            vec![9],    // 4 -> 9
+            vec![8],    // 5 -> 8
+            vec![9],    // 6 -> 9
+            vec![8, 9], // 7 -> 8, 9
+            vec![],     // 8
+            vec![],     // 9
+        ];
+        let original: Vec<usize> = layers[1].clone();
+        let mut budget = 1000;
+        sifting_sort(&mut layers, 1, &adj, &mut budget);
+        let mut sorted_result = layers[1].clone();
+        sorted_result.sort_unstable();
+        let mut sorted_original = original;
+        sorted_original.sort_unstable();
+        assert_eq!(
+            sorted_result, sorted_original,
+            "sifting must be a valid permutation"
+        );
+    }
+
+    #[test]
+    fn sifting_reduces_crossings_on_known_bad_ordering() {
+        // Construct a graph where the initial ordering has crossings
+        // that sifting should be able to reduce.
+        // Layer 0: [0, 1, 2]
+        // Layer 1: [3, 4, 5] — intentionally ordered to create crossings
+        // Edges: 0->5, 1->3, 2->4 (all crossing if layer 1 is [3,4,5])
+        let mut layers = vec![vec![0, 1, 2], vec![3, 4, 5]];
+        let adj = vec![
+            vec![5], // 0 -> 5
+            vec![3], // 1 -> 3
+            vec![4], // 2 -> 4
+            vec![],  // 3
+            vec![],  // 4
+            vec![],  // 5
+        ];
+        let before = count_crossings(&layers, &adj);
+        assert!(before > 0, "initial ordering should have crossings");
+
+        let mut budget = 1000;
+        sifting_sort(&mut layers, 1, &adj, &mut budget);
+        let after = count_crossings(&layers, &adj);
+        assert!(
+            after <= before,
+            "sifting should not increase crossings: before={before}, after={after}"
+        );
+        assert_eq!(
+            after, 0,
+            "sifting should find the optimal (zero-crossing) ordering"
+        );
+    }
+
+    #[test]
+    fn sifting_respects_budget() {
+        // With zero budget, sifting should not modify anything
+        let mut layers = vec![vec![0, 1, 2], vec![3, 4, 5]];
+        let adj = vec![vec![5], vec![3], vec![4], vec![], vec![], vec![]];
+        let original = layers[1].clone();
+        let mut budget = 0;
+        let improved = sifting_sort(&mut layers, 1, &adj, &mut budget);
+        assert!(!improved, "sifting with zero budget should not improve");
+        assert_eq!(
+            layers[1], original,
+            "layer should be unchanged with zero budget"
+        );
+    }
+
+    #[test]
+    fn sifting_noop_for_small_layers() {
+        // Layers with <= 2 nodes should not be modified
+        let mut layers = vec![vec![0], vec![1, 2]];
+        let adj = vec![vec![1, 2], vec![], vec![]];
+        let mut budget = 1000;
+        let improved = sifting_sort(&mut layers, 0, &adj, &mut budget);
+        assert!(!improved, "single-node layer cannot be improved by sifting");
+        let improved2 = sifting_sort(&mut layers, 1, &adj, &mut budget);
+        assert!(!improved2, "two-node layer should not trigger sifting");
+    }
+
+    #[test]
+    fn sifting_integrated_in_minimize_crossings() {
+        // Verify that the full minimize_crossings pipeline (barycenter + sifting)
+        // produces zero crossings on a graph with a known optimal solution.
+        // Diamond: A->B, A->C, B->D, C->D (no crossings possible with correct ordering)
+        let layer_assignment = vec![0, 1, 1, 2]; // A=0, B=1, C=1, D=2
+        let adj = vec![
+            vec![1, 2], // A -> B, C
+            vec![3],    // B -> D
+            vec![3],    // C -> D
+            vec![],     // D
+        ];
+        let radj = vec![
+            vec![],     // A
+            vec![0],    // B <- A
+            vec![0],    // C <- A
+            vec![1, 2], // D <- B, C
+        ];
+        let mut budget = 10_000;
+        let result = minimize_crossings(&layer_assignment, &adj, &radj, 4, 10, &mut budget);
+        let crossings = count_crossings(&result, &adj);
+        assert_eq!(crossings, 0, "diamond graph should have zero crossings");
+    }
+
+    #[test]
+    fn sifting_improves_dense_graph() {
+        // A denser graph where sifting should help beyond barycenter.
+        // 3 layers: [0,1,2,3] -> [4,5,6,7] -> [8,9,10,11]
+        // With crossing edges that barycenter alone may not fully resolve.
+        let layer_assignment = vec![0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2];
+        let adj = vec![
+            vec![7],  // 0 -> 7
+            vec![4],  // 1 -> 4
+            vec![6],  // 2 -> 6
+            vec![5],  // 3 -> 5
+            vec![11], // 4 -> 11
+            vec![8],  // 5 -> 8
+            vec![10], // 6 -> 10
+            vec![9],  // 7 -> 9
+            vec![],   // 8
+            vec![],   // 9
+            vec![],   // 10
+            vec![],   // 11
+        ];
+        let radj = vec![
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![1],
+            vec![3],
+            vec![2],
+            vec![0],
+            vec![5],
+            vec![7],
+            vec![6],
+            vec![4],
+        ];
+        let mut budget = 50_000;
+        let result = minimize_crossings(&layer_assignment, &adj, &radj, 12, 20, &mut budget);
+        let crossings = count_crossings(&result, &adj);
+        // This graph has an optimal solution with 0 crossings
+        assert_eq!(
+            crossings, 0,
+            "sifting should find zero-crossing ordering for this graph"
+        );
+    }
+
+    #[test]
+    fn count_crossings_pair_matches_full_count() {
+        // Verify count_crossings_pair gives same result as count_crossings for a 2-layer graph
+        let layers = vec![vec![0, 1, 2], vec![3, 4, 5]];
+        let adj = vec![vec![5], vec![3], vec![4], vec![], vec![], vec![]];
+        let full = count_crossings(&layers, &adj);
+        let pair = count_crossings_pair(&layers[0], &layers[1], &adj);
+        assert_eq!(
+            full, pair,
+            "pair count should match full count for 2-layer graph"
+        );
     }
 }

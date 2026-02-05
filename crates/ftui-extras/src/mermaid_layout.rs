@@ -6898,6 +6898,133 @@ mod tests {
         assert_eq!(layout.stats.total_bends, 0);
         assert!((layout.stats.position_variance - 0.0).abs() < f64::EPSILON);
     }
+
+    // ── Constraint application tests ──────────────────────────────
+
+    #[test]
+    fn same_rank_constraint_equalizes_layers() {
+        let mut ir = make_simple_ir(&["A", "B", "C"], &[(0, 1), (1, 2)], GraphDirection::TD);
+        ir.constraints.push(LayoutConstraint::SameRank {
+            node_ids: vec!["A".to_string(), "C".to_string()],
+            span: empty_span(),
+        });
+        let layout = layout_diagram(&ir, &default_config());
+        let rank_a = layout.nodes.iter().find(|n| n.node_idx == 0).unwrap().rank;
+        let rank_c = layout.nodes.iter().find(|n| n.node_idx == 2).unwrap().rank;
+        assert_eq!(rank_a, rank_c, "A and C should be on the same rank");
+    }
+
+    #[test]
+    fn min_length_constraint_ensures_rank_gap() {
+        let mut ir = make_simple_ir(&["A", "B"], &[(0, 1)], GraphDirection::TD);
+        ir.constraints.push(LayoutConstraint::MinLength {
+            from_id: "A".to_string(),
+            to_id: "B".to_string(),
+            min_len: 3,
+            span: empty_span(),
+        });
+        let layout = layout_diagram(&ir, &default_config());
+        let rank_a = layout.nodes.iter().find(|n| n.node_idx == 0).unwrap().rank;
+        let rank_b = layout.nodes.iter().find(|n| n.node_idx == 1).unwrap().rank;
+        assert!(
+            rank_b >= rank_a + 3,
+            "rank gap should be >= 3, got {} - {} = {}",
+            rank_b,
+            rank_a,
+            rank_b - rank_a
+        );
+    }
+
+    #[test]
+    fn pin_constraint_overrides_position() {
+        let mut ir = make_simple_ir(&["A", "B"], &[(0, 1)], GraphDirection::TD);
+        ir.constraints.push(LayoutConstraint::Pin {
+            node_id: "A".to_string(),
+            x: 42.0,
+            y: 99.0,
+            span: empty_span(),
+        });
+        let layout = layout_diagram(&ir, &default_config());
+        let node_a = layout.nodes.iter().find(|n| n.node_idx == 0).unwrap();
+        assert!(
+            (node_a.rect.x - 42.0).abs() < 1e-9,
+            "pinned x should be 42.0, got {}",
+            node_a.rect.x
+        );
+        assert!(
+            (node_a.rect.y - 99.0).abs() < 1e-9,
+            "pinned y should be 99.0, got {}",
+            node_a.rect.y
+        );
+    }
+
+    #[test]
+    fn order_constraint_enforces_sequence() {
+        let mut ir = make_simple_ir(&["A", "B", "C"], &[], GraphDirection::TD);
+        ir.constraints.push(LayoutConstraint::SameRank {
+            node_ids: vec!["A".to_string(), "B".to_string(), "C".to_string()],
+            span: empty_span(),
+        });
+        ir.constraints.push(LayoutConstraint::OrderInRank {
+            node_ids: vec!["C".to_string(), "A".to_string(), "B".to_string()],
+            span: empty_span(),
+        });
+        let layout = layout_diagram(&ir, &default_config());
+        let order_a = layout.nodes.iter().find(|n| n.node_idx == 0).unwrap().order;
+        let order_b = layout.nodes.iter().find(|n| n.node_idx == 1).unwrap().order;
+        let order_c = layout.nodes.iter().find(|n| n.node_idx == 2).unwrap().order;
+        assert!(
+            order_c < order_a && order_a < order_b,
+            "expected C < A < B ordering, got C={order_c} A={order_a} B={order_b}"
+        );
+    }
+
+    #[test]
+    fn constraints_with_unknown_nodes_are_harmless() {
+        let mut ir = make_simple_ir(&["A", "B"], &[(0, 1)], GraphDirection::TD);
+        ir.constraints.push(LayoutConstraint::SameRank {
+            node_ids: vec!["X".to_string(), "Y".to_string()],
+            span: empty_span(),
+        });
+        ir.constraints.push(LayoutConstraint::Pin {
+            node_id: "Z".to_string(),
+            x: 0.0,
+            y: 0.0,
+            span: empty_span(),
+        });
+        let layout = layout_diagram(&ir, &default_config());
+        assert_eq!(layout.nodes.len(), 2);
+    }
+
+    #[test]
+    fn full_pipeline_with_constraints() {
+        let src = "graph TD\n%%{ ftui:rank=same B, D }%%\nA --> B\nA --> C\nC --> D\n";
+        let ast = crate::mermaid::parse(src).expect("parse");
+        let config = MermaidConfig::default();
+        let ir_parse = crate::mermaid::normalize_ast_to_ir(
+            &ast,
+            &config,
+            &crate::mermaid::MermaidCompatibilityMatrix::default(),
+            &crate::mermaid::MermaidFallbackPolicy::default(),
+        );
+        assert_eq!(ir_parse.ir.constraints.len(), 1);
+        let layout = layout_diagram(&ir_parse.ir, &config);
+        let b_idx = ir_parse.ir.nodes.iter().position(|n| n.id == "B").unwrap();
+        let d_idx = ir_parse.ir.nodes.iter().position(|n| n.id == "D").unwrap();
+        let rank_b = layout
+            .nodes
+            .iter()
+            .find(|n| n.node_idx == b_idx)
+            .unwrap()
+            .rank;
+        let rank_d = layout
+            .nodes
+            .iter()
+            .find(|n| n.node_idx == d_idx)
+            .unwrap()
+            .rank;
+        assert_eq!(rank_b, rank_d, "B and D should be on same rank");
+    }
 }
 
 // ── Label placement & collision avoidance tests ─────────────────────
