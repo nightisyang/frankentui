@@ -3293,4 +3293,61 @@ mod tests {
         assert_ne!(g, b);
         assert_ne!(o, b);
     }
+
+    #[test]
+    fn feature_matrix_all_sample_tags_known() {
+        for sample in DEFAULT_SAMPLES {
+            for tag in sample.features {
+                assert!(
+                    KNOWN_FEATURE_TAGS.contains(tag),
+                    "Sample '{}' uses unknown feature tag '{}'",
+                    sample.name,
+                    tag
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn feature_matrix_all_known_tags_exercised() {
+        let exercised: std::collections::HashSet<&str> = DEFAULT_SAMPLES
+            .iter()
+            .flat_map(|s| s.features.iter().copied())
+            .collect();
+        let mut missing = Vec::new();
+        for tag in KNOWN_FEATURE_TAGS {
+            if !exercised.contains(tag) {
+                missing.push(*tag);
+            }
+        }
+        // All known tags should be exercised by at least one sample.
+        assert!(
+            missing.is_empty(),
+            "Known feature tags without samples: {:?}",
+            missing
+        );
+    }
+
+    #[test]
+    fn feature_gaps_are_documented() {
+        assert!(
+            !FEATURE_GAPS.is_empty(),
+            "FEATURE_GAPS should document known uncovered features"
+        );
+        for (tag, description) in FEATURE_GAPS {
+            assert!(!tag.is_empty(), "Gap tag must not be empty");
+            assert!(!description.is_empty(), "Gap description must not be empty");
+        }
+    }
+
+    #[test]
+    fn feature_gaps_not_in_known_tags() {
+        for (gap_tag, _) in FEATURE_GAPS {
+            assert!(
+                !KNOWN_FEATURE_TAGS.contains(gap_tag),
+                "Gap '{}' should not also be in KNOWN_FEATURE_TAGS (it\'s a gap)",
+                gap_tag
+            );
+        }
+    }
 }
