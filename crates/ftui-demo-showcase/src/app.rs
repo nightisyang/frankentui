@@ -596,6 +596,8 @@ pub enum ScreenId {
     Performance,
     /// Markdown rendering and typography.
     MarkdownRichText,
+    /// Interactive Mermaid diagram showcase.
+    MermaidShowcase,
     /// Mind-blowing visual effects with braille.
     VisualEffects,
     /// Responsive layout breakpoint demo.
@@ -692,6 +694,7 @@ impl ScreenId {
             Self::MacroRecorder => "MacroRecorder",
             Self::Performance => "Performance",
             Self::MarkdownRichText => "MarkdownRichText",
+            Self::MermaidShowcase => "MermaidShowcase",
             Self::VisualEffects => "VisualEffects",
             Self::ResponsiveDemo => "ResponsiveDemo",
             Self::LogSearch => "LogSearch",
@@ -805,6 +808,8 @@ pub struct ScreenStates {
     pub performance: screens::performance::Performance,
     /// Markdown and rich text screen state.
     pub markdown_rich_text: screens::markdown_rich_text::MarkdownRichText,
+    /// Mermaid showcase screen state.
+    pub mermaid_showcase: screens::mermaid_showcase::MermaidShowcaseScreen,
     /// Visual effects screen state (lazy init).
     visual_effects: LazyScreen<screens::visual_effects::VisualEffectsScreen>,
     /// Responsive layout demo screen state.
@@ -879,6 +884,7 @@ impl Default for ScreenStates {
             macro_recorder: Default::default(),
             performance: Default::default(),
             markdown_rich_text: Default::default(),
+            mermaid_showcase: Default::default(),
             visual_effects: LazyScreen::new(),
             responsive_demo: Default::default(),
             log_search: Default::default(),
@@ -1045,6 +1051,9 @@ impl ScreenStates {
             ScreenId::MarkdownRichText => {
                 self.markdown_rich_text.update(event);
             }
+            ScreenId::MermaidShowcase => {
+                self.mermaid_showcase.update(event);
+            }
             ScreenId::VisualEffects => {
                 self.visual_effects_mut(|screen| screen.update(event));
             }
@@ -1159,6 +1168,7 @@ impl ScreenStates {
             ScreenId::MacroRecorder => self.macro_recorder.tick(tick_count),
             ScreenId::Performance => self.performance.tick(tick_count),
             ScreenId::MarkdownRichText => self.markdown_rich_text.tick(tick_count),
+            ScreenId::MermaidShowcase => self.mermaid_showcase.tick(tick_count),
             ScreenId::VisualEffects => self.visual_effects_mut(|screen| screen.tick(tick_count)),
             ScreenId::ResponsiveDemo => self.responsive_demo.tick(tick_count),
             ScreenId::LogSearch => self.log_search.tick(tick_count),
@@ -1233,6 +1243,7 @@ impl ScreenStates {
                 ScreenId::MacroRecorder => self.macro_recorder.view(frame, area),
                 ScreenId::Performance => self.performance.view(frame, area),
                 ScreenId::MarkdownRichText => self.markdown_rich_text.view(frame, area),
+                ScreenId::MermaidShowcase => self.mermaid_showcase.view(frame, area),
                 ScreenId::VisualEffects => {
                     self.visual_effects_mut(|screen| screen.view(frame, area))
                 }
@@ -3334,6 +3345,7 @@ impl AppModel {
             ScreenId::MacroRecorder => self.screens.macro_recorder.keybindings(),
             ScreenId::Performance => self.screens.performance.keybindings(),
             ScreenId::MarkdownRichText => self.screens.markdown_rich_text.keybindings(),
+            ScreenId::MermaidShowcase => self.screens.mermaid_showcase.keybindings(),
             ScreenId::VisualEffects => self
                 .screens
                 .visual_effects_mut(|screen| screen.keybindings()),

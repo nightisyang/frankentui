@@ -924,8 +924,8 @@ impl<W: Write> TerminalWriter<W> {
                     // DECSTBM: set scroll region to rows log_top..term_height (1-indexed)
                     write!(self.writer(), "\x1b[{};{}r", log_top, term_height)?;
                     self.scroll_region_active = true;
-                    // DECSTBM moves cursor to home; for top-anchored UI we must
-                    // move it into the log region so restored cursor stays below UI.
+                    // DECSTBM moves cursor to home; for top-anchored UI we move it
+                    // into the log region so any subsequent output stays below UI.
                     write!(self.writer(), "\x1b[{};1H", log_top)?;
                 }
             }
@@ -1500,24 +1500,6 @@ impl<W: Write> TerminalWriter<W> {
                 height: visible_height,
             };
 
-            // Activate scroll region if strategy calls for it
-            {
-                let _span = debug_span!("ftui.render.scroll_region").entered();
-                if visible_height > 0 {
-                    match self.inline_strategy {
-                        InlineStrategy::ScrollRegion => {
-                            self.activate_scroll_region(visible_height)?;
-                        }
-                        InlineStrategy::Hybrid => {
-                            self.activate_scroll_region(visible_height)?;
-                        }
-                        InlineStrategy::OverlayRedraw => {}
-                    }
-                } else if self.scroll_region_active {
-                    self.deactivate_scroll_region()?;
-                }
-            }
-
             // Begin sync output if available
             if self.capabilities.sync_output && !self.in_sync_block {
                 self.writer().write_all(SYNC_BEGIN)?;
@@ -1527,6 +1509,21 @@ impl<W: Write> TerminalWriter<W> {
             // Save cursor (DEC save)
             self.writer().write_all(CURSOR_SAVE)?;
             self.cursor_saved = true;
+
+            // Activate scroll region if strategy calls for it
+            {
+                let _span = debug_span!("ftui.render.scroll_region").entered();
+                if visible_height > 0 {
+                    match self.inline_strategy {
+                        InlineStrategy::ScrollRegion | InlineStrategy::Hybrid => {
+                            self.activate_scroll_region(visible_height)?;
+                        }
+                        InlineStrategy::OverlayRedraw => {}
+                    }
+                } else if self.scroll_region_active {
+                    self.deactivate_scroll_region()?;
+                }
+            }
 
             self.clear_inline_region_diff(current_region)?;
 

@@ -47,6 +47,8 @@ LIB_DIR="$PROJECT_ROOT/tests/e2e/lib"
 source "$LIB_DIR/common.sh"
 # shellcheck source=/dev/null
 source "$LIB_DIR/logging.sh"
+# shellcheck source=/dev/null
+source "$LIB_DIR/pty.sh"
 if ! declare -f e2e_timestamp >/dev/null 2>&1; then
     e2e_timestamp() { date -Iseconds; }
 fi
@@ -1036,16 +1038,37 @@ if $CAN_SMOKE; then
 
             : > "$report_jsonl"
 
-            local cmd="stty rows ${rows} cols ${cols} 2>/dev/null; (sleep 1.2; printf 'v'; sleep 0.2; printf 'l'; sleep 0.2; printf 's'; sleep 0.2; printf 'e'; sleep 0.4; printf 'i') & FTUI_TABLE_THEME_REPORT_PATH='${report_jsonl}' FTUI_TABLE_THEME_EXPORT_PATH='${export_file}' FTUI_TABLE_THEME_IMPORT_PATH='${export_file}' FTUI_TABLE_THEME_CLIPBOARD='${clipboard_file}' FTUI_DEMO_EXIT_AFTER_MS=4500 FTUI_DEMO_SCREEN=${screen_num} timeout 12 $DEMO_BIN"
             local start_ms dur_ms exit_code outcome status hash
 
             echo "--- ${label} (screen ${screen_num}, keys=${keys_display}) ---"
             jsonl_case_step_start "$case_name" "$label" "$action" "$details"
             start_ms=$(e2e_now_ms)
-            if run_in_pty "$cmd" > "$log_file" 2>&1; then
-                exit_code=0
+            if [[ -n "${E2E_PYTHON:-}" ]]; then
+                if PTY_COLS="$cols" \
+                    PTY_ROWS="$rows" \
+                    PTY_TIMEOUT=12 \
+                    PTY_SEND="vlsei" \
+                    PTY_SEND_DELAY_MS=1200 \
+                    pty_run "$log_file" \
+                    env \
+                    FTUI_TABLE_THEME_REPORT_PATH="${report_jsonl}" \
+                    FTUI_TABLE_THEME_EXPORT_PATH="${export_file}" \
+                    FTUI_TABLE_THEME_IMPORT_PATH="${export_file}" \
+                    FTUI_TABLE_THEME_CLIPBOARD="${clipboard_file}" \
+                    FTUI_DEMO_EXIT_AFTER_MS=4500 \
+                    FTUI_DEMO_SCREEN="${screen_num}" \
+                    "$DEMO_BIN"; then
+                    exit_code=0
+                else
+                    exit_code=$?
+                fi
             else
-                exit_code=$?
+                local cmd="stty rows ${rows} cols ${cols} 2>/dev/null; (sleep 1.2; printf 'v'; sleep 0.2; printf 'l'; sleep 0.2; printf 's'; sleep 0.2; printf 'e'; sleep 0.4; printf 'i') & FTUI_TABLE_THEME_REPORT_PATH='${report_jsonl}' FTUI_TABLE_THEME_EXPORT_PATH='${export_file}' FTUI_TABLE_THEME_IMPORT_PATH='${export_file}' FTUI_TABLE_THEME_CLIPBOARD='${clipboard_file}' FTUI_DEMO_EXIT_AFTER_MS=4500 FTUI_DEMO_SCREEN=${screen_num} timeout 12 $DEMO_BIN"
+                if run_in_pty "$cmd" > "$log_file" 2>&1; then
+                    exit_code=0
+                else
+                    exit_code=$?
+                fi
             fi
             dur_ms=$(( $(e2e_now_ms) - start_ms ))
 

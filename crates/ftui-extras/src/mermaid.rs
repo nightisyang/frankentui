@@ -368,6 +368,7 @@ pub struct MermaidConfig {
     pub log_path: Option<String>,
     pub cache_enabled: bool,
     pub capability_profile: Option<String>,
+    pub debug_overlay: bool,
 }
 
 impl Default for MermaidConfig {
@@ -392,6 +393,7 @@ impl Default for MermaidConfig {
             log_path: None,
             cache_enabled: true,
             capability_profile: None,
+            debug_overlay: false,
         }
     }
 }
@@ -737,6 +739,12 @@ fn fnv1a_hash_usize(hash: &mut u64, val: usize) {
 }
 
 #[inline]
+#[allow(dead_code)]
+fn fnv1a_hash_f64(hash: &mut u64, val: f64) {
+    fnv1a_hash_bytes(hash, &val.to_le_bytes());
+}
+
+#[inline]
 fn fnv1a_hash_str(hash: &mut u64, s: &str) {
     fnv1a_hash_usize(hash, s.len());
     fnv1a_hash_bytes(hash, s.as_bytes());
@@ -788,6 +796,19 @@ pub fn hash_ir(ir: &MermaidDiagramIr) -> u64 {
     fnv1a_hash_usize(&mut h, ir.labels.len());
     for label in &ir.labels {
         fnv1a_hash_str(&mut h, &label.text);
+    }
+
+    // Pie data
+    fnv1a_hash_bool(&mut h, ir.pie_show_data);
+    fnv1a_hash_bool(&mut h, ir.pie_title.is_some());
+    if let Some(title_id) = ir.pie_title {
+        fnv1a_hash_usize(&mut h, title_id.0);
+    }
+    fnv1a_hash_usize(&mut h, ir.pie_entries.len());
+    for entry in &ir.pie_entries {
+        fnv1a_hash_usize(&mut h, entry.label.0);
+        fnv1a_hash_f64(&mut h, entry.value);
+        fnv1a_hash_str(&mut h, &entry.value_text);
     }
 
     // Edges
@@ -1180,6 +1201,7 @@ pub enum MermaidWarningCode {
     ImplicitNode,
     InvalidEdge,
     InvalidPort,
+    InvalidValue,
     LimitExceeded,
     BudgetExceeded,
 }
@@ -1197,6 +1219,7 @@ impl MermaidWarningCode {
             Self::ImplicitNode => "mermaid/implicit/node",
             Self::InvalidEdge => "mermaid/invalid/edge",
             Self::InvalidPort => "mermaid/invalid/port",
+            Self::InvalidValue => "mermaid/invalid/value",
             Self::LimitExceeded => "mermaid/limit/exceeded",
             Self::BudgetExceeded => "mermaid/budget/exceeded",
         }
@@ -1887,6 +1910,7 @@ fn upsert_node(
 ) -> usize {
     if let Some(&idx) = node_map.get(node_id) {
         let draft = &mut node_drafts[idx];
+        let was_implicit = draft.implicit;
         draft.spans.push(span);
         if draft.first_span.start.line > span.start.line
             || (draft.first_span.start.line == span.start.line
@@ -1897,8 +1921,10 @@ fn upsert_node(
         if !implicit {
             draft.implicit = false;
         }
-        if draft.label.is_none() {
-            draft.label = label.map(str::to_string);
+        if let Some(label_value) = label
+            && (draft.label.is_none() || (!implicit && was_implicit))
+        {
+            draft.label = Some(label_value.to_string());
         }
         // Prefer explicit shape over default Rect
         if shape != NodeShape::Rect {
@@ -2086,6 +2112,8 @@ fn apply_degradation(plan: &MermaidDegradationPlan, ir: &mut MermaidDiagramIr) {
             cluster.title = None;
         }
         ir.labels.clear();
+        ir.pie_title = None;
+        ir.pie_show_data = false;
     }
 
     if plan.collapse_clusters {
@@ -2184,15 +2212,19 @@ pub fn normalize_ast_to_ir(
                     );
                 }
             }
-            Statement::Raw { span, .. } => {
-                apply_fallback_action(
-                    policy.unsupported_feature,
-                    MermaidWarningCode::UnsupportedFeature,
-                    "unsupported statement",
-                    *span,
-                    &mut warnings,
-                    &mut errors,
-                );
+            Statement::Raw { text, span } => {
+                let is_pie_meta = ast.diagram_type == DiagramType::Pie
+                    && (is_pie_show_data_line(text) || parse_pie_title_line(text).is_some());
+                if !is_pie_meta {
+                    apply_fallback_action(
+                        policy.unsupported_feature,
+                        MermaidWarningCode::UnsupportedFeature,
+                        "unsupported statement",
+                        *span,
+                        &mut warnings,
+                        &mut errors,
+                    );
+                }
             }
             _ => {}
         }
@@ -2205,10 +2237,14 @@ pub fn normalize_ast_to_ir(
     let mut cluster_drafts: Vec<ClusterDraft> = Vec::new();
     let mut cluster_stack: Vec<usize> = Vec::new();
     let mut implicit_warned = std::collections::HashSet::new();
+    let mut labels = LabelInterner::default();
     let mut style_refs = Vec::new();
     let mut node_style_drafts: Vec<(String, String, Span)> = Vec::new();
     let mut mindmap_base_depth: Option<usize> = None;
     let mut mindmap_stack: Vec<(usize, String)> = Vec::new();
+    let mut pie_entries: Vec<IrPieEntry> = Vec::new();
+    let mut pie_title_text: Option<(String, Span)> = None;
+    let mut pie_show_data = ast.pie_show_data;
 
     for (idx, statement) in ast.statements.iter().enumerate() {
         match statement {
@@ -2376,6 +2412,58 @@ pub fn normalize_ast_to_ir(
                     });
                 }
                 mindmap_stack.push((depth, id));
+            }
+            Statement::PieEntry(entry) => {
+                if ast.diagram_type != DiagramType::Pie {
+                    continue;
+                }
+                if entry.label.trim().is_empty() {
+                    warnings.push(MermaidWarning::new(
+                        MermaidWarningCode::InvalidValue,
+                        "pie entry label is empty",
+                        entry.span,
+                    ));
+                    continue;
+                }
+                let value_text = entry.value.trim();
+                match value_text.parse::<f64>() {
+                    Ok(value) if value > 0.0 => {
+                        let label_id = labels.intern(&entry.label, entry.span);
+                        pie_entries.push(IrPieEntry {
+                            label: label_id,
+                            value,
+                            value_text: entry.value.clone(),
+                            span: entry.span,
+                        });
+                    }
+                    Ok(_) => warnings.push(MermaidWarning::new(
+                        MermaidWarningCode::InvalidValue,
+                        "pie entry value must be positive",
+                        entry.span,
+                    )),
+                    Err(_) => warnings.push(MermaidWarning::new(
+                        MermaidWarningCode::InvalidValue,
+                        "pie entry value is not numeric",
+                        entry.span,
+                    )),
+                }
+            }
+            Statement::Raw { text, span } => {
+                if ast.diagram_type == DiagramType::Pie {
+                    if is_pie_show_data_line(text) {
+                        pie_show_data = true;
+                    } else if let Some(title) = parse_pie_title_line(text) {
+                        if pie_title_text.is_none() {
+                            pie_title_text = Some((title, *span));
+                        } else {
+                            warnings.push(MermaidWarning::new(
+                                MermaidWarningCode::InvalidValue,
+                                "multiple pie titles; using first",
+                                *span,
+                            ));
+                        }
+                    }
+                }
             }
             Statement::ClassAssign {
                 targets,
@@ -2693,6 +2781,11 @@ pub fn normalize_ast_to_ir(
         });
     }
 
+    // Intern pie title into the final labels interner (it was deferred from
+    // the first pass because that used a different LabelInterner).
+    let pie_title: Option<IrLabelId> =
+        pie_title_text.map(|(text, span)| labels.intern(&text, span));
+
     let mut labels = labels.labels;
     let label_stats = enforce_label_limits(&mut labels, config);
 
@@ -2723,11 +2816,9 @@ pub fn normalize_ast_to_ir(
     };
 
     // Resolve link/click directives into IR links.
-    let ir_node_map: std::collections::HashMap<String, IrNodeId> = node_map
-        .iter()
-        .map(|(k, &v)| (k.clone(), IrNodeId(v)))
-        .collect();
-    let link_resolution = resolve_links(&ast, config, &ir_node_map);
+    // Use `node_id_map` (post-sort indices) rather than `node_map` (pre-sort)
+    // so that link targets point to the correct nodes in the final IR.
+    let link_resolution = resolve_links(&ast, config, &node_id_map);
     warnings.extend(link_resolution.warnings.clone());
     let resolved_links = link_resolution.links.clone();
 
@@ -2739,6 +2830,9 @@ pub fn normalize_ast_to_ir(
         ports,
         clusters,
         labels,
+        pie_entries,
+        pie_title,
+        pie_show_data,
         style_refs,
         links: resolved_links,
         meta,
@@ -2922,6 +3016,7 @@ pub struct Token<'a> {
 pub struct MermaidAst {
     pub diagram_type: DiagramType,
     pub direction: Option<GraphDirection>,
+    pub pie_show_data: bool,
     pub directives: Vec<Directive>,
     pub statements: Vec<Statement>,
 }
@@ -3104,6 +3199,14 @@ impl IrPortSideHint {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IrLabel {
     pub text: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrPieEntry {
+    pub label: IrLabelId,
+    pub value: f64,
+    pub value_text: String,
     pub span: Span,
 }
 
@@ -3671,6 +3774,9 @@ pub struct MermaidDiagramIr {
     pub ports: Vec<IrPort>,
     pub clusters: Vec<IrCluster>,
     pub labels: Vec<IrLabel>,
+    pub pie_entries: Vec<IrPieEntry>,
+    pub pie_title: Option<IrLabelId>,
+    pub pie_show_data: bool,
     pub style_refs: Vec<IrStyleRef>,
     pub links: Vec<IrLink>,
     pub meta: MermaidDiagramMeta,
@@ -4002,6 +4108,7 @@ pub fn parse(input: &str) -> Result<MermaidAst, MermaidError> {
 pub fn parse_with_diagnostics(input: &str) -> MermaidParse {
     let mut diagram_type = DiagramType::Unknown;
     let mut direction = None;
+    let mut pie_show_data = false;
     let mut directives = Vec::new();
     let mut statements = Vec::new();
     let mut saw_header = false;
@@ -4041,6 +4148,13 @@ pub fn parse_with_diagnostics(input: &str) -> MermaidParse {
 
         if !saw_header {
             if let Some((dtype, dir)) = parse_header(trimmed) {
+                if dtype == DiagramType::Pie {
+                    let lower = trimmed.to_ascii_lowercase();
+                    pie_show_data = lower
+                        .split_whitespace()
+                        .skip(1)
+                        .any(|token| token == "showdata");
+                }
                 diagram_type = dtype;
                 direction = dir;
                 saw_header = true;
@@ -4112,7 +4226,80 @@ pub fn parse_with_diagnostics(input: &str) -> MermaidParse {
             continue;
         }
         match diagram_type {
-            DiagramType::Graph | DiagramType::State | DiagramType::Class | DiagramType::Er => {
+            DiagramType::State => {
+                if trimmed == "}" {
+                    statements.push(Statement::SubgraphEnd { span });
+                    continue;
+                }
+                if let Some((target, inline)) = parse_state_note_start(trimmed) {
+                    if let Some(text) = inline {
+                        let note_id =
+                            format!("__state_note_L{}_C{}", span.start.line, span.start.col);
+                        let label = if text.is_empty() { None } else { Some(text) };
+                        statements.push(Statement::Node(Node {
+                            id: note_id.clone(),
+                            label,
+                            shape: NodeShape::Rect,
+                            span,
+                        }));
+                        statements.push(Statement::ClassAssign {
+                            targets: vec![note_id.clone()],
+                            classes: vec![STATE_NOTE_CLASS.to_string()],
+                            span,
+                        });
+                        statements.push(Statement::Edge(Edge {
+                            from: target,
+                            to: note_id,
+                            arrow: "-.->".to_string(),
+                            label: None,
+                            span,
+                        }));
+                    } else {
+                        pending_note = Some(StateNotePending {
+                            target,
+                            lines: Vec::new(),
+                            span,
+                        });
+                    }
+                    continue;
+                }
+                if let Some(state) = parse_state_decl_line(trimmed) {
+                    if state.block_start {
+                        let title = state.label.clone().or_else(|| Some(state.id.clone()));
+                        statements.push(Statement::SubgraphStart { title, span });
+                        statements.push(Statement::Node(Node {
+                            id: state.id.clone(),
+                            label: state.label.clone(),
+                            shape: NodeShape::Rect,
+                            span,
+                        }));
+                        statements.push(Statement::ClassAssign {
+                            targets: vec![state.id],
+                            classes: vec![STATE_CONTAINER_CLASS.to_string()],
+                            span,
+                        });
+                    } else {
+                        statements.push(Statement::Node(Node {
+                            id: state.id,
+                            label: state.label,
+                            shape: NodeShape::Rect,
+                            span,
+                        }));
+                    }
+                    continue;
+                }
+                if let Some(edge) = parse_state_edge(trimmed, span) {
+                    statements.push(Statement::Edge(edge));
+                } else if let Some(node) = parse_node(trimmed, span) {
+                    statements.push(Statement::Node(node));
+                } else {
+                    statements.push(Statement::Raw {
+                        text: normalize_ws(trimmed),
+                        span,
+                    });
+                }
+            }
+            DiagramType::Graph | DiagramType::Class | DiagramType::Er => {
                 let er_mode = diagram_type == DiagramType::Er;
                 // ER entity attribute block: lines inside `ENTITY { ... }`.
                 if er_mode {
@@ -4226,6 +4413,9 @@ pub fn parse_with_diagnostics(input: &str) -> MermaidParse {
                 }
             }
             DiagramType::Pie => {
+                if is_pie_show_data_line(trimmed) {
+                    pie_show_data = true;
+                }
                 if let Some(entry) = parse_pie(trimmed, span) {
                     statements.push(Statement::PieEntry(entry));
                 } else {
@@ -4248,6 +4438,7 @@ pub fn parse_with_diagnostics(input: &str) -> MermaidParse {
         ast: MermaidAst {
             diagram_type,
             direction,
+            pie_show_data,
             directives,
             statements,
         },
@@ -4354,15 +4545,19 @@ pub fn validate_ast_with_policy_and_init(
                     );
                 }
             }
-            Statement::Raw { span, .. } => {
-                apply_fallback_action(
-                    policy.unsupported_feature,
-                    MermaidWarningCode::UnsupportedFeature,
-                    "unsupported statement",
-                    *span,
-                    &mut warnings,
-                    &mut errors,
-                );
+            Statement::Raw { text, span } => {
+                let is_pie_meta = ast.diagram_type == DiagramType::Pie
+                    && (is_pie_show_data_line(text) || parse_pie_title_line(text).is_some());
+                if !is_pie_meta {
+                    apply_fallback_action(
+                        policy.unsupported_feature,
+                        MermaidWarningCode::UnsupportedFeature,
+                        "unsupported statement",
+                        *span,
+                        &mut warnings,
+                        &mut errors,
+                    );
+                }
             }
             _ => {}
         }
@@ -5169,6 +5364,21 @@ fn parse_state_edge(line: &str, span: Span) -> Option<Edge> {
     })
 }
 
+#[allow(dead_code)]
+fn state_endpoint_id(kind: &str, cluster_stack: &[usize]) -> String {
+    if cluster_stack.is_empty() {
+        return format!("__state_{}_root", kind);
+    }
+    let mut path = String::new();
+    for (idx, cluster_idx) in cluster_stack.iter().enumerate() {
+        if idx > 0 {
+            path.push('_');
+        }
+        path.push_str(&cluster_idx.to_string());
+    }
+    format!("__state_{}_{}", kind, path)
+}
+
 fn parse_header(line: &str) -> Option<(DiagramType, Option<GraphDirection>)> {
     let lower = line.trim().to_ascii_lowercase();
     if lower.starts_with("graph") || lower.starts_with("flowchart") {
@@ -5257,7 +5467,14 @@ fn edge_node_right(line: &str, span: Span, er_mode: bool) -> Option<Node> {
     } else {
         split_label(right)
     };
-    parse_node(right_id, span)
+    let node = parse_node(right_id, span)?;
+    // Only emit a Node statement when the right side has bracket syntax
+    // (non-default shape or a label). Bare IDs stay implicit from the edge.
+    if node.shape != NodeShape::Rect || node.label.is_some() {
+        Some(node)
+    } else {
+        None
+    }
 }
 
 fn parse_node(line: &str, span: Span) -> Option<Node> {
@@ -5415,13 +5632,17 @@ fn parse_sequence(line: &str, span: Span) -> Option<SequenceMessage> {
 
 fn parse_gantt(line: &str, span: Span) -> Option<Statement> {
     let lower = line.to_ascii_lowercase();
-    if let Some(rest) = lower.strip_prefix("title ") {
+    // Match keywords case-insensitively but extract values from the
+    // original `line` to preserve the user's casing.
+    if lower.starts_with("title ") {
+        let rest = &line["title ".len()..];
         return Some(Statement::GanttTitle {
             title: normalize_ws(rest),
             span,
         });
     }
-    if let Some(rest) = lower.strip_prefix("section ") {
+    if lower.starts_with("section ") {
+        let rest = &line["section ".len()..];
         return Some(Statement::GanttSection {
             name: normalize_ws(rest),
             span,
@@ -5454,6 +5675,24 @@ fn parse_pie(line: &str, span: Span) -> Option<PieEntry> {
         value: normalize_ws(value),
         span,
     })
+}
+
+fn is_pie_show_data_line(text: &str) -> bool {
+    text.trim().eq_ignore_ascii_case("showdata")
+}
+
+fn parse_pie_title_line(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let keyword = parts.next()?;
+    if !keyword.eq_ignore_ascii_case("title") {
+        return None;
+    }
+    let title = parts.next().unwrap_or("").trim();
+    if title.is_empty() {
+        return None;
+    }
+    Some(normalize_ws(title))
 }
 
 fn parse_mindmap(trimmed: &str, raw_line: &str, span: Span) -> Option<MindmapNode> {
@@ -5545,14 +5784,21 @@ fn find_er_arrow(line: &str) -> Option<(usize, usize, &str)> {
                     j += 1;
                 }
                 if j - start >= 2 {
-                    let start_byte = line.char_indices().nth(start).map(|(idx, _)| idx)?;
-                    let end_byte = if j >= chars.len() {
-                        line.len()
-                    } else {
-                        line.char_indices().nth(j).map(|(idx, _)| idx)?
-                    };
-                    let arrow = &line[start_byte..end_byte];
-                    return Some((start_byte, end_byte, arrow));
+                    // Require at least one core arrow character; pure endpoint
+                    // markers (o, x, *) are not valid arrows on their own.
+                    let has_core = chars[start..j]
+                        .iter()
+                        .any(|&ch| matches!(ch, '-' | '=' | '.' | '>' | '<'));
+                    if has_core {
+                        let start_byte = line.char_indices().nth(start).map(|(idx, _)| idx)?;
+                        let end_byte = if j >= chars.len() {
+                            line.len()
+                        } else {
+                            line.char_indices().nth(j).map(|(idx, _)| idx)?
+                        };
+                        let arrow = &line[start_byte..end_byte];
+                        return Some((start_byte, end_byte, arrow));
+                    }
                 }
                 i = j;
             }
@@ -5585,14 +5831,22 @@ fn find_arrow_with(line: &str, is_arrow: fn(char) -> bool) -> Option<(usize, usi
                     j += 1;
                 }
                 if j - start >= 2 {
-                    let start_byte = line.char_indices().nth(start).map(|(idx, _)| idx)?;
-                    let end_byte = if j >= chars.len() {
-                        line.len()
-                    } else {
-                        line.char_indices().nth(j).map(|(idx, _)| idx)?
-                    };
-                    let arrow = &line[start_byte..end_byte];
-                    return Some((start_byte, end_byte, arrow));
+                    // Require at least one core arrow character; pure endpoint
+                    // markers (o, x, *) are not valid arrows on their own
+                    // (e.g., "oo" in "Foo" must not match as an arrow).
+                    let has_core = chars[start..j]
+                        .iter()
+                        .any(|&ch| matches!(ch, '-' | '=' | '.' | '>' | '<'));
+                    if has_core {
+                        let start_byte = line.char_indices().nth(start).map(|(idx, _)| idx)?;
+                        let end_byte = if j >= chars.len() {
+                            line.len()
+                        } else {
+                            line.char_indices().nth(j).map(|(idx, _)| idx)?
+                        };
+                        let arrow = &line[start_byte..end_byte];
+                        return Some((start_byte, end_byte, arrow));
+                    }
                 }
                 i = j;
             }
@@ -5746,6 +6000,40 @@ mod tests {
             .filter(|s| matches!(s, Statement::Edge(_)))
             .count();
         assert_eq!(edges, 1);
+    }
+
+    #[test]
+    fn parse_state_start_end_edges() {
+        let ast = parse("stateDiagram-v2\n[*] --> S1\nS1 --> [*]\n").expect("parse");
+        let mut saw_start = false;
+        let mut saw_end = false;
+        for statement in &ast.statements {
+            if let Statement::Edge(edge) = statement {
+                if edge.from == STATE_START_TOKEN && edge.to == "S1" {
+                    saw_start = true;
+                }
+                if edge.to == STATE_END_TOKEN && edge.from == "S1" {
+                    saw_end = true;
+                }
+            }
+        }
+        assert!(saw_start, "expected start edge");
+        assert!(saw_end, "expected end edge");
+    }
+
+    #[test]
+    fn parse_state_note_inline() {
+        let ast = parse("stateDiagram\nnote right of S1: hello\n").expect("parse");
+        let has_note_node = ast
+            .statements
+            .iter()
+            .any(|s| matches!(s, Statement::Node(node) if node.id.starts_with("__state_note_")));
+        let has_note_edge = ast
+            .statements
+            .iter()
+            .any(|s| matches!(s, Statement::Edge(edge) if edge.arrow == "-.->"));
+        assert!(has_note_node, "expected note node");
+        assert!(has_note_edge, "expected note edge");
     }
 
     #[test]
@@ -5984,6 +6272,31 @@ mod tests {
             .filter(|s| matches!(s, Statement::PieEntry(_)))
             .count();
         assert_eq!(entries, 2);
+    }
+
+    #[test]
+    fn normalize_pie_title_and_show_data() {
+        let input = "pie showData\ntitle Pets\n\"Dogs\": 386\nCats: 85\n";
+        let parsed = parse_with_diagnostics(input);
+        assert_eq!(parsed.ast.diagram_type, DiagramType::Pie);
+        assert!(parsed.ast.pie_show_data);
+        let config = MermaidConfig::default();
+        let matrix = MermaidCompatibilityMatrix::default();
+        let policy = MermaidFallbackPolicy::default();
+        let ir_parse = normalize_ast_to_ir(&parsed.ast, &config, &matrix, &policy);
+        assert!(
+            ir_parse.errors.is_empty(),
+            "unexpected normalization errors: {:?}",
+            ir_parse.errors
+        );
+        assert_eq!(ir_parse.ir.pie_entries.len(), 2);
+        assert!(ir_parse.ir.pie_show_data);
+        let title = ir_parse
+            .ir
+            .pie_title
+            .and_then(|id| ir_parse.ir.labels.get(id.0))
+            .map(|label| label.text.as_str());
+        assert_eq!(title, Some("Pets"));
     }
 
     #[test]
@@ -6591,6 +6904,7 @@ mod tests {
             MermaidWarningCode::ImplicitNode,
             MermaidWarningCode::InvalidEdge,
             MermaidWarningCode::InvalidPort,
+            MermaidWarningCode::InvalidValue,
             MermaidWarningCode::LimitExceeded,
             MermaidWarningCode::BudgetExceeded,
         ];
@@ -6642,6 +6956,7 @@ mod tests {
             direction: None,
             directives: Vec::new(),
             statements: Vec::new(),
+            pie_show_data: false,
         };
         let config = MermaidConfig::default();
         let report =
@@ -7412,6 +7727,9 @@ mod tests {
             ports: vec![],
             clusters: vec![],
             labels,
+            pie_entries: vec![],
+            pie_title: None,
+            pie_show_data: false,
             style_refs: vec![],
             links: vec![],
             meta: MermaidDiagramMeta {

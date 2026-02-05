@@ -410,10 +410,14 @@ fn assign_layers(graph: &LayoutGraph, budget: &mut usize) -> Vec<usize> {
     // Longest-path layering with convergence loop.
     // A single forward pass suffices for a correct topo order, but if
     // budget exhaustion produced an incomplete sort, iterate until stable.
+    // Cap iterations at `n` to prevent infinite loops when residual cycles
+    // survive budget-exhausted cycle removal.
     let mut layer = vec![0usize; n];
     let mut changed = true;
-    while changed {
+    let mut iters = 0;
+    while changed && iters < n {
         changed = false;
+        iters += 1;
         for &u in &topo {
             for &v in &graph.adj[u] {
                 if layer[v] <= layer[u] {
@@ -562,9 +566,11 @@ fn barycenter_sort(
     let ref_layer = &layers[ref_layer_idx];
     let max_ref = ref_layer.iter().copied().max().unwrap_or(0) + 1;
     let mut ref_pos = vec![0usize; max_ref];
+    let mut ref_member = vec![false; max_ref];
     for (p, &v) in ref_layer.iter().enumerate() {
         if v < max_ref {
             ref_pos[v] = p;
+            ref_member[v] = true;
         }
     }
 
@@ -578,7 +584,7 @@ fn barycenter_sort(
         let relevant: Vec<usize> = neighbors
             .iter()
             .copied()
-            .filter(|&u| u < max_ref && ref_layer.contains(&u))
+            .filter(|&u| u < max_ref && ref_member[u])
             .collect();
 
         if relevant.is_empty() {
@@ -1152,6 +1158,9 @@ mod tests {
             ports: Vec::new(),
             clusters: Vec::new(),
             labels: Vec::new(),
+            pie_entries: Vec::new(),
+            pie_title: None,
+            pie_show_data: false,
             style_refs: Vec::new(),
             links: Vec::new(),
             meta: MermaidDiagramMeta {

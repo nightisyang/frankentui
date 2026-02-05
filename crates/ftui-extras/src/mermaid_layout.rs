@@ -117,6 +117,66 @@ pub struct DiagramLayout {
     pub degradation: Option<MermaidDegradationPlan>,
 }
 
+/// Named stage in the layout pipeline for debug overlay hooks (bd-12d5s).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayoutStageSnapshot {
+    /// Stage identifier (e.g. "rank_assignment", "crossing_minimization", "position_assignment").
+    pub stage: &'static str,
+    /// Node positions at this stage (index matches `DiagramLayout::nodes`).
+    pub node_positions: Vec<LayoutPoint>,
+    /// Number of edge crossings at this stage.
+    pub crossings: usize,
+    /// Iteration count within this stage.
+    pub iterations: usize,
+}
+
+/// Debug trace capturing per-stage layout snapshots (bd-12d5s).
+///
+/// When enabled via `layout_diagram_traced`, each major layout phase
+/// appends a snapshot. The bd-4cwfj Debug Overlay uses these to render
+/// step-by-step layout visualizations.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LayoutTrace {
+    /// Ordered snapshots for each layout stage.
+    pub stages: Vec<LayoutStageSnapshot>,
+}
+
+impl LayoutTrace {
+    /// Record a stage snapshot.
+    pub fn record(
+        &mut self,
+        stage: &'static str,
+        node_positions: Vec<LayoutPoint>,
+        crossings: usize,
+        iterations: usize,
+    ) {
+        self.stages.push(LayoutStageSnapshot {
+            stage,
+            node_positions,
+            crossings,
+            iterations,
+        });
+    }
+
+    /// Emit the trace as JSONL evidence lines.
+    pub fn emit_jsonl(&self, config: &MermaidConfig) {
+        let Some(path) = config.log_path.as_deref() else {
+            return;
+        };
+        for (i, snap) in self.stages.iter().enumerate() {
+            let json = serde_json::json!({
+                "event": "layout_trace",
+                "stage_index": i,
+                "stage": snap.stage,
+                "node_count": snap.node_positions.len(),
+                "crossings": snap.crossings,
+                "iterations": snap.iterations,
+            });
+            let _ = crate::mermaid::append_jsonl_line(path, &json.to_string());
+        }
+    }
+}
+
 // ── Layout configuration ─────────────────────────────────────────────
 
 /// Layout spacing parameters (world units).
@@ -896,8 +956,16 @@ fn multi_rank_waypoints(
 
     let total_steps = (hi_rank - lo_rank) as f64;
 
-    for mid_rank in (lo_rank + 1)..hi_rank {
-        let t = (mid_rank - lo_rank) as f64 / total_steps;
+    // Visit intermediate ranks in edge direction (from_rank toward to_rank)
+    // so that waypoints are emitted in traversal order.
+    let mid_ranks: Vec<usize> = if from_rank <= to_rank {
+        ((lo_rank + 1)..hi_rank).collect()
+    } else {
+        ((lo_rank + 1)..hi_rank).rev().collect()
+    };
+
+    for (step_idx, &mid_rank) in mid_ranks.iter().enumerate() {
+        let t = (step_idx + 1) as f64 / total_steps;
 
         // Interpolate both axes; which is "cross" vs "rank" depends on direction.
         let interp_x = from_port.x + t * (to_port.x - from_port.x);
@@ -1123,7 +1191,467 @@ fn layout_sequence_diagram(
     };
 
     let obj = evaluate_layout(&layout);
-    emit_layout_metrics_jsonl(config, &layout, &obj, crate::mermaid::hash_ir(ir));
+    emit_layout_metrics_jsonl(
+        config,
+        &layout,
+        &obj,
+        crate::mermaid::hash_ir(ir),
+        ir.diagram_type,
+    );
+
+    layout
+}
+
+fn mindmap_subtree_height(
+    idx: usize,
+    children: &[Vec<usize>],
+    node_sizes: &[(f64, f64)],
+    vertical_gap: f64,
+    memo: &mut [Option<f64>],
+    visiting: &mut [bool],
+) -> f64 {
+    if let Some(value) = memo[idx] {
+        return value;
+    }
+    if visiting[idx] {
+        return node_sizes[idx].1;
+    }
+    visiting[idx] = true;
+    let mut total = 0.0;
+    for &child in &children[idx] {
+        total += mindmap_subtree_height(child, children, node_sizes, vertical_gap, memo, visiting)
+            + vertical_gap;
+    }
+    if !children[idx].is_empty() {
+        total -= vertical_gap;
+    }
+    let height = node_sizes[idx].1.max(total);
+    memo[idx] = Some(height);
+    visiting[idx] = false;
+    height
+}
+
+#[allow(dead_code, clippy::too_many_arguments)]
+fn mindmap_layout_side_children(
+    entries: &[(usize, f64)],
+    side_dir: f64,
+    parent_idx: usize,
+    parent_center: LayoutPoint,
+    depth: usize,
+    children: &[Vec<usize>],
+    node_sizes: &[(f64, f64)],
+    vertical_gap: f64,
+    level_gap: f64,
+    centers: &mut [LayoutPoint],
+    depths: &mut [usize],
+    placed: &mut [bool],
+    memo: &mut [Option<f64>],
+    visiting: &mut [bool],
+) {
+    if entries.is_empty() {
+        return;
+    }
+    let total_height: f64 = entries.iter().map(|(_, h)| *h).sum::<f64>()
+        + vertical_gap * (entries.len().saturating_sub(1) as f64);
+    let mut cursor_y = parent_center.y - total_height / 2.0;
+    for (child, height) in entries {
+        let child_center = LayoutPoint {
+            x: parent_center.x
+                + side_dir
+                    * (level_gap + node_sizes[parent_idx].0 / 2.0 + node_sizes[*child].0 / 2.0),
+            y: cursor_y + height / 2.0,
+        };
+        if !placed[*child] {
+            centers[*child] = child_center;
+            depths[*child] = depth + 1;
+            placed[*child] = true;
+            mindmap_place_children(
+                *child,
+                child_center,
+                side_dir,
+                depth + 1,
+                false,
+                children,
+                node_sizes,
+                vertical_gap,
+                level_gap,
+                centers,
+                depths,
+                placed,
+                memo,
+                visiting,
+            );
+        }
+        cursor_y += height + vertical_gap;
+    }
+}
+
+#[allow(dead_code, clippy::too_many_arguments)]
+fn mindmap_place_children(
+    parent_idx: usize,
+    parent_center: LayoutPoint,
+    side: f64,
+    depth: usize,
+    is_root: bool,
+    children: &[Vec<usize>],
+    node_sizes: &[(f64, f64)],
+    vertical_gap: f64,
+    level_gap: f64,
+    centers: &mut [LayoutPoint],
+    depths: &mut [usize],
+    placed: &mut [bool],
+    memo: &mut [Option<f64>],
+    visiting: &mut [bool],
+) {
+    let child_ids = &children[parent_idx];
+    if child_ids.is_empty() {
+        return;
+    }
+    let mut child_entries: Vec<(usize, f64)> = child_ids
+        .iter()
+        .map(|&child| {
+            let height =
+                mindmap_subtree_height(child, children, node_sizes, vertical_gap, memo, visiting);
+            (child, height)
+        })
+        .collect();
+    child_entries.sort_unstable_by_key(|(idx, _)| *idx);
+
+    if is_root {
+        let mut left: Vec<(usize, f64)> = Vec::new();
+        let mut right: Vec<(usize, f64)> = Vec::new();
+        let mut left_total = 0.0;
+        let mut right_total = 0.0;
+        for entry in child_entries {
+            if right_total <= left_total {
+                right_total += entry.1 + vertical_gap;
+                right.push(entry);
+            } else {
+                left_total += entry.1 + vertical_gap;
+                left.push(entry);
+            }
+        }
+        mindmap_layout_side_children(
+            &right,
+            1.0,
+            parent_idx,
+            parent_center,
+            depth,
+            children,
+            node_sizes,
+            vertical_gap,
+            level_gap,
+            centers,
+            depths,
+            placed,
+            memo,
+            visiting,
+        );
+        mindmap_layout_side_children(
+            &left,
+            -1.0,
+            parent_idx,
+            parent_center,
+            depth,
+            children,
+            node_sizes,
+            vertical_gap,
+            level_gap,
+            centers,
+            depths,
+            placed,
+            memo,
+            visiting,
+        );
+    } else {
+        let side_dir = if side >= 0.0 { 1.0 } else { -1.0 };
+        mindmap_layout_side_children(
+            &child_entries,
+            side_dir,
+            parent_idx,
+            parent_center,
+            depth,
+            children,
+            node_sizes,
+            vertical_gap,
+            level_gap,
+            centers,
+            depths,
+            placed,
+            memo,
+            visiting,
+        );
+    }
+}
+
+fn layout_mindmap_diagram(
+    ir: &MermaidDiagramIr,
+    config: &MermaidConfig,
+    spacing: &LayoutSpacing,
+) -> DiagramLayout {
+    let n = ir.nodes.len();
+    if n == 0 {
+        return DiagramLayout {
+            nodes: vec![],
+            clusters: vec![],
+            edges: vec![],
+            bounding_box: LayoutRect {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            },
+            stats: LayoutStats {
+                iterations_used: 0,
+                max_iterations: config.layout_iteration_budget,
+                budget_exceeded: false,
+                crossings: 0,
+                ranks: 0,
+                max_rank_width: 0,
+                total_bends: 0,
+                position_variance: 0.0,
+            },
+            degradation: None,
+        };
+    }
+
+    let node_sizes = compute_node_sizes(ir, spacing);
+    let vertical_gap = spacing.node_gap.max(2.0);
+    let level_gap = spacing.rank_gap.max(4.0);
+
+    let mut children = vec![Vec::new(); n];
+    let mut incoming = vec![0usize; n];
+    for edge in &ir.edges {
+        let Some(from_idx) = endpoint_node_idx(ir, &edge.from) else {
+            continue;
+        };
+        let Some(to_idx) = endpoint_node_idx(ir, &edge.to) else {
+            continue;
+        };
+        if from_idx >= n || to_idx >= n || from_idx == to_idx {
+            continue;
+        }
+        children[from_idx].push(to_idx);
+        incoming[to_idx] = incoming[to_idx].saturating_add(1);
+    }
+    for list in &mut children {
+        list.sort_unstable();
+        list.dedup();
+    }
+
+    let mut roots: Vec<usize> = (0..n).filter(|&idx| incoming[idx] == 0).collect();
+    roots.sort_unstable();
+    if roots.is_empty() {
+        roots.push(0);
+    }
+
+    let mut memo = vec![None; n];
+    let mut visiting = vec![false; n];
+    let mut centers = vec![LayoutPoint { x: 0.0, y: 0.0 }; n];
+    let mut depths = vec![0usize; n];
+    let mut placed = vec![false; n];
+
+    let root_gap = spacing.rank_gap.max(4.0);
+    let mut cursor_y = 0.0;
+    for root in roots.iter().copied() {
+        let root_height = mindmap_subtree_height(
+            root,
+            &children,
+            &node_sizes,
+            vertical_gap,
+            &mut memo,
+            &mut visiting,
+        );
+        let center = LayoutPoint {
+            x: 0.0,
+            y: cursor_y + root_height / 2.0,
+        };
+        centers[root] = center;
+        depths[root] = 0;
+        placed[root] = true;
+        mindmap_place_children(
+            root,
+            center,
+            0.0,
+            0,
+            true,
+            &children,
+            &node_sizes,
+            vertical_gap,
+            level_gap,
+            &mut centers,
+            &mut depths,
+            &mut placed,
+            &mut memo,
+            &mut visiting,
+        );
+        cursor_y += root_height + root_gap;
+    }
+
+    for idx in 0..n {
+        if placed[idx] {
+            continue;
+        }
+        let height = mindmap_subtree_height(
+            idx,
+            &children,
+            &node_sizes,
+            vertical_gap,
+            &mut memo,
+            &mut visiting,
+        );
+        let center = LayoutPoint {
+            x: 0.0,
+            y: cursor_y + height / 2.0,
+        };
+        centers[idx] = center;
+        depths[idx] = 0;
+        placed[idx] = true;
+        mindmap_place_children(
+            idx,
+            center,
+            0.0,
+            0,
+            true,
+            &children,
+            &node_sizes,
+            vertical_gap,
+            level_gap,
+            &mut centers,
+            &mut depths,
+            &mut placed,
+            &mut memo,
+            &mut visiting,
+        );
+        cursor_y += height + root_gap;
+    }
+
+    let mut max_depth = 0usize;
+    for &depth in &depths {
+        max_depth = max_depth.max(depth);
+    }
+
+    let mut depth_buckets: Vec<Vec<usize>> = vec![Vec::new(); max_depth + 1];
+    for (idx, &depth) in depths.iter().enumerate() {
+        depth_buckets[depth].push(idx);
+    }
+
+    let mut order_map = vec![0usize; n];
+    let mut max_rank_width = 0usize;
+    for bucket in &mut depth_buckets {
+        bucket.sort_by(|a, b| centers[*a].y.total_cmp(&centers[*b].y));
+        max_rank_width = max_rank_width.max(bucket.len());
+        for (order, &node_idx) in bucket.iter().enumerate() {
+            order_map[node_idx] = order;
+        }
+    }
+
+    let nodes: Vec<LayoutNodeBox> = (0..n)
+        .map(|i| {
+            let (width, height) = node_sizes[i];
+            let center = centers[i];
+            let rect = LayoutRect {
+                x: center.x - width / 2.0,
+                y: center.y - height / 2.0,
+                width,
+                height,
+            };
+            let label_rect = ir.nodes[i].label.map(|_| LayoutRect {
+                x: rect.x + spacing.label_padding,
+                y: rect.y + spacing.label_padding,
+                width: rect.width - 2.0 * spacing.label_padding,
+                height: rect.height - 2.0 * spacing.label_padding,
+            });
+            LayoutNodeBox {
+                node_idx: i,
+                rect,
+                label_rect,
+                rank: depths[i],
+                order: order_map[i],
+            }
+        })
+        .collect();
+
+    let mut edges = Vec::with_capacity(ir.edges.len());
+    let mut total_bends = 0usize;
+    for (edge_idx, edge) in ir.edges.iter().enumerate() {
+        let Some(from_idx) = endpoint_node_idx(ir, &edge.from) else {
+            continue;
+        };
+        let Some(to_idx) = endpoint_node_idx(ir, &edge.to) else {
+            continue;
+        };
+        if from_idx >= n || to_idx >= n {
+            continue;
+        }
+        let from_rect = &nodes[from_idx].rect;
+        let to_rect = &nodes[to_idx].rect;
+        let from_center = centers[from_idx];
+        let to_center = centers[to_idx];
+        let to_right = to_center.x >= from_center.x;
+        let start_x = if to_right {
+            from_rect.x + from_rect.width
+        } else {
+            from_rect.x
+        };
+        let end_x = if to_right {
+            to_rect.x
+        } else {
+            to_rect.x + to_rect.width
+        };
+        let start = LayoutPoint {
+            x: start_x,
+            y: from_center.y,
+        };
+        let end = LayoutPoint {
+            x: end_x,
+            y: to_center.y,
+        };
+        let mid_x = (start.x + end.x) / 2.0;
+        let waypoints = vec![
+            start,
+            LayoutPoint {
+                x: mid_x,
+                y: start.y,
+            },
+            LayoutPoint { x: mid_x, y: end.y },
+            end,
+        ];
+        total_bends += waypoints.len().saturating_sub(2);
+        edges.push(LayoutEdgePath {
+            edge_idx,
+            waypoints,
+        });
+    }
+
+    let bounding_box = compute_bounding_box(&nodes, &[], &edges);
+    let pos_var = compute_position_variance(&nodes);
+    let layout = DiagramLayout {
+        nodes,
+        clusters: vec![],
+        edges,
+        bounding_box,
+        stats: LayoutStats {
+            iterations_used: 0,
+            max_iterations: config.layout_iteration_budget,
+            budget_exceeded: false,
+            crossings: 0,
+            ranks: max_depth + 1,
+            max_rank_width,
+            total_bends,
+            position_variance: pos_var,
+        },
+        degradation: None,
+    };
+
+    let obj = evaluate_layout(&layout);
+    emit_layout_metrics_jsonl(
+        config,
+        &layout,
+        &obj,
+        crate::mermaid::hash_ir(ir),
+        ir.diagram_type,
+    );
 
     layout
 }
@@ -1145,6 +1673,9 @@ pub fn layout_diagram_with_spacing(
     config: &MermaidConfig,
     spacing: &LayoutSpacing,
 ) -> DiagramLayout {
+    if ir.diagram_type == DiagramType::Mindmap {
+        return layout_mindmap_diagram(ir, config, spacing);
+    }
     if ir.diagram_type == DiagramType::Sequence {
         return layout_sequence_diagram(ir, config, spacing);
     }
@@ -1300,7 +1831,13 @@ pub fn layout_diagram_with_spacing(
 
     // Emit aesthetic metrics to evidence log (bd-19cll).
     let obj = evaluate_layout(&layout);
-    emit_layout_metrics_jsonl(config, &layout, &obj, crate::mermaid::hash_ir(ir));
+    emit_layout_metrics_jsonl(
+        config,
+        &layout,
+        &obj,
+        crate::mermaid::hash_ir(ir),
+        ir.diagram_type,
+    );
 
     layout
 }
@@ -1614,6 +2151,7 @@ fn emit_layout_metrics_jsonl(
     layout: &DiagramLayout,
     obj: &LayoutObjective,
     ir_hash: u64,
+    diagram_type: DiagramType,
 ) {
     let Some(path) = config.log_path.as_deref() else {
         return;
@@ -1624,6 +2162,7 @@ fn emit_layout_metrics_jsonl(
     let json = serde_json::json!({
         "event": "layout_metrics",
         "ir_hash": format!("0x{:016x}", ir_hash),
+        "diagram_type": diagram_type.as_str(),
         "nodes": layout.nodes.len(),
         "edges": layout.edges.len(),
         "ranks": layout.stats.ranks,
@@ -3510,6 +4049,9 @@ mod tests {
             ports: vec![],
             clusters: vec![],
             labels: vec![],
+            pie_entries: vec![],
+            pie_title: None,
+            pie_show_data: false,
             style_refs: vec![],
             links: vec![],
             meta: MermaidDiagramMeta {
@@ -3524,6 +4066,39 @@ mod tests {
                 guard: empty_guard_report(),
             },
         }
+    }
+    fn count_crossings_bruteforce(
+        rank_a: &[usize],
+        rank_b: &[usize],
+        graph: &LayoutGraph,
+    ) -> usize {
+        let mut pos_b = vec![usize::MAX; graph.n];
+        let mut in_b = vec![false; graph.n];
+        for (i, &v) in rank_b.iter().enumerate() {
+            pos_b[v] = i;
+            in_b[v] = true;
+        }
+
+        let mut edges: Vec<(usize, usize)> = Vec::new();
+        for (i, &u) in rank_a.iter().enumerate() {
+            for &v in &graph.adj[u] {
+                if in_b[v] {
+                    edges.push((i, pos_b[v]));
+                }
+            }
+        }
+
+        let mut crossings = 0usize;
+        for i in 0..edges.len() {
+            for j in (i + 1)..edges.len() {
+                let (a1, b1) = edges[i];
+                let (a2, b2) = edges[j];
+                if (a1 < a2 && b1 > b2) || (a1 > a2 && b1 < b2) {
+                    crossings += 1;
+                }
+            }
+        }
+        crossings
     }
 
     #[test]
@@ -4203,6 +4778,18 @@ mod tests {
     }
 
     #[test]
+    fn count_crossings_matches_bruteforce() {
+        let ir = make_simple_ir(&["A", "B", "C", "D"], &[(0, 3), (1, 2)], GraphDirection::TB);
+        let graph = LayoutGraph::from_ir(&ir);
+        let rank_a = vec![0, 1];
+        let rank_b = vec![2, 3];
+        let fast = count_crossings(&rank_a, &rank_b, &graph);
+        let slow = count_crossings_bruteforce(&rank_a, &rank_b, &graph);
+        assert_eq!(fast, slow, "crossing count must match brute force");
+        assert_eq!(fast, 1, "expected exactly one crossing");
+    }
+
+    #[test]
     fn layout_large_graph_stays_within_budget() {
         let node_names: Vec<String> = (0..20).map(|i| format!("N{i}")).collect();
         let node_refs: Vec<&str> = node_names.iter().map(String::as_str).collect();
@@ -4228,7 +4815,7 @@ mod tests {
         // Heavier deterministic workload for profiling layout hot paths.
         // Run with:
         // cargo test -p ftui-extras --features diagram perf_large_graph_layout --release -- --ignored --nocapture
-        let node_count = 200usize;
+        let node_count = 300usize;
         let names: Vec<String> = (0..node_count).map(|i| format!("N{i}")).collect();
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
 
@@ -4256,11 +4843,73 @@ mod tests {
         config.layout_iteration_budget = 200;
 
         let mut checksum = 0usize;
-        for _ in 0..20 {
+        for _ in 0..200 {
             let layout = layout_diagram(&ir, &config);
             checksum = checksum.wrapping_add(layout.nodes.len());
             checksum = checksum.wrapping_add(layout.stats.crossings);
             checksum = checksum.wrapping_add(layout.stats.total_bends);
+        }
+        std::hint::black_box(checksum);
+    }
+
+    fn make_dense_rank_ir(
+        rank_count: usize,
+        per_rank: usize,
+    ) -> (MermaidDiagramIr, Vec<Vec<usize>>) {
+        let node_count = rank_count.saturating_mul(per_rank);
+        let names: Vec<String> = (0..node_count).map(|i| format!("N{i}")).collect();
+        let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+
+        let mut edges = Vec::with_capacity(per_rank * per_rank * rank_count.saturating_sub(1));
+        for r in 0..rank_count.saturating_sub(1) {
+            let base_a = r * per_rank;
+            let base_b = (r + 1) * per_rank;
+            for i in 0..per_rank {
+                let from = base_a + i;
+                for j in 0..per_rank {
+                    edges.push((from, base_b + j));
+                }
+            }
+        }
+
+        let ir = make_simple_ir(&refs, &edges, GraphDirection::TB);
+        let mut rank_order = Vec::with_capacity(rank_count);
+        for r in 0..rank_count {
+            rank_order.push((r * per_rank..(r + 1) * per_rank).collect());
+        }
+        (ir, rank_order)
+    }
+
+    #[test]
+    #[ignore = "perf harness: run manually for profiling"]
+    fn perf_crossings_dense_full() {
+        // Dense multi-rank workload to stress Fenwick crossing counting.
+        // Run with:
+        // cargo test -p ftui-extras --features diagram perf_crossings_dense_full --release -- --ignored --nocapture
+        let (ir, rank_order) = make_dense_rank_ir(6, 200);
+        let graph = LayoutGraph::from_ir(&ir);
+
+        let mut checksum = 0usize;
+        for _ in 0..25 {
+            checksum = checksum.wrapping_add(total_crossings(&rank_order, &graph));
+        }
+        std::hint::black_box(checksum);
+    }
+
+    #[test]
+    #[ignore = "perf harness: run manually for profiling"]
+    fn perf_crossings_dense_early_exit() {
+        // Early-exit variant: uses a small limit so later rank pairs are skipped.
+        // Run with:
+        // cargo test -p ftui-extras --features diagram perf_crossings_dense_early_exit --release -- --ignored --nocapture
+        let (ir, rank_order) = make_dense_rank_ir(6, 200);
+        let graph = LayoutGraph::from_ir(&ir);
+        let limit = 5_000;
+
+        let mut checksum = 0usize;
+        for _ in 0..25 {
+            checksum =
+                checksum.wrapping_add(total_crossings_with_limit(&rank_order, &graph, limit));
         }
         std::hint::black_box(checksum);
     }
@@ -4421,6 +5070,27 @@ mod tests {
         assert_eq!(report.fallback_count, sum_fallbacks);
     }
 
+    #[test]
+    #[ignore = "perf harness: run manually for profiling"]
+    fn perf_route_all_edges_astar_dense() {
+        // Route-heavy workload to profile A* expansion and obstacle handling.
+        // Run with:
+        // cargo test -p ftui-extras --features diagram perf_route_all_edges_astar_dense --release -- --ignored --nocapture
+        let ir = make_random_ir(1337, 120, 10, GraphDirection::TB);
+        let mut config = default_config();
+        config.route_budget = usize::MAX / 2;
+        let layout = layout_diagram(&ir, &config);
+        let weights = RoutingWeights::default();
+
+        let mut checksum = 0usize;
+        for _ in 0..8 {
+            let (paths, report) = route_all_edges(&ir, &layout, &config, &weights);
+            checksum = checksum.wrapping_add(paths.len());
+            checksum = checksum.wrapping_add(report.total_cells_explored);
+        }
+        std::hint::black_box(checksum);
+    }
+
     // =========================================================================
     // Label placement tests (bd-33fdz)
     // =========================================================================
@@ -4498,6 +5168,9 @@ mod tests {
             ports: vec![],
             clusters: vec![],
             labels,
+            pie_entries: vec![],
+            pie_title: None,
+            pie_show_data: false,
             style_refs: vec![],
             links: vec![],
             meta: MermaidDiagramMeta {
@@ -4510,7 +5183,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn label_placement_edge_labels_at_midpoints() {
         let ir = make_labeled_ir(
@@ -5556,6 +6228,9 @@ mod tests {
             ports: vec![],
             clusters: vec![],
             labels: ir_labels,
+            pie_entries: vec![],
+            pie_title: None,
+            pie_show_data: false,
             style_refs: vec![],
             links: vec![],
             meta: MermaidDiagramMeta {
@@ -5571,7 +6246,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn content_aware_wider_label_wider_node() {
         let ir = make_labeled_ir_with_text(
@@ -5657,6 +6331,9 @@ mod tests {
             ports: vec![],
             clusters: ir_clusters,
             labels: vec![],
+            pie_entries: vec![],
+            pie_title: None,
+            pie_show_data: false,
             style_refs: vec![],
             links: vec![],
             meta: MermaidDiagramMeta {
@@ -5672,7 +6349,6 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn cluster_members_stay_contiguous() {
         // Nodes B, C, D in a cluster at rank 1. They should remain adjacent.
@@ -5902,6 +6578,9 @@ mod label_tests {
             ports: vec![],
             clusters: vec![],
             labels,
+            pie_entries: vec![],
+            pie_title: None,
+            pie_show_data: false,
             style_refs: vec![],
             links: vec![],
             meta: MermaidDiagramMeta {
