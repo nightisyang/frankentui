@@ -1362,6 +1362,108 @@ impl MermaidSupportLevel {
     }
 }
 
+// ── Feature matrix for diagram demos ─────────────────────────────────
+//
+// Structured inventory of supported diagram families, syntax features,
+// and which test fixture / sample demonstrates each capability. Used by
+// the mega-screen sample registry to map coverage gaps.
+
+/// One row of the Mermaid feature matrix.
+#[derive(Debug, Clone, Copy)]
+pub struct FeatureMatrixEntry {
+    /// Diagram family (e.g. "graph", "sequence", "state").
+    pub family: DiagramType,
+    /// Specific syntax feature (e.g. "subgraphs", "classDef", "sequence messages").
+    pub feature: &'static str,
+    /// Support level in the current engine.
+    pub level: MermaidSupportLevel,
+    /// Test fixture that exercises this feature (relative to tests/fixtures/mermaid/).
+    pub fixture: Option<&'static str>,
+    /// Brief note about gaps or planned improvements.
+    pub note: &'static str,
+}
+
+/// Comprehensive feature matrix mapping diagram capabilities to demo samples.
+///
+/// # How to use
+///
+/// The mega-screen sample registry should reference these entries so every
+/// planned sample has a declared purpose and linked feature coverage. Entries
+/// with `fixture: None` represent explicit gaps that need sample coverage.
+pub const FEATURE_MATRIX: &[FeatureMatrixEntry] = &[
+    // ── Flowchart / Graph ───────────────────────────────────────────
+    FeatureMatrixEntry { family: DiagramType::Graph, feature: "basic nodes + edges", level: MermaidSupportLevel::Supported, fixture: Some("graph_small.mmd"), note: "" },
+    FeatureMatrixEntry { family: DiagramType::Graph, feature: "subgraphs / clusters", level: MermaidSupportLevel::Supported, fixture: Some("graph_medium.mmd"), note: "" },
+    FeatureMatrixEntry { family: DiagramType::Graph, feature: "direction override (TB/LR/RL/BT)", level: MermaidSupportLevel::Supported, fixture: Some("graph_medium.mmd"), note: "all 5 directions" },
+    FeatureMatrixEntry { family: DiagramType::Graph, feature: "all 8 node shapes", level: MermaidSupportLevel::Supported, fixture: None, note: "cell-mode shapes via draw_shaped_node" },
+    FeatureMatrixEntry { family: DiagramType::Graph, feature: "classDef / style / class", level: MermaidSupportLevel::Supported, fixture: Some("graph_medium.mmd"), note: "fill/stroke/color/dash" },
+    FeatureMatrixEntry { family: DiagramType::Graph, feature: "linkStyle", level: MermaidSupportLevel::Supported, fixture: None, note: "edge styling by index" },
+    FeatureMatrixEntry { family: DiagramType::Graph, feature: "init directives (%%{init}%%)", level: MermaidSupportLevel::Supported, fixture: Some("graph_init_directive.mmd"), note: "theme + themeVariables + direction" },
+    FeatureMatrixEntry { family: DiagramType::Graph, feature: "click / link handlers", level: MermaidSupportLevel::Partial, fixture: None, note: "parsed but rendering TBD" },
+    FeatureMatrixEntry { family: DiagramType::Graph, feature: "unicode / long labels", level: MermaidSupportLevel::Supported, fixture: Some("graph_unicode_labels.mmd"), note: "wrapping + truncation" },
+    FeatureMatrixEntry { family: DiagramType::Graph, feature: "large graph (>50 nodes)", level: MermaidSupportLevel::Supported, fixture: Some("graph_large.mmd"), note: "stress + layout scale" },
+    FeatureMatrixEntry { family: DiagramType::Graph, feature: "edge label placement", level: MermaidSupportLevel::Supported, fixture: None, note: "collision-avoidance labels" },
+    FeatureMatrixEntry { family: DiagramType::Graph, feature: "color themes / palettes", level: MermaidSupportLevel::Supported, fixture: None, note: "6 preset palettes" },
+    // ── Sequence ────────────────────────────────────────────────────
+    FeatureMatrixEntry { family: DiagramType::Sequence, feature: "participants + messages", level: MermaidSupportLevel::Partial, fixture: Some("sequence_basic.mmd"), note: "basic parse; layout WIP" },
+    FeatureMatrixEntry { family: DiagramType::Sequence, feature: "activation bars", level: MermaidSupportLevel::Unsupported, fixture: None, note: "not yet implemented" },
+    FeatureMatrixEntry { family: DiagramType::Sequence, feature: "notes", level: MermaidSupportLevel::Unsupported, fixture: None, note: "not yet implemented" },
+    FeatureMatrixEntry { family: DiagramType::Sequence, feature: "alt/opt/loop/par blocks", level: MermaidSupportLevel::Unsupported, fixture: None, note: "not yet implemented" },
+    // ── State ───────────────────────────────────────────────────────
+    FeatureMatrixEntry { family: DiagramType::State, feature: "basic transitions", level: MermaidSupportLevel::Supported, fixture: Some("state_basic.mmd"), note: "" },
+    FeatureMatrixEntry { family: DiagramType::State, feature: "composite states", level: MermaidSupportLevel::Supported, fixture: Some("state_composite.mmd"), note: "nested state containers" },
+    FeatureMatrixEntry { family: DiagramType::State, feature: "start/end markers", level: MermaidSupportLevel::Supported, fixture: Some("state_composite.mmd"), note: "[*] nodes" },
+    FeatureMatrixEntry { family: DiagramType::State, feature: "notes", level: MermaidSupportLevel::Partial, fixture: None, note: "parsed; render TBD" },
+    // ── Class ───────────────────────────────────────────────────────
+    FeatureMatrixEntry { family: DiagramType::Class, feature: "class declarations", level: MermaidSupportLevel::Supported, fixture: Some("class_basic.mmd"), note: "" },
+    FeatureMatrixEntry { family: DiagramType::Class, feature: "members (fields + methods)", level: MermaidSupportLevel::Supported, fixture: Some("class_basic.mmd"), note: "via IrNode.members" },
+    FeatureMatrixEntry { family: DiagramType::Class, feature: "inheritance/association edges", level: MermaidSupportLevel::Supported, fixture: Some("class_basic.mmd"), note: "" },
+    FeatureMatrixEntry { family: DiagramType::Class, feature: "class annotations", level: MermaidSupportLevel::Unsupported, fixture: None, note: "<<interface>> etc." },
+    // ── ER ──────────────────────────────────────────────────────────
+    FeatureMatrixEntry { family: DiagramType::Er, feature: "entity-relationship edges", level: MermaidSupportLevel::Supported, fixture: Some("er_basic.mmd"), note: "" },
+    FeatureMatrixEntry { family: DiagramType::Er, feature: "cardinality labels", level: MermaidSupportLevel::Partial, fixture: Some("er_basic.mmd"), note: "parsed; rendering basic" },
+    FeatureMatrixEntry { family: DiagramType::Er, feature: "entity attributes", level: MermaidSupportLevel::Unsupported, fixture: None, note: "not yet implemented" },
+    // ── Gantt ───────────────────────────────────────────────────────
+    FeatureMatrixEntry { family: DiagramType::Gantt, feature: "title + sections + tasks", level: MermaidSupportLevel::Supported, fixture: Some("gantt_basic.mmd"), note: "" },
+    FeatureMatrixEntry { family: DiagramType::Gantt, feature: "date-based timelines", level: MermaidSupportLevel::Partial, fixture: None, note: "parsed; visual layout basic" },
+    FeatureMatrixEntry { family: DiagramType::Gantt, feature: "milestones", level: MermaidSupportLevel::Unsupported, fixture: None, note: "not yet implemented" },
+    // ── Mindmap ─────────────────────────────────────────────────────
+    FeatureMatrixEntry { family: DiagramType::Mindmap, feature: "indent-based hierarchy", level: MermaidSupportLevel::Supported, fixture: Some("mindmap_basic.mmd"), note: "depth detection" },
+    FeatureMatrixEntry { family: DiagramType::Mindmap, feature: "node shapes in mindmap", level: MermaidSupportLevel::Partial, fixture: None, note: "shape parsing TBD" },
+    // ── Pie ─────────────────────────────────────────────────────────
+    FeatureMatrixEntry { family: DiagramType::Pie, feature: "pie entries with values", level: MermaidSupportLevel::Supported, fixture: Some("pie_basic.mmd"), note: "" },
+    FeatureMatrixEntry { family: DiagramType::Pie, feature: "pie title", level: MermaidSupportLevel::Supported, fixture: Some("pie_basic.mmd"), note: "" },
+    FeatureMatrixEntry { family: DiagramType::Pie, feature: "showData toggle", level: MermaidSupportLevel::Partial, fixture: None, note: "parsed; render TBD" },
+    // ── Cross-cutting ───────────────────────────────────────────────
+    FeatureMatrixEntry { family: DiagramType::Unknown, feature: "unsupported diagram fallback", level: MermaidSupportLevel::Supported, fixture: Some("unsupported_mix.mmd"), note: "graceful error panel" },
+    FeatureMatrixEntry { family: DiagramType::Unknown, feature: "error panel / raw / both modes", level: MermaidSupportLevel::Supported, fixture: None, note: "snapshot tested" },
+    FeatureMatrixEntry { family: DiagramType::Unknown, feature: "cache + hash invalidation", level: MermaidSupportLevel::Supported, fixture: None, note: "DiagramCacheKey" },
+    FeatureMatrixEntry { family: DiagramType::Unknown, feature: "fidelity tiers (compact/normal/rich)", level: MermaidSupportLevel::Supported, fixture: None, note: "RenderPlan selection" },
+    FeatureMatrixEntry { family: DiagramType::Unknown, feature: "interactive selection + highlights", level: MermaidSupportLevel::Supported, fixture: None, note: "SelectionState + navigate_direction" },
+    FeatureMatrixEntry { family: DiagramType::Unknown, feature: "debug overlay", level: MermaidSupportLevel::Supported, fixture: None, note: "bounding boxes + metrics" },
+];
+
+/// Return features for a specific diagram type.
+#[must_use]
+pub fn features_for_type(dt: DiagramType) -> Vec<&'static FeatureMatrixEntry> {
+    FEATURE_MATRIX.iter().filter(|e| e.family == dt).collect()
+}
+
+/// Count features by support level.
+#[must_use]
+pub fn feature_coverage_summary() -> (usize, usize, usize) {
+    let supported = FEATURE_MATRIX.iter().filter(|e| e.level == MermaidSupportLevel::Supported).count();
+    let partial = FEATURE_MATRIX.iter().filter(|e| e.level == MermaidSupportLevel::Partial).count();
+    let unsupported = FEATURE_MATRIX.iter().filter(|e| e.level == MermaidSupportLevel::Unsupported).count();
+    (supported, partial, unsupported)
+}
+
+/// Features that have no test fixture (explicit coverage gaps).
+#[must_use]
+pub fn uncovered_features() -> Vec<&'static FeatureMatrixEntry> {
+    FEATURE_MATRIX.iter().filter(|e| e.fixture.is_none()).collect()
+}
+
 /// Warning taxonomy for Mermaid compatibility and fallback handling.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MermaidWarningCode {
