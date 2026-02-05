@@ -249,7 +249,8 @@ pub fn render_tab_bar(current: ScreenId, frame: &mut Frame, area: Rect) {
 
     // Lay out tabs left-to-right
     let mut x = area.x;
-    for (i, meta) in screens::screen_registry().iter().enumerate() {
+    let registry = screens::screen_registry();
+    for (i, meta) in registry.iter().enumerate() {
         let key_label = if i < 9 {
             format!("{}", i + 1)
         } else if i == 9 {
@@ -308,8 +309,26 @@ pub fn render_tab_bar(current: ScreenId, frame: &mut Frame, area: Rect) {
 
         x += label_width;
 
-        // Subtle separator between tabs
-        if x < area.x + area.width {
+        // Subtle separator between tabs (only if the next tab will fit)
+        if i + 1 < registry.len() {
+            let next_key_label = if i + 1 < 9 {
+                format!("{}", i + 2)
+            } else if i + 1 == 9 {
+                "0".into()
+            } else {
+                "-".into()
+            };
+            let next_label_text = registry[i + 1].short_label;
+            let next_label_width = 1
+                + display_width(&next_key_label) as u16
+                + 2
+                + display_width(next_label_text) as u16
+                + 1; // " {key}: {label} "
+
+            if x + 1 + next_label_width > area.x + area.width {
+                break;
+            }
+
             let sep_area = Rect::new(x, area.y, 1, 1);
             let sep_style = Style::new()
                 .bg(theme::alpha::SURFACE)

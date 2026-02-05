@@ -65,6 +65,34 @@ fn snapshot_app(app: &mut AppModel, width: u16, height: u16, name: &str) {
     assert_snapshot!(name, &frame.buffer);
 }
 
+struct EnvVarGuard {
+    key: String,
+    prev: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &str, value: Option<&str>) -> Self {
+        let prev = env::var(key).ok();
+        match value {
+            Some(val) => env::set_var(key, val),
+            None => env::remove_var(key),
+        }
+        Self {
+            key: key.to_string(),
+            prev,
+        }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.prev.as_deref() {
+            Some(val) => env::set_var(&self.key, val),
+            None => env::remove_var(&self.key),
+        }
+    }
+}
+
 fn terminal_caps_env() -> ftui_demo_showcase::screens::terminal_capabilities::EnvSnapshot {
     ftui_demo_showcase::screens::terminal_capabilities::EnvSnapshot::from_values(
         "xterm-256color",
@@ -2146,4 +2174,43 @@ fn hyperlink_playground_focus_120x40() {
     let mut frame = Frame::with_links(120, 40, &mut pool, &mut registry);
     screen.view(&mut frame, area);
     assert_snapshot!("hyperlink_playground_focus_120x40", &frame.buffer);
+}
+
+// ============================================================================
+// Explainability Cockpit (bd-iuvb.4)
+// ============================================================================
+
+#[test]
+fn explainability_cockpit_empty_80x24() {
+    let _guard_demo = EnvVarGuard::set("FTUI_DEMO_EVIDENCE_JSONL", None);
+    let _guard_harness = EnvVarGuard::set("FTUI_HARNESS_EVIDENCE_JSONL", None);
+    let screen = ftui_demo_showcase::screens::explainability_cockpit::ExplainabilityCockpit::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("explainability_cockpit_empty_80x24", &frame.buffer);
+}
+
+#[test]
+fn explainability_cockpit_populated_120x40() {
+    let path = "/tmp/ftui_explainability_cockpit.jsonl";
+    let sample = [
+        r#"{"schema_version":"ftui-evidence-v1","event":"diff_decision","run_id":"diff-1","event_idx":4,"screen_mode":"alt","cols":80,"rows":24,"strategy":"dirty","posterior_mean":0.33,"posterior_variance":0.12,"alpha":1.2,"beta":2.3,"guard_reason":"","fallback_reason":"","hysteresis_applied":true,"hysteresis_ratio":1.1,"dirty_rows":5,"total_rows":24,"dirty_tile_ratio":0.07,"dirty_cell_ratio":0.08}"#,
+        r#"{"schema_version":"ftui-evidence-v1","event":"decision_evidence","run_id":"resize-1","event_idx":7,"screen_mode":"alt","cols":80,"rows":24,"log_bayes_factor":1.23,"regime_contribution":0.5,"timing_contribution":0.3,"rate_contribution":0.2,"explanation":"burst regime"}"#,
+        r#"{"schema_version":"ftui-evidence-v1","event":"decision","run_id":"resize-1","event_idx":7,"screen_mode":"alt","cols":80,"rows":24,"idx":7,"elapsed_ms":10.0,"dt_ms":5.0,"event_rate":20.0,"regime":"burst","action":"coalesce","pending_w":80,"pending_h":24,"applied_w":80,"applied_h":24,"time_since_render_ms":3.0,"coalesce_ms":12.0,"forced":false}"#,
+        r#"{"event":"budget_decision","frame_idx":42,"decision":"degrade","decision_controller":"degrade","degradation_before":"full","degradation_after":"lite","frame_time_us":20000.0,"budget_us":16000.0,"pid_output":0.2,"pid_p":0.1,"pid_i":0.05,"pid_d":0.02,"e_value":0.4,"frames_observed":10,"frames_since_change":2,"in_warmup":false,"bucket_key":null,"n_b":null,"alpha":null,"q_b":null,"y_hat":null,"upper_us":null,"risk":null,"fallback_level":null,"window_size":null,"reset_count":null}"#,
+    ]
+    .join("\n");
+
+    fs::write(path, sample).expect("write explainability evidence fixture");
+    let _guard_demo = EnvVarGuard::set("FTUI_DEMO_EVIDENCE_JSONL", Some(path));
+    let _guard_harness = EnvVarGuard::set("FTUI_HARNESS_EVIDENCE_JSONL", None);
+
+    let screen = ftui_demo_showcase::screens::explainability_cockpit::ExplainabilityCockpit::new();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("explainability_cockpit_populated_120x40", &frame.buffer);
 }
