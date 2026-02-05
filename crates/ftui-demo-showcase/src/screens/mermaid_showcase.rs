@@ -11,8 +11,9 @@ use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind};
 use ftui_core::geometry::Rect;
 use ftui_extras::mermaid;
 use ftui_extras::mermaid::{
-    MermaidCompatibilityMatrix, MermaidConfig, MermaidDiagramIr, MermaidError,
-    MermaidFallbackPolicy, MermaidGlyphMode, MermaidRenderMode, MermaidTier, MermaidWrapMode,
+    DiagramPalettePreset, MermaidCompatibilityMatrix, MermaidConfig, MermaidDiagramIr,
+    MermaidError, MermaidFallbackPolicy, MermaidGlyphMode, MermaidRenderMode, MermaidTier,
+    MermaidWrapMode, ShowcaseMode,
 };
 use ftui_extras::mermaid_layout;
 use ftui_extras::mermaid_render;
@@ -1110,6 +1111,22 @@ struct MermaidShowcaseState {
     metrics: MermaidMetricsSnapshot,
     status_log: Vec<StatusLogEntry>,
     status_log_visible: bool,
+    /// Current interaction mode (Normal/Inspect/Search).
+    mode: ShowcaseMode,
+    /// Index of the focused node in Inspect mode.
+    selected_node_idx: Option<usize>,
+    /// Active search query text.
+    search_query: String,
+    /// Index into search_matches for the current highlighted match.
+    search_match_idx: usize,
+    /// Node indices matching the current search query.
+    search_matches: Vec<usize>,
+    /// Active color palette preset.
+    palette: DiagramPalettePreset,
+    /// Whether the help overlay is visible.
+    help_visible: bool,
+    /// Whether the debug overlay is visible.
+    debug_overlay: bool,
 }
 
 #[derive(Debug)]
@@ -1171,6 +1188,14 @@ impl MermaidShowcaseState {
             metrics: MermaidMetricsSnapshot::default(),
             status_log: Vec::new(),
             status_log_visible: false,
+            mode: ShowcaseMode::Normal,
+            selected_node_idx: None,
+            search_query: String::new(),
+            search_match_idx: 0,
+            search_matches: Vec::new(),
+            palette: DiagramPalettePreset::Default,
+            help_visible: false,
+            debug_overlay: false,
         };
         state.recompute_metrics();
         state
@@ -1565,6 +1590,17 @@ enum MermaidShowcaseAction {
     ResetViewportOverride,
     CollapsePanels,
     ToggleStatusLog,
+    // Mega screen actions
+    CyclePalette,
+    PrevPalette,
+    ToggleHelp,
+    ToggleDebugOverlay,
+    SelectNextNode,
+    SelectPrevNode,
+    EnterSearchMode,
+    ExitMode,
+    NextSearchMatch,
+    PrevSearchMatch,
 }
 
 /// Mermaid showcase screen scaffold (state + key handling).
@@ -1839,33 +1875,76 @@ impl MermaidShowcaseScreen {
             return None;
         }
 
+        // Mode-independent keys
         match event.code {
-            KeyCode::Down | KeyCode::Char('j') => Some(MermaidShowcaseAction::NextSample),
-            KeyCode::Up | KeyCode::Char('k') => Some(MermaidShowcaseAction::PrevSample),
-            KeyCode::Home => Some(MermaidShowcaseAction::FirstSample),
-            KeyCode::End => Some(MermaidShowcaseAction::LastSample),
-            KeyCode::Enter => Some(MermaidShowcaseAction::Refresh),
-            KeyCode::Char('+') | KeyCode::Char('=') => Some(MermaidShowcaseAction::ZoomIn),
-            KeyCode::Char('-') => Some(MermaidShowcaseAction::ZoomOut),
-            KeyCode::Char('0') => Some(MermaidShowcaseAction::ZoomReset),
-            KeyCode::Char('f') => Some(MermaidShowcaseAction::FitToView),
-            KeyCode::Char('l') => Some(MermaidShowcaseAction::ToggleLayoutMode),
-            KeyCode::Char('r') => Some(MermaidShowcaseAction::ForceRelayout),
-            KeyCode::Char('m') => Some(MermaidShowcaseAction::ToggleMetrics),
-            KeyCode::Char('c') => Some(MermaidShowcaseAction::ToggleControls),
-            KeyCode::Char('t') => Some(MermaidShowcaseAction::CycleTier),
-            KeyCode::Char('g') => Some(MermaidShowcaseAction::ToggleGlyphMode),
-            KeyCode::Char('b') => Some(MermaidShowcaseAction::CycleRenderMode),
-            KeyCode::Char('s') => Some(MermaidShowcaseAction::ToggleStyles),
-            KeyCode::Char('w') => Some(MermaidShowcaseAction::CycleWrapMode),
-            KeyCode::Char(']') => Some(MermaidShowcaseAction::IncreaseViewportWidth),
-            KeyCode::Char('[') => Some(MermaidShowcaseAction::DecreaseViewportWidth),
-            KeyCode::Char('}') => Some(MermaidShowcaseAction::IncreaseViewportHeight),
-            KeyCode::Char('{') => Some(MermaidShowcaseAction::DecreaseViewportHeight),
-            KeyCode::Char('o') => Some(MermaidShowcaseAction::ResetViewportOverride),
-            KeyCode::Escape => Some(MermaidShowcaseAction::CollapsePanels),
-            KeyCode::Char('i') => Some(MermaidShowcaseAction::ToggleStatusLog),
-            _ => None,
+            KeyCode::Char('?') => return Some(MermaidShowcaseAction::ToggleHelp),
+            _ => {}
+        }
+
+        // Mode-specific dispatch
+        match self.state.mode {
+            ShowcaseMode::Search => match event.code {
+                KeyCode::Escape => Some(MermaidShowcaseAction::ExitMode),
+                KeyCode::Char('n') => Some(MermaidShowcaseAction::NextSearchMatch),
+                KeyCode::Char('N') => Some(MermaidShowcaseAction::PrevSearchMatch),
+                _ => None,
+            },
+            ShowcaseMode::Inspect => match event.code {
+                KeyCode::Escape => Some(MermaidShowcaseAction::ExitMode),
+                KeyCode::Tab => Some(MermaidShowcaseAction::SelectNextNode),
+                KeyCode::BackTab => Some(MermaidShowcaseAction::SelectPrevNode),
+                KeyCode::Char('+') | KeyCode::Char('=') => {
+                    Some(MermaidShowcaseAction::ZoomIn)
+                }
+                KeyCode::Char('-') => Some(MermaidShowcaseAction::ZoomOut),
+                KeyCode::Char('0') => Some(MermaidShowcaseAction::ZoomReset),
+                KeyCode::Char('f') => Some(MermaidShowcaseAction::FitToView),
+                KeyCode::Char('m') => Some(MermaidShowcaseAction::ToggleMetrics),
+                KeyCode::Char('c') => Some(MermaidShowcaseAction::ToggleControls),
+                KeyCode::Char('i') => Some(MermaidShowcaseAction::ToggleStatusLog),
+                KeyCode::Char('/') => Some(MermaidShowcaseAction::EnterSearchMode),
+                _ => None,
+            },
+            ShowcaseMode::Normal => match event.code {
+                KeyCode::Down | KeyCode::Char('j') => {
+                    Some(MermaidShowcaseAction::NextSample)
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    Some(MermaidShowcaseAction::PrevSample)
+                }
+                KeyCode::Home => Some(MermaidShowcaseAction::FirstSample),
+                KeyCode::End => Some(MermaidShowcaseAction::LastSample),
+                KeyCode::Enter => Some(MermaidShowcaseAction::Refresh),
+                KeyCode::Char('+') | KeyCode::Char('=') => {
+                    Some(MermaidShowcaseAction::ZoomIn)
+                }
+                KeyCode::Char('-') => Some(MermaidShowcaseAction::ZoomOut),
+                KeyCode::Char('0') => Some(MermaidShowcaseAction::ZoomReset),
+                KeyCode::Char('f') => Some(MermaidShowcaseAction::FitToView),
+                KeyCode::Char('l') => Some(MermaidShowcaseAction::ToggleLayoutMode),
+                KeyCode::Char('r') => Some(MermaidShowcaseAction::ForceRelayout),
+                KeyCode::Char('m') => Some(MermaidShowcaseAction::ToggleMetrics),
+                KeyCode::Char('c') => Some(MermaidShowcaseAction::ToggleControls),
+                KeyCode::Char('t') => Some(MermaidShowcaseAction::CycleTier),
+                KeyCode::Char('g') => Some(MermaidShowcaseAction::ToggleGlyphMode),
+                KeyCode::Char('b') => Some(MermaidShowcaseAction::CycleRenderMode),
+                KeyCode::Char('s') => Some(MermaidShowcaseAction::ToggleStyles),
+                KeyCode::Char('w') => Some(MermaidShowcaseAction::CycleWrapMode),
+                KeyCode::Char(']') => Some(MermaidShowcaseAction::IncreaseViewportWidth),
+                KeyCode::Char('[') => Some(MermaidShowcaseAction::DecreaseViewportWidth),
+                KeyCode::Char('}') => Some(MermaidShowcaseAction::IncreaseViewportHeight),
+                KeyCode::Char('{') => Some(MermaidShowcaseAction::DecreaseViewportHeight),
+                KeyCode::Char('o') => Some(MermaidShowcaseAction::ResetViewportOverride),
+                KeyCode::Char('p') => Some(MermaidShowcaseAction::CyclePalette),
+                KeyCode::Char('P') => Some(MermaidShowcaseAction::PrevPalette),
+                KeyCode::Char('d') => Some(MermaidShowcaseAction::ToggleDebugOverlay),
+                KeyCode::Tab => Some(MermaidShowcaseAction::SelectNextNode),
+                KeyCode::BackTab => Some(MermaidShowcaseAction::SelectPrevNode),
+                KeyCode::Char('/') => Some(MermaidShowcaseAction::EnterSearchMode),
+                KeyCode::Escape => Some(MermaidShowcaseAction::CollapsePanels),
+                KeyCode::Char('i') => Some(MermaidShowcaseAction::ToggleStatusLog),
+                _ => None,
+            },
         }
     }
 

@@ -3050,13 +3050,7 @@ fn draw_node_canvas(
             fill_rect_colored(painter, rect, fill);
             draw_rect_border_colored(painter, rect, border);
             if w > 3 {
-                painter.line_colored(
-                    rect.x + 1,
-                    rect.y,
-                    rect.x + 1,
-                    rect.y + h - 1,
-                    Some(border),
-                );
+                painter.line_colored(rect.x + 1, rect.y, rect.x + 1, rect.y + h - 1, Some(border));
                 painter.line_colored(
                     rect.x + w - 2,
                     rect.y,
@@ -3167,13 +3161,7 @@ fn draw_polygon_colored(painter: &mut Painter, points: &[(i32, i32)], color: Pac
 }
 
 #[cfg(feature = "canvas")]
-fn fill_circle_colored(
-    painter: &mut Painter,
-    cx: i32,
-    cy: i32,
-    radius: i32,
-    color: PackedRgba,
-) {
+fn fill_circle_colored(painter: &mut Painter, cx: i32, cy: i32, radius: i32, color: PackedRgba) {
     let r = radius.max(1);
     for y in (cy - r)..=(cy + r) {
         for x in (cx - r)..=(cx + r) {
@@ -3187,13 +3175,7 @@ fn fill_circle_colored(
 }
 
 #[cfg(feature = "canvas")]
-fn draw_circle_colored(
-    painter: &mut Painter,
-    cx: i32,
-    cy: i32,
-    radius: i32,
-    color: PackedRgba,
-) {
+fn draw_circle_colored(painter: &mut Painter, cx: i32, cy: i32, radius: i32, color: PackedRgba) {
     if radius <= 0 {
         painter.point_colored(cx, cy, color);
         return;
