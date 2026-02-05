@@ -318,3 +318,20 @@ Coverage audit + deep review are still in progress (bd-2dui). Do not treat the c
 **Issue:** The `Cell::CONTINUATION` constant was defined as `Self(1)`, which collides with the valid Unicode control character SOH (U+0001). This caused `TextInput` and other widgets to incorrectly treat SOH characters as continuation placeholders, leading to them disappearing or being treated as empty space.
 **Fix:**
     - Changed `Cell::CONTINUATION` to `Self(0x7FFF_FFFF)`, a value outside the valid Unicode scalar range but within the 31-bit limit for "Direct Char" storage. This ensures SOH is correctly preserved as a character while maintaining the special meaning of `CONTINUATION`.
+
+## 106. Tree Widget Allocation Optimization
+**File:** `crates/ftui-widgets/src/tree.rs`
+**Issue:** `Tree::render` used an intermediate `flatten` method that allocated a `Vec<FlatNode>` containing cloned `String` labels and `Vec<bool>` depth markers for every visible node every frame. This caused O(N * Depth) allocations, which is inefficient for large trees.
+**Fix:**
+    - Refactored `Tree::render` to use a zero-allocation recursive visitor `render_node`.
+    - The new implementation traverses the tree structure directly, maintaining the `is_last` state on the stack and rendering nodes in-place.
+    - Removed the unused `flatten`, `flatten_visible`, and `FlatNode` code.
+    - Updated tests to remove dependencies on the deleted `flatten` method.
+
+## 107. TimeTravel Eviction Corruption
+**File:** `crates/ftui-harness/src/time_travel.rs`
+**Issue:** When the `TimeTravel` recorder reached capacity, evicting the oldest frame could cause data corruption if the new oldest frame (previously at index 1) was a delta-encoded snapshot. If the history became empty (e.g. capacity=1), pushing a new delta frame would result in a frame that could not be reconstructed because its base was lost.
+**Fix:**
+    - Updated `record` to perform eviction *before* computing the new snapshot.
+    - Added logic to force a `Full` snapshot if the history is empty after eviction, ensuring the first frame in the buffer is always self-contained.
+    - This guarantees that `get(0)` always returns a valid base frame.

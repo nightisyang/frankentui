@@ -1,5 +1,48 @@
 # Session TODO List
 
+## Current Session (Codex) — Agent Mail + bd-1e3w (Shakespeare + Code Explorer) (2026-02-05)
+- [ ] **Agent Mail bootstrap** (macro_start_session or equivalent) for `/data/projects/frankentui`
+- [ ] **Agent Mail roster**: list active agents + confirm names
+- [ ] **Agent Mail inbox**: fetch inbox + ack any messages
+- [ ] **Agent Mail responses**: reply to any pending requests
+- [ ] **Code investigation agent**: spawn explorer for architecture recap + constraints
+- [ ] **Triage**: run `bv --robot-triage` + `br ready --json`
+- [ ] **Bead selection**: confirm active bead (`bd-1e3w`) + subtask order
+- [ ] **Beads status**: update/confirm `bd-1e3w` in-progress + add comment
+- [ ] **File reservations** (if Agent Mail available): reserve relevant demo files for `bd-1e3w`
+
+- [ ] **Shakespeare live search + animated highlights** (bd-1e3w)
+- [ ] Locate screen implementation file(s) (likely `crates/ftui-demo-showcase/src/screens/shakespeare.rs`)
+- [ ] Review current search UX + highlight behavior
+- [ ] Identify missing features: live search + animated highlight pass
+- [ ] Design: deterministic animation phase input (no implicit clocks)
+- [ ] Implement live search updates on keystroke (no flicker)
+- [ ] Implement animated highlight (phase-driven)
+- [ ] Update help/legend text for new controls
+- [ ] Add/adjust unit tests for search + highlight logic
+- [ ] Add/adjust snapshot tests for highlighted state (80x24, 120x40)
+- [ ] Add/adjust E2E PTY logs if present for Shakespeare screen
+
+- [ ] **Code Explorer / SQLite feature boost** (bd-1e3w)
+- [ ] Locate screen implementation file (`crates/ftui-demo-showcase/src/screens/code_explorer.rs`)
+- [ ] Review current SQLite/Query Lab features + UX gaps
+- [ ] Define feature boost scope (query templates, EXPLAIN view, schema panel, etc.)
+- [ ] Implement new feature(s) with deterministic data
+- [ ] Update help/legend text for new controls
+- [ ] Add/adjust unit tests for new logic
+- [ ] Add/adjust snapshot tests (80x24, 120x40)
+- [ ] Add/adjust E2E PTY logs if present for Code Explorer screen
+
+- [ ] **Quality gates** after code edits:
+- [ ] `cargo fmt --check`
+- [ ] `cargo check --all-targets`
+- [ ] `cargo clippy --all-targets -- -D warnings`
+- [ ] **UBS scan** on touched Rust files
+
+- [ ] **Beads updates**: add detailed comments to `bd-1e3w`
+- [ ] **Agent Mail updates**: send progress + completion notes (if available)
+- [ ] **Release reservations** (if Agent Mail available)
+
 ## Current Session (Codex) — Publish + Review + Showcase Notes (2026-02-04)
 - [x] Re-read `AGENTS.md` + `README.md` end-to-end (fresh constraints + project intent)
 - [x] Run `bv --robot-triage` (capture top picks + blockers)
@@ -9,7 +52,8 @@
 - [x] Fix `ftui-harness` dev-deps: add `proptest` (dedupe entries)
 - [x] Confirm `ftui-render` publishes cleanly: `cargo publish -p ftui-render --dry-run --allow-dirty`
 - [x] README: add crates.io availability note (published crates + queue)
-- [ ] Publish `ftui-render` (blocked by crates.io 429 until 2026-02-04 22:13:06 GMT)
+- [x] Fix ftui-render publish verify: restore local text_width + unicode deps
+- [ ] Publish `ftui-render` (blocked by crates.io 429 until 2026-02-05 01:53:06 GMT)
 - [ ] Continue publish order for remaining crates (ftui-style, ftui-text, ftui-runtime, ftui-widgets, ftui-extras, ftui-harness, ftui-pty, ftui-demo-showcase, ftui-simd, ftui)
 - [x] Update bead `bd-3lul4` notes (README/crates.io status)
 - [x] Update bead `bd-17unx` notes (publish queue + rate limit)

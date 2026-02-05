@@ -1212,6 +1212,8 @@ fn cha_cost(col) → 3 + digits(col+1)                        // e.g., "\x1b[45G
 strategy = argmin(sparse_cost, merged_cost)
 ```
 
+This ensures expensive operations (like full diff computation) only run when the information gain justifies the cost.
+
 ---
 
 ## Bayesian Intelligence Layer
@@ -1260,9 +1262,16 @@ Key Property:
 The runtime decides when to sample expensive metrics using VOI:
 
 ```
-Beta Posterior: p ~ Beta(α, β)           ← Violation probability
-VOI Score:     variance_reduction × value_scale × boundary_weight
-Decision:      sample iff (max_interval exceeded) OR (score ≥ cost)
+Beta posterior over violation probability:
+    p ~ Beta(α, β)
+
+VOI computation:
+    variance_before = αβ / ((α+β)² × (α+β+1))
+    variance_after  = (α+1)β / ((α+β+2)² × (α+β+3))  [if success]
+    VOI = variance_before - E[variance_after]
+
+Decision:
+    sample iff (max_interval exceeded) OR (VOI × value_scale ≥ sample_cost)
 ```
 
 This ensures expensive operations (like full diff computation) only run when the information gain justifies the cost.
@@ -1310,7 +1319,7 @@ Lookup:   O(1) via HashMap deduplication
 Frames are wrapped in DEC 2026 sync brackets for atomic display:
 
 ```
-CSI ? 2026 h    ← Begin synchronized update
+CSI ? 2026 h    ←Begin synchronized update
 [all frame output]
 CSI ? 2026 l    ← End synchronized update (terminal displays atomically)
 ```
