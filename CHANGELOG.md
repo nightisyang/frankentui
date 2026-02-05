@@ -2,7 +2,7 @@
 
 This changelog explains **what was happening in the codebase** in terms of features and functionality, grouped into **5‑hour UTC intervals**. Routine beads syncs and pure bookkeeping are intentionally omitted, but meaningful docs/test/tooling work that enabled functionality is included.
 
-**Window:** 2026-01-14 → 2026-02-04 (UTC)  
+**Window:** 2026-01-14 → 2026-02-05 (UTC)  
 **Note:** The first non‑empty interval is 2026-01-31. Empty intervals are omitted.
 
 **2026-01-31 15:00–19:59 UTC**
@@ -38,6 +38,11 @@ This changelog explains **what was happening in the codebase** in terms of featu
 - Major widget additions: TextArea, Help, Tree, JsonView, Emoji, Stopwatch, Timer, Pretty; Live display system in extras.
 - Text capabilities deepened: undo/redo editor core, Unicode BiDi support, SyntaxHighlighter API.
 - Demo showcase and PTY tooling expanded substantially; fuzzing integration + large test suite expansion landed.
+
+**2026-02-05 05:00–09:59 UTC**
+- Published the remaining FrankenTUI crates to crates.io at v0.1.1, including `ftui-demo-showcase` and `ftui-harness`.
+- Bumped all workspace crate versions to 0.1.1 and aligned internal dependency versions for a consistent release train.
+- Broke the `ftui-extras` ↔ `ftui-harness` publish cycle by inlining ANSI snapshot helpers in extras tests.
 
 **2026-02-02 05:00–09:59 UTC**
 - PTY input and resize handling upgraded (file‑based input, dynamic resize, escape fixes).
