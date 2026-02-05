@@ -120,6 +120,31 @@ fn classify_higher(value: f32, good: f32, ok: f32) -> MetricLevel {
     }
 }
 
+const PALETTE_ORDER: &[DiagramPalettePreset] = &[
+    DiagramPalettePreset::Default,
+    DiagramPalettePreset::Corporate,
+    DiagramPalettePreset::Neon,
+    DiagramPalettePreset::Monochrome,
+    DiagramPalettePreset::Pastel,
+    DiagramPalettePreset::HighContrast,
+];
+
+fn next_palette(current: DiagramPalettePreset) -> DiagramPalettePreset {
+    let idx = PALETTE_ORDER
+        .iter()
+        .position(|&p| p == current)
+        .unwrap_or(0);
+    PALETTE_ORDER[(idx + 1) % PALETTE_ORDER.len()]
+}
+
+fn prev_palette(current: DiagramPalettePreset) -> DiagramPalettePreset {
+    let idx = PALETTE_ORDER
+        .iter()
+        .position(|&p| p == current)
+        .unwrap_or(0);
+    PALETTE_ORDER[(idx + PALETTE_ORDER.len() - 1) % PALETTE_ORDER.len()]
+}
+
 fn push_opt_f32(json: &mut String, key: &str, value: Option<f32>) {
     json.push_str(&format!(",\"{key}\":"));
     if let Some(v) = value
@@ -1217,6 +1242,34 @@ impl MermaidShowcaseState {
         self.clamp_viewport_override();
         self.recompute_metrics();
     }
+
+    /// Get the number of nodes from the last cached layout (0 if no layout).
+    fn cache_node_count(&self) -> usize {
+        // Access through MermaidShowcaseScreen's cache is not possible here,
+        // so estimate from the current sample's IR node count.
+        // The actual node count will be refined when the cache is available.
+        self.selected_sample()
+            .map(|s| {
+                // Simple heuristic: count lines that look like node definitions
+                s.source
+                    .lines()
+                    .filter(|l| {
+                        let l = l.trim();
+                        !l.is_empty()
+                            && !l.starts_with("graph")
+                            && !l.starts_with("flowchart")
+                            && !l.starts_with("subgraph")
+                            && !l.starts_with("end")
+                            && !l.starts_with("%%")
+                            && !l.starts_with("classDef")
+                            && !l.starts_with("style")
+                            && !l.starts_with("linkStyle")
+                    })
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
     /// Run the parse/layout pipeline for the current sample and populate metrics.
     fn recompute_metrics(&mut self) {
         let sample = match self.selected_sample() {
@@ -1558,6 +1611,100 @@ impl MermaidShowcaseState {
             MermaidShowcaseAction::ToggleStatusLog => {
                 self.status_log_visible = !self.status_log_visible;
             }
+            MermaidShowcaseAction::CyclePalette => {
+                self.palette = next_palette(self.palette);
+                self.bump_render();
+                self.log_action("palette", format!("{:?}", self.palette));
+            }
+            MermaidShowcaseAction::PrevPalette => {
+                self.palette = prev_palette(self.palette);
+                self.bump_render();
+                self.log_action("palette", format!("{:?}", self.palette));
+            }
+            MermaidShowcaseAction::ToggleHelp => {
+                self.help_visible = !self.help_visible;
+                self.log_action(
+                    "help",
+                    if self.help_visible { "show" } else { "hide" }.to_string(),
+                );
+            }
+            MermaidShowcaseAction::ToggleDebugOverlay => {
+                self.debug_overlay = !self.debug_overlay;
+                self.bump_render();
+                self.log_action(
+                    "debug",
+                    if self.debug_overlay { "on" } else { "off" }.to_string(),
+                );
+            }
+            MermaidShowcaseAction::SelectNextNode => {
+                let node_count = self.cache_node_count();
+                if node_count > 0 {
+                    let idx = self.selected_node_idx.map_or(0, |i| (i + 1) % node_count);
+                    self.selected_node_idx = Some(idx);
+                    self.mode = ShowcaseMode::Inspect;
+                    self.log_action("inspect", format!("node {idx}"));
+                }
+            }
+            MermaidShowcaseAction::SelectPrevNode => {
+                let node_count = self.cache_node_count();
+                if node_count > 0 {
+                    let idx = self
+                        .selected_node_idx
+                        .map_or(node_count - 1, |i| (i + node_count - 1) % node_count);
+                    self.selected_node_idx = Some(idx);
+                    self.mode = ShowcaseMode::Inspect;
+                    self.log_action("inspect", format!("node {idx}"));
+                }
+            }
+            MermaidShowcaseAction::EnterSearchMode => {
+                self.mode = ShowcaseMode::Search;
+                self.search_query.clear();
+                self.search_matches.clear();
+                self.search_match_idx = 0;
+                self.log_action("search", "enter".to_string());
+            }
+            MermaidShowcaseAction::ExitMode => match self.mode {
+                ShowcaseMode::Inspect => {
+                    self.selected_node_idx = None;
+                    self.mode = ShowcaseMode::Normal;
+                    self.log_action("mode", "normal".to_string());
+                }
+                ShowcaseMode::Search => {
+                    self.search_query.clear();
+                    self.search_matches.clear();
+                    self.search_match_idx = 0;
+                    self.mode = ShowcaseMode::Normal;
+                    self.log_action("mode", "normal".to_string());
+                }
+                ShowcaseMode::Normal => {}
+            },
+            MermaidShowcaseAction::NextSearchMatch => {
+                if !self.search_matches.is_empty() {
+                    self.search_match_idx = (self.search_match_idx + 1) % self.search_matches.len();
+                    self.log_action(
+                        "search",
+                        format!(
+                            "{}/{}",
+                            self.search_match_idx + 1,
+                            self.search_matches.len()
+                        ),
+                    );
+                }
+            }
+            MermaidShowcaseAction::PrevSearchMatch => {
+                if !self.search_matches.is_empty() {
+                    self.search_match_idx = (self.search_match_idx + self.search_matches.len() - 1)
+                        % self.search_matches.len();
+                    self.log_action(
+                        "search",
+                        format!(
+                            "{}/{}",
+                            self.search_match_idx + 1,
+                            self.search_matches.len()
+                        ),
+                    );
+                }
+            }
         }
         self.normalize();
     }
@@ -1893,9 +2040,7 @@ impl MermaidShowcaseScreen {
                 KeyCode::Escape => Some(MermaidShowcaseAction::ExitMode),
                 KeyCode::Tab => Some(MermaidShowcaseAction::SelectNextNode),
                 KeyCode::BackTab => Some(MermaidShowcaseAction::SelectPrevNode),
-                KeyCode::Char('+') | KeyCode::Char('=') => {
-                    Some(MermaidShowcaseAction::ZoomIn)
-                }
+                KeyCode::Char('+') | KeyCode::Char('=') => Some(MermaidShowcaseAction::ZoomIn),
                 KeyCode::Char('-') => Some(MermaidShowcaseAction::ZoomOut),
                 KeyCode::Char('0') => Some(MermaidShowcaseAction::ZoomReset),
                 KeyCode::Char('f') => Some(MermaidShowcaseAction::FitToView),
@@ -1906,18 +2051,12 @@ impl MermaidShowcaseScreen {
                 _ => None,
             },
             ShowcaseMode::Normal => match event.code {
-                KeyCode::Down | KeyCode::Char('j') => {
-                    Some(MermaidShowcaseAction::NextSample)
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    Some(MermaidShowcaseAction::PrevSample)
-                }
+                KeyCode::Down | KeyCode::Char('j') => Some(MermaidShowcaseAction::NextSample),
+                KeyCode::Up | KeyCode::Char('k') => Some(MermaidShowcaseAction::PrevSample),
                 KeyCode::Home => Some(MermaidShowcaseAction::FirstSample),
                 KeyCode::End => Some(MermaidShowcaseAction::LastSample),
                 KeyCode::Enter => Some(MermaidShowcaseAction::Refresh),
-                KeyCode::Char('+') | KeyCode::Char('=') => {
-                    Some(MermaidShowcaseAction::ZoomIn)
-                }
+                KeyCode::Char('+') | KeyCode::Char('=') => Some(MermaidShowcaseAction::ZoomIn),
                 KeyCode::Char('-') => Some(MermaidShowcaseAction::ZoomOut),
                 KeyCode::Char('0') => Some(MermaidShowcaseAction::ZoomReset),
                 KeyCode::Char('f') => Some(MermaidShowcaseAction::FitToView),
