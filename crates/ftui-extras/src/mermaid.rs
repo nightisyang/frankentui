@@ -8939,10 +8939,14 @@ mod tests {
 
     #[test]
     fn config_palette_in_hash() {
-        let mut c1 = MermaidConfig::default();
-        c1.palette = DiagramPalettePreset::Default;
-        let mut c2 = MermaidConfig::default();
-        c2.palette = DiagramPalettePreset::Neon;
+        let c1 = MermaidConfig {
+            palette: DiagramPalettePreset::Default,
+            ..MermaidConfig::default()
+        };
+        let c2 = MermaidConfig {
+            palette: DiagramPalettePreset::Neon,
+            ..MermaidConfig::default()
+        };
         assert_ne!(
             hash_config_layout(&c1),
             hash_config_layout(&c2),
