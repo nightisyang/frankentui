@@ -9,7 +9,7 @@
 # 4. Unit + snapshot tests
 # 5. Smoke test (alt-screen with auto-exit)
 # 6. Inline mode smoke test
-# 7. Screen navigation (cycle all 38 screens)
+# 7. Screen navigation (cycle all 40 screens)
 # 8. Search test (Shakespeare screen)
 # 9. Resize test (SIGWINCH handling)
 # 10. VisualEffects backdrop test (bd-l8x9.8.2)
@@ -2090,6 +2090,191 @@ PY
         jsonl_step_end "command palette" "failed" "$pal_dur_ms"
     fi
 
+    # ────────────────────────────────────────────────────────────────────────
+    # Step 18: Explainability cockpit evidence JSONL (bd-iuvb.4)
+    #
+    # Runs the Explainability Cockpit screen with evidence logging enabled,
+    # triggers a few resize events, and summarizes diff/resize/budget evidence.
+    # ────────────────────────────────────────────────────────────────────────
+    log_step "explainability cockpit (bd-iuvb.4)"
+    log_info "Running explainability cockpit and validating evidence JSONL..."
+    EXPLAIN_LOG="$LOG_DIR/18_explainability.log"
+    EXPLAIN_REPORT="$LOG_DIR/18_explainability_evidence_${TIMESTAMP}.jsonl"
+    EXPLAIN_JSONL="$LOG_DIR/18_explainability_summary.jsonl"
+    STEP_NAMES+=("explainability cockpit")
+
+    jsonl_step_start "explainability cockpit"
+    explain_start_ms="$(e2e_now_ms)"
+    {
+        echo "=== Explainability Cockpit (bd-iuvb.4) ==="
+        echo "Evidence path: $EXPLAIN_REPORT"
+        echo ""
+
+        explain_cmd="stty rows 24 cols 80 2>/dev/null; (sleep 0.6; stty rows 30 cols 100 2>/dev/null; sleep 0.6; stty rows 24 cols 80 2>/dev/null; sleep 0.6; stty rows 35 cols 120 2>/dev/null) & FTUI_DEMO_EVIDENCE_JSONL=\"$EXPLAIN_REPORT\" FTUI_DEMO_EXIT_AFTER_MS=3200 FTUI_DEMO_SCREEN=40 timeout 10 $DEMO_BIN"
+
+        if run_in_pty "$explain_cmd" 2>&1; then
+            explain_exit=0
+        else
+            explain_exit=$?
+        fi
+
+        if [ "$explain_exit" -eq 124 ]; then
+            explain_outcome="timeout"
+        elif [ "$explain_exit" -eq 0 ]; then
+            explain_outcome="pass"
+        else
+            explain_outcome="fail"
+        fi
+
+        explain_report_ok=false
+        if [ -s "$EXPLAIN_REPORT" ]; then
+            explain_report_ok=true
+        else
+            echo "Evidence file missing or empty: $EXPLAIN_REPORT"
+            explain_outcome="no_report"
+        fi
+
+        explain_parse_ok=false
+        if $explain_report_ok; then
+            if python3 - "$EXPLAIN_REPORT" "$EXPLAIN_JSONL" "$RUN_ID" "${E2E_SEED:-0}" "$(e2e_timestamp)" "${E2E_JSONL_SCHEMA_VERSION:-e2e-jsonl-v1}" "$explain_outcome" "$explain_exit" <<'PY'
+import hashlib
+import json
+import sys
+
+report_path, summary_path, run_id, seed, timestamp, schema_version, outcome, exit_code = sys.argv[1:9]
+
+with open(report_path, "r", encoding="utf-8") as handle:
+    lines = [line for line in handle if line.strip()]
+if not lines:
+    raise SystemExit("Evidence JSONL is empty")
+
+def stable_hash(payload):
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+def summarize_diff(entry):
+    return {
+        "event": "diff_decision",
+        "strategy": entry.get("strategy"),
+        "posterior_mean": entry.get("posterior_mean"),
+        "posterior_variance": entry.get("posterior_variance"),
+        "guard_reason": entry.get("guard_reason"),
+        "fallback_reason": entry.get("fallback_reason"),
+        "hysteresis_applied": entry.get("hysteresis_applied"),
+        "hysteresis_ratio": entry.get("hysteresis_ratio"),
+        "dirty_rows": entry.get("dirty_rows"),
+        "total_rows": entry.get("total_rows"),
+    }
+
+def summarize_resize(entry):
+    return {
+        "event": "resize_decision",
+        "regime": entry.get("regime"),
+        "action": entry.get("action"),
+        "forced": entry.get("forced"),
+        "pending_w": entry.get("pending_w"),
+        "pending_h": entry.get("pending_h"),
+        "applied_w": entry.get("applied_w"),
+        "applied_h": entry.get("applied_h"),
+    }
+
+def summarize_budget(entry):
+    return {
+        "event": "budget_decision",
+        "decision": entry.get("decision"),
+        "decision_controller": entry.get("decision_controller"),
+        "degradation_before": entry.get("degradation_before"),
+        "degradation_after": entry.get("degradation_after"),
+        "in_warmup": entry.get("in_warmup"),
+        "bucket_key": entry.get("bucket_key"),
+    }
+
+summaries = []
+seen_types = set()
+
+for line in lines:
+    entry = json.loads(line)
+    event = entry.get("event")
+    if event == "diff_decision":
+        frame_idx = entry.get("event_idx")
+        summary = summarize_diff(entry)
+        decision_type = "diff_decision"
+    elif event == "decision" and "regime" in entry and "action" in entry:
+        frame_idx = entry.get("event_idx", entry.get("idx"))
+        summary = summarize_resize(entry)
+        decision_type = "resize_decision"
+    elif event == "budget_decision":
+        frame_idx = entry.get("frame_idx")
+        summary = summarize_budget(entry)
+        decision_type = "budget_decision"
+    else:
+        continue
+
+    if frame_idx is None:
+        continue
+
+    seen_types.add(decision_type)
+    summaries.append({
+        "schema_version": schema_version,
+        "type": "explainability_summary",
+        "timestamp": timestamp,
+        "run_id": run_id,
+        "decision_type": decision_type,
+        "frame_idx": int(frame_idx),
+        "evidence_summary_hash": stable_hash(summary),
+        "outcome": outcome,
+        "exit_code": int(exit_code),
+    })
+
+required = {"diff_decision", "resize_decision", "budget_decision"}
+missing = required - seen_types
+
+with open(summary_path, "w", encoding="utf-8") as handle:
+    for summary in summaries:
+        handle.write(json.dumps(summary) + "\n")
+
+if missing:
+    raise SystemExit(f"Missing decision types: {sorted(missing)}")
+PY
+            then
+                explain_parse_ok=true
+            else
+                explain_parse_ok=false
+            fi
+        fi
+
+        explain_exit_ok=true
+        if [ "$explain_exit" -ne 0 ] && [ "$explain_exit" -ne 124 ]; then
+            explain_exit_ok=false
+        fi
+
+        explain_success=true
+        if ! $explain_exit_ok; then explain_success=false; fi
+        if ! $explain_report_ok; then explain_success=false; fi
+        if ! $explain_parse_ok; then explain_success=false; fi
+
+        echo "Outcome: $explain_outcome"
+        echo "Summary JSONL: $EXPLAIN_JSONL"
+
+        $explain_success
+    } > "$EXPLAIN_LOG" 2>&1
+    explain_exit=$?
+    explain_dur_ms=$(( $(e2e_now_ms) - explain_start_ms ))
+    explain_dur_s=$(echo "scale=2; $explain_dur_ms / 1000" | bc 2>/dev/null || echo "${explain_dur_ms}ms")
+    STEP_DURATIONS+=("${explain_dur_s}s")
+
+    if [ $explain_exit -eq 0 ]; then
+        log_pass "Explainability cockpit passed in ${explain_dur_s}s"
+        PASS_COUNT=$((PASS_COUNT + 1))
+        STEP_STATUSES+=("PASS")
+        jsonl_step_end "explainability cockpit" "success" "$explain_dur_ms"
+    else
+        log_fail "Explainability cockpit failed. See: $EXPLAIN_LOG"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        STEP_STATUSES+=("FAIL")
+        jsonl_step_end "explainability cockpit" "failed" "$explain_dur_ms"
+    fi
+
 else
     # No PTY support — skip all smoke/interactive tests
     for step in "Smoke test (alt-screen)" "Smoke test (inline)" \
@@ -2097,7 +2282,7 @@ else
                 "Resize (SIGWINCH) test" "VisualEffects backdrop" \
                 "Layout Inspector" "Terminal caps report" "i18n stress report" \
                 "Widget builder export" "Determinism lab report" \
-                "Hyperlink playground" "command palette"; do
+                "Hyperlink playground" "command palette" "explainability cockpit"; do
         skip_step "$step" "$SMOKE_REASON"
     done
 fi

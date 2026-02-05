@@ -1,45 +1,47 @@
 # Session TODO List
 
 ## Current Session (Codex) — Agent Mail + bd-1e3w (Shakespeare + Code Explorer) (2026-02-05)
-- [ ] **Agent Mail bootstrap** (macro_start_session or equivalent) for `/data/projects/frankentui`
-- [ ] **Agent Mail roster**: list active agents + confirm names
-- [ ] **Agent Mail inbox**: fetch inbox + ack any messages
-- [ ] **Agent Mail responses**: reply to any pending requests
-- [ ] **Code investigation agent**: spawn explorer for architecture recap + constraints
-- [ ] **Triage**: run `bv --robot-triage` + `br ready --json`
-- [ ] **Bead selection**: confirm active bead (`bd-1e3w`) + subtask order
-- [ ] **Beads status**: update/confirm `bd-1e3w` in-progress + add comment
+- [x] **Agent Mail bootstrap** attempted for `/data/projects/frankentui` (blocked: MCP Agent Mail unavailable)
+- [x] **Agent Mail roster** attempt (blocked: no MCP resources)
+- [x] **Agent Mail inbox** attempt (blocked: no MCP resources)
+- [x] **Agent Mail responses** attempt (blocked: no MCP resources)
+- [x] **Code investigation agent**: spawn explorer for architecture recap + constraints
+- [x] **Triage**: run `bv --robot-triage` + `br ready --json`
+- [x] **Bead selection**: confirm active bead (`bd-1e3w`) + subtask order
+- [x] **Beads status**: update/confirm `bd-1e3w` in-progress + add comment
 - [ ] **File reservations** (if Agent Mail available): reserve relevant demo files for `bd-1e3w`
 
-- [ ] **Shakespeare live search + animated highlights** (bd-1e3w)
-- [ ] Locate screen implementation file(s) (likely `crates/ftui-demo-showcase/src/screens/shakespeare.rs`)
-- [ ] Review current search UX + highlight behavior
-- [ ] Identify missing features: live search + animated highlight pass
-- [ ] Design: deterministic animation phase input (no implicit clocks)
-- [ ] Implement live search updates on keystroke (no flicker)
-- [ ] Implement animated highlight (phase-driven)
-- [ ] Update help/legend text for new controls
+- [x] **Shakespeare live search + animated highlights** (bd-1e3w)
+- [x] Locate screen implementation file(s) (`crates/ftui-demo-showcase/src/screens/shakespeare.rs`)
+- [x] Review current search UX + highlight behavior
+- [x] Identify missing features: live search + animated highlight pass
+- [x] Design: deterministic animation phase input (no implicit clocks)
+- [x] Implement live search updates on keystroke (no flicker)
+- [x] Implement animated highlight (phase-driven)
+- [ ] Update help/legend text for new controls (if needed)
 - [ ] Add/adjust unit tests for search + highlight logic
 - [ ] Add/adjust snapshot tests for highlighted state (80x24, 120x40)
 - [ ] Add/adjust E2E PTY logs if present for Shakespeare screen
 
-- [ ] **Code Explorer / SQLite feature boost** (bd-1e3w)
-- [ ] Locate screen implementation file (`crates/ftui-demo-showcase/src/screens/code_explorer.rs`)
-- [ ] Review current SQLite/Query Lab features + UX gaps
-- [ ] Define feature boost scope (query templates, EXPLAIN view, schema panel, etc.)
-- [ ] Implement new feature(s) with deterministic data
-- [ ] Update help/legend text for new controls
+- [x] **Code Explorer / SQLite feature boost** (bd-1e3w)
+- [x] Locate screen implementation file (`crates/ftui-demo-showcase/src/screens/code_explorer.rs`)
+- [x] Review current SQLite/Query Lab features + UX gaps
+- [x] Define feature boost scope (result preview + schema inspector + index map)
+- [x] Implement new feature(s) with deterministic data
+- [ ] Update help/legend text for new controls (if needed)
 - [ ] Add/adjust unit tests for new logic
 - [ ] Add/adjust snapshot tests (80x24, 120x40)
 - [ ] Add/adjust E2E PTY logs if present for Code Explorer screen
 
-- [ ] **Quality gates** after code edits:
-- [ ] `cargo fmt --check`
-- [ ] `cargo check --all-targets`
-- [ ] `cargo clippy --all-targets -- -D warnings`
-- [ ] **UBS scan** on touched Rust files
+- [x] **Fix fmt parse blocker** in `crates/ftui-extras/src/mermaid.rs` (raw string delimiter for init directive JSON)
 
-- [ ] **Beads updates**: add detailed comments to `bd-1e3w`
+- [x] **Quality gates** after code edits:
+- [x] `cargo fmt --check`
+- [x] `cargo check --all-targets`
+- [x] `cargo clippy --all-targets -- -D warnings`
+- [x] **UBS scan** attempt on diff (note: `ubs --diff` found no changed files after ignore override)
+
+- [x] **Beads updates**: add detailed comments to `bd-1e3w`
 - [ ] **Agent Mail updates**: send progress + completion notes (if available)
 - [ ] **Release reservations** (if Agent Mail available)
 
