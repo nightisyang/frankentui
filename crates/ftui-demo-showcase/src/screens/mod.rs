@@ -24,6 +24,7 @@ pub mod hyperlink_playground;
 pub mod i18n_demo;
 pub mod inline_mode_story;
 pub mod intrinsic_sizing;
+pub mod kanban_board;
 pub mod layout_inspector;
 pub mod layout_lab;
 pub mod log_search;
@@ -502,6 +503,16 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         category: ScreenCategory::Interaction,
         palette_tags: &["links", "osc8", "hit-test"],
         blurb: "OSC-8 hyperlink playground and hit regions.",
+        default_hotkey: None,
+        tour_step_hint: None,
+    },
+    ScreenMeta {
+        id: ScreenId::KanbanBoard,
+        title: "Kanban Board",
+        short_label: "Kanban",
+        category: ScreenCategory::Interaction,
+        palette_tags: &["kanban", "drag", "drop", "hit"],
+        blurb: "Interactive Kanban board with drag-drop task management.",
         default_hotkey: None,
         tour_step_hint: None,
     },
