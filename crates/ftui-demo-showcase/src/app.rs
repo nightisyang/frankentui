@@ -357,11 +357,6 @@ fn record_screen_init_event(
     });
 }
 
-#[cfg(test)]
-fn take_screen_init_events() -> Vec<ScreenInitEvent> {
-    SCREEN_INIT_EVENTS.with(|events| events.borrow_mut().drain(..).collect())
-}
-
 /// Accessibility telemetry event types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum A11yEventKind {
