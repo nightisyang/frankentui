@@ -879,7 +879,10 @@ impl Widget for CommandPalette {
         self.draw_results(results_area, frame);
 
         // Position cursor in query input.
-        let cursor_x = input_area.x + self.cursor.min(input_area.width as usize) as u16;
+        // Calculate visual cursor position from byte offset by computing display width
+        // of the text up to the cursor position.
+        let cursor_visual_pos = display_width(&self.query[..self.cursor.min(self.query.len())]);
+        let cursor_x = input_area.x + cursor_visual_pos.min(input_area.width as usize) as u16;
         frame.cursor_position = Some((cursor_x, input_area.y));
         frame.cursor_visible = true;
     }
@@ -1015,18 +1018,33 @@ impl CommandPalette {
                 }
             }
         } else {
-            for (i, ch) in self.query.chars().enumerate() {
-                let x = area.x + i as u16;
-                if x >= area.right() {
+            // Render query text with proper grapheme/width handling.
+            let mut col = area.x;
+            for grapheme in graphemes(&self.query) {
+                let w = grapheme_width(grapheme);
+                if w == 0 {
+                    continue;
+                }
+                if col >= area.right() {
                     break;
                 }
-                if ch.is_ascii()
-                    && let Some(cell) = frame.buffer.get_mut(x, area.y)
-                {
-                    cell.content = CellContent::from_char(ch);
+                if col.saturating_add(w as u16) > area.right() {
+                    break;
+                }
+                let content = if w > 1 || grapheme.chars().count() > 1 {
+                    let id = frame.intern_with_width(grapheme, w as u8);
+                    CellContent::from_grapheme(id)
+                } else if let Some(ch) = grapheme.chars().next() {
+                    CellContent::from_char(ch)
+                } else {
+                    continue;
+                };
+                if let Some(cell) = frame.buffer.get_mut(col, area.y) {
+                    cell.content = content;
                     cell.fg = input_fg;
                     cell.bg = bg;
                 }
+                col = col.saturating_add(w as u16);
             }
         }
     }
@@ -1811,6 +1829,81 @@ mod widget_tests {
     }
 
     #[test]
+    fn unicode_query_renders_correctly() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let mut palette = CommandPalette::new();
+        palette.register("Café Menu", None, &["food"]);
+        palette.open();
+        palette.set_query("café");
+
+        assert_eq!(palette.query(), "café");
+
+        let area = Rect::from_size(60, 10);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(60, 10, &mut pool);
+        palette.render(area, &mut frame);
+
+        // The query "café" should be visible in the input area
+        // palette_y ≈ 1 (10/6), query line is at palette_y + 1 = 2
+        let palette_y = area.y + area.height / 6;
+        let input_y = palette_y + 1;
+
+        // Find the query characters in the input row
+        let mut found_query_chars = 0;
+        for x in 0..60u16 {
+            if let Some(cell) = frame.buffer.get(x, input_y)
+                && let Some(ch) = cell.content.as_char()
+                && "café".contains(ch)
+            {
+                found_query_chars += 1;
+            }
+        }
+        // Should find at least 3 of the 4 characters (c, a, f, é may be grapheme)
+        assert!(
+            found_query_chars >= 3,
+            "Unicode query should render (found {} chars)",
+            found_query_chars
+        );
+    }
+
+    #[test]
+    fn wide_char_query_renders_correctly() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let mut palette = CommandPalette::new();
+        palette.register("日本語メニュー", None, &["japanese"]);
+        palette.open();
+        palette.set_query("日本");
+
+        assert_eq!(palette.query(), "日本");
+
+        let area = Rect::from_size(60, 10);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(60, 10, &mut pool);
+        palette.render(area, &mut frame);
+
+        // Wide characters should be rendered (each takes 2 columns)
+        let palette_y = area.y + area.height / 6;
+        let input_y = palette_y + 1;
+
+        // Find grapheme cells in the input row
+        let mut found_grapheme = false;
+        for x in 0..60u16 {
+            if let Some(cell) = frame.buffer.get(x, input_y)
+                && cell.content.is_grapheme()
+            {
+                found_grapheme = true;
+                break;
+            }
+        }
+        assert!(
+            found_grapheme,
+            "Wide character query should render as graphemes"
+        );
+    }
+
+    #[test]
     fn wcag_aa_contrast_ratios() {
         // Verify the default style colors meet WCAG AA contrast requirements.
         // WCAG AA requires >= 4.5:1 for normal text.
@@ -1912,7 +2005,9 @@ mod widget_tests {
 
                     fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
                         if field.name() == "event" {
-                            self.name = Some(format!("{value:?}"));
+                            let raw = format!("{value:?}");
+                            let normalized = raw.trim_matches('\"').to_string();
+                            self.name = Some(normalized);
                         }
                     }
                 }

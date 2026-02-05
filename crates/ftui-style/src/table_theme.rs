@@ -457,6 +457,10 @@ pub struct TableThemeDiagnostics {
 ///
 /// This is a pure data representation (no rendering logic) that preserves
 /// the full TableTheme surface, including effects.
+///
+/// Forward-compatibility notes:
+/// - Unknown fields are rejected when `serde` is enabled (strict schema).
+/// - New fields should be optional with safe defaults to keep older exports valid.
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(deny_unknown_fields))]
 #[derive(Clone, Debug, PartialEq)]
@@ -779,8 +783,36 @@ fn validate_style_spec(style: &StyleSpec, field: &str) -> Result<(), TableThemeS
     Ok(())
 }
 
+fn validate_effect_target(
+    target: &TableEffectTarget,
+    idx: usize,
+) -> Result<(), TableThemeSpecError> {
+    let base = format!("effects[{idx}].target");
+    match *target {
+        TableEffectTarget::RowRange { start, end } => {
+            if start > end {
+                return Err(TableThemeSpecError::new(
+                    format!("{base}.row_range"),
+                    "start must be <= end",
+                ));
+            }
+        }
+        TableEffectTarget::ColumnRange { start, end } => {
+            if start > end {
+                return Err(TableThemeSpecError::new(
+                    format!("{base}.column_range"),
+                    "start must be <= end",
+                ));
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn validate_effect_rule(rule: &TableEffectRuleSpec, idx: usize) -> Result<(), TableThemeSpecError> {
-    let base = format!("effects[{idx}]");
+    validate_effect_target(&rule.target, idx)?;
+    let base = format!("effects[{idx}].effect");
     match &rule.effect {
         TableEffectSpec::Pulse {
             speed,
@@ -2006,6 +2038,8 @@ fn hash_effect_rule(rule: &TableEffectRule, hasher: &mut StableHasher) {
 mod tests {
     use super::*;
     use crate::color::{WCAG_AA_LARGE_TEXT, WCAG_AA_NORMAL_TEXT, contrast_ratio_packed};
+    #[cfg(feature = "serde")]
+    use serde_json;
 
     fn base_bg(theme: &TableTheme) -> PackedRgba {
         theme
@@ -2434,11 +2468,54 @@ mod tests {
     }
 
     #[test]
+    fn table_theme_spec_validate_rejects_name_length_overflow() {
+        let mut spec = base_spec();
+        spec.name = Some("x".repeat(TABLE_THEME_SPEC_MAX_NAME_LEN.saturating_add(1)));
+        let err = spec.validate().expect_err("expected name length error");
+        assert_eq!(err.field, "name");
+    }
+
+    #[test]
     fn table_theme_spec_validate_rejects_effect_count_overflow() {
         let mut spec = base_spec();
         spec.effects = vec![sample_rule(); TABLE_THEME_SPEC_MAX_EFFECTS.saturating_add(1)];
         let err = spec.validate().expect_err("expected effects length error");
         assert_eq!(err.field, "effects");
+    }
+
+    #[test]
+    fn table_theme_spec_validate_rejects_style_attr_overflow() {
+        let mut spec = base_spec();
+        spec.styles.header.attrs =
+            vec![StyleAttr::Bold; TABLE_THEME_SPEC_MAX_STYLE_ATTRS.saturating_add(1)];
+        let err = spec
+            .validate()
+            .expect_err("expected style attr length error");
+        assert_eq!(err.field, "styles.header.attrs");
+    }
+
+    #[test]
+    fn table_theme_spec_validate_rejects_gradient_stop_count_out_of_range() {
+        let mut spec = base_spec();
+        spec.effects = vec![TableEffectRuleSpec {
+            target: TableEffectTarget::AllRows,
+            effect: TableEffectSpec::GradientSweep {
+                gradient: GradientSpec { stops: Vec::new() },
+                speed: 1.0,
+                phase_offset: 0.0,
+            },
+            priority: 0,
+            blend_mode: BlendMode::Replace,
+            style_mask: StyleMask::fg_bg(),
+        }];
+        let err = spec
+            .validate()
+            .expect_err("expected gradient stop count error");
+        assert!(
+            err.field.contains("gradient.stops"),
+            "unexpected field: {}",
+            err.field
+        );
     }
 
     #[test]
@@ -2468,5 +2545,61 @@ mod tests {
             "unexpected field: {}",
             err.field
         );
+    }
+
+    #[test]
+    fn table_theme_spec_validate_rejects_inverted_row_range() {
+        let mut spec = base_spec();
+        let mut rule = sample_rule();
+        rule.target = TableEffectTarget::RowRange { start: 3, end: 1 };
+        spec.effects = vec![rule];
+        let err = spec.validate().expect_err("expected target range error");
+        assert!(
+            err.field.contains("target"),
+            "unexpected field: {}",
+            err.field
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn table_theme_spec_json_rejects_unknown_field() {
+        let mut value = serde_json::to_value(base_spec()).expect("TableThemeSpec should serialize");
+        let obj = value.as_object_mut().expect("spec should be an object");
+        obj.insert("unknown_field".to_string(), serde_json::json!(true));
+        let err = serde_json::from_value::<TableThemeSpec>(value)
+            .expect_err("expected unknown field error");
+        assert!(
+            err.to_string().contains("unknown field"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn table_theme_spec_json_has_canonical_key_order() {
+        let json =
+            serde_json::to_string_pretty(&base_spec()).expect("TableThemeSpec should serialize");
+        let keys = [
+            "\"version\"",
+            "\"name\"",
+            "\"preset_id\"",
+            "\"padding\"",
+            "\"column_gap\"",
+            "\"row_height\"",
+            "\"styles\"",
+            "\"effects\"",
+        ];
+        let mut last = 0usize;
+        for key in keys {
+            let pos = json
+                .find(key)
+                .unwrap_or_else(|| panic!("missing key {key}"));
+            assert!(
+                pos >= last,
+                "key {key} is out of order (pos {pos} < {last})"
+            );
+            last = pos;
+        }
     }
 }
