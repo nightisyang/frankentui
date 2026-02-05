@@ -4216,7 +4216,7 @@ fn main() {
         assert!(reg.for_extension("md").is_some());
         assert!(reg.for_extension("diff").is_some());
         assert!(reg.for_extension("txt").is_some());
-        assert_eq!(reg.len(), 28);
+        assert_eq!(reg.len(), 31);
     }
 
     // -- Token range validation across all tokenizers -------------------------

@@ -921,6 +921,28 @@ impl MermaidInitConfig {
             self.flowchart_direction = other.flowchart_direction;
         }
     }
+
+    fn apply_to_ast(&self, ast: &mut MermaidAst) {
+        if let Some(direction) = self.flowchart_direction {
+            ast.direction = Some(direction);
+        }
+    }
+
+    /// Extract theme overrides implied by init directives.
+    #[must_use]
+    pub fn theme_overrides(&self) -> MermaidThemeOverrides {
+        MermaidThemeOverrides {
+            theme: self.theme.clone(),
+            theme_variables: self.theme_variables.clone(),
+        }
+    }
+}
+
+/// Theme overrides derived from Mermaid init directives.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MermaidThemeOverrides {
+    pub theme: Option<String>,
+    pub theme_variables: BTreeMap<String, String>,
 }
 
 /// Result of parsing one or more init directives.
@@ -1132,6 +1154,21 @@ pub fn collect_init_config(
         warnings,
         errors,
     }
+}
+
+/// Apply init directives to the AST and return the parsed init config.
+///
+/// This should run before style resolution or layout so flowchart direction
+/// overrides are respected.
+#[must_use]
+pub fn apply_init_directives(
+    ast: &mut MermaidAst,
+    config: &MermaidConfig,
+    policy: &MermaidFallbackPolicy,
+) -> MermaidInitParse {
+    let parsed = collect_init_config(ast, config, policy);
+    parsed.config.apply_to_ast(ast);
+    parsed
 }
 
 fn value_to_string(value: &Value) -> Option<String> {
@@ -2867,6 +2904,40 @@ mod tests {
         let parsed = collect_init_config(&ast, &config, &MermaidFallbackPolicy::default());
         assert_eq!(parsed.config.theme.as_deref(), Some("base"));
         assert_eq!(parsed.config.flowchart_direction, Some(GraphDirection::TB));
+    }
+
+    #[test]
+    fn apply_init_directives_overrides_direction() {
+        let mut ast =
+            parse("graph TD\n%%{init: {\"flowchart\":{\"direction\":\"LR\"}}}%%\nA-->B\n")
+                .expect("parse");
+        let config = MermaidConfig {
+            enable_init_directives: true,
+            ..Default::default()
+        };
+        let parsed = apply_init_directives(&mut ast, &config, &MermaidFallbackPolicy::default());
+        assert!(parsed.errors.is_empty());
+        assert_eq!(parsed.config.flowchart_direction, Some(GraphDirection::LR));
+        assert_eq!(ast.direction, Some(GraphDirection::LR));
+    }
+
+    #[test]
+    fn init_theme_overrides_clone() {
+        let payload = r##"{"theme":"dark","themeVariables":{"primaryColor":"#ffcc00"}}"##;
+        let parsed = parse_init_directive(
+            payload,
+            Span::at_line(1, payload.len()),
+            &MermaidFallbackPolicy::default(),
+        );
+        let overrides = parsed.config.theme_overrides();
+        assert_eq!(overrides.theme.as_deref(), Some("dark"));
+        assert_eq!(
+            overrides
+                .theme_variables
+                .get("primaryColor")
+                .map(String::as_str),
+            Some("#ffcc00")
+        );
     }
 
     #[test]

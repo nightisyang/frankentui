@@ -64,6 +64,38 @@ All env vars use the `FTUI_MERMAID_*` prefix:
 - Invalid values are reported as structured `MermaidConfigError`s.
 - Rendering behavior must not depend on wall-clock time or non-deterministic IO.
 
+## Diagram IR + Normalization (Planned)
+
+The AST is syntax-focused. The renderer/layout stack needs a semantic IR with
+stable, deterministic normalization so semantically equivalent inputs produce
+identical IR.
+
+### IR Core (Diagram-Agnostic)
+
+- `DiagramIr { diagram_type, direction, nodes, edges, clusters, labels, ports, style_refs, meta }`
+- `DiagramMeta { init: MermaidInitParse, warnings, source_spans, diagram_flags }`
+- `IrNode { id, label, classes, style, span_primary, span_all }`
+- `IrEdge { from: Endpoint, to: Endpoint, arrow, label, classes, style, span }`
+- `Endpoint = Node(NodeId) | Port(PortId)`
+- `IrPort { node, name, side_hint, span }`
+- `IrCluster { id, title, members, span }`
+
+Typed sub-IRs (sequence lifelines, gantt timelines, etc.) can hang off `DiagramIr`
+as optional, diagram-specific payloads.
+
+### Normalization Rules (Deterministic)
+
+1. Resolve `direction` with precedence: init-directive override → header → default `TB`.
+2. Apply init directives into `DiagramMeta` before any style resolution.
+3. Deduplicate nodes by normalized id; stable ordering by `(id, first_span.line, first_span.col, insertion_idx)`.
+4. Edges referencing missing nodes create implicit nodes (emit warning).
+5. Parse endpoint ports (`node:port`) into `IrPort`, and attach a default `side_hint`
+   based on direction (TB → top/bottom, LR → left/right).
+6. Build `IrCluster` membership from `subgraph` blocks with stable ordering.
+7. Preserve class/style/link directives as raw references; resolution and palette mapping
+   occur later (see styling tasks).
+8. Validate malformed ids/edges/ports and emit deterministic warnings with spans.
+
 ## Validation Rules
 
 - `max_nodes`, `max_edges`, `route_budget`, `layout_iteration_budget`,
@@ -147,7 +179,7 @@ When encountering unsupported input, the engine degrades in a predictable order:
 5. **Budget exceeded** (`route_budget`, `layout_iteration_budget`) → degrade
    tier `rich → normal → compact → outline`, emitting `MERMAID_BUDGET_EXCEEDED`.
 6. **Security violations** (HTML/JS, unsafe links) → strip and emit
-   `MERMAID_SANITIZED`.
+   `mermaid/sanitized/input`.
 
 Implementation note:
 - `ftui_extras::mermaid::validate_ast` applies the compatibility matrix plus
@@ -159,20 +191,25 @@ edges (stable ordering by insertion + lexicographic tie‑break).
 ## Warning Taxonomy (JSONL + Panels)
 
 Warnings are structured and deterministic, including `code`, `message`,
-`diagram_type`, and `span` (line/col). Recommended codes:
+`diagram_type`, and `span` (line/col). Implemented codes:
 
 | Code | When | Severity |
 | --- | --- | --- |
-| `MERMAID_UNSUPPORTED_DIAGRAM` | Header not recognized | error |
-| `MERMAID_UNSUPPORTED_TOKEN` | Statement unsupported in current diagram | warn |
-| `MERMAID_LIMIT_EXCEEDED` | `max_nodes`/`max_edges`/label limits triggered | warn |
-| `MERMAID_BUDGET_EXCEEDED` | Route/layout budget exhausted | warn |
-| `MERMAID_DISABLED` | Config `enabled=false` | info |
-| `MERMAID_INIT_BLOCKED` | `%%{init}%%` encountered but disabled | warn |
-| `MERMAID_STYLE_BLOCKED` | `classDef`/`style`/`linkStyle` blocked | warn |
-| `MERMAID_LINK_BLOCKED` | link/click disabled or sanitized | warn |
-| `MERMAID_SANITIZED` | HTML/JS/unsafe text stripped | warn |
-| `MERMAID_PARSE_ERROR` | Syntax error with span | error |
+| `mermaid/unsupported/diagram` | Header not recognized | error |
+| `mermaid/unsupported/directive` | `%%{init}%%` or raw directive blocked | warn |
+| `mermaid/unsupported/style` | `classDef`/`style`/`linkStyle` blocked | warn |
+| `mermaid/unsupported/link` | link/click disabled or sanitized | warn |
+| `mermaid/unsupported/feature` | Statement unsupported in current diagram | warn |
+| `mermaid/sanitized/input` | HTML/JS/unsafe text stripped | warn |
+
+Reserved for upcoming guard/degradation phases (not yet emitted):
+
+| Code | When | Severity |
+| --- | --- | --- |
+| `mermaid/limit/exceeded` | `max_nodes`/`max_edges`/label limits triggered | warn |
+| `mermaid/budget/exceeded` | Route/layout budget exhausted | warn |
+| `mermaid/disabled` | Config `enabled=false` | info |
+| `mermaid/parse/error` | Syntax error with span | error |
 
 ## Security Policy
 

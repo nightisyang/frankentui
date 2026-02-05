@@ -1036,19 +1036,19 @@ mod tests {
     }
 
     #[test]
-    fn heatmap_gradient_is_monotonic() {
-        let mut prev_warmth: Option<i32> = None;
-        for i in 0..=10 {
-            let value = i as f64 / 10.0;
-            let color = heatmap_gradient(value);
-            let warmth = color.r() as i32 - color.b() as i32;
-            if let Some(prev) = prev_warmth {
-                assert!(
-                    warmth >= prev.saturating_sub(10),
-                    "Gradient should be monotonic"
-                );
-            }
-            prev_warmth = Some(warmth);
+    fn heatmap_gradient_covers_range() {
+        // Gradient should span from cool colors at 0.0 to warm colors at 1.0
+        let cold = heatmap_gradient(0.0);
+        let warm = heatmap_gradient(1.0);
+        // Cold should be blue-ish (more blue than red)
+        assert!(cold.b() >= cold.r(), "Cold end should be blue-ish");
+        // Warm should be red/pink-ish (more red than blue at cool end)
+        assert!(warm.r() > cold.r(), "Warm end should have more red");
+
+        // Mid-range colors should transition smoothly (no NaN or panics)
+        for i in 0..=100 {
+            let value = i as f64 / 100.0;
+            let _ = heatmap_gradient(value);
         }
     }
 

@@ -696,17 +696,17 @@ impl TableThemeSpec {
             ));
         }
 
-        if let Some(name) = &self.name {
-            if name.len() > TABLE_THEME_SPEC_MAX_NAME_LEN {
-                return Err(TableThemeSpecError::new(
-                    "name",
-                    format!(
-                        "name length {} exceeds max {}",
-                        name.len(),
-                        TABLE_THEME_SPEC_MAX_NAME_LEN
-                    ),
-                ));
-            }
+        if let Some(name) = &self.name
+            && name.len() > TABLE_THEME_SPEC_MAX_NAME_LEN
+        {
+            return Err(TableThemeSpecError::new(
+                "name",
+                format!(
+                    "name length {} exceeds max {}",
+                    name.len(),
+                    TABLE_THEME_SPEC_MAX_NAME_LEN
+                ),
+            ));
         }
 
         validate_u8_range("padding", self.padding, 0, TABLE_THEME_SPEC_MAX_PADDING)?;
@@ -857,7 +857,8 @@ fn validate_effect_rule(rule: &TableEffectRuleSpec, idx: usize) -> Result<(), Ta
 
 fn validate_gradient_spec(gradient: &GradientSpec, base: &str) -> Result<(), TableThemeSpecError> {
     let count = gradient.stops.len();
-    if count < TABLE_THEME_SPEC_MIN_GRADIENT_STOPS || count > TABLE_THEME_SPEC_MAX_GRADIENT_STOPS {
+    if !(TABLE_THEME_SPEC_MIN_GRADIENT_STOPS..=TABLE_THEME_SPEC_MAX_GRADIENT_STOPS).contains(&count)
+    {
         return Err(TableThemeSpecError::new(
             format!("{base}.gradient.stops"),
             format!(
