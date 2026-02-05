@@ -2828,15 +2828,16 @@ mod perf_tests {
             stats_100.samples, stats_100.p50_us, stats_1000.samples, stats_1000.p50_us
         );
 
-        // 10x corpus should take less than 15x time (linear + sort overhead)
+        // 10x corpus ⇒ O(n log n) theoretical ratio ≈ 15x.  Use 25x to absorb
+        // system noise when tests run in parallel (still catches O(n²) = 100x).
         let ratio = if stats_100.p50_us > 0 {
             stats_1000.p50_us as f64 / stats_100.p50_us as f64
         } else {
             0.0
         };
         assert!(
-            ratio < 15.0,
-            "1000/100 scaling ratio = {:.1}x exceeds 15x threshold (100: {}µs, 1000: {}µs)",
+            ratio < 25.0,
+            "1000/100 scaling ratio = {:.1}x exceeds 25x threshold (100: {}µs, 1000: {}µs)",
             ratio,
             stats_100.p50_us,
             stats_1000.p50_us,
