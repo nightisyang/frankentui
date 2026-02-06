@@ -401,17 +401,18 @@ impl<C: Widget> Widget for Modal<C> {
             set_style_area(&mut frame.buffer, area, Style::new().bg(bg));
         }
 
+        // Register hit regions BEFORE content renders so the inner widget
+        // (e.g. Dialog) can overlay more specific hits (buttons) on top.
         let content_area = self.content_rect(area);
-        if !content_area.is_empty() {
-            self.content.render(content_area, frame);
-        }
-
-        // Register hit regions for backdrop and content if requested.
         if let Some(hit_id) = self.config.hit_id {
             frame.register_hit(area, hit_id, MODAL_HIT_BACKDROP, 0);
             if !content_area.is_empty() {
                 frame.register_hit(content_area, hit_id, MODAL_HIT_CONTENT, 0);
             }
+        }
+
+        if !content_area.is_empty() {
+            self.content.render(content_area, frame);
         }
     }
 }

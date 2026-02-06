@@ -787,7 +787,7 @@ fn hit_regions_are_deterministic_across_renders() {
 #[test]
 fn dialog_modal_backdrop_covers_full_area() {
     init_tracing();
-    info!("dialog modal backdrop registers hit regions");
+    info!("dialog modal has backdrop, content, and button hit regions");
     let mut pool = GraphemePool::new();
     let mut frame = Frame::with_hit_grid(80, 24, &mut pool);
     let area = Rect::new(0, 0, 80, 24);
@@ -796,26 +796,29 @@ fn dialog_modal_backdrop_covers_full_area() {
 
     StatefulWidget::render(&dialog, area, &mut frame, &mut state);
 
-    // The Modal container registers backdrop hit regions after content,
-    // so dialog button hits get overwritten. Verify the modal at least
-    // registers some hit regions for the dialog hit_id.
-    let mut any_hit = false;
+    // Scan all cells and categorize hit regions.
+    let mut has_backdrop = false;
+    let mut has_content = false;
+    let mut has_button = false;
     for y in 0..24u16 {
         for x in 0..80u16 {
-            if let Some((id, _region, _data)) = frame.hit_test(x, y) {
+            if let Some((id, region, _data)) = frame.hit_test(x, y) {
                 if id == HitId::new(100) {
-                    any_hit = true;
-                    break;
+                    match region {
+                        HitRegion::Custom(1) => has_backdrop = true,
+                        HitRegion::Custom(2) => has_content = true,
+                        HitRegion::Custom(10) => has_button = true,
+                        _ => {}
+                    }
                 }
             }
         }
-        if any_hit {
-            break;
-        }
     }
+    assert!(has_backdrop, "Dialog should have backdrop hit regions");
+    assert!(has_content, "Dialog should have content hit regions");
     assert!(
-        any_hit,
-        "Dialog with hit_id should have at least one hit region"
+        has_button,
+        "Dialog button hit regions should NOT be overwritten by backdrop/content"
     );
 }
 

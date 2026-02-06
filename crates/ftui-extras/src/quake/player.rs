@@ -306,7 +306,10 @@ mod tests {
         let fwd = p.forward();
         let right = p.right();
         let dot = fwd[0] * right[0] + fwd[1] * right[1] + fwd[2] * right[2];
-        assert!(dot.abs() < 0.01, "forward and right should be perpendicular, dot={dot}");
+        assert!(
+            dot.abs() < 0.01,
+            "forward and right should be perpendicular, dot={dot}"
+        );
     }
 
     #[test]
@@ -348,8 +351,10 @@ mod tests {
     #[test]
     fn running_increases_move_speed() {
         let mut p1 = Player::default();
-        let mut p2 = Player::default();
-        p2.running = true;
+        let mut p2 = Player {
+            running: true,
+            ..Player::default()
+        };
         p1.move_forward(1.0);
         p2.move_forward(1.0);
         let speed1 = p1.vel[0] * p1.vel[0] + p1.vel[1] * p1.vel[1];

@@ -337,4 +337,62 @@ mod tests {
             assert_ne!(v, 0, "xorshift32 should never produce 0");
         }
     }
+
+    #[test]
+    fn fire_set_active_false_cools_bottom() {
+        let mut fx = DoomFireFx::new();
+        // Run a few frames to heat up
+        for frame in 0..10 {
+            let ctx = make_ctx(10, 10, frame);
+            let mut buf = vec![PackedRgba::rgb(0, 0, 0); 100];
+            fx.render(ctx, &mut buf);
+        }
+        // Deactivate and run more frames
+        fx.set_active(false);
+        for frame in 10..80 {
+            let ctx = make_ctx(10, 10, frame);
+            let mut buf = vec![PackedRgba::rgb(0, 0, 0); 100];
+            fx.render(ctx, &mut buf);
+        }
+        // After many frames with no heat source, fire should be mostly cooled
+        let mut buf = vec![PackedRgba::rgb(0, 0, 0); 100];
+        fx.render(make_ctx(10, 10, 80), &mut buf);
+        let bottom = &buf[90..100];
+        // Bottom row is no longer white since active=false
+        assert!(
+            bottom.iter().any(|c| *c != PackedRgba::rgb(255, 255, 255)),
+            "bottom should cool when deactivated"
+        );
+    }
+
+    #[test]
+    fn fire_resize_resets_buffer() {
+        let mut fx = DoomFireFx::new();
+        // Render at one size
+        let mut buf = vec![PackedRgba::rgb(0, 0, 0); 100];
+        fx.render(make_ctx(10, 10, 5), &mut buf);
+        // Resize to different dimensions
+        fx.resize(20, 15);
+        let mut buf2 = vec![PackedRgba::rgb(0, 0, 0); 300];
+        fx.render(make_ctx(20, 15, 6), &mut buf2);
+        // Bottom row of new size should be white/hot
+        let bottom = &buf2[280..300];
+        for c in bottom {
+            assert_eq!(*c, PackedRgba::rgb(255, 255, 255));
+        }
+    }
+
+    #[test]
+    fn fire_wind_clamps_to_range() {
+        let mut fx = DoomFireFx::new();
+        fx.set_wind(5);
+        // Wind should be clamped to 1, so fire still renders correctly
+        let mut buf = vec![PackedRgba::rgb(0, 0, 0); 100];
+        fx.render(make_ctx(10, 10, 5), &mut buf);
+        // Bottom row should still be hot
+        let bottom = &buf[90..100];
+        for c in bottom {
+            assert_eq!(*c, PackedRgba::rgb(255, 255, 255));
+        }
+    }
 }
