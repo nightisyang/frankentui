@@ -2333,12 +2333,21 @@ pub const DIAGRAM_FAMILY_REGISTRY: &[DiagramFamilyEntry] = &[
         family: DiagramType::ArchitectureBeta,
         canonical_keyword: "architecture-beta",
         introduced_version: "11.1",
-        support_level: MermaidSupportLevel::Unsupported,
+        support_level: MermaidSupportLevel::Supported,
         is_beta: true,
-        pipeline: [StageStatus::NotStarted; 8],
+        pipeline: [
+            StageStatus::Done,       // parser
+            StageStatus::Done,       // ir
+            StageStatus::Done,       // layout
+            StageStatus::Done,       // render
+            StageStatus::Done,       // fixtures
+            StageStatus::NotStarted, // snapshots
+            StageStatus::NotStarted, // pty_e2e
+            StageStatus::Partial,    // demo_picker
+        ],
         min_feature_slice: "services, groups, edges, icons, junction points",
         terminal_degradations: "icons as text labels; groups as bordered regions",
-        notes: "planned: bd-hudcn.1.17",
+        notes: "bd-hudcn.1.17",
     },
     // ── C4 family ───────────────────────────────────────────────────
     DiagramFamilyEntry {
@@ -2878,7 +2887,7 @@ impl MermaidCompatibilityMatrix {
             xy_chart: MermaidSupportLevel::Partial,
             block_beta: MermaidSupportLevel::Partial,
             packet_beta: MermaidSupportLevel::Supported,
-            architecture_beta: MermaidSupportLevel::Unsupported,
+            architecture_beta: MermaidSupportLevel::Partial,
             c4_context: MermaidSupportLevel::Partial,
             c4_container: MermaidSupportLevel::Partial,
             c4_component: MermaidSupportLevel::Partial,
@@ -2938,7 +2947,7 @@ impl Default for MermaidCompatibilityMatrix {
             xy_chart: MermaidSupportLevel::Partial,
             block_beta: MermaidSupportLevel::Partial,
             packet_beta: MermaidSupportLevel::Supported,
-            architecture_beta: MermaidSupportLevel::Unsupported,
+            architecture_beta: MermaidSupportLevel::Supported,
             c4_context: MermaidSupportLevel::Partial,
             c4_container: MermaidSupportLevel::Partial,
             c4_component: MermaidSupportLevel::Partial,
@@ -3911,6 +3920,8 @@ pub fn normalize_ast_to_ir(
     let mut edge_drafts = Vec::new();
     let mut cluster_drafts: Vec<ClusterDraft> = Vec::new();
     let mut cluster_stack: Vec<usize> = Vec::new();
+    let mut architecture_cluster_map: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     let mut implicit_warned = std::collections::HashSet::new();
     let mut labels = LabelInterner::default();
     let mut style_refs = Vec::new();
@@ -3923,6 +3934,87 @@ pub fn normalize_ast_to_ir(
 
     for (idx, statement) in ast.statements.iter().enumerate() {
         match statement {
+            Statement::ArchitectureGroup(g) => {
+                let group_id = normalize_id(&g.id);
+                if group_id.is_empty() {
+                    warnings.push(MermaidWarning::new(
+                        MermaidWarningCode::InvalidValue,
+                        "architecture group id is empty",
+                        g.span,
+                    ));
+                    continue;
+                }
+
+                let mut title_text = g.label.clone();
+                if let Some(icon) = g.icon.as_deref() {
+                    title_text = format!("{icon} {title_text}");
+                }
+                let title_text = normalize_ws(title_text.trim());
+                let title = if title_text.is_empty() {
+                    None
+                } else {
+                    Some(title_text)
+                };
+
+                if let Some(&cluster_idx) = architecture_cluster_map.get(&group_id) {
+                    if title.is_some() && cluster_drafts[cluster_idx].title.is_none() {
+                        cluster_drafts[cluster_idx].title = title;
+                    }
+                    continue;
+                }
+
+                let cid = IrClusterId(cluster_drafts.len());
+                cluster_drafts.push(ClusterDraft {
+                    id: cid,
+                    title,
+                    members: vec![],
+                    span: g.span,
+                });
+                architecture_cluster_map.insert(group_id, cluster_drafts.len() - 1);
+            }
+            Statement::ArchitectureService(s) => {
+                let id = normalize_id(&s.id);
+                if id.is_empty() {
+                    warnings.push(MermaidWarning::new(
+                        MermaidWarningCode::InvalidValue,
+                        "architecture service id is empty",
+                        s.span,
+                    ));
+                    continue;
+                }
+
+                let mut label_text = s.label.clone();
+                if let Some(icon) = s.icon.as_deref() {
+                    label_text = format!("{icon} {label_text}");
+                }
+                let label_opt = (!label_text.trim().is_empty()).then_some(label_text.as_str());
+
+                upsert_node(
+                    &id,
+                    label_opt,
+                    NodeShape::Rect,
+                    s.span,
+                    false,
+                    idx,
+                    &mut node_map,
+                    &mut node_drafts,
+                    &mut implicit_warned,
+                    &mut warnings,
+                );
+
+                if let Some(group_id_raw) = s.in_group.as_deref() {
+                    let group_id = normalize_id(group_id_raw);
+                    if let Some(&cluster_idx) = architecture_cluster_map.get(&group_id) {
+                        cluster_drafts[cluster_idx].members.push(id);
+                    } else {
+                        warnings.push(MermaidWarning::new(
+                            MermaidWarningCode::InvalidValue,
+                            "architecture service references unknown group; ignoring membership",
+                            s.span,
+                        ));
+                    }
+                }
+            }
             Statement::Node(node) => {
                 let id = normalize_id(&node.id);
                 if id.is_empty() {
@@ -5295,6 +5387,23 @@ pub struct Edge {
 }
 
 #[derive(Debug, Clone)]
+pub struct ArchitectureGroup {
+    pub id: String,
+    pub icon: Option<String>,
+    pub label: String,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub struct ArchitectureService {
+    pub id: String,
+    pub icon: Option<String>,
+    pub label: String,
+    pub in_group: Option<String>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub struct SequenceMessage {
     pub from: String,
     pub to: String,
@@ -5543,6 +5652,8 @@ pub enum Statement {
     },
     Node(Node),
     Edge(Edge),
+    ArchitectureGroup(ArchitectureGroup),
+    ArchitectureService(ArchitectureService),
     SequenceMessage(SequenceMessage),
     ClassMember {
         class: String,
@@ -7127,7 +7238,17 @@ pub fn parse_with_diagnostics(input: &str) -> MermaidParse {
                     });
                 }
             }
-            DiagramType::Unknown | DiagramType::ArchitectureBeta => {
+            DiagramType::ArchitectureBeta => {
+                if let Some(stmt) = parse_architecture_line(trimmed, span) {
+                    statements.push(stmt);
+                } else {
+                    statements.push(Statement::Raw {
+                        text: normalize_ws(trimmed),
+                        span,
+                    });
+                }
+            }
+            DiagramType::Unknown => {
                 statements.push(Statement::Raw {
                     text: normalize_ws(trimmed),
                     span,
@@ -7589,6 +7710,8 @@ fn statement_span(statement: &Statement) -> Span {
         Statement::Link { span, .. } => *span,
         Statement::Node(node) => node.span,
         Statement::Edge(edge) => edge.span,
+        Statement::ArchitectureGroup(g) => g.span,
+        Statement::ArchitectureService(s) => s.span,
         Statement::SequenceMessage(msg) => msg.span,
         Statement::ClassMember { span, .. } => *span,
         Statement::GanttTitle { span, .. } => *span,
@@ -8623,6 +8746,176 @@ fn parse_packet_line(line: &str, span: Span) -> Option<Statement> {
     }
 
     None
+}
+
+fn split_architecture_in_clause(input: &str) -> (&str, Option<&str>) {
+    // Split on " in " only at the top level (outside (...) and [...]).
+    let lower = input.to_ascii_lowercase();
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut split_at: Option<usize> = None;
+    let bytes = input.as_bytes();
+    let lower_bytes = lower.as_bytes();
+
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] as char {
+            '(' => paren_depth += 1,
+            ')' => paren_depth = paren_depth.saturating_sub(1),
+            '[' => bracket_depth += 1,
+            ']' => bracket_depth = bracket_depth.saturating_sub(1),
+            _ => {}
+        }
+
+        if paren_depth == 0
+            && bracket_depth == 0
+            && i + 4 <= lower_bytes.len()
+            && &lower_bytes[i..i + 4] == b" in "
+        {
+            split_at = Some(i);
+        }
+        i += 1;
+    }
+
+    let Some(pos) = split_at else {
+        return (input.trim(), None);
+    };
+
+    let (left, right_with_in) = input.split_at(pos);
+    let right = right_with_in.strip_prefix(" in ").unwrap_or(right_with_in);
+    (left.trim_end(), Some(right.trim()))
+}
+
+fn parse_architecture_entity_spec(spec: &str) -> Option<(String, Option<String>, Option<String>)> {
+    // Entity syntax (Mermaid architecture-beta):
+    //   <id>(<icon>)[<label>]
+    // Both icon and label are optional in the spec, but our fixtures use both.
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return None;
+    }
+
+    let mut end = spec.len();
+    for (i, c) in spec.char_indices() {
+        if c == '(' || c == '[' || c.is_whitespace() {
+            end = i;
+            break;
+        }
+    }
+    let id = spec[..end].trim();
+    if id.is_empty() {
+        return None;
+    }
+
+    let mut rest = spec[end..].trim();
+    let mut icon: Option<String> = None;
+    if rest.starts_with('(') {
+        let close = rest.find(')')?;
+        let inner = rest[1..close].trim();
+        if !inner.is_empty() {
+            icon = Some(normalize_ws(inner));
+        }
+        rest = rest[close + 1..].trim();
+    }
+
+    let mut label: Option<String> = None;
+    if rest.starts_with('[') {
+        let close = rest.find(']')?;
+        let inner = rest[1..close].trim();
+        if !inner.is_empty() {
+            label = Some(normalize_ws(inner));
+        }
+        rest = rest[close + 1..].trim();
+    }
+
+    let _ = rest; // reserved for future extensions (junctions, tags, etc.)
+    Some((normalize_ws(id), icon, label))
+}
+
+fn parse_architecture_group(line: &str, span: Span) -> Option<Statement> {
+    let lower = line.to_ascii_lowercase();
+    if !lower.starts_with("group ") {
+        return None;
+    }
+    let spec = line["group ".len()..].trim();
+    let (id, icon, label) = parse_architecture_entity_spec(spec)?;
+    let label = label.unwrap_or_else(|| id.clone());
+    Some(Statement::ArchitectureGroup(ArchitectureGroup {
+        id,
+        icon,
+        label,
+        span,
+    }))
+}
+
+fn parse_architecture_service(line: &str, span: Span) -> Option<Statement> {
+    let lower = line.to_ascii_lowercase();
+    if !lower.starts_with("service ") {
+        return None;
+    }
+    let rest = line["service ".len()..].trim();
+    let (spec, in_group) = split_architecture_in_clause(rest);
+    let (id, icon, label) = parse_architecture_entity_spec(spec)?;
+    let label = label.unwrap_or_else(|| id.clone());
+    let in_group = in_group
+        .and_then(|g| g.split_whitespace().next())
+        .map(normalize_ws);
+    Some(Statement::ArchitectureService(ArchitectureService {
+        id,
+        icon,
+        label,
+        in_group,
+        span,
+    }))
+}
+
+fn strip_architecture_group_marker(raw_id: &str) -> &str {
+    // Mermaid architecture edges allow `{group}` after an id (e.g. `server{group}:B`).
+    // For now we strip any `{...}` suffix and keep only the base identifier.
+    raw_id
+        .split_once('{')
+        .map_or(raw_id, |(base, _)| base)
+        .trim()
+}
+
+fn parse_architecture_edge(line: &str, span: Span) -> Option<Statement> {
+    let (start, end, arrow) = find_arrow(line)?;
+    let left = line[..start].trim();
+    let right = line[end..].trim();
+    if left.is_empty() || right.is_empty() {
+        return None;
+    }
+
+    // Mermaid architecture edges use:
+    // - FROM: `<id>:<side>` (e.g. `api:R`)
+    // - TO:   `<side>:<id>` (e.g. `L:db`)
+    //
+    // Normalize both to `<id>:<side>` so `split_endpoint()` can derive ports.
+    let (from_id_raw, from_side) = left.split_once(':')?;
+    let (to_side, to_id_raw) = right.split_once(':')?;
+
+    let from_id = strip_architecture_group_marker(from_id_raw);
+    let from_side = from_side.trim();
+    let to_id = strip_architecture_group_marker(to_id_raw);
+    let to_side = to_side.trim();
+
+    if from_id.is_empty() || from_side.is_empty() || to_id.is_empty() || to_side.is_empty() {
+        return None;
+    }
+
+    Some(Statement::Edge(Edge {
+        from: format!("{}:{}", normalize_ws(from_id), normalize_ws(from_side)),
+        to: format!("{}:{}", normalize_ws(to_id), normalize_ws(to_side)),
+        arrow: arrow.to_string(),
+        label: None,
+        span,
+    }))
+}
+
+fn parse_architecture_line(line: &str, span: Span) -> Option<Statement> {
+    parse_architecture_group(line, span)
+        .or_else(|| parse_architecture_service(line, span))
+        .or_else(|| parse_architecture_edge(line, span))
 }
 
 /// Parse a quadrantChart line into its corresponding statement.
@@ -12213,6 +12506,101 @@ mod tests {
         assert_eq!(
             parse_header("C4Deployment").map(|h| h.0),
             Some(DiagramType::C4Deployment)
+        );
+    }
+
+    #[test]
+    fn architecture_beta_basic_parses_to_ir_with_ports() {
+        let input = include_str!("../tests/fixtures/mermaid/architecture_beta_basic.mmd");
+        let parsed = parse_with_diagnostics(input);
+        assert_eq!(parsed.ast.diagram_type, DiagramType::ArchitectureBeta);
+
+        let service_count = parsed
+            .ast
+            .statements
+            .iter()
+            .filter(|s| matches!(s, Statement::ArchitectureService(_)))
+            .count();
+        let group_count = parsed
+            .ast
+            .statements
+            .iter()
+            .filter(|s| matches!(s, Statement::ArchitectureGroup(_)))
+            .count();
+        let edge_count = parsed
+            .ast
+            .statements
+            .iter()
+            .filter(|s| matches!(s, Statement::Edge(_)))
+            .count();
+        let raw_count = parsed
+            .ast
+            .statements
+            .iter()
+            .filter(|s| matches!(s, Statement::Raw { .. }))
+            .count();
+
+        assert!(service_count >= 3, "expected >= 3 services");
+        assert_eq!(group_count, 0, "basic fixture should not declare groups");
+        assert!(edge_count >= 2, "expected >= 2 edges");
+        assert_eq!(
+            raw_count, 0,
+            "architecture-beta should not fall back to Raw"
+        );
+
+        let config = MermaidConfig::default();
+        let ir_parse = normalize_ast_to_ir(
+            &parsed.ast,
+            &config,
+            &MermaidCompatibilityMatrix::default(),
+            &MermaidFallbackPolicy::default(),
+        );
+        assert!(
+            ir_parse.errors.is_empty(),
+            "normalize_ast_to_ir should not error: {:?}",
+            ir_parse.errors
+        );
+        assert_eq!(ir_parse.ir.diagram_type, DiagramType::ArchitectureBeta);
+        assert!(ir_parse.ir.nodes.len() >= 3);
+        assert!(ir_parse.ir.edges.len() >= 2);
+        assert!(
+            ir_parse.ir.ports.len() >= 4,
+            "expected at least 4 ports from explicit side endpoints"
+        );
+        assert_eq!(ir_parse.ir.clusters.len(), 0);
+    }
+
+    #[test]
+    fn architecture_beta_stress_builds_group_cluster() {
+        let input = include_str!("../tests/fixtures/mermaid/architecture_beta_stress.mmd");
+        let parsed = parse_with_diagnostics(input);
+        assert_eq!(parsed.ast.diagram_type, DiagramType::ArchitectureBeta);
+
+        let config = MermaidConfig::default();
+        let ir_parse = normalize_ast_to_ir(
+            &parsed.ast,
+            &config,
+            &MermaidCompatibilityMatrix::default(),
+            &MermaidFallbackPolicy::default(),
+        );
+        assert!(
+            ir_parse.errors.is_empty(),
+            "normalize_ast_to_ir should not error: {:?}",
+            ir_parse.errors
+        );
+        assert_eq!(ir_parse.ir.diagram_type, DiagramType::ArchitectureBeta);
+        assert!(
+            ir_parse.ir.nodes.len() >= 10,
+            "stress fixture should have many services"
+        );
+        assert_eq!(ir_parse.ir.clusters.len(), 1, "expected exactly one group");
+        assert!(
+            ir_parse.ir.clusters[0].members.len() >= 8,
+            "group should contain most services"
+        );
+        assert!(
+            ir_parse.ir.clusters[0].title.is_some(),
+            "group title should be present"
         );
     }
 

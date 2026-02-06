@@ -403,7 +403,7 @@ const FIXTURES: &[MermaidFixture] = &[
         source: include_str!("fixtures/mermaid/architecture_beta_basic.mmd"),
         family: "architecture-beta",
         tier: FixtureTier::Basic,
-        expects_raw_fallback: true,
+        expects_raw_fallback: false,
     },
     MermaidFixture {
         id: "architecture_beta_stress",
@@ -411,7 +411,7 @@ const FIXTURES: &[MermaidFixture] = &[
         source: include_str!("fixtures/mermaid/architecture_beta_stress.mmd"),
         family: "architecture-beta",
         tier: FixtureTier::Stress,
-        expects_raw_fallback: true,
+        expects_raw_fallback: false,
     },
     // -- C4Context (partial) --
     MermaidFixture {
@@ -512,6 +512,8 @@ mod tests {
     struct AstCounts {
         nodes: usize,
         edges: usize,
+        architecture_group: usize,
+        architecture_service: usize,
         directives: usize,
         comments: usize,
         subgraph_start: usize,
@@ -560,6 +562,8 @@ mod tests {
                 Statement::Link { .. } => counts.links += 1,
                 Statement::Node(_) => counts.nodes += 1,
                 Statement::Edge(_) => counts.edges += 1,
+                Statement::ArchitectureGroup(_) => counts.architecture_group += 1,
+                Statement::ArchitectureService(_) => counts.architecture_service += 1,
                 Statement::SequenceMessage(_) => counts.sequence += 1,
                 Statement::ClassMember { .. } => counts.class_member += 1,
                 Statement::GanttTitle { .. } => counts.gantt_title += 1,
@@ -606,6 +610,8 @@ mod tests {
     fn total_statements(c: &AstCounts) -> usize {
         c.nodes
             + c.edges
+            + c.architecture_group
+            + c.architecture_service
             + c.directives
             + c.comments
             + c.subgraph_start
