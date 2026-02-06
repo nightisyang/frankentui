@@ -1581,12 +1581,59 @@ impl MermaidRenderer {
         (1, 1, point_depth + 1, 1)
     }
 
+    /// Apply half-block characters at the top and bottom interior rows for
+    /// smoother shape boundaries. Only applies to rectangular shapes (Rect,
+    /// Rounded) with enough interior height (≥4 rows).
+    fn apply_half_block_fill(
+        &self,
+        cell_rect: Rect,
+        shape: NodeShape,
+        fill_color: PackedRgba,
+        buf: &mut Buffer,
+    ) {
+        if self.glyph_mode == MermaidGlyphMode::Ascii {
+            return;
+        }
+        if fill_color == PackedRgba::TRANSPARENT {
+            return;
+        }
+        // Half-block smoothing only for shapes with horizontal top/bottom edges.
+        match shape {
+            NodeShape::Rect | NodeShape::Rounded | NodeShape::Circle => {}
+            _ => return,
+        }
+        let inner_h = cell_rect.height.saturating_sub(2);
+        if inner_h < 2 {
+            // Not enough interior rows for half-block smoothing.
+            return;
+        }
+        let x_start = cell_rect.x.saturating_add(1);
+        let x_end = cell_rect
+            .x
+            .saturating_add(cell_rect.width.saturating_sub(1));
+        // Top interior row: ▄ (lower half block) — fill starts partway down.
+        let top_y = cell_rect.y.saturating_add(1);
+        let half_cell = Cell::from_char('\u{2584}').with_fg(fill_color);
+        for x in x_start..x_end {
+            buf.set(x, top_y, half_cell);
+        }
+        // Bottom interior row: ▀ (upper half block) — fill ends partway up.
+        let bot_y = cell_rect
+            .y
+            .saturating_add(cell_rect.height.saturating_sub(2));
+        let half_cell = Cell::from_char('\u{2580}').with_fg(fill_color);
+        for x in x_start..x_end {
+            buf.set(x, bot_y, half_cell);
+        }
+    }
+
     /// Render a node label with shape-specific insets.
     fn render_node_label_with_inset(
         &self,
         cell_rect: Rect,
         text: &str,
         inset: (u16, u16, u16, u16),
+        fill_bg: PackedRgba,
         buf: &mut Buffer,
     ) {
         let (il, it, ir, ib) = inset;
@@ -1601,7 +1648,9 @@ impl MermaidRenderer {
             .saturating_add(cell_rect.width)
             .saturating_sub(ir)
             .saturating_sub(1);
-        let label_cell = Cell::from_char(' ').with_fg(self.colors.node_text);
+        let label_cell = Cell::from_char(' ')
+            .with_fg(self.colors.node_text)
+            .with_bg(fill_bg);
 
         let mut lines = wrap_text(text, inner_w);
         if lines.len() > inner_h {
@@ -1635,7 +1684,6 @@ impl MermaidRenderer {
         buf: &mut Buffer,
     ) {
         let border_cell = Cell::from_char(' ').with_fg(self.colors.node_border);
-        let fill_cell = Cell::from_char(' ');
 
         for node in nodes {
             let ir_node = match ir.nodes.get(node.node_idx) {
@@ -1667,8 +1715,14 @@ impl MermaidRenderer {
                 continue;
             }
 
+            let fill_color = self.colors.node_fill_for(node.node_idx);
+            let fill_cell = Cell::from_char(' ').with_bg(fill_color);
+
             let inset =
                 self.draw_shaped_node(cell_rect, ir_node.shape, border_cell, fill_cell, buf);
+
+            // Apply half-block smoothing at top/bottom fill boundaries.
+            self.apply_half_block_fill(cell_rect, ir_node.shape, fill_color, buf);
 
             // Labels only if plan allows.
             if plan.show_node_labels
@@ -1682,6 +1736,7 @@ impl MermaidRenderer {
                         &label.text,
                         &ir_node.members,
                         plan.max_label_width,
+                        fill_color,
                         buf,
                     );
                 } else {
@@ -1690,7 +1745,7 @@ impl MermaidRenderer {
                     } else {
                         &label.text
                     };
-                    self.render_node_label_with_inset(cell_rect, text, inset, buf);
+                    self.render_node_label_with_inset(cell_rect, text, inset, fill_color, buf);
                 }
             }
         }
@@ -1747,20 +1802,23 @@ impl MermaidRenderer {
                 && let Some(label) = ir.labels.get(label_id.0)
             {
                 if !ir_node.members.is_empty() {
+                    let fill_color = self.colors.node_fill_for(node.node_idx);
                     self.render_class_compartments(
                         cell_rect,
                         &label.text,
                         &ir_node.members,
                         plan.max_label_width,
+                        fill_color,
                         buf,
                     );
                 } else {
+                    let fill_color = self.colors.node_fill_for(node.node_idx);
                     let text = if plan.max_label_width > 0 {
                         &truncate_label(&label.text, plan.max_label_width)
                     } else {
                         &label.text
                     };
-                    self.render_node_label(cell_rect, text, buf);
+                    self.render_node_label(cell_rect, text, fill_color, buf);
                 }
             }
         }
@@ -1844,6 +1902,7 @@ impl MermaidRenderer {
                         &label.text,
                         &ir_node.members,
                         plan.max_label_width,
+                        fill,
                         buf,
                     );
                 } else {
@@ -1934,9 +1993,17 @@ impl MermaidRenderer {
         if edge_path.waypoints.len() < 2 || text.is_empty() {
             return;
         }
+        // Place label near the geometric midpoint of the path.
         let mid_idx = edge_path.waypoints.len() / 2;
-        let mid = &edge_path.waypoints[mid_idx];
-        let (cx, cy) = vp.to_cell(mid.x, mid.y);
+        let (mx, my) = if edge_path.waypoints.len().is_multiple_of(2) && mid_idx > 0 {
+            let a = &edge_path.waypoints[mid_idx - 1];
+            let b = &edge_path.waypoints[mid_idx];
+            ((a.x + b.x) / 2.0, (a.y + b.y) / 2.0)
+        } else {
+            let mid = &edge_path.waypoints[mid_idx];
+            (mid.x, mid.y)
+        };
+        let (cx, cy) = vp.to_cell(mx, my);
         let label = if max_label_width == 0 {
             text.to_string()
         } else {
@@ -2473,7 +2540,7 @@ impl MermaidRenderer {
         }
         // Place label near the geometric midpoint of the path.
         let mid_idx = edge_path.waypoints.len() / 2;
-        let (mx, my) = if edge_path.waypoints.len() % 2 == 0 && mid_idx > 0 {
+        let (mx, my) = if edge_path.waypoints.len().is_multiple_of(2) && mid_idx > 0 {
             // Even waypoint count: interpolate between the two middle segments.
             let a = &edge_path.waypoints[mid_idx - 1];
             let b = &edge_path.waypoints[mid_idx];
@@ -2502,7 +2569,6 @@ impl MermaidRenderer {
         buf: &mut Buffer,
     ) {
         let border_cell = Cell::from_char(' ').with_fg(self.colors.node_border);
-        let fill_cell = Cell::from_char(' ');
 
         for node in nodes {
             let ir_node = match ir.nodes.get(node.node_idx) {
@@ -2524,8 +2590,14 @@ impl MermaidRenderer {
                 continue;
             }
 
+            let fill_color = self.colors.node_fill_for(node.node_idx);
+            let fill_cell = Cell::from_char(' ').with_bg(fill_color);
+
             let inset =
                 self.draw_shaped_node(cell_rect, ir_node.shape, border_cell, fill_cell, buf);
+
+            // Apply half-block smoothing at top/bottom fill boundaries.
+            self.apply_half_block_fill(cell_rect, ir_node.shape, fill_color, buf);
 
             // Render label (and class compartments if applicable) inside the node.
             if let Some(label_id) = ir_node.label
@@ -2537,10 +2609,17 @@ impl MermaidRenderer {
                         &label.text,
                         &ir_node.members,
                         0,
+                        fill_color,
                         buf,
                     );
                 } else {
-                    self.render_node_label_with_inset(cell_rect, &label.text, inset, buf);
+                    self.render_node_label_with_inset(
+                        cell_rect,
+                        &label.text,
+                        inset,
+                        fill_color,
+                        buf,
+                    );
                 }
             }
         }
@@ -2598,7 +2677,13 @@ impl MermaidRenderer {
     /// at word boundaries (falling back to character breaks) and the block
     /// of lines is centered vertically. If there are more lines than rows,
     /// the last visible line is truncated with an ellipsis.
-    fn render_node_label(&self, cell_rect: Rect, text: &str, buf: &mut Buffer) {
+    fn render_node_label(
+        &self,
+        cell_rect: Rect,
+        text: &str,
+        fill_bg: PackedRgba,
+        buf: &mut Buffer,
+    ) {
         // Available interior space (excluding border).
         let inner_w = cell_rect.width.saturating_sub(2) as usize;
         let inner_h = cell_rect.height.saturating_sub(2) as usize;
@@ -2610,7 +2695,9 @@ impl MermaidRenderer {
             .x
             .saturating_add(cell_rect.width)
             .saturating_sub(1);
-        let label_cell = Cell::from_char(' ').with_fg(self.colors.node_text);
+        let label_cell = Cell::from_char(' ')
+            .with_fg(self.colors.node_text)
+            .with_bg(fill_bg);
 
         let mut lines = wrap_text(text, inner_w);
 
@@ -2645,16 +2732,21 @@ impl MermaidRenderer {
         label_text: &str,
         members: &[String],
         max_label_width: usize,
+        fill_bg: PackedRgba,
         buf: &mut Buffer,
     ) {
         let border_cell = Cell::from_char(' ').with_fg(self.colors.node_border);
-        let label_cell = Cell::from_char(' ').with_fg(self.colors.node_text);
-        let member_cell = Cell::from_char(' ').with_fg(self.colors.edge_color);
+        let label_cell = Cell::from_char(' ')
+            .with_fg(self.colors.node_text)
+            .with_bg(fill_bg);
+        let member_cell = Cell::from_char(' ')
+            .with_fg(self.colors.edge_color)
+            .with_bg(fill_bg);
         let inner_w = cell_rect.width.saturating_sub(2) as usize;
 
         if inner_w == 0 || cell_rect.height < 4 {
             // Too small for compartments, fall back to normal label.
-            self.render_node_label(cell_rect, label_text, buf);
+            self.render_node_label(cell_rect, label_text, fill_bg, buf);
             return;
         }
 

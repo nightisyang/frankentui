@@ -5311,6 +5311,43 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_mouse_click_on_dashboard_tile_switches_screen() {
+        let mut app = AppModel::new();
+        app.terminal_width = 120;
+        app.terminal_height = 40;
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(120, 40, &mut pool);
+        app.view(&mut frame);
+
+        let expected =
+            crate::chrome::PANE_HIT_BASE + crate::screens::screen_index(ScreenId::DataViz) as u32;
+        let mut tile_xy = None;
+        for y in 0..40u16 {
+            for x in 0..120u16 {
+                if let Some((id, _region, _data)) = frame.hit_test(x, y)
+                    && id.id() == expected
+                {
+                    tile_xy = Some((x, y));
+                    break;
+                }
+            }
+            if tile_xy.is_some() {
+                break;
+            }
+        }
+        let (x, y) = tile_xy.expect("Should find Dashboard tile pane-link hit region");
+        assert_eq!(app.current_screen, ScreenId::Dashboard);
+
+        let down = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), x, y);
+        assert_eq!(app.dispatch_mouse(&down), MouseDispatchResult::NotConsumed);
+        assert_eq!(app.current_screen, ScreenId::Dashboard);
+
+        let up = MouseEvent::new(MouseEventKind::Up(MouseButton::Left), x, y);
+        assert_eq!(app.dispatch_mouse(&up), MouseDispatchResult::Consumed);
+        assert_eq!(app.current_screen, ScreenId::DataViz);
+    }
+
+    #[test]
     fn dispatch_mouse_up_without_drag_triggers_click() {
         let mut app = AppModel::new();
         app.terminal_width = 120;
@@ -6642,20 +6679,37 @@ mod tests {
             let mut frame2 = ftui_render::frame::Frame::with_hit_grid(200, 40, &mut pool2);
             app.view(&mut frame2);
 
-            // Second click
-            let down2 = Event::Mouse(ftui_core::event::MouseEvent::new(
-                ftui_core::event::MouseEventKind::Down(ftui_core::event::MouseButton::Left),
-                x,
-                status_y,
-            ));
-            let up2 = Event::Mouse(ftui_core::event::MouseEvent::new(
-                ftui_core::event::MouseEventKind::Up(ftui_core::event::MouseButton::Left),
-                x,
-                status_y,
-            ));
-            let _ = app.update(AppMsg::from(down2));
-            let _ = app.update(AppMsg::from(up2));
-            assert!(!app.help_visible, "Double-click should return to OFF");
+            // Second click: help overlay has priority, so close it via the overlay close button.
+            let mut close_pos = None;
+            for y in 0..40u16 {
+                for x in 0..200u16 {
+                    if let Some((id, _region, _data)) = frame2.hit_test(x, y)
+                        && id.id() == crate::chrome::OVERLAY_HELP_CLOSE
+                    {
+                        close_pos = Some((x, y));
+                        break;
+                    }
+                }
+                if close_pos.is_some() {
+                    break;
+                }
+            }
+
+            if let Some((x, y)) = close_pos {
+                let down2 = Event::Mouse(ftui_core::event::MouseEvent::new(
+                    ftui_core::event::MouseEventKind::Down(ftui_core::event::MouseButton::Left),
+                    x,
+                    y,
+                ));
+                let up2 = Event::Mouse(ftui_core::event::MouseEvent::new(
+                    ftui_core::event::MouseEventKind::Up(ftui_core::event::MouseButton::Left),
+                    x,
+                    y,
+                ));
+                let _ = app.update(AppMsg::from(down2));
+                let _ = app.update(AppMsg::from(up2));
+                assert!(!app.help_visible, "Overlay close should return to OFF");
+            }
         }
     }
 

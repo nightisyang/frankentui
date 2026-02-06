@@ -60,6 +60,7 @@ pub struct List<'a> {
     items: Vec<ListItem<'a>>,
     style: Style,
     highlight_style: Style,
+    hover_style: Style,
     highlight_symbol: Option<&'a str>,
     /// Optional hit ID for mouse interaction.
     /// When set, each list item registers a hit region with the hit grid.
@@ -74,6 +75,7 @@ impl<'a> List<'a> {
             items: items.into_iter().map(|i| i.into()).collect(),
             style: Style::default(),
             highlight_style: Style::default(),
+            hover_style: Style::default(),
             highlight_symbol: None,
             hit_id: None,
         }
@@ -94,6 +96,12 @@ impl<'a> List<'a> {
     /// Set the style applied to the selected item.
     pub fn highlight_style(mut self, style: Style) -> Self {
         self.highlight_style = style;
+        self
+    }
+
+    /// Set the style applied to the hovered item (mouse move).
+    pub fn hover_style(mut self, style: Style) -> Self {
+        self.hover_style = style;
         self
     }
 
@@ -121,6 +129,8 @@ pub struct ListState {
     undo_id: UndoWidgetId,
     /// Index of the currently selected item, if any.
     pub selected: Option<usize>,
+    /// Index of the currently hovered item, if any.
+    pub hovered: Option<usize>,
     /// Scroll offset (first visible item index).
     pub offset: usize,
     /// Optional persistence ID for state saving/restoration.
@@ -182,11 +192,39 @@ impl ListState {
                 {
                     let index = data as usize;
                     if index < item_count {
+                        // Deterministic "double click": second click on the already-selected row activates.
+                        if self.selected == Some(index) {
+                            return MouseResult::Activated(index);
+                        }
                         self.select(Some(index));
                         return MouseResult::Selected(index);
                     }
                 }
                 MouseResult::Ignored
+            }
+            MouseEventKind::Moved => {
+                if let Some((id, HitRegion::Content, data)) = hit
+                    && id == expected_id
+                {
+                    let index = data as usize;
+                    if index < item_count {
+                        let changed = self.hovered != Some(index);
+                        self.hovered = Some(index);
+                        return if changed {
+                            MouseResult::HoverChanged
+                        } else {
+                            MouseResult::Ignored
+                        };
+                    }
+                }
+
+                // Mouse moved off the widget or to non-content region.
+                if self.hovered.is_some() {
+                    self.hovered = None;
+                    MouseResult::HoverChanged
+                } else {
+                    MouseResult::Ignored
+                }
             }
             MouseEventKind::ScrollUp => {
                 self.scroll_up(3);
@@ -273,6 +311,7 @@ impl Stateful for ListState {
 
     fn restore_state(&mut self, state: ListPersistState) {
         self.selected = state.selected;
+        self.hovered = None;
         self.offset = state.offset;
     }
 }
@@ -309,6 +348,7 @@ impl<'a> StatefulWidget for List<'a> {
 
         if self.items.is_empty() {
             state.selected = None;
+            state.hovered = None;
             state.offset = 0;
             return;
         }
@@ -323,6 +363,11 @@ impl<'a> StatefulWidget for List<'a> {
             && selected >= self.items.len()
         {
             state.selected = Some(self.items.len() - 1);
+        }
+        if let Some(hovered) = state.hovered
+            && hovered >= self.items.len()
+        {
+            state.hovered = None;
         }
 
         // Ensure visible range includes selected item
@@ -347,14 +392,18 @@ impl<'a> StatefulWidget for List<'a> {
                 break;
             }
             let is_selected = state.selected == Some(i);
+            let is_hovered = state.hovered == Some(i);
 
             // Determine style: merge highlight on top of item style so
             // unset highlight properties inherit from the item.
-            let item_style = if is_selected {
-                self.highlight_style.merge(&item.style)
+            let mut item_style = if is_hovered {
+                self.hover_style.merge(&item.style)
             } else {
                 item.style
             };
+            if is_selected {
+                item_style = self.highlight_style.merge(&item_style);
+            }
 
             // Apply item background style to the whole row
             let row_area = Rect::new(list_area.x, y, list_area.width, 1);
@@ -527,6 +576,7 @@ impl UndoSupport for ListState {
     fn restore_snapshot(&mut self, snapshot: &dyn std::any::Any) -> bool {
         if let Some(snap) = snapshot.downcast_ref::<ListStateSnapshot>() {
             self.selected = snap.selected;
+            self.hovered = None;
             self.offset = snap.offset;
             true
         } else {
@@ -1198,6 +1248,66 @@ mod tests {
         let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 2);
         let hit = Some((HitId::new(1), HitRegion::Border, 3u64));
         let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::Ignored);
+    }
+
+    #[test]
+    fn list_state_second_click_activates() {
+        let mut state = ListState::default();
+        state.select(Some(3));
+
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 2);
+        let hit = Some((HitId::new(1), HitRegion::Content, 3u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::Activated(3));
+        assert_eq!(state.selected(), Some(3));
+    }
+
+    #[test]
+    fn list_state_hover_updates() {
+        let mut state = ListState::default();
+        let event = MouseEvent::new(MouseEventKind::Moved, 5, 2);
+        let hit = Some((HitId::new(1), HitRegion::Content, 3u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::HoverChanged);
+        assert_eq!(state.hovered, Some(3));
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn list_state_hover_same_index_ignored() {
+        let mut state = {
+            let mut s = ListState::default();
+            s.hovered = Some(3);
+            s
+        };
+        let event = MouseEvent::new(MouseEventKind::Moved, 5, 2);
+        let hit = Some((HitId::new(1), HitRegion::Content, 3u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::Ignored);
+        assert_eq!(state.hovered, Some(3));
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn list_state_hover_clears() {
+        let mut state = {
+            let mut s = ListState::default();
+            s.hovered = Some(5);
+            s
+        };
+        let event = MouseEvent::new(MouseEventKind::Moved, 5, 2);
+        // No hit (mouse moved off the list)
+        let result = state.handle_mouse(&event, None, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::HoverChanged);
+        assert_eq!(state.hovered, None);
+    }
+
+    #[test]
+    fn list_state_hover_clear_when_already_none() {
+        let mut state = ListState::default();
+        let event = MouseEvent::new(MouseEventKind::Moved, 5, 2);
+        let result = state.handle_mouse(&event, None, HitId::new(1), 10);
         assert_eq!(result, MouseResult::Ignored);
     }
 }

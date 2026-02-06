@@ -29,7 +29,7 @@ use ftui_style::{Style, StyleFlags};
 use ftui_text::display_width;
 
 /// Hit region for dialog buttons.
-pub const DIALOG_HIT_BUTTON: HitRegion = HitRegion::Custom(10);
+pub const DIALOG_HIT_BUTTON: HitRegion = HitRegion::Button;
 
 /// Result from a dialog interaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +98,8 @@ pub enum DialogKind {
 pub struct DialogState {
     /// Currently focused button index.
     pub focused_button: Option<usize>,
+    /// Button index currently pressed by mouse (Down without matching Up yet).
+    pressed_button: Option<usize>,
     /// Input field value (for Prompt dialogs).
     pub input_value: String,
     /// Whether the input field is focused.
@@ -126,6 +128,7 @@ impl DialogState {
     /// Close the dialog with a result.
     pub fn close(&mut self, result: DialogResult) {
         self.open = false;
+        self.pressed_button = None;
         self.result = Some(result);
     }
 
@@ -135,6 +138,7 @@ impl DialogState {
         self.result = None;
         self.input_value.clear();
         self.focused_button = None;
+        self.pressed_button = None;
         self.input_focused = true;
     }
 
@@ -362,7 +366,7 @@ impl Dialog {
                 self.navigate_buttons(state, forward);
             }
 
-            // Mouse click on button
+            // Mouse down on button (press only; activate on mouse up).
             Event::Mouse(MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Left),
                 ..
@@ -372,6 +376,24 @@ impl Dialog {
                     && region == DIALOG_HIT_BUTTON
                     && let Ok(idx) = usize::try_from(data)
                     && idx < self.buttons.len()
+                {
+                    state.focused_button = Some(idx);
+                    state.pressed_button = Some(idx);
+                }
+            }
+
+            // Mouse up on button activates if it matches the pressed target.
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                ..
+            }) => {
+                let pressed = state.pressed_button.take();
+                if let (Some(pressed), Some((id, region, data)), Some(expected)) =
+                    (pressed, hit, self.hit_id)
+                    && id == expected
+                    && region == DIALOG_HIT_BUTTON
+                    && let Ok(idx) = usize::try_from(data)
+                    && idx == pressed
                 {
                     state.focused_button = Some(idx);
                     return self.activate_button(state);
@@ -853,6 +875,50 @@ mod tests {
         });
         let result = dialog.handle_event(&event, &mut state, None);
         assert_eq!(result, Some(DialogResult::Ok));
+    }
+
+    #[test]
+    fn dialog_mouse_up_activates_pressed_button() {
+        let dialog = Dialog::confirm("Test", "Msg").hit_id(HitId::new(1));
+        let mut state = DialogState::new();
+
+        let down = Event::Mouse(MouseEvent::new(
+            MouseEventKind::Down(MouseButton::Left),
+            0,
+            0,
+        ));
+        let hit = Some((HitId::new(1), HitRegion::Button, 0u64));
+        let result = dialog.handle_event(&down, &mut state, hit);
+        assert_eq!(result, None);
+        assert_eq!(state.focused_button, Some(0));
+        assert_eq!(state.pressed_button, Some(0));
+
+        let up = Event::Mouse(MouseEvent::new(MouseEventKind::Up(MouseButton::Left), 0, 0));
+        let result = dialog.handle_event(&up, &mut state, hit);
+        assert_eq!(result, Some(DialogResult::Ok));
+        assert!(!state.is_open());
+    }
+
+    #[test]
+    fn dialog_mouse_up_outside_does_not_activate() {
+        let dialog = Dialog::confirm("Test", "Msg").hit_id(HitId::new(1));
+        let mut state = DialogState::new();
+
+        let down = Event::Mouse(MouseEvent::new(
+            MouseEventKind::Down(MouseButton::Left),
+            0,
+            0,
+        ));
+        let hit = Some((HitId::new(1), HitRegion::Button, 0u64));
+        let result = dialog.handle_event(&down, &mut state, hit);
+        assert_eq!(result, None);
+        assert_eq!(state.pressed_button, Some(0));
+
+        let up = Event::Mouse(MouseEvent::new(MouseEventKind::Up(MouseButton::Left), 0, 0));
+        let result = dialog.handle_event(&up, &mut state, None);
+        assert_eq!(result, None);
+        assert!(state.is_open());
+        assert_eq!(state.pressed_button, None);
     }
 
     #[test]

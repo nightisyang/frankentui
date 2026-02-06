@@ -921,6 +921,31 @@ fn snapshot_list_selection_styled_ansi() {
 }
 
 // ============================================================================
+// List: ANSI hover + selection snapshot (bd-iuvb.17.3)
+// ============================================================================
+
+#[test]
+fn snapshot_list_selected_hover_ansi() {
+    let items = vec![
+        ListItem::new("One"),
+        ListItem::new("Two"),
+        ListItem::new("Three"),
+    ];
+    let list = List::new(items)
+        .highlight_symbol(">")
+        .highlight_style(Style::new().bold())
+        .hover_style(Style::new().reverse());
+    let area = Rect::new(0, 0, 12, 3);
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(12, 3, &mut pool);
+    let mut state = ListState::default();
+    state.select(Some(1));
+    state.hovered = Some(2);
+    StatefulWidget::render(&list, area, &mut frame, &mut state);
+    assert_snapshot_ansi!("list_selected_hover", &frame.buffer);
+}
+
+// ============================================================================
 // List: hit region with selection (bd-iuvb.17.3)
 // ============================================================================
 

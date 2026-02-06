@@ -3,12 +3,12 @@ Mermaid Showcase | Flow Basic (1/22) | Layout: Auto | Score: 0.8 | Viewport: aut
 │> Flow Basic [flow, S,││                                                      │
 │  Flow Subgraphs [flow││                                                      │
 │  Flow Dense [flow, L,││                                         OK           │
-│  Flow Long Labels [fl││                                      Yes⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿ │
-│  Flow Unicode [flow, ││                                     ⢐⢶⢾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿ │
+│  Flow Long Labels [fl││                                       ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿ │
+│  Flow Unicode [flow, ││                                    Yes⢾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿ │
 │  Flow Styles [flow, M││ ⣿⣿⣿⣿⣿⣿  Start    ⣄⡀ ⣀  Check   ⣀ ⢀⡠⠊⠁⠈               │
 │  Sequence Mini [seque││ ⣿⣿⣿⣿⣿⣿         ⠉⠉⠟⠋⠉⠙          ⠋⠉⠑⠢⡀                 │
 │  Sequence Checkout [s││                                    ⠈⢑⣼⣼⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿ │
-│  Sequence Dense [sequ││                                       ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿ │
+│  Sequence Dense [sequ││                                    No ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿ │
 │  Class Basic [class, ││                                         Fix          │
 │  Class Members [class││                                                      │
 │  State Basic [state, ││                                                      │

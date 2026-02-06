@@ -26,7 +26,7 @@ Mermaid Showcase | Sequence Mini (7/22) | Layout: Auto | Score: 50.9 | Viewport:
 │                                                  ││                                                                                                      ││                                          │
 │                                                  ││                            │                                             │                           ││                                          │
 │                                                  ││                                                                                                      ││                                          │
-│                                                  ││                            │                                             │Hello                      ││                                          │
+│                                                  ││                            │                       Hello                 │  ⢠⣀                       ││                                          │
 │                                                  ││                      ⠈⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠹⠝⠋                      ││                                          │
 │                                                  ││                            │                                             │                           ││                                          │
 │                                                  ││                                                                                                      ││                                          │
@@ -41,7 +41,7 @@ Mermaid Showcase | Sequence Mini (7/22) | Layout: Auto | Score: 50.9 | Viewport:
 │                                                  ││                            │                                             │                           ││Score: 50.90                              │
 │                                                  ││                                                                                                      ││Cross: 0                                  │
 │                                                  ││                            │                                             │                           ││Bends: 0                                  │
-│                                                  ││                             Hi!                                                                      ││Sym: 1.00                                 │
+│                                                  ││                                                    Hi!                                               ││Sym: 1.00                                 │
 │                                                  ││                            │                                             │                           ││Comp: 0.17                                │
 │                                                  ││                                                                                                      ││Edge var: 0.00                            │
 │                                                  ││                            │                                             │                           ││Label col: 0                              │

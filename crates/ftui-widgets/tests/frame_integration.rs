@@ -808,7 +808,7 @@ fn dialog_modal_backdrop_covers_full_area() {
                 match region {
                     HitRegion::Custom(1) => has_backdrop = true,
                     HitRegion::Custom(2) => has_content = true,
-                    HitRegion::Custom(10) => has_button = true,
+                    HitRegion::Button => has_button = true,
                     _ => {}
                 }
             }

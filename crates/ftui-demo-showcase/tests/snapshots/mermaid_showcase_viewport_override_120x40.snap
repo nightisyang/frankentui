@@ -15,13 +15,13 @@ Mermaid Showcase | Flow Basic (1/22) | Layout: Auto | Score: 0.8 | Viewport: 88x
 │  State Composite [state, M, ││                                                            ││                        │ 
 │  ER Basic [er, M, cardinalit││                                                  ⢸         ││                        │ 
 │  Gantt Basic [gantt, M, sect││                                                ⢀⣀⣸⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        │ 
-│  Mindmap Seed [mindmap, S, t││                                               ⣀⠔⠹⢹⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        │ 
+│  Mindmap Seed [mindmap, S, t││                                               Yes⢹⣿⣿⣿⣿⣿⣿⣿⣿⣿││                        │ 
 │  Mindmap Deep [mindmap, L, d││         ⡆                                  ⢀⡠⠊   ⠈⠉⠉⠉⠉⠉⠉⠉⠉⠉││                        │ 
 │  Pie Basic [pie, S, title, s││t        ⡇      ⢠⣀ ⢀       Check        ⡀ ⡠⠔⠁               ││                        │ 
 │  Pie Many [pie, M, many-slic││         ⡏⠉⠉⠉⠉⠉⠉⠹⠛⠉⠙                    ⠋⠉⠢⢄                ││                        │ 
 │  Gitgraph Basic [unsupported││         ⠇                                  ⠑⠢⡀   ⢀⣀⣀⣀⣀⣀⣀⣀⣀⣀│╰────────────────────────╯ 
 │  Journey Basic [unsupported,││                                              ⠈⠒⢄⢠⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿│╭────────Metrics─────────╮ 
-│  Requirement Basic [unsuppor││                                                ⠐⠛⢻⣿⣿⣿⣿⣿⣿⣿⣿⣿││Parse: 0.00 ms          │ 
+│  Requirement Basic [unsuppor││                                               No⠛⢻⣿⣿⣿⣿⣿⣿⣿⣿⣿││Parse: 0.00 ms          │ 
 │                             ││                                                  ⢸         ││Layout: 0.00 ms         │ 
 │                             ││                                                            ││Render: 0.00 ms         │ 
 │                             ││                                                            ││Viewport: 88x26         │ 

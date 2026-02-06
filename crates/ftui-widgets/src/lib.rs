@@ -841,4 +841,93 @@ mod tests {
         assert_eq!(end_x, 3);
         assert!(frame.buffer.get(3, 0).unwrap().is_empty());
     }
+
+    #[test]
+    fn widget_is_essential_default_false() {
+        struct DummyWidget;
+        impl Widget for DummyWidget {
+            fn render(&self, _: Rect, _: &mut Frame) {}
+        }
+        assert!(!DummyWidget.is_essential());
+    }
+
+    #[test]
+    fn budgeted_new_and_inner() {
+        struct TestW;
+        impl Widget for TestW {
+            fn render(&self, _: Rect, _: &mut Frame) {}
+        }
+        let b = Budgeted::new(42, TestW);
+        assert_eq!(b.widget_id, 42);
+        let _ = b.inner(); // Should not panic
+    }
+
+    #[test]
+    fn budgeted_with_signal() {
+        struct TestW;
+        impl Widget for TestW {
+            fn render(&self, _: Rect, _: &mut Frame) {}
+        }
+        let sig = WidgetSignal::new(99);
+        let b = Budgeted::new(42, TestW).with_signal(sig);
+        // with_signal should override the signal's widget_id to match
+        assert_eq!(b.signal.widget_id, 42);
+    }
+
+    #[test]
+    fn set_style_area_transparent_bg_is_noop() {
+        let mut buf = Buffer::new(1, 1);
+        let base = PackedRgba::rgb(100, 100, 100);
+        buf.set(0, 0, Cell::default().with_bg(base));
+
+        // Alpha=0 means fully transparent, should leave bg unchanged
+        let transparent = PackedRgba::rgba(255, 0, 0, 0);
+        set_style_area(
+            &mut buf,
+            Rect::new(0, 0, 1, 1),
+            Style::new().bg(transparent),
+        );
+        assert_eq!(buf.get(0, 0).unwrap().bg, base);
+    }
+
+    #[test]
+    fn set_style_area_opaque_bg_replaces() {
+        let mut buf = Buffer::new(1, 1);
+        buf.set(
+            0,
+            0,
+            Cell::default().with_bg(PackedRgba::rgb(100, 100, 100)),
+        );
+
+        let opaque = PackedRgba::rgba(0, 255, 0, 255);
+        set_style_area(
+            &mut buf,
+            Rect::new(0, 0, 1, 1),
+            Style::new().bg(opaque),
+        );
+        assert_eq!(buf.get(0, 0).unwrap().bg, opaque);
+    }
+
+    #[test]
+    fn draw_text_span_scrolled_skips_chars() {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        // Scroll past first 2 chars of "ABCDE"
+        let end_x =
+            draw_text_span_scrolled(&mut frame, 0, 0, "ABCDE", Style::default(), 10, 2, None);
+
+        assert_eq!(end_x, 3);
+        assert_eq!(
+            frame.buffer.get(0, 0).unwrap().content.as_char(),
+            Some('C')
+        );
+        assert_eq!(
+            frame.buffer.get(1, 0).unwrap().content.as_char(),
+            Some('D')
+        );
+        assert_eq!(
+            frame.buffer.get(2, 0).unwrap().content.as_char(),
+            Some('E')
+        );
+    }
 }
