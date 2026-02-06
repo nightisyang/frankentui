@@ -52,6 +52,8 @@
 //! by at most `DIRTY_SPAN_MERGE_GAP` cells (gap becomes dirty). If a row exceeds
 //! `DIRTY_SPAN_MAX_SPANS_PER_ROW`, it falls back to full-row scan.
 
+use smallvec::SmallVec;
+
 use crate::budget::DegradationLevel;
 use crate::cell::Cell;
 use ftui_core::geometry::Rect;
@@ -133,7 +135,8 @@ impl DirtySpan {
 #[derive(Debug, Default, Clone)]
 pub(crate) struct DirtySpanRow {
     overflow: bool,
-    spans: Vec<DirtySpan>,
+    /// Inline storage for up to 4 spans (16 bytes) avoids heap allocation for ~90% of rows.
+    spans: SmallVec<[DirtySpan; 4]>,
 }
 
 impl DirtySpanRow {
@@ -141,7 +144,7 @@ impl DirtySpanRow {
     fn new_full() -> Self {
         Self {
             overflow: true,
-            spans: Vec::new(),
+            spans: SmallVec::new(),
         }
     }
 
@@ -358,14 +361,10 @@ impl Buffer {
         }
 
         let row_start = y as usize * width as usize;
-        for x in start..end {
-            let idx = row_start + x as usize;
-            let slot = &mut self.dirty_bits[idx];
-            if *slot == 0 {
-                *slot = 1;
-                self.dirty_cells = self.dirty_cells.saturating_add(1);
-            }
-        }
+        let slice = &mut self.dirty_bits[row_start + start as usize..row_start + end as usize];
+        let newly_dirty = slice.iter().filter(|&&b| b == 0).count();
+        slice.fill(1);
+        self.dirty_cells = self.dirty_cells.saturating_add(newly_dirty);
     }
 
     /// Mark an entire row as dirty in the bitmap.
@@ -736,6 +735,46 @@ impl Buffer {
         }
     }
 
+    /// Fast-path cell write for the common case.
+    ///
+    /// Bypasses scissor intersection, opacity blending, and overlap cleanup
+    /// when all of the following hold:
+    ///
+    /// - The cell is single-width (`width_hint() <= 1`) and not a continuation
+    /// - Only the base scissor is active (no nested push)
+    /// - Only the base opacity is active (no nested push)
+    /// - The existing cell at the target is also single-width and not a continuation
+    ///
+    /// Falls through to [`set()`] for any non-trivial case, so behavior is
+    /// always identical to calling `set()` directly.
+    #[inline]
+    pub fn set_fast(&mut self, x: u16, y: u16, cell: Cell) {
+        // Bail to full path for wide or continuation cells
+        if cell.content.width_hint() > 1 || cell.is_continuation() {
+            return self.set(x, y, cell);
+        }
+
+        // Bail if scissor or opacity stacks are non-trivial
+        if self.scissor_stack.len() != 1 || self.opacity_stack.len() != 1 {
+            return self.set(x, y, cell);
+        }
+
+        // Bounds check
+        let Some(idx) = self.index(x, y) else {
+            return;
+        };
+
+        // Check that existing cell doesn't need overlap cleanup
+        let existing = &self.cells[idx];
+        if existing.content.width_hint() > 1 || existing.is_continuation() {
+            return self.set(x, y, cell);
+        }
+
+        // All fast-path conditions met: direct write
+        self.cells[idx] = cell;
+        self.mark_dirty_span(y, x, x.saturating_add(1));
+    }
+
     /// Set the cell at (x, y).
     ///
     /// This method:
@@ -891,6 +930,26 @@ impl Buffer {
                 let row_end = row_start + row_width;
                 self.cells[row_start..row_end].fill(cell);
                 self.mark_dirty_row_full(y);
+            }
+            return;
+        }
+
+        // Medium path: partial-width fill with opaque, single-width cell, base scissor/opacity.
+        // Direct cell writes with per-row dirty span (no per-cell overlap cleanup needed since
+        // fill overwrites the entire clipped region).
+        if cell_width <= 1
+            && !cell.is_continuation()
+            && self.current_opacity() >= 1.0
+            && cell.bg.a() == 255
+            && self.scissor_stack.len() == 1
+        {
+            let row_width = self.width as usize;
+            let x_start = clipped.x as usize;
+            let x_end = clipped.right() as usize;
+            for y in clipped.y..clipped.bottom() {
+                let row_start = y as usize * row_width;
+                self.cells[row_start + x_start..row_start + x_end].fill(cell);
+                self.mark_dirty_span(y, clipped.x, clipped.right());
             }
             return;
         }
