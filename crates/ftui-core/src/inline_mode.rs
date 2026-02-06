@@ -582,4 +582,66 @@ mod tests {
         // Should NOT restore cursor since we never saved it
         assert!(!writer_contains_sequence(&renderer.writer, CURSOR_RESTORE));
     }
+
+    #[test]
+    fn inline_strategy_default_is_hybrid() {
+        assert_eq!(InlineStrategy::default(), InlineStrategy::Hybrid);
+    }
+
+    #[test]
+    fn config_ui_top_row_clamps_to_1() {
+        // ui_height >= term_height means saturating_sub yields 0, +1 = 1
+        let config = InlineConfig::new(30, 24, 80);
+        assert!(config.ui_top_row() >= 1);
+    }
+
+    #[test]
+    fn strategy_select_fallback_no_scroll_no_sync() {
+        let mut caps = TerminalCapabilities::basic();
+        caps.scroll_region = false;
+        caps.sync_output = false;
+        assert_eq!(InlineStrategy::select(&caps), InlineStrategy::OverlayRedraw);
+    }
+
+    #[test]
+    fn write_log_in_scroll_region_mode() {
+        let writer = test_writer();
+        let config = InlineConfig::new(6, 24, 80).with_strategy(InlineStrategy::ScrollRegion);
+        let mut renderer = InlineRenderer::new(writer, config);
+
+        renderer.enter().unwrap();
+        renderer.write_log("hello\n").unwrap();
+
+        // In scroll-region mode, log is written directly without cursor save/restore
+        let output = renderer.writer.get_ref();
+        assert!(output.windows(b"hello\n".len()).any(|w| w == b"hello\n"));
+    }
+
+    #[test]
+    fn present_ui_clears_ui_lines() {
+        let writer = test_writer();
+        let config = InlineConfig::new(2, 10, 80).with_strategy(InlineStrategy::OverlayRedraw);
+        let mut renderer = InlineRenderer::new(writer, config);
+
+        renderer.present_ui(|_, _| Ok(())).unwrap();
+
+        // Should contain ERASE_LINE sequences for the 2 UI rows
+        let count = renderer
+            .writer
+            .get_ref()
+            .windows(ERASE_LINE.len())
+            .filter(|w| *w == ERASE_LINE)
+            .count();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn config_new_defaults() {
+        let config = InlineConfig::new(5, 20, 100);
+        assert_eq!(config.ui_height, 5);
+        assert_eq!(config.term_height, 20);
+        assert_eq!(config.term_width, 100);
+        assert_eq!(config.strategy, InlineStrategy::Hybrid);
+        assert!(!config.use_sync_output);
+    }
 }

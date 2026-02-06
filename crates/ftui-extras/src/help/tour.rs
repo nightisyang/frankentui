@@ -673,4 +673,74 @@ mod tests {
         assert_eq!(step.target_widget, Some(5));
         assert_eq!(step.effective_bounds(), Some(bounds));
     }
+
+    #[test]
+    fn step_defaults_no_target_or_bounds() {
+        let step = TourStep::new("Plain");
+        assert_eq!(step.title, "Plain");
+        assert!(step.content.is_empty());
+        assert!(step.target_widget.is_none());
+        assert!(step.target_bounds.is_none());
+        assert!(!step.requires_action);
+        assert!(step.metadata.is_none());
+        assert!(step.effective_bounds().is_none());
+    }
+
+    #[test]
+    fn tour_is_skippable_by_default() {
+        let tour = Tour::new("id");
+        assert!(tour.skippable);
+    }
+
+    #[test]
+    fn tour_state_stop_ends_tour() {
+        let mut state = TourState::new();
+        state.start(sample_tour());
+        state.take_event();
+        assert!(state.is_active());
+
+        state.stop();
+        assert!(!state.is_active());
+        assert_eq!(state.current_step_index(), 0);
+        assert!(state.take_event().is_none());
+    }
+
+    #[test]
+    fn progress_no_active_tour_returns_zero() {
+        let state = TourState::new();
+        assert_eq!(state.progress(), (0, 0));
+    }
+
+    #[test]
+    fn can_go_back_no_tour() {
+        let state = TourState::new();
+        assert!(!state.can_go_back());
+    }
+
+    #[test]
+    fn can_skip_no_tour() {
+        let state = TourState::new();
+        assert!(!state.can_skip());
+    }
+
+    #[test]
+    fn completion_mark_completed_idempotent() {
+        let mut completion = TourCompletion::new();
+        completion.mark_completed("t");
+        completion.mark_completed("t");
+        assert_eq!(completion.status("t"), CompletionStatus::Completed);
+        assert_eq!(completion.completed_tours().count(), 1);
+    }
+
+    #[test]
+    fn navigate_complete_sets_flag() {
+        let tour = Tour::new("a").add_step(TourStep::new("S").requires_action(true));
+        let mut state = TourState::new();
+        state.start(tour);
+        state.take_event();
+
+        assert!(!state.is_action_completed());
+        assert!(state.navigate(TourAction::Complete));
+        assert!(state.is_action_completed());
+    }
 }

@@ -443,4 +443,51 @@ mod tests {
         // Should not panic
         adapter.view(&mut frame);
     }
+
+    #[test]
+    fn default_init_returns_none() {
+        let mut adapter = StringModelAdapter::new(CounterModel { value: 0 });
+        let cmd = adapter.init();
+        assert!(matches!(cmd, Cmd::None));
+    }
+
+    #[test]
+    fn render_text_styled_fg() {
+        use ftui_render::cell::PackedRgba;
+        use ftui_style::Style;
+        use ftui_text::{Line, Span, Text};
+
+        let style = Style::new().fg(PackedRgba::rgb(255, 0, 0));
+        let line = Line::from_spans([Span::styled("Hi", style)]);
+        let text = Text::from_lines([line]);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        render_text_to_frame(&text, &mut frame);
+
+        let cell = frame.buffer.get(0, 0).unwrap();
+        assert_eq!(cell.content.as_char(), Some('H'));
+        assert_eq!(cell.fg, PackedRgba::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn render_blank_lines_between_content() {
+        let text = Text::raw("A\n\nB");
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 5, &mut pool);
+        render_text_to_frame(&text, &mut frame);
+
+        assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some('A'));
+        // blank line at y=1 remains default
+        assert_eq!(frame.buffer.get(0, 2).unwrap().content.as_char(), Some('B'));
+    }
+
+    #[test]
+    fn adapter_noop_message() {
+        let mut adapter = StringModelAdapter::new(CounterModel { value: 5 });
+        let cmd = adapter.update(TestMsg::NoOp);
+        assert!(matches!(cmd, Cmd::None));
+        assert_eq!(adapter.inner().value, 5);
+    }
 }
