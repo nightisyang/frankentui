@@ -7358,4 +7358,197 @@ mod tests {
             "bundle count should appear in output; rendered:\n{text}"
         );
     }
+    #[test]
+    fn node_fill_has_background_color() {
+        let renderer = MermaidRenderer::with_mode(MermaidGlyphMode::Unicode);
+        let ir = make_ir(2, vec![(0, 1)]);
+        let layout = make_layout(2, vec![(0, 1)]);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 12,
+        };
+        let config = MermaidConfig::default();
+        let plan = select_render_plan(&config, &layout, &ir, area);
+        let mut buf = Buffer::new(40, 12);
+        renderer.render_with_plan(&layout, &ir, &plan, &mut buf);
+
+        let colors = DiagramPalette::default_palette();
+        let fill0 = colors.node_fill_for(0);
+
+        // Check that interior cells have the fill background color.
+        // Interior is inside the border (row 1..h-1, col 1..w-1).
+        let node_rect = &layout.nodes[0].rect;
+        let vp = Viewport::fit(&layout.bounding_box, area);
+        let cell_rect = vp.to_cell_rect(node_rect);
+
+        // Middle interior cell should have the fill background.
+        let mid_x = cell_rect.x + cell_rect.width / 2;
+        let mid_y = cell_rect.y + cell_rect.height / 2;
+        if let Some(cell) = buf.get(mid_x, mid_y) {
+            assert_eq!(
+                cell.bg, fill0,
+                "interior cell should have node fill background color"
+            );
+        }
+    }
+
+    #[test]
+    fn node_fill_half_block_top_row() {
+        let renderer = MermaidRenderer::with_mode(MermaidGlyphMode::Unicode);
+        let ir = make_ir(1, vec![]);
+        // Create a layout with a single tall node.
+        let layout = DiagramLayout {
+            nodes: vec![LayoutNodeBox {
+                node_idx: 0,
+                rect: LayoutRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 6.0,
+                },
+                label_rect: None,
+                rank: 0,
+                order: 0,
+            }],
+            clusters: vec![],
+            edges: vec![],
+            bounding_box: LayoutRect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 6.0,
+            },
+            stats: LayoutStats {
+                iterations_used: 0,
+                max_iterations: 100,
+                budget_exceeded: false,
+                crossings: 0,
+                ranks: 1,
+                max_rank_width: 1,
+                total_bends: 0,
+                position_variance: 0.0,
+            },
+            degradation: None,
+        };
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 12,
+            height: 8,
+        };
+        let config = MermaidConfig::default();
+        let plan = select_render_plan(&config, &layout, &ir, area);
+        let mut buf = Buffer::new(12, 8);
+        renderer.render_with_plan(&layout, &ir, &plan, &mut buf);
+
+        let text = buffer_to_text(&buf);
+        // Should contain half-block characters for smooth edges.
+        let has_lower_half = text.contains('\u{2584}');
+        let has_upper_half = text.contains('\u{2580}');
+        assert!(
+            has_lower_half,
+            "expected lower half block (\u{2584}) for top interior row"
+        );
+        assert!(
+            has_upper_half,
+            "expected upper half block (\u{2580}) for bottom interior row"
+        );
+    }
+
+    #[test]
+    fn node_fill_ascii_mode_no_half_blocks() {
+        let renderer = MermaidRenderer::with_mode(MermaidGlyphMode::Ascii);
+        let ir = make_ir(1, vec![]);
+        let layout = DiagramLayout {
+            nodes: vec![LayoutNodeBox {
+                node_idx: 0,
+                rect: LayoutRect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 6.0,
+                },
+                label_rect: None,
+                rank: 0,
+                order: 0,
+            }],
+            clusters: vec![],
+            edges: vec![],
+            bounding_box: LayoutRect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 6.0,
+            },
+            stats: LayoutStats {
+                iterations_used: 0,
+                max_iterations: 100,
+                budget_exceeded: false,
+                crossings: 0,
+                ranks: 1,
+                max_rank_width: 1,
+                total_bends: 0,
+                position_variance: 0.0,
+            },
+            degradation: None,
+        };
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 12,
+            height: 8,
+        };
+        let config = MermaidConfig::default();
+        let plan = select_render_plan(&config, &layout, &ir, area);
+        let mut buf = Buffer::new(12, 8);
+        renderer.render_with_plan(&layout, &ir, &plan, &mut buf);
+
+        let text = buffer_to_text(&buf);
+        // ASCII mode should NOT use half-block characters.
+        assert!(
+            !text.contains('\u{2584}') && !text.contains('\u{2580}'),
+            "ASCII mode should not use half-block characters"
+        );
+    }
+
+    #[test]
+    fn node_label_preserves_fill_background() {
+        let renderer = MermaidRenderer::with_mode(MermaidGlyphMode::Unicode);
+        let ir = make_ir(1, vec![]);
+        let layout = make_layout(1, vec![]);
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 6,
+        };
+        let config = MermaidConfig::default();
+        let plan = select_render_plan(&config, &layout, &ir, area);
+        let mut buf = Buffer::new(20, 6);
+        renderer.render_with_plan(&layout, &ir, &plan, &mut buf);
+
+        let colors = DiagramPalette::default_palette();
+        let fill0 = colors.node_fill_for(0);
+
+        // Find a cell that contains label text (letter 'N' from "N0").
+        let mut found_label_with_bg = false;
+        for y in 0..buf.height() {
+            for x in 0..buf.width() {
+                if let Some(cell) = buf.get(x, y) {
+                    if cell.content.as_char() == Some('N') && cell.bg == fill0 {
+                        found_label_with_bg = true;
+                    }
+                }
+            }
+        }
+        assert!(
+            found_label_with_bg,
+            "label text should preserve the node fill background color"
+        );
+    }
+
 }
