@@ -1590,7 +1590,7 @@ mod tests {
     ) -> (String, Frame<'static>) {
         // Leak the pool to get 'static lifetime for test convenience
         let pool = Box::leak(Box::new(GraphemePool::new()));
-        let mut frame = Frame::new(width, 1, pool);
+        let mut frame = Frame::with_hit_grid(width, 1, pool);
         let area = Rect::new(0, 0, width, 1);
         let state = test_status_bar_state(overrides);
         render_status_bar(&state, &mut frame, area);
@@ -1657,12 +1657,11 @@ mod tests {
     #[test]
     fn status_bar_registers_help_toggle_hit_region() {
         let (_rendered, frame) = render_status_bar_test(200, |_| {});
-        let grid = frame.hit_grid();
         // Find the [h] toggle position and verify hit region
         let mut found = false;
         for x in 0..200u16 {
-            if let Some((id, _region, _data)) = grid.hit_test(x, 0) {
-                if id.raw() == STATUS_HELP_TOGGLE {
+            if let Some((id, _region, _data)) = frame.hit_test(x, 0) {
+                if id.id() == STATUS_HELP_TOGGLE {
                     found = true;
                     break;
                 }
@@ -1674,11 +1673,10 @@ mod tests {
     #[test]
     fn status_bar_registers_palette_toggle_hit_region() {
         let (_rendered, frame) = render_status_bar_test(200, |_| {});
-        let grid = frame.hit_grid();
         let mut found = false;
         for x in 0..200u16 {
-            if let Some((id, _region, _data)) = grid.hit_test(x, 0) {
-                if id.raw() == STATUS_PALETTE_TOGGLE {
+            if let Some((id, _region, _data)) = frame.hit_test(x, 0) {
+                if id.id() == STATUS_PALETTE_TOGGLE {
                     found = true;
                     break;
                 }
@@ -1690,11 +1688,10 @@ mod tests {
     #[test]
     fn status_bar_registers_perf_toggle_hit_region() {
         let (_rendered, frame) = render_status_bar_test(200, |_| {});
-        let grid = frame.hit_grid();
         let mut found = false;
         for x in 0..200u16 {
-            if let Some((id, _region, _data)) = grid.hit_test(x, 0) {
-                if id.raw() == STATUS_PERF_TOGGLE {
+            if let Some((id, _region, _data)) = frame.hit_test(x, 0) {
+                if id.id() == STATUS_PERF_TOGGLE {
                     found = true;
                     break;
                 }
@@ -1706,11 +1703,10 @@ mod tests {
     #[test]
     fn status_bar_registers_debug_toggle_hit_region() {
         let (_rendered, frame) = render_status_bar_test(200, |_| {});
-        let grid = frame.hit_grid();
         let mut found = false;
         for x in 0..200u16 {
-            if let Some((id, _region, _data)) = grid.hit_test(x, 0) {
-                if id.raw() == STATUS_DEBUG_TOGGLE {
+            if let Some((id, _region, _data)) = frame.hit_test(x, 0) {
+                if id.id() == STATUS_DEBUG_TOGGLE {
                     found = true;
                     break;
                 }
@@ -1722,11 +1718,10 @@ mod tests {
     #[test]
     fn status_bar_registers_mouse_toggle_hit_region() {
         let (_rendered, frame) = render_status_bar_test(200, |_| {});
-        let grid = frame.hit_grid();
         let mut found = false;
         for x in 0..200u16 {
-            if let Some((id, _region, _data)) = grid.hit_test(x, 0) {
-                if id.raw() == STATUS_MOUSE_TOGGLE {
+            if let Some((id, _region, _data)) = frame.hit_test(x, 0) {
+                if id.id() == STATUS_MOUSE_TOGGLE {
                     found = true;
                     break;
                 }
@@ -1738,12 +1733,11 @@ mod tests {
     #[test]
     fn status_bar_hit_regions_are_non_overlapping() {
         let (_rendered, frame) = render_status_bar_test(200, |_| {});
-        let grid = frame.hit_grid();
         // Walk each column and collect which hit IDs we see
         let mut hit_ids: Vec<(u16, u32)> = Vec::new();
         for x in 0..200u16 {
-            if let Some((id, _region, _data)) = grid.hit_test(x, 0) {
-                let raw = id.raw();
+            if let Some((id, _region, _data)) = frame.hit_test(x, 0) {
+                let raw = id.id();
                 if raw >= STATUS_HIT_BASE {
                     hit_ids.push((x, raw));
                 }
@@ -1801,16 +1795,15 @@ mod tests {
     #[test]
     fn status_bar_toggles_truncated_on_narrow_terminal() {
         // On a very narrow terminal, toggle strip should be truncated
-        let (rendered, frame) = render_status_bar_test(40, |_| {});
+        let (rendered, _frame) = render_status_bar_test(40, |_| {});
         // On 40 cols, the toggle strip may be truncated
-        let grid = frame.hit_grid();
         // Just verify no panic and that the status bar renders something
         assert!(
             rendered.contains("Dashboard"),
             "Should still show screen title: {rendered}"
         );
         // Hit regions might not be registered if strip was truncated — that's OK
-        let _ = grid;
+        // Hit regions might not be registered if strip was truncated
     }
 
     #[test]
@@ -1818,23 +1811,23 @@ mod tests {
         // Verify all toggle hit IDs classify as StatusToggle layer
         assert_eq!(
             classify_hit(HitId::new(STATUS_HELP_TOGGLE)),
-            HitLayer::StatusToggle
+            HitLayer::StatusToggle(STATUS_HELP_TOGGLE)
         );
         assert_eq!(
             classify_hit(HitId::new(STATUS_PALETTE_TOGGLE)),
-            HitLayer::StatusToggle
+            HitLayer::StatusToggle(STATUS_PALETTE_TOGGLE)
         );
         assert_eq!(
             classify_hit(HitId::new(STATUS_PERF_TOGGLE)),
-            HitLayer::StatusToggle
+            HitLayer::StatusToggle(STATUS_PERF_TOGGLE)
         );
         assert_eq!(
             classify_hit(HitId::new(STATUS_DEBUG_TOGGLE)),
-            HitLayer::StatusToggle
+            HitLayer::StatusToggle(STATUS_DEBUG_TOGGLE)
         );
         assert_eq!(
             classify_hit(HitId::new(STATUS_MOUSE_TOGGLE)),
-            HitLayer::StatusToggle
+            HitLayer::StatusToggle(STATUS_MOUSE_TOGGLE)
         );
     }
 }
