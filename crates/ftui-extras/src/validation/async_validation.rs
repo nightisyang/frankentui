@@ -1090,4 +1090,70 @@ mod tests {
         };
         assert_eq!(stale.event_type(), "stale_discarded");
     }
+
+    #[test]
+    fn trace_new_is_empty() {
+        let trace = ValidationTrace::new();
+        assert!(trace.is_empty());
+        assert_eq!(trace.len(), 0);
+        assert!(trace.events().is_empty());
+    }
+
+    #[test]
+    fn trace_clear_removes_events() {
+        let mut coordinator = AsyncValidationCoordinator::new();
+        let token = coordinator.start_validation();
+        coordinator.try_apply_result(token, ValidationResult::Valid, Duration::from_millis(10));
+        assert!(!coordinator.trace().is_empty());
+        coordinator.clear_trace();
+        assert!(coordinator.trace().is_empty());
+    }
+
+    #[test]
+    fn trace_events_for_token_filters() {
+        let mut coordinator = AsyncValidationCoordinator::new();
+        let t1 = coordinator.start_validation();
+        coordinator.try_apply_result(t1, ValidationResult::Valid, Duration::from_millis(10));
+        let t2 = coordinator.start_validation();
+        coordinator.try_apply_result(t2, ValidationResult::Valid, Duration::from_millis(10));
+
+        let events_t1 = coordinator.trace().events_for_token(t1);
+        assert!(events_t1.iter().all(|e| e.token() == t1));
+        let events_t2 = coordinator.trace().events_for_token(t2);
+        assert!(events_t2.iter().all(|e| e.token() == t2));
+    }
+
+    #[test]
+    fn trace_mut_allows_push() {
+        let mut coordinator = AsyncValidationCoordinator::new();
+        let before = coordinator.trace().len();
+        coordinator.trace_mut().push(ValidationEvent::Started {
+            token: ValidationToken::from_raw(999),
+            elapsed_ns: 0,
+        });
+        assert_eq!(coordinator.trace().len(), before + 1);
+    }
+
+    #[test]
+    fn shared_coordinator_trace_checksum() {
+        let coordinator = SharedValidationCoordinator::new();
+        let t1 = coordinator.start_validation();
+        coordinator.try_apply_result(t1, ValidationResult::Valid, Duration::from_millis(10));
+        let checksum = coordinator.trace_checksum();
+        // Calling again should be deterministic
+        assert_eq!(checksum, coordinator.trace_checksum());
+    }
+
+    #[test]
+    fn coordinator_current_result_after_invalid() {
+        let mut coordinator = AsyncValidationCoordinator::new();
+        let token = coordinator.start_validation();
+        coordinator.try_apply_result(
+            token,
+            ValidationResult::Invalid(ValidationError::new("field", "too short")),
+            Duration::from_millis(10),
+        );
+        let result = coordinator.current_result().unwrap();
+        assert!(!result.is_valid());
+    }
 }
