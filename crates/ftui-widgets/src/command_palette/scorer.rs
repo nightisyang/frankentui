@@ -2512,7 +2512,11 @@ mod perf_tests {
 
     fn coverage_budget_us(base: u64) -> u64 {
         if is_coverage_run() {
-            base.saturating_mul(2)
+            // Coverage instrumentation adds substantial overhead (and noise) to these
+            // microbench-style regression tests, so we relax budgets enough to keep
+            // `cargo llvm-cov` stable while still logging the timings.
+            const COVERAGE_BUDGET_MULTIPLIER: u64 = 5;
+            base.saturating_mul(COVERAGE_BUDGET_MULTIPLIER)
         } else {
             base
         }
