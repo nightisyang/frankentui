@@ -167,6 +167,21 @@ impl InlineModeStory {
         self.compare = !self.compare;
     }
 
+    fn reset_to_defaults(&mut self) {
+        self.log_rate_idx = 1;
+        self.ui_height_idx = 1;
+        self.anchor = InlineAnchor::Bottom;
+        self.compare = false;
+        self.mode = DisplayMode::Inline;
+        self.paused = false;
+        self.log_lines.clear();
+        self.lines_generated = 0;
+        for i in 0..INITIAL_LOG_LINES {
+            self.log_lines.push_back(generate_log_line(i as u64));
+        }
+        self.lines_generated = INITIAL_LOG_LINES as u64;
+    }
+
     fn toggle_mode(&mut self) {
         self.mode = match self.mode {
             DisplayMode::Inline => DisplayMode::AltScreen,
@@ -417,6 +432,7 @@ impl Screen for InlineModeStory {
             KeyCode::Char(ch) => match ch.to_ascii_lowercase() {
                 'a' => self.toggle_anchor(),
                 'c' => self.toggle_compare(),
+                'd' => self.reset_to_defaults(),
                 'h' => self.cycle_ui_height(),
                 'm' => self.toggle_mode(),
                 'r' => self.cycle_log_rate(),
@@ -489,23 +505,27 @@ impl Screen for InlineModeStory {
             },
             HelpEntry {
                 key: "A",
-                action: "Toggle chrome anchor",
-            },
-            HelpEntry {
-                key: "H",
-                action: "Cycle UI height",
-            },
-            HelpEntry {
-                key: "R",
-                action: "Cycle log rate",
+                action: "Toggle chrome anchor (top/bottom)",
             },
             HelpEntry {
                 key: "C",
                 action: "Toggle inline vs alt comparison",
             },
             HelpEntry {
+                key: "D",
+                action: "Reset story to defaults",
+            },
+            HelpEntry {
+                key: "H",
+                action: "Cycle UI height",
+            },
+            HelpEntry {
                 key: "M",
                 action: "Toggle single view mode",
+            },
+            HelpEntry {
+                key: "R",
+                action: "Cycle log rate",
             },
             HelpEntry {
                 key: "T",
@@ -517,7 +537,7 @@ impl Screen for InlineModeStory {
             },
             HelpEntry {
                 key: "Wheel",
-                action: "Adjust log rate",
+                action: "Adjust log rate (scrollback preserved when mouse off)",
             },
         ]
     }
@@ -631,5 +651,84 @@ mod tests {
         state.update(&scroll);
 
         assert_ne!(state.log_rate(), before);
+    }
+
+    fn press(ch: char) -> Event {
+        Event::Key(KeyEvent {
+            code: KeyCode::Char(ch),
+            kind: KeyEventKind::Press,
+            modifiers: ftui_core::event::Modifiers::empty(),
+        })
+    }
+
+    #[test]
+    fn d_key_resets_to_defaults() {
+        let mut state = InlineModeStory::new();
+        state.toggle_anchor();
+        state.toggle_compare();
+        state.toggle_mode();
+        state.paused = true;
+        state.log_rate_idx = 3;
+        state.ui_height_idx = 3;
+        state.append_log_burst(500);
+        assert!(state.lines_generated > INITIAL_LOG_LINES as u64);
+
+        state.update(&press('d'));
+
+        assert_eq!(state.anchor, InlineAnchor::Bottom);
+        assert!(!state.compare);
+        assert_eq!(state.mode, DisplayMode::Inline);
+        assert!(!state.paused);
+        assert_eq!(state.log_rate_idx, 1);
+        assert_eq!(state.ui_height_idx, 1);
+        assert_eq!(state.lines_generated, INITIAL_LOG_LINES as u64);
+        assert_eq!(state.log_lines.len(), INITIAL_LOG_LINES);
+    }
+
+    #[test]
+    fn space_key_toggles_pause() {
+        let mut state = InlineModeStory::new();
+        assert!(!state.paused);
+        state.update(&Event::Key(KeyEvent {
+            code: KeyCode::Char(' '),
+            kind: KeyEventKind::Press,
+            modifiers: ftui_core::event::Modifiers::empty(),
+        }));
+        assert!(state.paused);
+    }
+
+    #[test]
+    fn keyboard_shortcuts_toggle_state() {
+        let mut state = InlineModeStory::new();
+        assert_eq!(state.anchor, InlineAnchor::Bottom);
+        state.update(&press('a'));
+        assert_eq!(state.anchor, InlineAnchor::Top);
+
+        assert!(!state.compare);
+        state.update(&press('c'));
+        assert!(state.compare);
+
+        assert_eq!(state.mode, DisplayMode::Inline);
+        state.update(&press('m'));
+        assert_eq!(state.mode, DisplayMode::AltScreen);
+    }
+
+    #[test]
+    fn keybindings_returns_entries() {
+        let state = InlineModeStory::new();
+        let bindings = state.keybindings();
+        assert!(bindings.len() >= 5);
+        let keys: Vec<&str> = bindings.iter().map(|e| e.key).collect();
+        assert!(keys.contains(&"D"));
+        assert!(keys.contains(&"Space"));
+    }
+
+    #[test]
+    fn tick_paused_does_not_grow_logs() {
+        let mut state = InlineModeStory::new();
+        state.paused = true;
+        let before = state.lines_generated;
+        state.tick(100);
+        assert_eq!(state.lines_generated, before);
     }
 }

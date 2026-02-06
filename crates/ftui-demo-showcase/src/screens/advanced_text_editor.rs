@@ -1679,6 +1679,10 @@ impl Screen for AdvancedTextEditor {
         true
     }
 
+    fn consumes_text_input(&self) -> bool {
+        true
+    }
+
     fn title(&self) -> &'static str {
         "Advanced Text Editor"
     }

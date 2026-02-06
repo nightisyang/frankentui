@@ -3397,6 +3397,12 @@ impl AppModel {
                     ..
                 }) = &event
                 {
+                    // Esc dismisses the help overlay when visible.
+                    if self.help_visible && matches!(code, KeyCode::Escape) {
+                        self.help_visible = false;
+                        return Cmd::None;
+                    }
+
                     if self.a11y_panel_visible {
                         match (*code, *modifiers) {
                             (KeyCode::Char('A'), Modifiers::SHIFT) | (KeyCode::Escape, _) => {

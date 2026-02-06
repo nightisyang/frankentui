@@ -1188,6 +1188,13 @@ impl Screen for FormsInput {
         true
     }
 
+    fn consumes_text_input(&self) -> bool {
+        matches!(
+            self.focus,
+            FocusPanel::SearchInput | FocusPanel::PasswordInput | FocusPanel::TextEditor
+        )
+    }
+
     fn title(&self) -> &'static str {
         "Forms and Input"
     }

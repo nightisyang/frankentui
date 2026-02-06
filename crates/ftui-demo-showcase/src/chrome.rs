@@ -1125,6 +1125,7 @@ fn build_help_overlay_hints(current: ScreenId, screen_bindings: &[HelpEntry]) ->
         .global_entry_categorized("Esc", "Dismiss top overlay", HelpCategory::View)
         .global_entry_categorized("m / F6", "Toggle mouse capture", HelpCategory::View)
         .global_entry_categorized("Ctrl+P", "Toggle performance HUD", HelpCategory::View)
+        .global_entry_categorized("Ctrl+I", "Toggle evidence inspector", HelpCategory::View)
         .global_entry_categorized("Shift+A", "Toggle A11y panel", HelpCategory::View)
         .global_entry_categorized("F12", "Toggle debug overlay", HelpCategory::View)
         // Editing

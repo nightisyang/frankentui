@@ -705,6 +705,13 @@ pub trait Screen {
         vec![]
     }
 
+    /// Whether this screen is currently accepting text input (e.g. a focused
+    /// text field or editor). When `true`, single-character global shortcuts
+    /// (q, ?, m, 0-9) are suppressed so keystrokes reach the screen instead.
+    fn consumes_text_input(&self) -> bool {
+        false
+    }
+
     /// Whether this screen can undo.
     fn can_undo(&self) -> bool {
         false

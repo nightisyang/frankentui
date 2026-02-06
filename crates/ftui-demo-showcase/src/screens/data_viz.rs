@@ -74,6 +74,7 @@ pub struct DataViz {
     chart_data: ChartData,
     tick_count: u64,
     bar_horizontal: bool,
+    paused: bool,
     layout_sparkline: StdCell<Rect>,
     layout_barchart: StdCell<Rect>,
     layout_spectrum: StdCell<Rect>,
@@ -99,6 +100,7 @@ impl DataViz {
             chart_data,
             tick_count: 30,
             bar_horizontal: false,
+            paused: false,
             layout_sparkline: StdCell::new(Rect::default()),
             layout_barchart: StdCell::new(Rect::default()),
             layout_spectrum: StdCell::new(Rect::default()),
@@ -798,10 +800,38 @@ impl Screen for DataViz {
             self.bar_horizontal = !self.bar_horizontal;
         }
 
+        // Pause / resume data animation with Space
+        if let Event::Key(KeyEvent {
+            code: KeyCode::Char(' '),
+            kind: KeyEventKind::Press,
+            ..
+        }) = event
+        {
+            self.paused = !self.paused;
+        }
+
+        // Reset chart data with 'r'
+        if let Event::Key(KeyEvent {
+            code: KeyCode::Char('r'),
+            kind: KeyEventKind::Press,
+            ..
+        }) = event
+        {
+            let mut chart_data = ChartData::default();
+            for t in 0..30 {
+                chart_data.tick(t);
+            }
+            self.chart_data = chart_data;
+            self.tick_count = 30;
+        }
+
         Cmd::None
     }
 
     fn tick(&mut self, tick_count: u64) {
+        if self.paused {
+            return;
+        }
         self.tick_count = tick_count;
         self.chart_data.tick(tick_count);
     }
@@ -856,9 +886,10 @@ impl Screen for DataViz {
         self.render_micro_panels(frame, rows[2]);
 
         // Status bar
+        let pause_label = if self.paused { " [PAUSED]" } else { "" };
         let status = format!(
-            "Tick: {} | \u{2190}/\u{2192}/\u{2191}/\u{2193}: panels | d: toggle bar direction",
-            self.tick_count
+            "Tick: {}{} | Arrows: panels | d: bar dir | Space: pause | r: reset",
+            self.tick_count, pause_label
         );
         Paragraph::new(&*status)
             .style(Style::new().fg(theme::fg::MUTED).bg(theme::alpha::SURFACE))
@@ -874,6 +905,18 @@ impl Screen for DataViz {
             HelpEntry {
                 key: "d",
                 action: "Toggle bar direction",
+            },
+            HelpEntry {
+                key: "Space",
+                action: if self.paused {
+                    "Resume animation"
+                } else {
+                    "Pause animation"
+                },
+            },
+            HelpEntry {
+                key: "r",
+                action: "Reset chart data",
             },
         ]
     }
