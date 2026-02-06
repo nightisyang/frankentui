@@ -1612,21 +1612,21 @@ pub const FEATURE_MATRIX: &[FeatureMatrixEntry] = &[
     FeatureMatrixEntry {
         family: DiagramType::Sequence,
         feature: "activation bars",
-        level: MermaidSupportLevel::Unsupported,
+        level: MermaidSupportLevel::Partial,
         fixture: None,
         note: "not yet implemented",
     },
     FeatureMatrixEntry {
         family: DiagramType::Sequence,
         feature: "notes",
-        level: MermaidSupportLevel::Unsupported,
+        level: MermaidSupportLevel::Partial,
         fixture: None,
         note: "not yet implemented",
     },
     FeatureMatrixEntry {
         family: DiagramType::Sequence,
         feature: "alt/opt/loop/par blocks",
-        level: MermaidSupportLevel::Unsupported,
+        level: MermaidSupportLevel::Partial,
         fixture: None,
         note: "not yet implemented",
     },
@@ -3995,6 +3995,13 @@ pub fn normalize_ast_to_ir(
                     );
                 }
             }
+            Statement::SequenceParticipant { .. }
+            | Statement::SequenceActivation { .. }
+            | Statement::SequenceNote { .. }
+            | Statement::SequenceBlockStart { .. }
+            | Statement::SequenceBlockAlt { .. }
+            | Statement::SequenceBlockEnd { .. }
+            | Statement::SequenceAutonumber { .. } => {}
             Statement::Raw { text, span } => {
                 let is_pie_meta = ast.diagram_type == DiagramType::Pie
                     && (is_pie_show_data_line(text) || parse_pie_title_line(text).is_some());
@@ -4226,15 +4233,127 @@ pub fn normalize_ast_to_ir(
                     &mut warnings,
                 );
                 edge_drafts.push(EdgeDraft {
-                    from,
+                    from: from.clone(),
                     from_port: None,
-                    to,
+                    to: to.clone(),
                     to_port: None,
                     arrow: msg.arrow.clone(),
                     label: msg.message.clone(),
                     span: msg.span,
                     insertion_idx: idx,
                 });
+                // Add message participants to active cluster (control block).
+                if let Some(cluster_idx) = cluster_stack.last().copied() {
+                    cluster_drafts[cluster_idx].members.push(from);
+                    cluster_drafts[cluster_idx].members.push(to);
+                }
+            }
+            Statement::SequenceParticipant { id, alias, .. } => {
+                let label = alias.as_deref().unwrap_or(id.as_str());
+                upsert_node(
+                    id,
+                    Some(label),
+                    NodeShape::Rect,
+                    statement_span(statement),
+                    false,
+                    idx,
+                    &mut node_map,
+                    &mut node_drafts,
+                    &mut implicit_warned,
+                    &mut warnings,
+                );
+            }
+            Statement::SequenceBlockStart { kind, label, span } => {
+                // Map control blocks to clusters so they appear as regions in layout.
+                let cid = IrClusterId(cluster_drafts.len());
+                let title = if label.is_empty() {
+                    kind.as_str().to_string()
+                } else {
+                    format!("{} {label}", kind.as_str())
+                };
+                cluster_drafts.push(ClusterDraft {
+                    id: cid,
+                    title: Some(title),
+                    members: Vec::new(),
+                    span: *span,
+                });
+                cluster_stack.push(cluster_drafts.len() - 1);
+            }
+            Statement::SequenceBlockAlt { .. } => {
+                // Alt sections are visual dividers within a cluster.
+                // For now we don't create a separate cluster — the parent
+                // block cluster captures the members. A future enhancement
+                // could split the cluster here.
+            }
+            Statement::SequenceBlockEnd { .. } => {
+                cluster_stack.pop();
+            }
+            Statement::SequenceNote {
+                participants,
+                text,
+                span,
+                ..
+            } => {
+                // Create a note as a special node attached near the referenced participants.
+                let note_id = format!("seq_note_{}", node_drafts.len());
+                let nid = upsert_node(
+                    &note_id,
+                    Some(text),
+                    NodeShape::Rect,
+                    *span,
+                    false,
+                    idx,
+                    &mut node_map,
+                    &mut node_drafts,
+                    &mut implicit_warned,
+                    &mut warnings,
+                );
+                // If inside a block, add note to the cluster.
+                if let Some(cluster_idx) = cluster_stack.last().copied() {
+                    cluster_drafts[cluster_idx].members.push(note_id.clone());
+                }
+                let _ = nid;
+                // Ensure referenced participants exist as nodes.
+                for p in participants {
+                    let pid = normalize_id(p);
+                    if !pid.is_empty() {
+                        upsert_node(
+                            &pid,
+                            None,
+                            NodeShape::Rect,
+                            *span,
+                            true,
+                            idx,
+                            &mut node_map,
+                            &mut node_drafts,
+                            &mut implicit_warned,
+                            &mut warnings,
+                        );
+                    }
+                }
+            }
+            Statement::SequenceActivation {
+                participant, span, ..
+            } => {
+                // Ensure the participant exists as a node.
+                let pid = normalize_id(participant);
+                if !pid.is_empty() {
+                    upsert_node(
+                        &pid,
+                        None,
+                        NodeShape::Rect,
+                        *span,
+                        true,
+                        idx,
+                        &mut node_map,
+                        &mut node_drafts,
+                        &mut implicit_warned,
+                        &mut warnings,
+                    );
+                }
+            }
+            Statement::SequenceAutonumber { .. } => {
+                // Autonumber is a rendering hint — no IR action needed.
             }
             Statement::MindmapNode(node) => {
                 let base = mindmap_base_depth.get_or_insert(node.depth);
@@ -5511,6 +5630,44 @@ pub struct SequenceMessage {
     pub span: Span,
 }
 
+/// Placement of a sequence diagram note.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SequenceNotePlacement {
+    /// `Note over A,B` — spanning between participants
+    Over,
+    /// `Note right of A`
+    RightOf,
+    /// `Note left of A`
+    LeftOf,
+}
+
+/// Kind of sequence diagram control block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SequenceBlockKind {
+    Loop,
+    Alt,
+    Opt,
+    Par,
+    Critical,
+    Break,
+    Rect,
+}
+
+impl SequenceBlockKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Loop => "loop",
+            Self::Alt => "alt",
+            Self::Opt => "opt",
+            Self::Par => "par",
+            Self::Critical => "critical",
+            Self::Break => "break",
+            Self::Rect => "rect",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GanttTask {
     pub title: String,
@@ -5754,6 +5911,45 @@ pub enum Statement {
     ArchitectureGroup(ArchitectureGroup),
     ArchitectureService(ArchitectureService),
     SequenceMessage(SequenceMessage),
+    /// `participant X as Label` or `actor X as Label`
+    SequenceParticipant {
+        id: String,
+        alias: Option<String>,
+        is_actor: bool,
+        span: Span,
+    },
+    /// `activate X` or `deactivate X`
+    SequenceActivation {
+        participant: String,
+        active: bool,
+        span: Span,
+    },
+    /// `Note over A,B: text` or `Note right of A: text`
+    SequenceNote {
+        placement: SequenceNotePlacement,
+        participants: Vec<String>,
+        text: String,
+        span: Span,
+    },
+    /// Opening of a control block: `loop text`, `alt text`, `opt text`, `par text`, `critical text`, `break text`, `rect text`
+    SequenceBlockStart {
+        kind: SequenceBlockKind,
+        label: String,
+        span: Span,
+    },
+    /// `else text` or `and text` — alternative section within a block
+    SequenceBlockAlt {
+        label: String,
+        span: Span,
+    },
+    /// `end` — closes a control block
+    SequenceBlockEnd {
+        span: Span,
+    },
+    /// `autonumber` — enable message numbering
+    SequenceAutonumber {
+        span: Span,
+    },
     ClassMember {
         class: String,
         member: String,
@@ -7200,7 +7396,9 @@ pub fn parse_with_diagnostics(input: &str) -> MermaidParse {
                 }
             }
             DiagramType::Sequence => {
-                if let Some(msg) = parse_sequence(trimmed, span) {
+                if let Some(stmt) = parse_sequence_statement(trimmed, span) {
+                    statements.push(stmt);
+                } else if let Some(msg) = parse_sequence(trimmed, span) {
                     statements.push(Statement::SequenceMessage(msg));
                 } else {
                     statements.push(Statement::Raw {
@@ -7848,6 +8046,13 @@ fn statement_span(statement: &Statement) -> Span {
         Statement::QuadrantLabel { span, .. } => *span,
         Statement::QuadrantPoint(p) => p.span,
         Statement::PacketField(f) => f.span,
+        Statement::SequenceParticipant { span, .. } => *span,
+        Statement::SequenceActivation { span, .. } => *span,
+        Statement::SequenceNote { span, .. } => *span,
+        Statement::SequenceBlockStart { span, .. } => *span,
+        Statement::SequenceBlockAlt { span, .. } => *span,
+        Statement::SequenceBlockEnd { span, .. } => *span,
+        Statement::SequenceAutonumber { span, .. } => *span,
         Statement::Raw { span, .. } => *span,
     }
 }
@@ -8001,7 +8206,10 @@ fn parse_directive_statement(
     if let Some(statement) = parse_subgraph_line(line, span) {
         return Some(Ok(statement));
     }
-    if line.trim().eq_ignore_ascii_case("end") && diagram_type != DiagramType::BlockBeta {
+    if line.trim().eq_ignore_ascii_case("end")
+        && diagram_type != DiagramType::BlockBeta
+        && diagram_type != DiagramType::Sequence
+    {
         return Some(Ok(Statement::SubgraphEnd { span }));
     }
     if let Some(result) = parse_direction_line(line, span) {
@@ -8725,6 +8933,227 @@ fn parse_class_member(line: &str, span: Span) -> Option<Statement> {
             });
         }
     }
+    None
+}
+
+/// Parse sequence-diagram-specific statements: participant, actor, activate,
+/// deactivate, notes, control blocks (loop/alt/opt/par/critical/break/rect),
+/// else/and, end, and autonumber.
+fn parse_sequence_statement(line: &str, span: Span) -> Option<Statement> {
+    let lower = line.to_ascii_lowercase();
+    let trimmed = line.trim();
+
+    // participant X as Label  /  actor X as Label
+    if lower.starts_with("participant ") || lower.starts_with("actor ") {
+        let is_actor = lower.starts_with("actor ");
+        let prefix_len = if is_actor { 6 } else { 12 };
+        let rest = trimmed[prefix_len..].trim();
+        let (id, alias) = if let Some(as_pos) = rest.to_ascii_lowercase().find(" as ") {
+            let id_part = rest[..as_pos].trim();
+            let alias_part = rest[as_pos + 4..].trim();
+            (normalize_ws(id_part), Some(normalize_ws(alias_part)))
+        } else {
+            (normalize_ws(rest), None)
+        };
+        if id.is_empty() {
+            return None;
+        }
+        return Some(Statement::SequenceParticipant {
+            id,
+            alias,
+            is_actor,
+            span,
+        });
+    }
+
+    // activate X  /  deactivate X
+    if lower.starts_with("activate ") {
+        let rest = trimmed[9..].trim();
+        if !rest.is_empty() {
+            return Some(Statement::SequenceActivation {
+                participant: normalize_ws(rest),
+                active: true,
+                span,
+            });
+        }
+    }
+    if lower.starts_with("deactivate ") {
+        let rest = trimmed[11..].trim();
+        if !rest.is_empty() {
+            return Some(Statement::SequenceActivation {
+                participant: normalize_ws(rest),
+                active: false,
+                span,
+            });
+        }
+    }
+
+    // autonumber
+    if lower.starts_with("autonumber") {
+        return Some(Statement::SequenceAutonumber { span });
+    }
+
+    // Note over A,B: text  /  Note right of A: text  /  Note left of A: text
+    if lower.starts_with("note ") {
+        let rest = &trimmed[5..];
+        let rest_lower = rest.to_ascii_lowercase();
+        if rest_lower.starts_with("over ") {
+            let after = &rest[5..];
+            if let Some(colon) = after.find(':') {
+                let participants_str = &after[..colon];
+                let text = after[colon + 1..].trim();
+                let participants: Vec<String> = participants_str
+                    .split(',')
+                    .map(|s| normalize_ws(s.trim()))
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if !participants.is_empty() && !text.is_empty() {
+                    return Some(Statement::SequenceNote {
+                        placement: SequenceNotePlacement::Over,
+                        participants,
+                        text: normalize_ws(text),
+                        span,
+                    });
+                }
+            }
+        } else if rest_lower.starts_with("right of ") {
+            let after = &rest[9..];
+            if let Some(colon) = after.find(':') {
+                let participant = normalize_ws(after[..colon].trim());
+                let text = normalize_ws(after[colon + 1..].trim());
+                if !participant.is_empty() && !text.is_empty() {
+                    return Some(Statement::SequenceNote {
+                        placement: SequenceNotePlacement::RightOf,
+                        participants: vec![participant],
+                        text,
+                        span,
+                    });
+                }
+            }
+        } else if rest_lower.starts_with("left of ") {
+            let after = &rest[8..];
+            if let Some(colon) = after.find(':') {
+                let participant = normalize_ws(after[..colon].trim());
+                let text = normalize_ws(after[colon + 1..].trim());
+                if !participant.is_empty() && !text.is_empty() {
+                    return Some(Statement::SequenceNote {
+                        placement: SequenceNotePlacement::LeftOf,
+                        participants: vec![participant],
+                        text,
+                        span,
+                    });
+                }
+            }
+        }
+        return None;
+    }
+
+    // Control blocks: loop, alt, opt, par, critical, break, rect
+    let block_kind = if lower.starts_with("loop")
+        && (lower.len() == 4
+            || lower
+                .as_bytes()
+                .get(4)
+                .is_some_and(|b| b.is_ascii_whitespace()))
+    {
+        Some(SequenceBlockKind::Loop)
+    } else if lower.starts_with("alt")
+        && (lower.len() == 3
+            || lower
+                .as_bytes()
+                .get(3)
+                .is_some_and(|b| b.is_ascii_whitespace()))
+    {
+        Some(SequenceBlockKind::Alt)
+    } else if lower.starts_with("opt")
+        && (lower.len() == 3
+            || lower
+                .as_bytes()
+                .get(3)
+                .is_some_and(|b| b.is_ascii_whitespace()))
+    {
+        Some(SequenceBlockKind::Opt)
+    } else if lower.starts_with("par")
+        && (lower.len() == 3
+            || lower
+                .as_bytes()
+                .get(3)
+                .is_some_and(|b| b.is_ascii_whitespace()))
+    {
+        Some(SequenceBlockKind::Par)
+    } else if lower.starts_with("critical")
+        && (lower.len() == 8
+            || lower
+                .as_bytes()
+                .get(8)
+                .is_some_and(|b| b.is_ascii_whitespace()))
+    {
+        Some(SequenceBlockKind::Critical)
+    } else if lower.starts_with("break")
+        && (lower.len() == 5
+            || lower
+                .as_bytes()
+                .get(5)
+                .is_some_and(|b| b.is_ascii_whitespace()))
+    {
+        Some(SequenceBlockKind::Break)
+    } else if lower.starts_with("rect")
+        && (lower.len() == 4
+            || lower
+                .as_bytes()
+                .get(4)
+                .is_some_and(|b| b.is_ascii_whitespace()))
+    {
+        Some(SequenceBlockKind::Rect)
+    } else {
+        None
+    };
+
+    if let Some(kind) = block_kind {
+        let keyword_len = kind.as_str().len();
+        let label = if trimmed.len() > keyword_len {
+            normalize_ws(trimmed[keyword_len..].trim())
+        } else {
+            String::new()
+        };
+        return Some(Statement::SequenceBlockStart { kind, label, span });
+    }
+
+    // else / and — alternative sections within alt/par
+    if lower.starts_with("else")
+        && (lower.len() == 4
+            || lower
+                .as_bytes()
+                .get(4)
+                .is_some_and(|b| b.is_ascii_whitespace()))
+    {
+        let label = if trimmed.len() > 4 {
+            normalize_ws(trimmed[4..].trim())
+        } else {
+            String::new()
+        };
+        return Some(Statement::SequenceBlockAlt { label, span });
+    }
+    if lower.starts_with("and")
+        && (lower.len() == 3
+            || lower
+                .as_bytes()
+                .get(3)
+                .is_some_and(|b| b.is_ascii_whitespace()))
+    {
+        let label = if trimmed.len() > 3 {
+            normalize_ws(trimmed[3..].trim())
+        } else {
+            String::new()
+        };
+        return Some(Statement::SequenceBlockAlt { label, span });
+    }
+
+    // end — closes a control block
+    if lower == "end" {
+        return Some(Statement::SequenceBlockEnd { span });
+    }
+
     None
 }
 
@@ -10464,6 +10893,197 @@ mod tests {
             .filter(|s| matches!(s, Statement::SequenceMessage(_)))
             .count();
         assert_eq!(msgs, 1);
+    }
+
+    #[test]
+    fn parse_sequence_participant_with_alias() {
+        let ast = parse("sequenceDiagram\nparticipant A as Alice\nA->>B: Hello\n").expect("parse");
+        let participants = ast
+            .statements
+            .iter()
+            .filter(|s| matches!(s, Statement::SequenceParticipant { .. }))
+            .count();
+        assert_eq!(participants, 1);
+        if let Statement::SequenceParticipant {
+            id,
+            alias,
+            is_actor,
+            ..
+        } = &ast.statements[0]
+        {
+            assert_eq!(id, "A");
+            assert_eq!(alias.as_deref(), Some("Alice"));
+            assert!(!is_actor);
+        } else {
+            panic!("expected SequenceParticipant");
+        }
+    }
+
+    #[test]
+    fn parse_sequence_actor() {
+        let ast = parse("sequenceDiagram\nactor U as User\n").expect("parse");
+        let actors = ast
+            .statements
+            .iter()
+            .filter(|s| matches!(s, Statement::SequenceParticipant { is_actor: true, .. }))
+            .count();
+        assert_eq!(actors, 1);
+    }
+
+    #[test]
+    fn parse_sequence_control_blocks() {
+        let input = "sequenceDiagram\nloop Every minute\nA->>B: Heartbeat\nend\n";
+        let ast = parse(input).expect("parse");
+        let starts = ast
+            .statements
+            .iter()
+            .filter(|s| matches!(s, Statement::SequenceBlockStart { .. }))
+            .count();
+        let ends = ast
+            .statements
+            .iter()
+            .filter(|s| matches!(s, Statement::SequenceBlockEnd { .. }))
+            .count();
+        assert_eq!(starts, 1, "expected 1 block start");
+        assert_eq!(ends, 1, "expected 1 block end");
+        if let Statement::SequenceBlockStart { kind, label, .. } = &ast.statements[0] {
+            assert_eq!(*kind, SequenceBlockKind::Loop);
+            assert_eq!(label, "Every minute");
+        } else {
+            panic!("expected SequenceBlockStart");
+        }
+    }
+
+    #[test]
+    fn parse_sequence_alt_else() {
+        let input = "sequenceDiagram\nalt Success\nA->>B: OK\nelse Failure\nA->>B: Error\nend\n";
+        let ast = parse(input).expect("parse");
+        let alts = ast
+            .statements
+            .iter()
+            .filter(|s| matches!(s, Statement::SequenceBlockAlt { .. }))
+            .count();
+        assert_eq!(alts, 1, "expected 1 else/and section");
+    }
+
+    #[test]
+    fn parse_sequence_note_over() {
+        let input = "sequenceDiagram\nNote over A,B: System note\n";
+        let ast = parse(input).expect("parse");
+        let notes = ast
+            .statements
+            .iter()
+            .filter(|s| matches!(s, Statement::SequenceNote { .. }))
+            .count();
+        assert_eq!(notes, 1);
+        if let Statement::SequenceNote {
+            placement,
+            participants,
+            text,
+            ..
+        } = &ast.statements[0]
+        {
+            assert_eq!(*placement, SequenceNotePlacement::Over);
+            assert_eq!(participants.len(), 2);
+            assert_eq!(text, "System note");
+        } else {
+            panic!("expected SequenceNote");
+        }
+    }
+
+    #[test]
+    fn parse_sequence_note_right_of() {
+        let input = "sequenceDiagram\nNote right of A: Private note\n";
+        let ast = parse(input).expect("parse");
+        if let Statement::SequenceNote {
+            placement,
+            participants,
+            text,
+            ..
+        } = &ast.statements[0]
+        {
+            assert_eq!(*placement, SequenceNotePlacement::RightOf);
+            assert_eq!(participants, &["A"]);
+            assert_eq!(text, "Private note");
+        } else {
+            panic!("expected SequenceNote");
+        }
+    }
+
+    #[test]
+    fn parse_sequence_activate_deactivate() {
+        let input = "sequenceDiagram\nactivate A\nA->>B: Call\ndeactivate A\n";
+        let ast = parse(input).expect("parse");
+        let activations = ast
+            .statements
+            .iter()
+            .filter(|s| matches!(s, Statement::SequenceActivation { .. }))
+            .count();
+        assert_eq!(activations, 2);
+    }
+
+    #[test]
+    fn parse_sequence_autonumber() {
+        let input = "sequenceDiagram\nautonumber\nA->>B: Hello\n";
+        let ast = parse(input).expect("parse");
+        let autos = ast
+            .statements
+            .iter()
+            .filter(|s| matches!(s, Statement::SequenceAutonumber { .. }))
+            .count();
+        assert_eq!(autos, 1);
+    }
+
+    #[test]
+    fn parse_sequence_stress_no_raw_fallback() {
+        // The stress fixture should parse all lines into structured statements,
+        // not fall back to Raw for control blocks/notes.
+        let input = std::fs::read_to_string("tests/fixtures/mermaid/sequence_stress.mmd")
+            .expect("read fixture");
+        let ast = parse(&input).expect("parse");
+        let raw_count = ast
+            .statements
+            .iter()
+            .filter(|s| matches!(s, Statement::Raw { .. }))
+            .count();
+        // There should be zero or very few Raw statements (comments are OK)
+        assert!(
+            raw_count <= 1,
+            "expected at most 1 raw statement, got {raw_count}"
+        );
+    }
+
+    #[test]
+    fn sequence_ir_has_participants_and_edges() {
+        let input = "sequenceDiagram\nparticipant A as Alice\nparticipant B as Bob\nA->>B: Hello\nB-->>A: Hi\n";
+        let ast = parse(input).expect("parse");
+        let config = MermaidConfig::default();
+        let normalized = normalize_ast_to_ir(
+            &ast,
+            &config,
+            &MermaidCompatibilityMatrix::default(),
+            &MermaidFallbackPolicy::default(),
+        );
+        // Should have 2 nodes (Alice, Bob) and 2 edges
+        assert_eq!(normalized.ir.nodes.len(), 2, "expected 2 participant nodes");
+        assert_eq!(normalized.ir.edges.len(), 2, "expected 2 message edges");
+    }
+
+    #[test]
+    fn sequence_ir_control_block_creates_cluster() {
+        let input = "sequenceDiagram\nloop Every sec\nA->>B: Ping\nend\n";
+        let ast = parse(input).expect("parse");
+        let config = MermaidConfig::default();
+        let normalized = normalize_ast_to_ir(
+            &ast,
+            &config,
+            &MermaidCompatibilityMatrix::default(),
+            &MermaidFallbackPolicy::default(),
+        );
+        assert!(
+            !normalized.ir.clusters.is_empty(),
+            "expected at least 1 cluster for loop block"
+        );
     }
 
     #[test]
@@ -12642,7 +13262,10 @@ mod tests {
         assert!(service_count >= 3, "expected >= 3 services");
         assert_eq!(group_count, 0, "basic fixture should not declare groups");
         assert!(edge_count >= 2, "expected >= 2 edges");
-        assert_eq!(raw_count, 0, "architecture-beta should not fall back to Raw");
+        assert_eq!(
+            raw_count, 0,
+            "architecture-beta should not fall back to Raw"
+        );
 
         let config = MermaidConfig::default();
         let ir_parse = normalize_ast_to_ir(

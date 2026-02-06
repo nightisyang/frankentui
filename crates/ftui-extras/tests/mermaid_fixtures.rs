@@ -601,6 +601,13 @@ mod tests {
                 | Statement::BlockDef(_)
                 | Statement::BlockGroupStart { .. }
                 | Statement::BlockGroupEnd { .. } => counts.block_beta += 1,
+                Statement::SequenceParticipant { .. }
+                | Statement::SequenceNote { .. }
+                | Statement::SequenceActivation { .. }
+                | Statement::SequenceBlockStart { .. }
+                | Statement::SequenceBlockAlt { .. }
+                | Statement::SequenceBlockEnd { .. }
+                | Statement::SequenceAutonumber { .. } => counts.sequence += 1,
                 Statement::Raw { .. } => counts.raw += 1,
             }
         }
@@ -735,8 +742,8 @@ mod tests {
                 }
                 "sequence_stress" => {
                     assert_eq!(parsed.ast.diagram_type, DiagramType::Sequence);
-                    assert!(counts.sequence >= 8, "sequence_stress messages < 8");
-                    assert!(counts.raw >= 1, "sequence_stress raw (loop/alt) missing");
+                    // Sequence messages + control blocks + notes + participants
+                    assert!(counts.sequence >= 8, "sequence_stress statements < 8");
                 }
                 // -- State family --
                 "state_basic" => {
@@ -807,7 +814,8 @@ mod tests {
                 "unsupported_mix" => {
                     assert_eq!(parsed.ast.diagram_type, DiagramType::Sequence);
                     assert!(counts.sequence >= 1, "unsupported_mix message missing");
-                    assert!(counts.raw >= 1, "unsupported_mix raw fallback missing");
+                    // Notes and participants are now parsed as structured statements,
+                    // so the raw fallback count may be zero.
                     assert!(counts.links >= 1, "unsupported_mix link/click missing");
                 }
                 // -- GitGraph family --

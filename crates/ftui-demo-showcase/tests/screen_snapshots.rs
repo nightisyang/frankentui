@@ -3384,3 +3384,77 @@ fn mega_showcase_architecture_beta_stress_200x60() {
         "mega_showcase_architecture_beta_stress_200x60",
     );
 }
+
+// ============================================================================
+// Mermaid Mega Showcase — Sequence Diagrams (bd-2kn9a)
+// ============================================================================
+
+#[test]
+fn mega_showcase_sequence_loops_80x24() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen =
+        ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
+    mega_showcase_goto_sample(&mut screen, 16);
+    mega_showcase_snapshot(
+        &mut screen,
+        80,
+        24,
+        "mega_showcase_sequence_loops_80x24",
+    );
+}
+
+#[test]
+fn mega_showcase_sequence_loops_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen =
+        ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
+    mega_showcase_goto_sample(&mut screen, 16);
+    mega_showcase_snapshot(
+        &mut screen,
+        120,
+        40,
+        "mega_showcase_sequence_loops_120x40",
+    );
+}
+
+#[test]
+fn mega_showcase_sequence_parallel_80x24() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen =
+        ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
+    mega_showcase_goto_sample(&mut screen, 17);
+    mega_showcase_snapshot(
+        &mut screen,
+        80,
+        24,
+        "mega_showcase_sequence_parallel_80x24",
+    );
+}
+
+#[test]
+fn mega_showcase_sequence_parallel_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen =
+        ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
+    mega_showcase_goto_sample(&mut screen, 17);
+    mega_showcase_snapshot(
+        &mut screen,
+        120,
+        40,
+        "mega_showcase_sequence_parallel_120x40",
+    );
+}
+
+#[test]
+fn mega_showcase_sequence_dense_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen =
+        ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
+    mega_showcase_goto_sample(&mut screen, 29);
+    mega_showcase_snapshot(
+        &mut screen,
+        120,
+        40,
+        "mega_showcase_sequence_dense_120x40",
+    );
+}
