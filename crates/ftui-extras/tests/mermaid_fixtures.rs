@@ -397,14 +397,14 @@ const FIXTURES: &[MermaidFixture] = &[
         tier: FixtureTier::Stress,
         expects_raw_fallback: true,
     },
-    // -- C4Context (raw fallback) --
+    // -- C4Context (partial) --
     MermaidFixture {
         id: "c4_context_basic",
         file: "c4_context_basic.mmd",
         source: include_str!("fixtures/mermaid/c4_context_basic.mmd"),
         family: "C4Context",
         tier: FixtureTier::Basic,
-        expects_raw_fallback: true,
+        expects_raw_fallback: false,
     },
     MermaidFixture {
         id: "c4_context_stress",
@@ -412,16 +412,16 @@ const FIXTURES: &[MermaidFixture] = &[
         source: include_str!("fixtures/mermaid/c4_context_stress.mmd"),
         family: "C4Context",
         tier: FixtureTier::Stress,
-        expects_raw_fallback: true,
+        expects_raw_fallback: false,
     },
-    // -- C4Container (raw fallback) --
+    // -- C4Container (partial) --
     MermaidFixture {
         id: "c4_container_basic",
         file: "c4_container_basic.mmd",
         source: include_str!("fixtures/mermaid/c4_container_basic.mmd"),
         family: "C4Container",
         tier: FixtureTier::Basic,
-        expects_raw_fallback: true,
+        expects_raw_fallback: false,
     },
     MermaidFixture {
         id: "c4_container_stress",
@@ -429,16 +429,16 @@ const FIXTURES: &[MermaidFixture] = &[
         source: include_str!("fixtures/mermaid/c4_container_stress.mmd"),
         family: "C4Container",
         tier: FixtureTier::Stress,
-        expects_raw_fallback: true,
+        expects_raw_fallback: false,
     },
-    // -- C4Component (raw fallback) --
+    // -- C4Component (partial) --
     MermaidFixture {
         id: "c4_component_basic",
         file: "c4_component_basic.mmd",
         source: include_str!("fixtures/mermaid/c4_component_basic.mmd"),
         family: "C4Component",
         tier: FixtureTier::Basic,
-        expects_raw_fallback: true,
+        expects_raw_fallback: false,
     },
     MermaidFixture {
         id: "c4_component_stress",
@@ -446,16 +446,16 @@ const FIXTURES: &[MermaidFixture] = &[
         source: include_str!("fixtures/mermaid/c4_component_stress.mmd"),
         family: "C4Component",
         tier: FixtureTier::Stress,
-        expects_raw_fallback: true,
+        expects_raw_fallback: false,
     },
-    // -- C4Dynamic (raw fallback) --
+    // -- C4Dynamic (partial) --
     MermaidFixture {
         id: "c4_dynamic_basic",
         file: "c4_dynamic_basic.mmd",
         source: include_str!("fixtures/mermaid/c4_dynamic_basic.mmd"),
         family: "C4Dynamic",
         tier: FixtureTier::Basic,
-        expects_raw_fallback: true,
+        expects_raw_fallback: false,
     },
     MermaidFixture {
         id: "c4_dynamic_stress",
@@ -463,16 +463,16 @@ const FIXTURES: &[MermaidFixture] = &[
         source: include_str!("fixtures/mermaid/c4_dynamic_stress.mmd"),
         family: "C4Dynamic",
         tier: FixtureTier::Stress,
-        expects_raw_fallback: true,
+        expects_raw_fallback: false,
     },
-    // -- C4Deployment (raw fallback) --
+    // -- C4Deployment (partial) --
     MermaidFixture {
         id: "c4_deployment_basic",
         file: "c4_deployment_basic.mmd",
         source: include_str!("fixtures/mermaid/c4_deployment_basic.mmd"),
         family: "C4Deployment",
         tier: FixtureTier::Basic,
-        expects_raw_fallback: true,
+        expects_raw_fallback: false,
     },
     MermaidFixture {
         id: "c4_deployment_stress",
@@ -480,7 +480,7 @@ const FIXTURES: &[MermaidFixture] = &[
         source: include_str!("fixtures/mermaid/c4_deployment_stress.mmd"),
         family: "C4Deployment",
         tier: FixtureTier::Stress,
-        expects_raw_fallback: true,
+        expects_raw_fallback: false,
     },
 ];
 
@@ -521,6 +521,7 @@ mod tests {
         xy_chart: usize,
         sankey: usize,
         raw: usize,
+        c4: usize,
     }
 
     fn count_statements(statements: &[Statement]) -> AstCounts {
@@ -556,9 +557,18 @@ mod tests {
                 Statement::RequirementDef(_)
                 | Statement::RequirementRelation(_)
                 | Statement::RequirementElement(_) => counts.requirement += 1,
-                Statement::TimelineSection { .. } | Statement::TimelineEvent(_) => counts.timeline += 1,
-                Statement::XyChartXAxis { .. } | Statement::XyChartYAxis { .. } | Statement::XyChartSeries(_) => counts.xy_chart += 1,
+                Statement::TimelineSection { .. } | Statement::TimelineEvent(_) => {
+                    counts.timeline += 1
+                }
+                Statement::XyChartXAxis { .. }
+                | Statement::XyChartYAxis { .. }
+                | Statement::XyChartSeries(_) => counts.xy_chart += 1,
                 Statement::SankeyLink(_) => counts.sankey += 1,
+                Statement::C4Element(_)
+                | Statement::C4Relation(_)
+                | Statement::C4BoundaryStart(_)
+                | Statement::C4BoundaryEnd { .. }
+                | Statement::C4Title { .. } => counts.c4 += 1,
                 Statement::Raw { .. } => counts.raw += 1,
             }
         }
@@ -592,6 +602,7 @@ mod tests {
             + c.timeline
             + c.xy_chart
             + c.sankey
+            + c.c4
             + c.raw
     }
 
