@@ -441,4 +441,97 @@ mod tests {
         engine.jump();
         assert!(!engine.player.on_ground);
     }
+
+    #[test]
+    fn engine_new_no_map() {
+        let engine = QuakeEngine::new();
+        assert!(engine.map.is_none());
+        assert_eq!(engine.frame, 0);
+        assert_eq!(engine.time, 0.0);
+    }
+
+    #[test]
+    fn engine_load_test_map() {
+        let mut engine = QuakeEngine::new();
+        engine.load_test_map();
+        assert!(engine.map.is_some());
+    }
+
+    #[test]
+    fn engine_fire_flash_decays() {
+        let mut engine = QuakeEngine::default();
+        engine.fire();
+        assert!((engine.fire_flash - 1.0).abs() < 0.01);
+        engine.update(0.5);
+        assert!(engine.fire_flash < 1.0, "flash should decay after update");
+    }
+
+    #[test]
+    fn engine_update_caps_ticks() {
+        let mut engine = QuakeEngine::default();
+        // Very large dt should be capped (10 ticks max)
+        engine.update(10.0);
+        // Engine should still be in a valid state
+        assert!(engine.time > 0.0);
+    }
+
+    #[test]
+    fn engine_toggle_run() {
+        let mut engine = QuakeEngine::default();
+        assert!(!engine.player.running);
+        engine.toggle_run();
+        assert!(engine.player.running);
+        engine.toggle_run();
+        assert!(!engine.player.running);
+    }
+
+    #[test]
+    fn engine_strafe_changes_velocity() {
+        let mut engine = QuakeEngine::default();
+        engine.strafe(1.0);
+        let vel_mag = engine.player.vel[0].abs() + engine.player.vel[1].abs();
+        assert!(vel_mag > 0.0, "strafing should add velocity");
+    }
+
+    #[test]
+    fn engine_look_changes_yaw() {
+        let mut engine = QuakeEngine::default();
+        let original_yaw = engine.player.yaw;
+        engine.look(0.5, 0.0);
+        assert!((engine.player.yaw - original_yaw).abs() > 0.01);
+    }
+
+    #[test]
+    fn engine_show_crosshair_default_true() {
+        let engine = QuakeEngine::default();
+        assert!(engine.show_crosshair);
+        assert!(!engine.show_minimap);
+    }
+
+    #[test]
+    fn engine_render_no_map() {
+        let mut engine = QuakeEngine::new();
+        let mut painter = Painter::new(120, 80, crate::canvas::Mode::Braille);
+        engine.render(&mut painter, 60, 20, 1);
+        // Should not panic even without a map
+        assert_eq!(engine.frame, 1);
+    }
+
+    #[test]
+    fn engine_render_with_minimap() {
+        let mut engine = QuakeEngine::default();
+        engine.show_minimap = true;
+        let mut painter = Painter::new(240, 160, crate::canvas::Mode::Braille);
+        engine.render(&mut painter, 120, 40, 1);
+        // Should not panic with minimap enabled
+    }
+
+    #[test]
+    fn engine_render_with_fire_flash() {
+        let mut engine = QuakeEngine::default();
+        engine.fire();
+        let mut painter = Painter::new(240, 160, crate::canvas::Mode::Braille);
+        engine.render(&mut painter, 120, 40, 1);
+        // Should not panic with fire flash active
+    }
 }
