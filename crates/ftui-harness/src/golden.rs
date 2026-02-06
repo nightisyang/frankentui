@@ -673,4 +673,214 @@ mod tests {
         assert!(scenarios.iter().any(|s| s.resize_steps.is_empty()));
         assert!(scenarios.iter().any(|s| !s.resize_steps.is_empty()));
     }
+
+    // ── GoldenOutcome ─────────────────────────────────────────────────
+
+    #[test]
+    fn outcome_as_str() {
+        assert_eq!(GoldenOutcome::Pass.as_str(), "pass");
+        assert_eq!(GoldenOutcome::Fail.as_str(), "fail");
+        assert_eq!(GoldenOutcome::Skip.as_str(), "skip");
+    }
+
+    // ── GoldenResult formatting ───────────────────────────────────────
+
+    #[test]
+    fn result_format_pass() {
+        let r = GoldenResult {
+            scenario: "test".into(),
+            outcome: GoldenOutcome::Pass,
+            checksums: vec![],
+            expected_checksums: vec![],
+            mismatch_index: None,
+            duration_ms: 42,
+        };
+        assert!(r.is_pass());
+        let s = r.format();
+        assert!(s.contains("PASS"), "{s}");
+        assert!(s.contains("42ms"), "{s}");
+    }
+
+    #[test]
+    fn result_format_fail_missing_golden() {
+        let r = GoldenResult {
+            scenario: "test".into(),
+            outcome: GoldenOutcome::Fail,
+            checksums: vec!["sha256:abc".into()],
+            expected_checksums: vec![],
+            mismatch_index: None,
+            duration_ms: 0,
+        };
+        assert!(!r.is_pass());
+        let s = r.format();
+        assert!(s.contains("missing golden checksums"), "{s}");
+    }
+
+    #[test]
+    fn result_format_fail_mismatch() {
+        let r = GoldenResult {
+            scenario: "test".into(),
+            outcome: GoldenOutcome::Fail,
+            checksums: vec!["sha256:abc".into(), "sha256:wrong".into()],
+            expected_checksums: vec!["sha256:abc".into(), "sha256:def".into()],
+            mismatch_index: Some(1),
+            duration_ms: 0,
+        };
+        let s = r.format();
+        assert!(s.contains("checksum mismatch at frame 1"), "{s}");
+        assert!(s.contains("sha256:def"), "expected: {s}");
+        assert!(s.contains("sha256:wrong"), "actual: {s}");
+    }
+
+    #[test]
+    fn result_format_fail_count_mismatch() {
+        let r = GoldenResult {
+            scenario: "test".into(),
+            outcome: GoldenOutcome::Fail,
+            checksums: vec!["sha256:abc".into()],
+            expected_checksums: vec!["sha256:abc".into(), "sha256:def".into()],
+            mismatch_index: None,
+            duration_ms: 0,
+        };
+        let s = r.format();
+        assert!(s.contains("checksum count mismatch"), "{s}");
+    }
+
+    #[test]
+    fn result_format_skip() {
+        let r = GoldenResult {
+            scenario: "test".into(),
+            outcome: GoldenOutcome::Skip,
+            checksums: vec![],
+            expected_checksums: vec![],
+            mismatch_index: None,
+            duration_ms: 0,
+        };
+        assert!(r.format().starts_with("SKIP:"));
+    }
+
+    // ── GoldenLogger ──────────────────────────────────────────────────
+
+    #[test]
+    fn noop_logger_does_not_crash() {
+        let mut logger = GoldenLogger::noop();
+        let env = GoldenEnv::capture();
+        logger.log_start("test_case", &env);
+        logger.log_frame(0, 80, 24, "sha256:abc", 10);
+        logger.log_resize(80, 24, 120, 40, 5);
+        logger.log_error("some error");
+        logger.log_complete(GoldenOutcome::Pass);
+        assert_eq!(logger.checksums(), &["sha256:abc".to_string()]);
+    }
+
+    #[test]
+    fn file_logger_writes_events() {
+        let dir = std::env::temp_dir().join(format!(
+            "ftui_golden_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let log_path = dir.join("test.jsonl");
+        {
+            let mut logger = GoldenLogger::new(&log_path).expect("create logger");
+            let env = GoldenEnv::capture();
+            logger.log_start("test", &env);
+            logger.log_frame(0, 80, 24, "sha256:aaa", 1);
+            logger.log_resize(80, 24, 120, 40, 2);
+            logger.log_frame(1, 120, 40, "sha256:bbb", 3);
+            logger.log_complete(GoldenOutcome::Pass);
+        }
+        let content = std::fs::read_to_string(&log_path).expect("read log");
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 5, "should have 5 JSONL events");
+        assert!(lines[0].contains("\"event\":\"start\""));
+        assert!(lines[1].contains("\"event\":\"frame\""));
+        assert!(lines[2].contains("\"event\":\"resize\""));
+        assert!(lines[3].contains("\"event\":\"frame\""));
+        assert!(lines[4].contains("\"event\":\"complete\""));
+        assert!(lines[4].contains("\"outcome\":\"pass\""));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Golden file I/O ───────────────────────────────────────────────
+
+    #[test]
+    fn save_and_load_golden_checksums() {
+        let dir = std::env::temp_dir().join(format!(
+            "ftui_golden_io_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let path = dir.join("tests").join("golden").join("test.checksums");
+        let checksums = vec!["sha256:abc".to_string(), "sha256:def".to_string()];
+        save_golden_checksums(&path, &checksums).expect("save");
+        let loaded = load_golden_checksums(&path).expect("load");
+        assert_eq!(loaded, checksums);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_golden_checksums_nonexistent_returns_empty() {
+        let path = std::path::Path::new("/tmp/nonexistent_golden_12345.checksums");
+        let loaded = load_golden_checksums(path).expect("should return empty");
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn load_golden_checksums_skips_comments_and_blanks() {
+        let dir = std::env::temp_dir().join(format!(
+            "ftui_golden_comments_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("test.checksums");
+        std::fs::write(
+            &path,
+            "# comment\nsha256:abc\n\nsha256:def\n# another comment\n",
+        )
+        .unwrap();
+        let loaded = load_golden_checksums(&path).expect("load");
+        assert_eq!(loaded, vec!["sha256:abc", "sha256:def"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn golden_checksum_path_format() {
+        let base = std::path::Path::new("/project");
+        let path = golden_checksum_path(base, "resize_80x24");
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/project/tests/golden/resize_80x24.checksums")
+        );
+    }
+
+    // ── ResizeScenario builder ────────────────────────────────────────
+
+    #[test]
+    fn resize_scenario_with_expected() {
+        let scenario =
+            ResizeScenario::fixed("test", 80, 24).with_expected(vec!["sha256:abc".into()]);
+        assert_eq!(scenario.expected_checksums, vec!["sha256:abc"]);
+    }
+
+    // ── GoldenEnv::to_json produces valid JSON ────────────────────────
+
+    #[test]
+    fn golden_env_to_json_is_valid() {
+        let env = GoldenEnv::capture();
+        let json = env.to_json();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("GoldenEnv::to_json should produce valid JSON");
+        assert!(parsed.get("term").is_some());
+        assert!(parsed.get("seed").is_some());
+        assert!(parsed.get("rust_version").is_some());
+        assert!(parsed.get("git_commit").is_some());
+    }
 }
