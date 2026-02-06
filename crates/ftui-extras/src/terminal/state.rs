@@ -1292,4 +1292,164 @@ mod tests {
         assert!(state.cell(5, 3).unwrap().is_empty());
         assert!(state.title().is_empty());
     }
+
+    #[test]
+    fn test_cell_attrs_set() {
+        let attrs = CellAttrs::NONE;
+        let bold = attrs.set(CellAttrs::BOLD, true);
+        assert!(bold.contains(CellAttrs::BOLD));
+        let cleared = bold.set(CellAttrs::BOLD, false);
+        assert!(!cleared.contains(CellAttrs::BOLD));
+    }
+
+    #[test]
+    fn test_dirty_region_mark_rect() {
+        let mut dirty = DirtyRegion::new(10, 5);
+        dirty.mark_rect(2, 1, 3, 2);
+        assert!(dirty.is_dirty(2, 1));
+        assert!(dirty.is_dirty(4, 2));
+        assert!(!dirty.is_dirty(5, 1));
+        assert!(!dirty.is_dirty(2, 0));
+        assert!(dirty.has_dirty());
+    }
+
+    #[test]
+    fn test_dirty_region_mark_all() {
+        let mut dirty = DirtyRegion::new(4, 4);
+        dirty.mark_all();
+        assert!(dirty.is_dirty(0, 0));
+        assert!(dirty.is_dirty(3, 3));
+        assert!(dirty.has_dirty());
+    }
+
+    #[test]
+    fn test_dirty_region_resize_clears() {
+        let mut dirty = DirtyRegion::new(10, 5);
+        dirty.mark_all();
+        assert!(dirty.has_dirty());
+        dirty.resize(20, 10);
+        assert!(!dirty.has_dirty());
+        assert!(!dirty.is_dirty(0, 0));
+    }
+
+    #[test]
+    fn test_scrollback_empty_and_clear() {
+        let mut sb = Scrollback::new(10);
+        assert!(sb.is_empty());
+        assert_eq!(sb.len(), 0);
+        sb.push(vec![Cell::default()]);
+        assert!(!sb.is_empty());
+        sb.clear();
+        assert!(sb.is_empty());
+    }
+
+    #[test]
+    fn test_scrollback_max_lines_zero_drops() {
+        let mut sb = Scrollback::new(0);
+        sb.push(vec![Cell::default()]);
+        assert!(sb.is_empty());
+    }
+
+    #[test]
+    fn test_scrollback_push_many_overflow() {
+        let mut sb = Scrollback::new(3);
+        sb.push_many((0..5).map(|i| vec![Cell::new((b'A' + i) as char)]));
+        assert_eq!(sb.len(), 3);
+        // Most recent is index 0
+        assert_eq!(sb.line(0).unwrap()[0].ch, 'E');
+        assert_eq!(sb.line(2).unwrap()[0].ch, 'C');
+        assert!(sb.line(3).is_none());
+    }
+
+    #[test]
+    fn test_pen_reset() {
+        let mut pen = Pen {
+            fg: Some(Color::rgb(255, 0, 0)),
+            bg: Some(Color::rgb(0, 255, 0)),
+            attrs: CellAttrs::BOLD,
+        };
+        pen.reset();
+        assert_eq!(pen.fg, None);
+        assert_eq!(pen.bg, None);
+        assert_eq!(pen.attrs, CellAttrs::NONE);
+    }
+
+    #[test]
+    fn test_set_cursor_visible() {
+        let mut state = TerminalState::new(10, 5);
+        assert!(state.cursor().visible);
+        state.set_cursor_visible(false);
+        assert!(!state.cursor().visible);
+        assert!(!state.modes().contains(TerminalModes::CURSOR_VISIBLE));
+        state.set_cursor_visible(true);
+        assert!(state.cursor().visible);
+        assert!(state.modes().contains(TerminalModes::CURSOR_VISIBLE));
+    }
+
+    #[test]
+    fn test_clear_region_cursor_to_end() {
+        let mut state = TerminalState::new(5, 3);
+        for ch in ['A', 'B', 'C', 'D', 'E'] {
+            state.put_char(ch);
+        }
+        state.move_cursor(0, 1);
+        for ch in ['F', 'G', 'H', 'I', 'J'] {
+            state.put_char(ch);
+        }
+        // Cursor at col 2, row 1 — clear from cursor to end of screen
+        state.move_cursor(2, 0);
+        state.clear_region(ClearRegion::CursorToEnd);
+        assert_eq!(state.cell(0, 0).unwrap().ch, 'A');
+        assert_eq!(state.cell(1, 0).unwrap().ch, 'B');
+        assert!(state.cell(2, 0).unwrap().is_empty());
+        assert!(state.cell(0, 1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_clear_region_start_to_cursor() {
+        let mut state = TerminalState::new(5, 3);
+        for ch in ['A', 'B', 'C', 'D', 'E'] {
+            state.put_char(ch);
+        }
+        state.move_cursor(0, 1);
+        for ch in ['F', 'G', 'H', 'I', 'J'] {
+            state.put_char(ch);
+        }
+        state.move_cursor(2, 1);
+        state.clear_region(ClearRegion::StartToCursor);
+        // Row 0 should be cleared
+        assert!(state.cell(0, 0).unwrap().is_empty());
+        // Row 1, cols 0..=2 cleared
+        assert!(state.cell(2, 1).unwrap().is_empty());
+        // Row 1, col 3 preserved
+        assert_eq!(state.cell(3, 1).unwrap().ch, 'I');
+    }
+
+    #[test]
+    fn test_clear_region_line_from_cursor() {
+        let mut state = TerminalState::new(5, 2);
+        for ch in ['A', 'B', 'C', 'D', 'E'] {
+            state.put_char(ch);
+        }
+        state.move_cursor(2, 0);
+        state.clear_region(ClearRegion::LineFromCursor);
+        assert_eq!(state.cell(0, 0).unwrap().ch, 'A');
+        assert_eq!(state.cell(1, 0).unwrap().ch, 'B');
+        assert!(state.cell(2, 0).unwrap().is_empty());
+        assert!(state.cell(4, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_clear_region_line_to_cursor() {
+        let mut state = TerminalState::new(5, 2);
+        for ch in ['A', 'B', 'C', 'D', 'E'] {
+            state.put_char(ch);
+        }
+        state.move_cursor(2, 0);
+        state.clear_region(ClearRegion::LineToCursor);
+        assert!(state.cell(0, 0).unwrap().is_empty());
+        assert!(state.cell(2, 0).unwrap().is_empty());
+        assert_eq!(state.cell(3, 0).unwrap().ch, 'D');
+        assert_eq!(state.cell(4, 0).unwrap().ch, 'E');
+    }
 }
