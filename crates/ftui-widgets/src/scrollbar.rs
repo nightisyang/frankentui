@@ -153,17 +153,50 @@ impl ScrollbarState {
                             return MouseResult::Scrolled;
                         }
                         SCROLLBAR_PART_TRACK | SCROLLBAR_PART_THUMB => {
-                            // Proportional jump: position in track → position in content
+                            // Proportional jump: position in track → position in content.
+                            //
+                            // The hit data encodes only `track_pos` (no explicit `track_len`).
+                            // In practice the scrollbar is usually rendered with a length equal
+                            // to `viewport_length`, so we use `viewport_length` as the track length.
                             let track_pos = (data & 0x00FF_FFFF_FFFF_FFFF) as usize;
-                            // The track length is at most content_length worth of cells,
-                            // but we don't know the exact rendered track length here.
-                            // We use the track position as a direct scroll target,
-                            // clamped to the valid range.
                             let max_pos = self.content_length.saturating_sub(self.viewport_length);
-                            self.position = track_pos.min(max_pos);
+                            let track_len = self.viewport_length.max(1);
+                            let denom = track_len.saturating_sub(1).max(1);
+                            let clamped_pos = track_pos.min(denom);
+                            self.position = if max_pos == 0 {
+                                0
+                            } else {
+                                // Round-to-nearest integer in a deterministic way.
+                                let num = (clamped_pos as u128) * (max_pos as u128);
+                                let pos = (num + (denom as u128 / 2)) / denom as u128;
+                                pos as usize
+                            };
                             return MouseResult::Scrolled;
                         }
                         _ => {}
+                    }
+                }
+                MouseResult::Ignored
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some((id, HitRegion::Scrollbar, data)) = hit
+                    && id == expected_id
+                {
+                    let part = data >> 56;
+                    if matches!(part, SCROLLBAR_PART_TRACK | SCROLLBAR_PART_THUMB) {
+                        let track_pos = (data & 0x00FF_FFFF_FFFF_FFFF) as usize;
+                        let max_pos = self.content_length.saturating_sub(self.viewport_length);
+                        let track_len = self.viewport_length.max(1);
+                        let denom = track_len.saturating_sub(1).max(1);
+                        let clamped_pos = track_pos.min(denom);
+                        self.position = if max_pos == 0 {
+                            0
+                        } else {
+                            let num = (clamped_pos as u128) * (max_pos as u128);
+                            let pos = (num + (denom as u128 / 2)) / denom as u128;
+                            pos as usize
+                        };
+                        return MouseResult::Scrolled;
                     }
                 }
                 MouseResult::Ignored
@@ -706,13 +739,14 @@ mod tests {
     #[test]
     fn scrollbar_state_track_click() {
         let mut state = ScrollbarState::new(100, 0, 20);
-        let track_pos = 50u64;
+        let track_pos = 10u64;
         let data = (SCROLLBAR_PART_TRACK << 56) | track_pos;
         let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 0, 0);
         let hit = Some((HitId::new(1), HitRegion::Scrollbar, data));
         let result = state.handle_mouse(&event, hit, HitId::new(1));
         assert_eq!(result, MouseResult::Scrolled);
-        assert_eq!(state.position, 50);
+        // track_len is inferred from viewport_length (20), so track_pos 10 maps proportionally to 42.
+        assert_eq!(state.position, 42);
     }
 
     #[test]
@@ -725,6 +759,18 @@ mod tests {
         let result = state.handle_mouse(&event, hit, HitId::new(1));
         assert_eq!(result, MouseResult::Scrolled);
         assert_eq!(state.position, 80); // content_length - viewport_length
+    }
+
+    #[test]
+    fn scrollbar_state_thumb_drag_updates_position() {
+        let mut state = ScrollbarState::new(100, 0, 20);
+        let track_pos = 19u64;
+        let data = (SCROLLBAR_PART_THUMB << 56) | track_pos;
+        let event = MouseEvent::new(MouseEventKind::Drag(MouseButton::Left), 0, 0);
+        let hit = Some((HitId::new(1), HitRegion::Scrollbar, data));
+        let result = state.handle_mouse(&event, hit, HitId::new(1));
+        assert_eq!(result, MouseResult::Scrolled);
+        assert_eq!(state.position, 80);
     }
 
     #[test]

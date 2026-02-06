@@ -294,6 +294,7 @@ impl crate::stateful::Stateful for TableState {
     fn restore_state(&mut self, state: TablePersistState) {
         // Restore values directly; clamping to valid ranges happens during render
         self.selected = state.selected;
+        self.hovered = None;
         self.offset = state.offset;
         self.sort_column = state.sort_column;
         self.sort_ascending = state.sort_ascending;
@@ -333,6 +334,7 @@ impl UndoSupport for TableState {
     fn restore_snapshot(&mut self, snapshot: &dyn Any) -> bool {
         if let Some(snap) = snapshot.downcast_ref::<TableStateSnapshot>() {
             self.selected = snap.selected;
+            self.hovered = None;
             self.offset = snap.offset;
             self.sort_column = snap.sort_column;
             self.sort_ascending = snap.sort_ascending;
@@ -429,6 +431,10 @@ impl TableState {
                 {
                     let index = data as usize;
                     if index < row_count {
+                        // Deterministic "double click": second click on the already-selected row activates.
+                        if self.selected == Some(index) {
+                            return MouseResult::Activated(index);
+                        }
                         self.select(Some(index));
                         return MouseResult::Selected(index);
                     }
@@ -1852,6 +1858,18 @@ mod tests {
         let hit = Some((HitId::new(1), HitRegion::Content, 4u64));
         let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
         assert_eq!(result, MouseResult::Selected(4));
+        assert_eq!(state.selected, Some(4));
+    }
+
+    #[test]
+    fn table_state_second_click_activates() {
+        let mut state = TableState::default();
+        state.select(Some(4));
+
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 2);
+        let hit = Some((HitId::new(1), HitRegion::Content, 4u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::Activated(4));
         assert_eq!(state.selected, Some(4));
     }
 

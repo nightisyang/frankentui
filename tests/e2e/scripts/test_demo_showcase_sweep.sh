@@ -4,7 +4,7 @@ set -euo pipefail
 # E2E: Demo-showcase screen sweep with JSONL logs (bd-34m9w)
 #
 # Coverage:
-# - Screens 1..38 (configurable)
+# - Screens 1..42 (configurable)
 # - Modes: alt + inline
 # - Sizes: 80x24, 120x40
 # - Deterministic seeds/time
@@ -115,7 +115,8 @@ ALL_SCREENS=(
     1 2 3 4 5 6 7 8 9 10
     11 12 13 14 15 16 17 18 19 20
     21 22 23 24 25 26 27 28 29 30
-    31 32 33 34 35 36 37 38
+    31 32 33 34 35 36 37 38 39 40
+    41 42
 )
 
 parse_sweep_screens() {

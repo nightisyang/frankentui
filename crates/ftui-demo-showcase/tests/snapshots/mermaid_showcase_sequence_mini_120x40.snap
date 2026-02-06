@@ -17,7 +17,7 @@ Mermaid Showcase | Sequence Mini (7/22) | Layout: Auto | Score: 50.9 | Viewport:
 │  Gantt Basic [gantt, M, sect││               │                             │              ││                        │ 
 │  Mindmap Seed [mindmap, S, t││                                                            ││                        │ 
 │  Mindmap Deep [mindmap, L, d││               │                            ⢀│              ││                        │ 
-│  Pie Basic [pie, S, title, s││             ⠐⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⢺⡻Hello         ││                        │ 
+│  Pie Basic [pie, S, title, s││             ⠐⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒⠒Hello⠒⠒⠒⠒⠒⠒⠒⠒⢺⡻⠖             ││                        │ 
 │  Pie Many [pie, M, many-slic││               │                             │              ││                        │ 
 │  Gitgraph Basic [unsupported││                                                            │╰────────────────────────╯ 
 │  Journey Basic [unsupported,││               │                             │              │╭────────Metrics─────────╮ 
@@ -26,7 +26,7 @@ Mermaid Showcase | Sequence Mini (7/22) | Layout: Auto | Score: 50.9 | Viewport:
 │                             ││               ⠈                                            ││Render: 0.00 ms         │ 
 │                             ││               │                             │              ││Viewport: auto          │ 
 │                             ││                                                            ││Zoom: 100%              │ 
-│                             ││               │Hi!                          │              ││Iters: 0                │ 
+│                             ││               │               Hi!           │              ││Iters: 0                │ 
 │                             ││                                                            ││Score: 50.90            │ 
 │                             ││               │                             │              ││Cross: 0                │ 
 │                             ││                                                            ││Bends: 0                │ 

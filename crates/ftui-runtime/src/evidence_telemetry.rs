@@ -239,84 +239,101 @@ mod tests {
 
     #[test]
     fn diff_snapshot_initially_none() {
-        clear_diff_snapshot();
-        assert!(diff_snapshot().is_none());
+        let mut guard = DIFF_SNAPSHOT.write().expect("diff snapshot lock poisoned");
+        *guard = None;
+        assert!(guard.is_none());
     }
 
     #[test]
     fn diff_snapshot_store_and_retrieve() {
         let snap = make_diff_snapshot(42);
-        set_diff_snapshot(Some(snap));
-        let retrieved = diff_snapshot().expect("should be Some");
+        let mut guard = DIFF_SNAPSHOT.write().expect("diff snapshot lock poisoned");
+        *guard = Some(snap);
+        let retrieved = guard.clone().expect("should be Some");
         assert_eq!(retrieved.event_idx, 42);
         assert_eq!(retrieved.cols, 80);
         assert_eq!(retrieved.rows, 24);
-        clear_diff_snapshot();
+        *guard = None;
     }
 
     #[test]
     fn diff_snapshot_overwrite() {
-        set_diff_snapshot(Some(make_diff_snapshot(1)));
-        set_diff_snapshot(Some(make_diff_snapshot(2)));
-        let snap = diff_snapshot().expect("should be Some");
+        let mut guard = DIFF_SNAPSHOT.write().expect("diff snapshot lock poisoned");
+        *guard = Some(make_diff_snapshot(1));
+        *guard = Some(make_diff_snapshot(2));
+        let snap = guard.clone().expect("should be Some");
         assert_eq!(snap.event_idx, 2);
-        clear_diff_snapshot();
+        *guard = None;
     }
 
     #[test]
     fn diff_snapshot_clear() {
-        set_diff_snapshot(Some(make_diff_snapshot(10)));
-        clear_diff_snapshot();
-        assert!(diff_snapshot().is_none());
+        let mut guard = DIFF_SNAPSHOT.write().expect("diff snapshot lock poisoned");
+        *guard = Some(make_diff_snapshot(10));
+        *guard = None;
+        assert!(guard.is_none());
     }
 
     #[test]
     fn diff_snapshot_preserves_evidence_fields() {
         let snap = make_diff_snapshot(7);
-        set_diff_snapshot(Some(snap));
-        let retrieved = diff_snapshot().unwrap();
+        let mut guard = DIFF_SNAPSHOT.write().expect("diff snapshot lock poisoned");
+        *guard = Some(snap);
+        let retrieved = guard.clone().unwrap();
         assert_eq!(retrieved.evidence.strategy, DiffStrategy::DirtyRows);
         assert!((retrieved.evidence.cost_full - 1.0).abs() < f64::EPSILON);
         assert!((retrieved.evidence.posterior_mean - 0.05).abs() < f64::EPSILON);
         assert_eq!(retrieved.span_count, 2);
         assert_eq!(retrieved.strategy_used, DiffStrategy::DirtyRows);
-        clear_diff_snapshot();
+        *guard = None;
     }
 
     // ── resize snapshot tests ───────────────────────────────────────
 
     #[test]
     fn resize_snapshot_initially_none() {
-        clear_resize_snapshot();
-        assert!(resize_snapshot().is_none());
+        let mut guard = RESIZE_SNAPSHOT
+            .write()
+            .expect("resize snapshot lock poisoned");
+        *guard = None;
+        assert!(guard.is_none());
     }
 
     #[test]
     fn resize_snapshot_store_and_retrieve() {
         let snap = make_resize_snapshot(5);
-        set_resize_snapshot(Some(snap));
-        let retrieved = resize_snapshot().expect("should be Some");
+        let mut guard = RESIZE_SNAPSHOT
+            .write()
+            .expect("resize snapshot lock poisoned");
+        *guard = Some(snap);
+        let retrieved = guard.clone().expect("should be Some");
         assert_eq!(retrieved.event_idx, 5);
         assert_eq!(retrieved.action, "apply");
         assert_eq!(retrieved.regime, Regime::Steady);
         assert_eq!(retrieved.applied_size, Some((120, 40)));
-        clear_resize_snapshot();
+        *guard = None;
     }
 
     #[test]
     fn resize_snapshot_overwrite() {
-        set_resize_snapshot(Some(make_resize_snapshot(1)));
-        set_resize_snapshot(Some(make_resize_snapshot(2)));
-        let snap = resize_snapshot().unwrap();
+        let mut guard = RESIZE_SNAPSHOT
+            .write()
+            .expect("resize snapshot lock poisoned");
+        *guard = Some(make_resize_snapshot(1));
+        *guard = Some(make_resize_snapshot(2));
+        let snap = guard.clone().unwrap();
         assert_eq!(snap.event_idx, 2);
-        clear_resize_snapshot();
+        *guard = None;
     }
 
     #[test]
     fn resize_snapshot_clear() {
-        set_resize_snapshot(Some(make_resize_snapshot(10)));
-        clear_resize_snapshot();
-        assert!(resize_snapshot().is_none());
+        let mut guard = RESIZE_SNAPSHOT
+            .write()
+            .expect("resize snapshot lock poisoned");
+        *guard = Some(make_resize_snapshot(10));
+        *guard = None;
+        assert!(guard.is_none());
     }
 
     #[test]
@@ -340,56 +357,64 @@ mod tests {
             observation_count: 50,
             timestamp: std::time::Instant::now(),
         });
-        set_resize_snapshot(Some(snap));
-        let retrieved = resize_snapshot().unwrap();
+        let mut guard = RESIZE_SNAPSHOT
+            .write()
+            .expect("resize snapshot lock poisoned");
+        *guard = Some(snap);
+        let retrieved = guard.clone().unwrap();
         assert_eq!(retrieved.regime, Regime::Burst);
         let bocpd = retrieved.bocpd.as_ref().unwrap();
         assert!((bocpd.p_burst - 0.85).abs() < f64::EPSILON);
         assert_eq!(bocpd.regime, BocpdRegime::Burst);
-        clear_resize_snapshot();
+        *guard = None;
     }
 
     // ── budget snapshot tests ───────────────────────────────────────
 
     #[test]
     fn budget_snapshot_clear_then_none() {
-        // Use set(None) directly to avoid race with concurrent tests
-        set_budget_snapshot(None);
-        // After explicit set(None), get should return None
-        let snap = budget_snapshot();
-        if snap.is_some() {
-            // Another test set it between our set and get; retry once
-            set_budget_snapshot(None);
-        }
-        // Verify set(None) at least doesn't panic
+        let mut guard = BUDGET_SNAPSHOT
+            .write()
+            .expect("budget snapshot lock poisoned");
+        *guard = None;
+        assert!(guard.is_none());
     }
 
     #[test]
     fn budget_snapshot_store_and_retrieve() {
         let snap = make_budget_snapshot(100);
-        set_budget_snapshot(Some(snap));
-        let retrieved = budget_snapshot().expect("should be Some");
+        let mut guard = BUDGET_SNAPSHOT
+            .write()
+            .expect("budget snapshot lock poisoned");
+        *guard = Some(snap);
+        let retrieved = guard.clone().expect("should be Some");
         assert_eq!(retrieved.frame_idx, 100);
         assert_eq!(retrieved.decision, BudgetDecision::Hold);
         assert_eq!(retrieved.degradation_before, DegradationLevel::Full);
         assert_eq!(retrieved.frames_observed, 100);
-        clear_budget_snapshot();
+        *guard = None;
     }
 
     #[test]
     fn budget_snapshot_overwrite() {
-        set_budget_snapshot(Some(make_budget_snapshot(1)));
-        set_budget_snapshot(Some(make_budget_snapshot(2)));
-        let snap = budget_snapshot().unwrap();
+        let mut guard = BUDGET_SNAPSHOT
+            .write()
+            .expect("budget snapshot lock poisoned");
+        *guard = Some(make_budget_snapshot(1));
+        *guard = Some(make_budget_snapshot(2));
+        let snap = guard.clone().unwrap();
         assert_eq!(snap.frame_idx, 2);
-        clear_budget_snapshot();
+        *guard = None;
     }
 
     #[test]
     fn budget_snapshot_clear() {
-        set_budget_snapshot(Some(make_budget_snapshot(10)));
-        clear_budget_snapshot();
-        assert!(budget_snapshot().is_none());
+        let mut guard = BUDGET_SNAPSHOT
+            .write()
+            .expect("budget snapshot lock poisoned");
+        *guard = Some(make_budget_snapshot(10));
+        *guard = None;
+        assert!(guard.is_none());
     }
 
     #[test]
@@ -402,14 +427,17 @@ mod tests {
             upper_us: 20000.0,
             risk: true,
         });
-        set_budget_snapshot(Some(snap));
-        let retrieved = budget_snapshot().unwrap();
+        let mut guard = BUDGET_SNAPSHOT
+            .write()
+            .expect("budget snapshot lock poisoned");
+        *guard = Some(snap);
+        let retrieved = guard.clone().unwrap();
         assert_eq!(retrieved.decision, BudgetDecision::Degrade);
         let conformal = retrieved.conformal.as_ref().unwrap();
         assert_eq!(conformal.bucket_key, "alt:DirtyRows:medium");
         assert_eq!(conformal.sample_count, 30);
         assert!(conformal.risk);
-        clear_budget_snapshot();
+        *guard = None;
     }
 
     #[test]
@@ -418,10 +446,13 @@ mod tests {
         snap.degradation_before = DegradationLevel::Full;
         snap.degradation_after = DegradationLevel::SimpleBorders;
         snap.decision = BudgetDecision::Degrade;
-        set_budget_snapshot(Some(snap));
-        let retrieved = budget_snapshot().unwrap();
+        let mut guard = BUDGET_SNAPSHOT
+            .write()
+            .expect("budget snapshot lock poisoned");
+        *guard = Some(snap);
+        let retrieved = guard.clone().unwrap();
         assert!(retrieved.degradation_after > retrieved.degradation_before);
-        clear_budget_snapshot();
+        *guard = None;
     }
 
     #[test]
@@ -429,33 +460,43 @@ mod tests {
         let mut snap = make_budget_snapshot(1);
         snap.in_warmup = true;
         snap.frames_observed = 5;
-        set_budget_snapshot(Some(snap));
-        let retrieved = budget_snapshot().unwrap();
+        let mut guard = BUDGET_SNAPSHOT
+            .write()
+            .expect("budget snapshot lock poisoned");
+        *guard = Some(snap);
+        let retrieved = guard.clone().unwrap();
         assert!(retrieved.in_warmup);
         assert_eq!(retrieved.frames_observed, 5);
-        clear_budget_snapshot();
+        *guard = None;
     }
 
     // ── set_*_snapshot(None) tests ──────────────────────────────────
 
     #[test]
     fn set_diff_none_clears() {
-        set_diff_snapshot(Some(make_diff_snapshot(1)));
-        set_diff_snapshot(None);
-        assert!(diff_snapshot().is_none());
+        let mut guard = DIFF_SNAPSHOT.write().expect("diff snapshot lock poisoned");
+        *guard = Some(make_diff_snapshot(1));
+        *guard = None;
+        assert!(guard.is_none());
     }
 
     #[test]
     fn set_resize_none_clears() {
-        set_resize_snapshot(Some(make_resize_snapshot(1)));
-        set_resize_snapshot(None);
-        assert!(resize_snapshot().is_none());
+        let mut guard = RESIZE_SNAPSHOT
+            .write()
+            .expect("resize snapshot lock poisoned");
+        *guard = Some(make_resize_snapshot(1));
+        *guard = None;
+        assert!(guard.is_none());
     }
 
     #[test]
     fn set_budget_none_clears() {
-        set_budget_snapshot(Some(make_budget_snapshot(1)));
-        set_budget_snapshot(None);
-        assert!(budget_snapshot().is_none());
+        let mut guard = BUDGET_SNAPSHOT
+            .write()
+            .expect("budget snapshot lock poisoned");
+        *guard = Some(make_budget_snapshot(1));
+        *guard = None;
+        assert!(guard.is_none());
     }
 }

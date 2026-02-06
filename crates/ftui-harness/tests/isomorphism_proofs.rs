@@ -785,8 +785,18 @@ fn proof_performance_budget() {
     );
 
     let coverage = is_coverage_mode();
-    let iterations = if coverage { 10 } else { 50 };
+    // We run enough iterations that "p99" isn't just the single worst outlier.
+    // (Tests run in parallel and can occasionally see scheduler noise.)
+    let iterations = if coverage { 10 } else { 200 };
     let mut timings_us = Vec::with_capacity(iterations);
+
+    // Warm up to prime caches / lazy init effects (not measured).
+    for _ in 0..5 {
+        let prev = Buffer::new(80, 24);
+        let next = render_styled_scene(80, 24);
+        let diff = BufferDiff::compute(&prev, &next);
+        let _runs = diff.runs();
+    }
 
     for _ in 0..iterations {
         let start = Instant::now();
@@ -800,9 +810,17 @@ fn proof_performance_budget() {
     }
 
     timings_us.sort();
-    let p50 = timings_us[timings_us.len() / 2];
-    let p95 = timings_us[(timings_us.len() * 95) / 100];
-    let p99 = timings_us[(timings_us.len() * 99) / 100];
+    let percentile = |pct: usize| -> u64 {
+        let n = timings_us.len();
+        debug_assert!(n > 0);
+        // Indexing via (n-1) ensures pct<100 doesn't collapse to the max for small n.
+        let idx = ((n - 1) * pct) / 100;
+        timings_us[idx]
+    };
+
+    let p50 = percentile(50);
+    let p95 = percentile(95);
+    let p99 = percentile(99);
 
     let budget_us = if coverage { 50_000 } else { 5_000 };
 

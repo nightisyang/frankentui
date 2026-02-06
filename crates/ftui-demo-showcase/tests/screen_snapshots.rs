@@ -174,6 +174,46 @@ fn dashboard_initial_120x40() {
 }
 
 #[test]
+fn dashboard_hover_dataviz_120x40() {
+    let mut screen = ftui_demo_showcase::screens::dashboard::Dashboard::new();
+
+    // Render once with hit testing enabled so we can pick a stable coordinate
+    // inside the DataViz tile.
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    frame.enable_hit_testing();
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+
+    let expected = ftui_demo_showcase::chrome::PANE_HIT_BASE
+        + ftui_demo_showcase::screens::screen_index(ScreenId::DataViz) as u32;
+    let mut tile_xy = None;
+    for y in 0..40u16 {
+        for x in 0..120u16 {
+            if let Some((id, _region, _data)) = frame.hit_test(x, y)
+                && id.id() == expected
+            {
+                tile_xy = Some((x, y));
+                break;
+            }
+        }
+        if tile_xy.is_some() {
+            break;
+        }
+    }
+    let (x, y) = tile_xy.expect("Should find DataViz tile pane hit region");
+
+    let moved = Event::Mouse(MouseEvent::new(MouseEventKind::Moved, x, y));
+    let _ = screen.update(&moved);
+
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("dashboard_hover_dataviz_120x40", &frame.buffer);
+}
+
+#[test]
 fn dashboard_tiny_40x10() {
     let screen = ftui_demo_showcase::screens::dashboard::Dashboard::new();
     let mut pool = GraphemePool::new();

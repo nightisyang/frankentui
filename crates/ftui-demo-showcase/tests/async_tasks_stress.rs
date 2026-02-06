@@ -22,6 +22,7 @@
 //!
 //! Run with: `cargo test -p ftui-demo-showcase async_tasks_stress -- --nocapture`
 
+use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 
 use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
@@ -34,6 +35,18 @@ use ftui_render::grapheme_pool::GraphemePool;
 // =============================================================================
 // Test Utilities
 // =============================================================================
+
+// libtest runs tests in this module in parallel by default. These tests include
+// performance regression gates that become flaky under same-binary contention,
+// so we serialize them with a global lock.
+static ASYNC_TASKS_STRESS_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+fn stress_lock() -> std::sync::MutexGuard<'static, ()> {
+    match ASYNC_TASKS_STRESS_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poison) => poison.into_inner(),
+    }
+}
 
 /// Emit a JSONL log line for CI consumption.
 fn log_jsonl(data: &serde_json::Value) {
@@ -62,12 +75,20 @@ fn is_coverage_run() -> bool {
     std::env::var("LLVM_PROFILE_FILE").is_ok() || std::env::var("CARGO_LLVM_COV").is_ok()
 }
 
+fn percentile(sorted: &[u64], pct: usize) -> u64 {
+    assert!(!sorted.is_empty(), "percentile() requires non-empty input");
+    let pct = pct.min(100);
+    let idx = (sorted.len() - 1) * pct / 100;
+    sorted[idx]
+}
+
 // =============================================================================
 // Stress Tests: Many Tasks
 // =============================================================================
 
 #[test]
 fn stress_spawn_many_tasks() {
+    let _guard = stress_lock();
     let mut mgr = AsyncTaskManager::new();
     let start = Instant::now();
 
@@ -95,6 +116,7 @@ fn stress_spawn_many_tasks() {
 
 #[test]
 fn stress_tick_with_many_running_tasks() {
+    let _guard = stress_lock();
     let mut mgr = AsyncTaskManager::new();
 
     // Spawn many tasks
@@ -118,9 +140,9 @@ fn stress_tick_with_many_running_tasks() {
     let avg_ns = tick_times.iter().sum::<u64>() / tick_times.len() as u64;
     let max_ns = *tick_times.iter().max().unwrap();
     tick_times.sort();
-    let p50_ns = tick_times[tick_times.len() / 2];
-    let p95_ns = tick_times[tick_times.len() * 95 / 100];
-    let p99_ns = tick_times[tick_times.len() * 99 / 100];
+    let p50_ns = percentile(&tick_times, 50);
+    let p95_ns = percentile(&tick_times, 95);
+    let p99_ns = percentile(&tick_times, 99);
 
     log_jsonl(&serde_json::json!({
         "test": "stress_tick_with_many_running_tasks",
@@ -142,6 +164,7 @@ fn stress_tick_with_many_running_tasks() {
 
 #[test]
 fn stress_view_render_with_many_tasks() {
+    let _guard = stress_lock();
     let mut mgr = AsyncTaskManager::new();
 
     // Spawn many tasks
@@ -157,6 +180,12 @@ fn stress_view_render_with_many_tasks() {
     let mut pool = GraphemePool::new();
     let mut render_times = Vec::new();
 
+    // Warm up renders (not measured) to avoid cold-start inflation
+    for _ in 0..5 {
+        let mut frame = Frame::new(120, 40, &mut pool);
+        mgr.view(&mut frame, Rect::new(0, 0, 120, 40));
+    }
+
     for _ in 0..50 {
         let mut frame = Frame::new(120, 40, &mut pool);
         let start = Instant::now();
@@ -167,7 +196,7 @@ fn stress_view_render_with_many_tasks() {
     let avg_ns = render_times.iter().sum::<u64>() / render_times.len() as u64;
     let max_ns = *render_times.iter().max().unwrap();
     render_times.sort();
-    let p95_ns = render_times[render_times.len() * 95 / 100];
+    let p95_ns = percentile(&render_times, 95);
 
     let budget_avg_ns = if is_coverage_run() {
         5_000_000
@@ -199,6 +228,7 @@ fn stress_view_render_with_many_tasks() {
 
 #[test]
 fn cancellation_is_immediate() {
+    let _guard = stress_lock();
     let mut mgr = AsyncTaskManager::new();
 
     // Spawn a task and start it running
@@ -230,6 +260,7 @@ fn cancellation_is_immediate() {
 
 #[test]
 fn mass_cancellation_stress() {
+    let _guard = stress_lock();
     let mut mgr = AsyncTaskManager::new();
 
     // Spawn many tasks
@@ -274,6 +305,7 @@ fn mass_cancellation_stress() {
 
 #[test]
 fn scheduler_respects_max_concurrent_under_stress() {
+    let _guard = stress_lock();
     let mut mgr = AsyncTaskManager::new();
 
     // Spawn many tasks
@@ -296,6 +328,7 @@ fn scheduler_respects_max_concurrent_under_stress() {
 
 #[test]
 fn scheduler_policy_determinism() {
+    let _guard = stress_lock();
     // Run the same sequence twice and verify identical outcomes
     let mut results = Vec::new();
 
@@ -324,6 +357,7 @@ fn scheduler_policy_determinism() {
 
 #[test]
 fn all_scheduler_policies_complete_work() {
+    let _guard = stress_lock();
     for policy_idx in 0..4 {
         let mut mgr = AsyncTaskManager::new();
 
@@ -356,6 +390,7 @@ fn all_scheduler_policies_complete_work() {
 
 #[test]
 fn regression_gate_tick_latency() {
+    let _guard = stress_lock();
     let mut mgr = AsyncTaskManager::new();
 
     // Spawn moderate workload
@@ -377,9 +412,9 @@ fn regression_gate_tick_latency() {
     }
 
     tick_times.sort();
-    let p50 = tick_times[tick_times.len() / 2];
-    let p95 = tick_times[tick_times.len() * 95 / 100];
-    let p99 = tick_times[tick_times.len() * 99 / 100];
+    let p50 = percentile(&tick_times, 50);
+    let p95 = percentile(&tick_times, 95);
+    let p99 = percentile(&tick_times, 99);
 
     log_jsonl(&serde_json::json!({
         "test": "regression_gate_tick_latency",
@@ -397,6 +432,7 @@ fn regression_gate_tick_latency() {
 
 #[test]
 fn regression_gate_render_latency() {
+    let _guard = stress_lock();
     let mut mgr = AsyncTaskManager::new();
 
     // Moderate workload
@@ -426,9 +462,9 @@ fn regression_gate_render_latency() {
     }
 
     render_times.sort();
-    let p50 = render_times[render_times.len() / 2];
-    let p95 = render_times[render_times.len() * 95 / 100];
-    let p99 = render_times[render_times.len() * 99 / 100];
+    let p50 = percentile(&render_times, 50);
+    let p95 = percentile(&render_times, 95);
+    let p99 = percentile(&render_times, 99);
 
     let budget_p99_ns = if is_coverage_run() {
         7_000_000
@@ -461,6 +497,7 @@ fn regression_gate_render_latency() {
 
 #[test]
 fn max_tasks_limit_enforced() {
+    let _guard = stress_lock();
     let mut mgr = AsyncTaskManager::new();
 
     // Spawn more than MAX_TASKS (100)
