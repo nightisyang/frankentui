@@ -602,4 +602,216 @@ mod tests {
             "Change sort"
         );
     }
+
+    // --- UndoWidgetId ---
+
+    #[test]
+    fn widget_id_display() {
+        let id = UndoWidgetId::from_raw(7);
+        assert_eq!(format!("{id}"), "Widget(7)");
+    }
+
+    #[test]
+    fn widget_id_default_is_unique() {
+        let a = UndoWidgetId::default();
+        let b = UndoWidgetId::default();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn widget_id_hash_eq() {
+        let id = UndoWidgetId::from_raw(99);
+        let id2 = UndoWidgetId::from_raw(99);
+        assert_eq!(id, id2);
+
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(id);
+        assert!(set.contains(&id2));
+    }
+
+    // --- TextEditOperation descriptions and size_bytes ---
+
+    #[test]
+    fn text_edit_replace_description() {
+        let op = TextEditOperation::Replace {
+            position: 0,
+            old_text: "old".to_string(),
+            new_text: "new".to_string(),
+        };
+        assert_eq!(op.description(), "Replace text");
+    }
+
+    #[test]
+    fn text_edit_set_value_description() {
+        let op = TextEditOperation::SetValue {
+            old_value: "".to_string(),
+            new_value: "hello".to_string(),
+        };
+        assert_eq!(op.description(), "Set value");
+    }
+
+    #[test]
+    fn text_edit_delete_size_bytes() {
+        let op = TextEditOperation::Delete {
+            position: 5,
+            deleted_text: "abc".to_string(),
+        };
+        assert!(op.size_bytes() >= 3);
+    }
+
+    #[test]
+    fn text_edit_replace_size_bytes() {
+        let op = TextEditOperation::Replace {
+            position: 0,
+            old_text: "aaa".to_string(),
+            new_text: "bbbbb".to_string(),
+        };
+        // Should include both old and new text lengths
+        assert!(op.size_bytes() >= 8); // 3 + 5
+    }
+
+    #[test]
+    fn text_edit_set_value_size_bytes() {
+        let op = TextEditOperation::SetValue {
+            old_value: "x".to_string(),
+            new_value: "yyyy".to_string(),
+        };
+        assert!(op.size_bytes() >= 5); // 1 + 4
+    }
+
+    // --- WidgetTextEditCmd ---
+
+    #[test]
+    fn cmd_execute_without_callbacks_succeeds() {
+        let mut cmd = WidgetTextEditCmd::new(
+            UndoWidgetId::from_raw(1),
+            TextEditOperation::Insert {
+                position: 0,
+                text: "hi".to_string(),
+            },
+        );
+        assert!(cmd.execute().is_ok());
+    }
+
+    #[test]
+    fn cmd_undo_without_callbacks_succeeds() {
+        let mut cmd = WidgetTextEditCmd::new(
+            UndoWidgetId::from_raw(1),
+            TextEditOperation::Delete {
+                position: 0,
+                deleted_text: "x".to_string(),
+            },
+        );
+        assert!(cmd.undo().is_ok());
+    }
+
+    #[test]
+    fn cmd_redo_calls_execute() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let count = Arc::new(AtomicUsize::new(0));
+        let count_clone = count.clone();
+
+        let mut cmd = WidgetTextEditCmd::new(
+            UndoWidgetId::from_raw(1),
+            TextEditOperation::Insert {
+                position: 0,
+                text: "t".to_string(),
+            },
+        )
+        .with_apply(move |_, _| {
+            count_clone.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+
+        cmd.execute().unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+
+        cmd.redo().unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn cmd_debug_format() {
+        let cmd = WidgetTextEditCmd::new(
+            UndoWidgetId::from_raw(5),
+            TextEditOperation::Insert {
+                position: 0,
+                text: "abc".to_string(),
+            },
+        );
+        let dbg = format!("{cmd:?}");
+        assert!(dbg.contains("WidgetTextEditCmd"));
+        assert!(dbg.contains("Insert"));
+    }
+
+    #[test]
+    fn cmd_size_bytes_nonzero() {
+        let cmd = WidgetTextEditCmd::new(
+            UndoWidgetId::from_raw(1),
+            TextEditOperation::Insert {
+                position: 0,
+                text: "hello world".to_string(),
+            },
+        );
+        assert!(cmd.size_bytes() > 11);
+    }
+
+    // --- TreeOperation ---
+
+    #[test]
+    fn tree_toggle_batch_description() {
+        let op = TreeOperation::ToggleBatch {
+            expanded: vec![vec![0, 1]],
+            collapsed: vec![vec![2]],
+        };
+        assert_eq!(op.description(), "Toggle nodes");
+    }
+
+    // --- ListOperation ---
+
+    #[test]
+    fn list_multi_select_description() {
+        let op = ListOperation::MultiSelect {
+            old_selections: vec![0, 1],
+            new_selections: vec![2, 3],
+        };
+        assert_eq!(op.description(), "Change selections");
+    }
+
+    // --- TableOperation ---
+
+    #[test]
+    fn table_filter_description() {
+        let op = TableOperation::Filter {
+            old_filter: "".to_string(),
+            new_filter: "test".to_string(),
+        };
+        assert_eq!(op.description(), "Apply filter");
+    }
+
+    #[test]
+    fn table_select_row_description() {
+        let op = TableOperation::SelectRow {
+            old_row: Some(0),
+            new_row: Some(5),
+        };
+        assert_eq!(op.description(), "Select row");
+    }
+
+    // --- SelectionOperation ---
+
+    #[test]
+    fn selection_operation_fields() {
+        let op = SelectionOperation::Changed {
+            old_anchor: Some(0),
+            old_cursor: 5,
+            new_anchor: None,
+            new_cursor: 10,
+        };
+        let dbg = format!("{op:?}");
+        assert!(dbg.contains("Changed"));
+    }
 }
