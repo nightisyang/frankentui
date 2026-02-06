@@ -873,4 +873,635 @@ mod tests {
         assert!(text.contains("\"event\":\"frame\""));
         assert!(text.contains("\"event\":\"trace_summary\""));
     }
+
+    // --- JSON helper tests ---
+
+    #[test]
+    fn json_escape_basic() {
+        assert_eq!(json_escape("hello"), "hello");
+        assert_eq!(json_escape(""), "");
+    }
+
+    #[test]
+    fn json_escape_special_chars() {
+        assert_eq!(json_escape(r#"say "hi""#), r#"say \"hi\""#);
+        assert_eq!(json_escape("back\\slash"), "back\\\\slash");
+        assert_eq!(json_escape("line\nbreak"), "line\\nbreak");
+        assert_eq!(json_escape("tab\there"), "tab\\there");
+        assert_eq!(json_escape("cr\rhere"), "cr\\rhere");
+    }
+
+    #[test]
+    fn json_escape_control_chars() {
+        // Control char \x01 should be unicode-escaped
+        let input = "a\x01b";
+        let escaped = json_escape(input);
+        assert_eq!(escaped, "a\\u0001b");
+    }
+
+    #[test]
+    fn opt_u64_some_none() {
+        assert_eq!(opt_u64(Some(42)), "42");
+        assert_eq!(opt_u64(None), "null");
+        assert_eq!(opt_u64(Some(0)), "0");
+    }
+
+    #[test]
+    fn opt_usize_some_none() {
+        assert_eq!(opt_usize(Some(100)), "100");
+        assert_eq!(opt_usize(None), "null");
+    }
+
+    #[test]
+    fn opt_f64_some_none() {
+        assert_eq!(opt_f64(None), "null");
+        let s = opt_f64(Some(0.5));
+        assert!(s.starts_with("0.5"), "got: {s}");
+    }
+
+    #[test]
+    fn opt_str_some_none() {
+        assert_eq!(opt_str(None), "null");
+        assert_eq!(opt_str(Some("test")), "\"test\"");
+        assert_eq!(opt_str(Some("with\"quote")), "\"with\\\"quote\"");
+    }
+
+    // --- FNV hash tests ---
+
+    #[test]
+    fn fnv1a64_byte_deterministic() {
+        let a = fnv1a64_byte(FNV_OFFSET_BASIS, 0x42);
+        let b = fnv1a64_byte(FNV_OFFSET_BASIS, 0x42);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn fnv1a64_byte_differs_for_different_input() {
+        let a = fnv1a64_byte(FNV_OFFSET_BASIS, 0x01);
+        let b = fnv1a64_byte(FNV_OFFSET_BASIS, 0x02);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn fnv1a64_bytes_empty() {
+        let hash = fnv1a64_bytes(FNV_OFFSET_BASIS, &[]);
+        assert_eq!(hash, FNV_OFFSET_BASIS);
+    }
+
+    #[test]
+    fn fnv1a64_bytes_consistent_with_single_byte() {
+        let from_bytes = fnv1a64_bytes(FNV_OFFSET_BASIS, &[0x42]);
+        let from_byte = fnv1a64_byte(FNV_OFFSET_BASIS, 0x42);
+        assert_eq!(from_bytes, from_byte);
+    }
+
+    #[test]
+    fn fnv1a64_u16_is_le_bytes() {
+        let from_u16 = fnv1a64_u16(FNV_OFFSET_BASIS, 0x1234);
+        let from_bytes = fnv1a64_bytes(FNV_OFFSET_BASIS, &0x1234u16.to_le_bytes());
+        assert_eq!(from_u16, from_bytes);
+    }
+
+    #[test]
+    fn fnv1a64_u32_is_le_bytes() {
+        let from_u32 = fnv1a64_u32(FNV_OFFSET_BASIS, 0xDEAD_BEEF);
+        let from_bytes = fnv1a64_bytes(FNV_OFFSET_BASIS, &0xDEAD_BEEFu32.to_le_bytes());
+        assert_eq!(from_u32, from_bytes);
+    }
+
+    #[test]
+    fn fnv1a64_pair_deterministic() {
+        let a = fnv1a64_pair(123, 456);
+        let b = fnv1a64_pair(123, 456);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn fnv1a64_pair_differs_for_different_input() {
+        let a = fnv1a64_pair(123, 456);
+        let b = fnv1a64_pair(456, 123);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn fnv1a64_bytes_long_input() {
+        // Test the 8-byte unrolled loop path
+        let data: Vec<u8> = (0..32).collect();
+        let hash = fnv1a64_bytes(FNV_OFFSET_BASIS, &data);
+        let hash2 = fnv1a64_bytes(FNV_OFFSET_BASIS, &data);
+        assert_eq!(hash, hash2);
+        // Different data should produce different hash
+        let mut data2 = data.clone();
+        data2[15] = 255;
+        assert_ne!(hash, fnv1a64_bytes(FNV_OFFSET_BASIS, &data2));
+    }
+
+    // --- Config builder tests ---
+
+    #[test]
+    fn config_default_is_disabled() {
+        let config = RenderTraceConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.output_path, PathBuf::from("trace.jsonl"));
+        assert!(config.run_id.is_none());
+        assert!(config.seed.is_none());
+        assert!(config.test_module.is_none());
+        assert!(config.flush_on_write);
+        assert!(!config.include_start_ts_ms);
+    }
+
+    #[test]
+    fn config_enabled_file() {
+        let config = RenderTraceConfig::enabled_file("/tmp/test.jsonl");
+        assert!(config.enabled);
+        assert_eq!(config.output_path, PathBuf::from("/tmp/test.jsonl"));
+    }
+
+    #[test]
+    fn config_builder_chain() {
+        let config = RenderTraceConfig::enabled_file("/tmp/test.jsonl")
+            .with_run_id("test-run-1")
+            .with_seed(42)
+            .with_test_module("my_module")
+            .with_flush_on_write(false)
+            .with_start_ts_ms(true);
+
+        assert!(config.enabled);
+        assert_eq!(config.run_id.as_deref(), Some("test-run-1"));
+        assert_eq!(config.seed, Some(42));
+        assert_eq!(config.test_module.as_deref(), Some("my_module"));
+        assert!(!config.flush_on_write);
+        assert!(config.include_start_ts_ms);
+    }
+
+    // --- Recorder disabled config ---
+
+    #[test]
+    fn recorder_disabled_returns_none() {
+        let config = RenderTraceConfig::default(); // disabled
+        let caps = TerminalCapabilities::default();
+        let context = RenderTraceContext {
+            capabilities: &caps,
+            diff_config: RuntimeDiffConfig::default(),
+            resize_config: CoalescerConfig::default(),
+            conformal_config: None,
+        };
+        let result = RenderTraceRecorder::from_config(&config, context).expect("no io error");
+        assert!(result.is_none());
+    }
+
+    // --- Finish idempotence ---
+
+    #[test]
+    fn recorder_finish_is_idempotent() {
+        let path = temp_trace_path("idempotent");
+        let config = RenderTraceConfig::enabled_file(&path);
+        let caps = TerminalCapabilities::default();
+        let context = RenderTraceContext {
+            capabilities: &caps,
+            diff_config: RuntimeDiffConfig::default(),
+            resize_config: CoalescerConfig::default(),
+            conformal_config: None,
+        };
+        let mut recorder = RenderTraceRecorder::from_config(&config, context)
+            .expect("config")
+            .expect("enabled");
+
+        recorder.finish(Some(10)).expect("first finish");
+        recorder.finish(Some(20)).expect("second finish");
+
+        // Only one summary line should be written
+        let text = std::fs::read_to_string(&path).expect("read");
+        let summary_count = text.matches("\"event\":\"trace_summary\"").count();
+        assert_eq!(summary_count, 1);
+    }
+
+    // --- Checksum tests ---
+
+    #[test]
+    fn checksum_1x1_buffer() {
+        let buffer = Buffer::new(1, 1);
+        let pool = GraphemePool::new();
+        let hash = checksum_buffer(&buffer, &pool);
+        // 1x1 empty buffer should produce a consistent non-basis hash
+        let hash2 = checksum_buffer(&buffer, &pool);
+        assert_eq!(hash, hash2);
+        assert_ne!(hash, FNV_OFFSET_BASIS, "1x1 should differ from basis");
+    }
+
+    #[test]
+    fn checksum_differs_for_different_content() {
+        let pool = GraphemePool::new();
+        let mut buf_a = Buffer::new(2, 1);
+        buf_a.set(0, 0, Cell::from_char('A'));
+
+        let mut buf_b = Buffer::new(2, 1);
+        buf_b.set(0, 0, Cell::from_char('B'));
+
+        assert_ne!(
+            checksum_buffer(&buf_a, &pool),
+            checksum_buffer(&buf_b, &pool)
+        );
+    }
+
+    #[test]
+    fn checksum_differs_for_different_dimensions() {
+        let pool = GraphemePool::new();
+        let buf_a = Buffer::new(2, 2);
+        let buf_b = Buffer::new(3, 2);
+        // Different grid dimensions → different checksums
+        assert_ne!(
+            checksum_buffer(&buf_a, &pool),
+            checksum_buffer(&buf_b, &pool)
+        );
+    }
+
+    // --- Payload kind ---
+
+    #[test]
+    fn payload_kind_as_str() {
+        assert_eq!(RenderTracePayloadKind::DiffRunsV1.as_str(), "diff_runs_v1");
+        assert_eq!(
+            RenderTracePayloadKind::FullBufferV1.as_str(),
+            "full_buffer_v1"
+        );
+    }
+
+    // --- Full buffer payload ---
+
+    #[test]
+    fn build_full_buffer_payload_deterministic() {
+        let mut buffer = Buffer::new(3, 2);
+        buffer.set(0, 0, Cell::from_char('X'));
+        buffer.set(1, 0, Cell::from_char('Y'));
+        let pool = GraphemePool::new();
+
+        let p1 = build_full_buffer_payload(&buffer, &pool);
+        let p2 = build_full_buffer_payload(&buffer, &pool);
+        assert_eq!(p1.kind, RenderTracePayloadKind::FullBufferV1);
+        assert_eq!(p1.bytes, p2.bytes);
+    }
+
+    #[test]
+    fn build_full_buffer_payload_starts_with_dimensions() {
+        let buffer = Buffer::new(4, 3);
+        let pool = GraphemePool::new();
+        let payload = build_full_buffer_payload(&buffer, &pool);
+
+        // First 4 bytes: width (u16 LE) + height (u16 LE)
+        assert!(payload.bytes.len() >= 4);
+        let w = u16::from_le_bytes([payload.bytes[0], payload.bytes[1]]);
+        let h = u16::from_le_bytes([payload.bytes[2], payload.bytes[3]]);
+        assert_eq!(w, 4);
+        assert_eq!(h, 3);
+    }
+
+    // --- pack_attrs ---
+
+    #[test]
+    fn pack_attrs_default() {
+        let attrs = CellAttrs::default();
+        let packed = pack_attrs(attrs);
+        // Default attrs should have 0 flags and 0 link_id
+        assert_eq!(packed, 0);
+    }
+
+    // --- JSONL format tests ---
+
+    #[test]
+    fn frame_to_jsonl_valid_json() {
+        let frame = RenderTraceFrame {
+            cols: 80,
+            rows: 24,
+            mode: "inline",
+            ui_height: 20,
+            ui_anchor: "bottom",
+            diff_strategy: "dirty_rows",
+            diff_cells: 100,
+            diff_runs: 5,
+            present_bytes: 512,
+            render_us: Some(50),
+            present_us: Some(30),
+            payload_kind: "full_buffer_v1",
+            payload_path: Some("trace_payloads/frame_000000_full_buffer_v1.bin"),
+            trace_us: Some(10),
+        };
+
+        let line = frame.to_jsonl(0, 0xDEADBEEF, 0xCAFEBABE);
+        assert!(line.starts_with('{'));
+        assert!(line.ends_with('}'));
+        assert!(line.contains("\"event\":\"frame\""));
+        assert!(line.contains("\"frame_idx\":0"));
+        assert!(line.contains("\"cols\":80"));
+        assert!(line.contains("\"rows\":24"));
+        assert!(line.contains("\"mode\":\"inline\""));
+        assert!(line.contains("\"checksum\":\"00000000deadbeef\""));
+        assert!(line.contains("\"checksum_chain\":\"00000000cafebabe\""));
+        assert!(line.contains("\"diff_strategy\":\"dirty_rows\""));
+    }
+
+    #[test]
+    fn frame_to_jsonl_null_optionals() {
+        let frame = RenderTraceFrame {
+            cols: 10,
+            rows: 5,
+            mode: "alt",
+            ui_height: 5,
+            ui_anchor: "top",
+            diff_strategy: "full",
+            diff_cells: 50,
+            diff_runs: 1,
+            present_bytes: 100,
+            render_us: None,
+            present_us: None,
+            payload_kind: "none",
+            payload_path: None,
+            trace_us: None,
+        };
+
+        let line = frame.to_jsonl(1, 0, 0);
+        assert!(line.contains("\"render_us\":null"));
+        assert!(line.contains("\"present_us\":null"));
+        assert!(line.contains("\"payload_path\":null"));
+        assert!(line.contains("\"trace_us\":null"));
+    }
+
+    #[test]
+    fn summary_to_jsonl_format() {
+        let summary = RenderTraceSummary {
+            total_frames: 100,
+            final_checksum_chain: 0xABCDEF0123456789,
+            elapsed_ms: Some(5000),
+        };
+        let line = summary.to_jsonl();
+        assert!(line.contains("\"event\":\"trace_summary\""));
+        assert!(line.contains("\"total_frames\":100"));
+        assert!(line.contains("\"final_checksum_chain\":\"abcdef0123456789\""));
+        assert!(line.contains("\"elapsed_ms\":5000"));
+    }
+
+    #[test]
+    fn summary_to_jsonl_null_elapsed() {
+        let summary = RenderTraceSummary {
+            total_frames: 0,
+            final_checksum_chain: 0,
+            elapsed_ms: None,
+        };
+        let line = summary.to_jsonl();
+        assert!(line.contains("\"elapsed_ms\":null"));
+    }
+
+    // --- Header JSONL ---
+
+    #[test]
+    fn header_to_jsonl_format() {
+        let header = RenderTraceHeader {
+            run_id: "test-run".to_string(),
+            seed: Some(42),
+            env: RenderTraceEnv {
+                os: "linux".to_string(),
+                arch: "x86_64".to_string(),
+                test_module: Some("my_test".to_string()),
+            },
+            capabilities: RenderTraceCapabilities {
+                profile: "kitty".to_string(),
+                true_color: true,
+                colors_256: true,
+                sync_output: true,
+                osc8_hyperlinks: false,
+                scroll_region: true,
+                in_tmux: false,
+                in_screen: false,
+                in_zellij: false,
+                kitty_keyboard: true,
+                focus_events: true,
+                bracketed_paste: true,
+                mouse_sgr: true,
+                osc52_clipboard: false,
+            },
+            policies: RenderTracePolicies {
+                diff_bayesian: true,
+                diff_dirty_rows: true,
+                diff_dirty_spans: false,
+                diff_guard_band: 2,
+                diff_merge_gap: 4,
+                bocpd_enabled: true,
+                steady_delay_ms: 100,
+                burst_delay_ms: 16,
+                conformal_enabled: false,
+                conformal_alpha: None,
+                conformal_min_samples: None,
+                conformal_window_size: None,
+            },
+            start_ts_ms: None,
+        };
+
+        let line = header.to_jsonl();
+        assert!(line.contains("\"event\":\"trace_header\""));
+        assert!(line.contains("\"schema_version\":\"render-trace-v1\""));
+        assert!(line.contains("\"run_id\":\"test-run\""));
+        assert!(line.contains("\"seed\":42"));
+        assert!(line.contains("\"start_ts_ms\":null"));
+    }
+
+    // --- Env JSONL ---
+
+    #[test]
+    fn env_to_json_format() {
+        let env = RenderTraceEnv {
+            os: "linux".to_string(),
+            arch: "x86_64".to_string(),
+            test_module: None,
+        };
+        let json = env.to_json();
+        assert!(json.contains("\"os\":\"linux\""));
+        assert!(json.contains("\"arch\":\"x86_64\""));
+        assert!(json.contains("\"test_module\":null"));
+    }
+
+    #[test]
+    fn env_to_json_with_test_module() {
+        let env = RenderTraceEnv {
+            os: "macos".to_string(),
+            arch: "aarch64".to_string(),
+            test_module: Some("integration".to_string()),
+        };
+        let json = env.to_json();
+        assert!(json.contains("\"test_module\":\"integration\""));
+    }
+
+    // --- Capabilities JSONL ---
+
+    #[test]
+    fn capabilities_to_json_format() {
+        let caps = RenderTraceCapabilities {
+            profile: "xterm".to_string(),
+            true_color: false,
+            colors_256: true,
+            sync_output: false,
+            osc8_hyperlinks: false,
+            scroll_region: true,
+            in_tmux: true,
+            in_screen: false,
+            in_zellij: false,
+            kitty_keyboard: false,
+            focus_events: false,
+            bracketed_paste: true,
+            mouse_sgr: false,
+            osc52_clipboard: false,
+        };
+        let json = caps.to_json();
+        assert!(json.contains("\"profile\":\"xterm\""));
+        assert!(json.contains("\"true_color\":false"));
+        assert!(json.contains("\"in_tmux\":true"));
+    }
+
+    // --- Policies JSONL ---
+
+    #[test]
+    fn policies_to_json_with_conformal() {
+        let policies = RenderTracePolicies {
+            diff_bayesian: true,
+            diff_dirty_rows: true,
+            diff_dirty_spans: true,
+            diff_guard_band: 3,
+            diff_merge_gap: 5,
+            bocpd_enabled: true,
+            steady_delay_ms: 100,
+            burst_delay_ms: 16,
+            conformal_enabled: true,
+            conformal_alpha: Some(0.05),
+            conformal_min_samples: Some(10),
+            conformal_window_size: Some(100),
+        };
+        let json = policies.to_json();
+        assert!(json.contains("\"diff\":{"));
+        assert!(json.contains("\"bocpd\":{"));
+        assert!(json.contains("\"conformal\":{"));
+        assert!(json.contains("\"enabled\":true"));
+        assert!(json.contains("\"guard_band\":3"));
+    }
+
+    #[test]
+    fn policies_to_json_without_conformal() {
+        let policies = RenderTracePolicies {
+            diff_bayesian: false,
+            diff_dirty_rows: false,
+            diff_dirty_spans: false,
+            diff_guard_band: 0,
+            diff_merge_gap: 0,
+            bocpd_enabled: false,
+            steady_delay_ms: 0,
+            burst_delay_ms: 0,
+            conformal_enabled: false,
+            conformal_alpha: None,
+            conformal_min_samples: None,
+            conformal_window_size: None,
+        };
+        let json = policies.to_json();
+        assert!(json.contains("\"alpha\":null"));
+        assert!(json.contains("\"min_samples\":null"));
+        assert!(json.contains("\"window_size\":null"));
+    }
+
+    // --- Write payload ---
+
+    #[test]
+    fn write_payload_creates_file() {
+        let path = temp_trace_path("payload");
+        let config = RenderTraceConfig::enabled_file(&path);
+        let caps = TerminalCapabilities::default();
+        let context = RenderTraceContext {
+            capabilities: &caps,
+            diff_config: RuntimeDiffConfig::default(),
+            resize_config: CoalescerConfig::default(),
+            conformal_config: None,
+        };
+        let mut recorder = RenderTraceRecorder::from_config(&config, context)
+            .expect("config")
+            .expect("enabled");
+
+        let payload = RenderTracePayload {
+            kind: RenderTracePayloadKind::FullBufferV1,
+            bytes: vec![1, 2, 3, 4],
+        };
+        let info = recorder.write_payload(&payload).expect("write");
+        assert_eq!(info.kind, "full_buffer_v1");
+        assert!(info.path.contains("frame_000000"));
+        assert!(info.path.contains("full_buffer_v1.bin"));
+    }
+
+    // --- Multiple frames advance index ---
+
+    #[test]
+    fn record_multiple_frames_increments_index() {
+        let path = temp_trace_path("multi");
+        let config = RenderTraceConfig::enabled_file(&path);
+        let caps = TerminalCapabilities::default();
+        let context = RenderTraceContext {
+            capabilities: &caps,
+            diff_config: RuntimeDiffConfig::default(),
+            resize_config: CoalescerConfig::default(),
+            conformal_config: None,
+        };
+        let mut recorder = RenderTraceRecorder::from_config(&config, context)
+            .expect("config")
+            .expect("enabled");
+
+        let buffer = Buffer::new(2, 1);
+        let pool = GraphemePool::new();
+
+        for _ in 0..3 {
+            let frame = RenderTraceFrame {
+                cols: 2,
+                rows: 1,
+                mode: "inline",
+                ui_height: 1,
+                ui_anchor: "bottom",
+                diff_strategy: "full",
+                diff_cells: 2,
+                diff_runs: 1,
+                present_bytes: 8,
+                render_us: None,
+                present_us: None,
+                payload_kind: "none",
+                payload_path: None,
+                trace_us: None,
+            };
+            recorder.record_frame(frame, &buffer, &pool).expect("frame");
+        }
+        recorder.finish(None).expect("finish");
+
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("\"frame_idx\":0"));
+        assert!(text.contains("\"frame_idx\":1"));
+        assert!(text.contains("\"frame_idx\":2"));
+    }
+
+    // --- Config with seed and run_id in header ---
+
+    #[test]
+    fn recorder_header_includes_seed_and_run_id() {
+        let path = temp_trace_path("seed");
+        let config = RenderTraceConfig::enabled_file(&path)
+            .with_run_id("my-test-run")
+            .with_seed(12345)
+            .with_test_module("test_mod");
+        let caps = TerminalCapabilities::default();
+        let context = RenderTraceContext {
+            capabilities: &caps,
+            diff_config: RuntimeDiffConfig::default(),
+            resize_config: CoalescerConfig::default(),
+            conformal_config: None,
+        };
+        let mut recorder = RenderTraceRecorder::from_config(&config, context)
+            .expect("config")
+            .expect("enabled");
+        recorder.finish(None).expect("finish");
+
+        let text = std::fs::read_to_string(&path).expect("read");
+        assert!(text.contains("\"run_id\":\"my-test-run\""));
+        assert!(text.contains("\"seed\":12345"));
+        assert!(text.contains("\"test_module\":\"test_mod\""));
+    }
 }
