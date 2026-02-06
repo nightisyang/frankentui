@@ -564,4 +564,271 @@ mod tests {
         assert_eq!(a, 6);
         assert_eq!(b, 7);
     }
+
+    // --- size_bucket edge cases ---
+
+    #[test]
+    fn size_bucket_zero_area() {
+        assert_eq!(size_bucket(0, 0), 0);
+        assert_eq!(size_bucket(0, 24), 0);
+        assert_eq!(size_bucket(80, 0), 0);
+    }
+
+    #[test]
+    fn size_bucket_one_by_one() {
+        assert_eq!(size_bucket(1, 1), 0); // area 1, log2(1) = 0
+    }
+
+    #[test]
+    fn size_bucket_typical_terminals() {
+        let b80 = size_bucket(80, 24); // 1920 -> log2 ~ 10
+        let b120 = size_bucket(120, 40); // 4800 -> log2 ~ 12
+        assert_eq!(b80, 10);
+        assert_eq!(b120, 12);
+    }
+
+    // --- conformal_quantile edge cases ---
+
+    #[test]
+    fn conformal_quantile_empty() {
+        let mut data: Vec<f64> = vec![];
+        assert_eq!(conformal_quantile(0.1, &mut data), 0.0);
+    }
+
+    #[test]
+    fn conformal_quantile_single_element() {
+        let mut data = vec![42.0];
+        assert_eq!(conformal_quantile(0.1, &mut data), 42.0);
+    }
+
+    #[test]
+    fn conformal_quantile_sorted_data() {
+        let mut data = vec![1.0, 2.0, 3.0, 4.0, 5.0];
+        let q = conformal_quantile(0.5, &mut data);
+        // (5+1)*0.5 = 3.0 -> ceil = 3 -> idx = 2 -> data[2] = 3.0
+        assert_eq!(q, 3.0);
+    }
+
+    #[test]
+    fn conformal_quantile_alpha_half() {
+        let mut data = vec![10.0, 20.0, 30.0, 40.0];
+        let q = conformal_quantile(0.5, &mut data);
+        // (4+1)*0.5 = 2.5 -> ceil = 3 -> idx = 2 -> data[2] = 30.0
+        assert_eq!(q, 30.0);
+    }
+
+    // --- ModeBucket / DiffBucket ---
+
+    #[test]
+    fn mode_bucket_as_str_all_variants() {
+        assert_eq!(ModeBucket::Inline.as_str(), "inline");
+        assert_eq!(ModeBucket::InlineAuto.as_str(), "inline_auto");
+        assert_eq!(ModeBucket::AltScreen.as_str(), "altscreen");
+    }
+
+    #[test]
+    fn diff_bucket_as_str_all_variants() {
+        assert_eq!(DiffBucket::Full.as_str(), "full");
+        assert_eq!(DiffBucket::DirtyRows.as_str(), "dirty");
+        assert_eq!(DiffBucket::FullRedraw.as_str(), "redraw");
+    }
+
+    #[test]
+    fn diff_bucket_from_strategy() {
+        assert_eq!(DiffBucket::from(DiffStrategy::Full), DiffBucket::Full);
+        assert_eq!(
+            DiffBucket::from(DiffStrategy::DirtyRows),
+            DiffBucket::DirtyRows
+        );
+        assert_eq!(
+            DiffBucket::from(DiffStrategy::FullRedraw),
+            DiffBucket::FullRedraw
+        );
+    }
+
+    // --- BucketKey Display ---
+
+    #[test]
+    fn bucket_key_display_format() {
+        let key = BucketKey {
+            mode: ModeBucket::AltScreen,
+            diff: DiffBucket::DirtyRows,
+            size_bucket: 12,
+        };
+        assert_eq!(format!("{key}"), "altscreen:dirty:12");
+    }
+
+    // --- observe edge cases ---
+
+    #[test]
+    fn observe_nan_residual_not_stored() {
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 8,
+            q_default: 5.0,
+        });
+        let key = test_key(80, 24);
+        let update = predictor.observe(key, 0.0, f64::NAN);
+        assert!(!update.residual.is_finite());
+        assert_eq!(predictor.bucket_samples(key), 0);
+    }
+
+    #[test]
+    fn observe_infinity_residual_not_stored() {
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 8,
+            q_default: 5.0,
+        });
+        let key = test_key(80, 24);
+        predictor.observe(key, 0.0, f64::INFINITY);
+        assert_eq!(predictor.bucket_samples(key), 0);
+    }
+
+    // --- prediction fields ---
+
+    #[test]
+    fn prediction_risk_flag() {
+        let predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 8,
+            q_default: 50.0,
+        });
+        let key = test_key(80, 24);
+        // No data -> q_default = 50.0, y_hat = 0 -> upper = 50
+        let p = predictor.predict(key, 0.0, 100.0);
+        assert!(!p.risk); // 50 <= 100
+        let p2 = predictor.predict(key, 0.0, 30.0);
+        assert!(p2.risk); // 50 > 30
+    }
+
+    #[test]
+    fn prediction_confidence() {
+        let predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.05,
+            min_samples: 1,
+            window_size: 8,
+            q_default: 0.0,
+        });
+        let key = test_key(80, 24);
+        let p = predictor.predict(key, 0.0, 100.0);
+        assert!((p.confidence - 0.95).abs() < 1e-10);
+    }
+
+    // --- global fallback with data ---
+
+    #[test]
+    fn global_fallback_with_data() {
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 100, // impossibly high -> always fall through
+            window_size: 256,
+            q_default: 999.0,
+        });
+        // Use altscreen mode bucket, then query inline
+        let alt_key = BucketKey::from_context(ScreenMode::AltScreen, DiffStrategy::Full, 80, 24);
+        predictor.observe(alt_key, 0.0, 5.0);
+
+        let inline_key = test_key(80, 24);
+        let p = predictor.predict(inline_key, 0.0, 1000.0);
+        // Falls all the way to global (level 3), has 1 sample
+        assert_eq!(p.fallback_level, 3);
+        assert_eq!(p.sample_count, 1);
+        assert_eq!(p.quantile, 5.0);
+    }
+
+    // --- ModeBucket from_screen_mode ---
+
+    #[test]
+    fn mode_bucket_from_screen_modes() {
+        assert_eq!(
+            ModeBucket::from_screen_mode(ScreenMode::Inline { ui_height: 4 }),
+            ModeBucket::Inline
+        );
+        assert_eq!(
+            ModeBucket::from_screen_mode(ScreenMode::InlineAuto {
+                min_height: 4,
+                max_height: 24
+            }),
+            ModeBucket::InlineAuto
+        );
+        assert_eq!(
+            ModeBucket::from_screen_mode(ScreenMode::AltScreen),
+            ModeBucket::AltScreen
+        );
+    }
+
+    // --- Config defaults ---
+
+    #[test]
+    fn config_defaults() {
+        let config = ConformalConfig::default();
+        assert!((config.alpha - 0.05).abs() < 1e-10);
+        assert_eq!(config.min_samples, 20);
+        assert_eq!(config.window_size, 256);
+        assert!((config.q_default - 10_000.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn predictor_config_accessor() {
+        let config = ConformalConfig {
+            alpha: 0.2,
+            min_samples: 5,
+            window_size: 32,
+            q_default: 100.0,
+        };
+        let predictor = ConformalPredictor::new(config);
+        assert!((predictor.config().alpha - 0.2).abs() < 1e-10);
+        assert_eq!(predictor.config().min_samples, 5);
+    }
+
+    // --- negative residuals ---
+
+    #[test]
+    fn negative_residual_clamped_in_prediction() {
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 8,
+            q_default: 0.0,
+        });
+        let key = test_key(80, 24);
+        // observed < y_hat -> negative residual
+        predictor.observe(key, 10.0, 5.0);
+        let p = predictor.predict(key, 10.0, 100.0);
+        // quantile is -5.0, but clamped to 0.0 via .max(0.0)
+        // so upper_us = 10.0 + 0.0 = 10.0
+        assert_eq!(p.upper_us, 10.0);
+    }
+
+    // --- ConformalUpdate fields ---
+
+    #[test]
+    fn observe_returns_correct_update() {
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 8,
+            q_default: 0.0,
+        });
+        let key = test_key(80, 24);
+        let update = predictor.observe(key, 3.0, 10.0);
+        assert!((update.residual - 7.0).abs() < 1e-10);
+        assert_eq!(update.bucket, key);
+        assert_eq!(update.sample_count, 1);
+    }
+
+    // --- prediction y_hat and budget fields ---
+
+    #[test]
+    fn prediction_preserves_yhat_and_budget() {
+        let predictor = ConformalPredictor::new(ConformalConfig::default());
+        let key = test_key(80, 24);
+        let p = predictor.predict(key, 42.5, 16666.0);
+        assert!((p.y_hat - 42.5).abs() < 1e-10);
+        assert!((p.budget_us - 16666.0).abs() < 1e-10);
+    }
 }
