@@ -304,19 +304,28 @@ impl Screen for ResponsiveDemo {
     type Message = Event;
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
-        if let Event::Key(KeyEvent {
-            code,
-            modifiers,
-            kind: KeyEventKind::Press,
-            ..
-        }) = event
-            && let (KeyCode::Char('b'), Modifiers::NONE) = (*code, *modifiers)
-        {
-            self.use_custom_breakpoints = !self.use_custom_breakpoints;
-        }
-        if let Event::Resize { width, height } = event {
-            self.width = *width;
-            self.height = *height;
+        match event {
+            Event::Key(KeyEvent {
+                code,
+                kind: KeyEventKind::Press,
+                ..
+            }) => match code {
+                KeyCode::Char('b') => {
+                    self.use_custom_breakpoints = !self.use_custom_breakpoints;
+                }
+                KeyCode::Char('+') | KeyCode::Char('=') => {
+                    self.width = self.width.saturating_add(10).min(300);
+                }
+                KeyCode::Char('-') => {
+                    self.width = self.width.saturating_sub(10).max(20);
+                }
+                _ => {}
+            },
+            Event::Resize { width, height } => {
+                self.width = *width;
+                self.height = *height;
+            }
+            _ => {}
         }
         Cmd::None
     }
@@ -380,10 +389,16 @@ impl Screen for ResponsiveDemo {
     }
 
     fn keybindings(&self) -> Vec<HelpEntry> {
-        vec![HelpEntry {
-            key: "b",
-            action: "Toggle custom breakpoints",
-        }]
+        vec![
+            HelpEntry {
+                key: "b",
+                action: "Toggle custom breakpoints",
+            },
+            HelpEntry {
+                key: "+ / -",
+                action: "Adjust simulated width",
+            },
+        ]
     }
 
     fn title(&self) -> &'static str {

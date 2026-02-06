@@ -2,9 +2,12 @@
 
 //! VOI overlay demo screen (Galaxy-Brain widget).
 
+use std::cell::Cell;
 use std::time::Instant;
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind};
+use ftui_core::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
+};
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
 use ftui_runtime::{
@@ -12,6 +15,7 @@ use ftui_runtime::{
     inline_auto_voi_snapshot,
 };
 use ftui_style::Style;
+use ftui_text::{Line, Span};
 use ftui_widgets::Widget;
 use ftui_widgets::borders::BorderType;
 use ftui_widgets::paragraph::Paragraph;
@@ -23,11 +27,32 @@ use ftui_widgets::voi_debug_overlay::{
 use super::{HelpEntry, Screen};
 use crate::theme;
 
+/// Focusable sections within the VOI overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VoiSection {
+    Decision,
+    Posterior,
+    Observation,
+    Ledger,
+}
+
 /// Tiny screen showcasing the VOI overlay widget.
 pub struct VoiOverlayScreen {
     sampler: VoiSampler,
     tick: u64,
     start: Instant,
+    /// Currently focused overlay section (if any).
+    focused_section: Option<VoiSection>,
+    /// Selected ledger entry index.
+    selected_ledger_idx: usize,
+    /// Whether expanded detail mode is active.
+    expanded: bool,
+    // Layout rects for mouse hit-testing (set in view, read in update).
+    layout_overlay: Cell<Rect>,
+    layout_decision: Cell<Rect>,
+    layout_posterior: Cell<Rect>,
+    layout_observation: Cell<Rect>,
+    layout_ledger: Cell<Rect>,
 }
 
 impl Default for VoiOverlayScreen {
@@ -46,11 +71,57 @@ impl VoiOverlayScreen {
             sampler,
             tick: 0,
             start: Instant::now(),
+            focused_section: None,
+            selected_ledger_idx: 0,
+            expanded: false,
+            layout_overlay: Cell::new(Rect::default()),
+            layout_decision: Cell::new(Rect::default()),
+            layout_posterior: Cell::new(Rect::default()),
+            layout_observation: Cell::new(Rect::default()),
+            layout_ledger: Cell::new(Rect::default()),
         }
     }
 
     fn reset(&mut self) {
+        let focused = self.focused_section;
+        let exp = self.expanded;
         *self = Self::new();
+        self.focused_section = focused;
+        self.expanded = exp;
+    }
+
+    fn handle_mouse(&mut self, mouse: &MouseEvent) {
+        let (x, y) = mouse.position();
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.layout_decision.get().contains(x, y) {
+                    self.focused_section = Some(VoiSection::Decision);
+                } else if self.layout_posterior.get().contains(x, y) {
+                    self.focused_section = Some(VoiSection::Posterior);
+                } else if self.layout_observation.get().contains(x, y) {
+                    self.focused_section = Some(VoiSection::Observation);
+                } else if self.layout_ledger.get().contains(x, y) {
+                    self.focused_section = Some(VoiSection::Ledger);
+                } else if !self.layout_overlay.get().contains(x, y) {
+                    self.focused_section = None;
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                if self.layout_ledger.get().contains(x, y)
+                    || self.focused_section == Some(VoiSection::Ledger)
+                {
+                    self.selected_ledger_idx = self.selected_ledger_idx.saturating_add(1);
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                if self.layout_ledger.get().contains(x, y)
+                    || self.focused_section == Some(VoiSection::Ledger)
+                {
+                    self.selected_ledger_idx = self.selected_ledger_idx.saturating_sub(1);
+                }
+            }
+            _ => {}
+        }
     }
 
     fn overlay_area(area: Rect, width: u16, height: u16) -> Rect {
@@ -172,13 +243,33 @@ impl Screen for VoiOverlayScreen {
     type Message = ();
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
-        if let Event::Key(KeyEvent {
-            code: KeyCode::Char('r'),
-            kind: KeyEventKind::Press,
-            ..
-        }) = event
-        {
-            self.reset();
+        match event {
+            Event::Mouse(mouse) => self.handle_mouse(mouse),
+            Event::Key(KeyEvent {
+                kind: KeyEventKind::Press,
+                code,
+                ..
+            }) => match code {
+                KeyCode::Char('r') => self.reset(),
+                KeyCode::Char('v') => self.expanded = !self.expanded,
+                KeyCode::Char('n') | KeyCode::Down => {
+                    self.selected_ledger_idx = self.selected_ledger_idx.saturating_add(1);
+                }
+                KeyCode::Char('p') | KeyCode::Up => {
+                    self.selected_ledger_idx = self.selected_ledger_idx.saturating_sub(1);
+                }
+                KeyCode::Tab => {
+                    self.focused_section = Some(match self.focused_section {
+                        None | Some(VoiSection::Ledger) => VoiSection::Decision,
+                        Some(VoiSection::Decision) => VoiSection::Posterior,
+                        Some(VoiSection::Posterior) => VoiSection::Observation,
+                        Some(VoiSection::Observation) => VoiSection::Ledger,
+                    });
+                }
+                KeyCode::Escape => self.focused_section = None,
+                _ => {}
+            },
+            _ => {}
         }
         Cmd::None
     }
@@ -188,18 +279,54 @@ impl Screen for VoiOverlayScreen {
             return;
         }
 
-        let hint = "runtime snapshot: inline-auto  |  fallback: local sampler  |  r:reset";
-        Paragraph::new(hint)
-            .style(Style::new().fg(theme::fg::MUTED))
-            .render(
-                Rect::new(area.x + 1, area.y, area.width.saturating_sub(2), 1),
-                frame,
-            );
+        // Status bar with focus state and keybinding hints.
+        let focus_label = match self.focused_section {
+            Some(VoiSection::Decision) => "Decision",
+            Some(VoiSection::Posterior) => "Posterior",
+            Some(VoiSection::Observation) => "Observation",
+            Some(VoiSection::Ledger) => "Ledger",
+            None => "\u{2014}",
+        };
+        let status = Line::from_spans(vec![
+            Span::raw("src: inline-auto|fallback  "),
+            Span::styled("focus: ", Style::new().fg(theme::fg::MUTED)),
+            Span::styled(focus_label, Style::new().fg(theme::accent::PRIMARY)),
+            Span::raw(if self.expanded { "  [expanded]" } else { "" }),
+            Span::styled(
+                "  Tab:section v:detail n/p:ledger",
+                Style::new().fg(theme::fg::MUTED),
+            ),
+        ]);
+        Paragraph::new(status).render(
+            Rect::new(area.x + 1, area.y, area.width.saturating_sub(2), 1),
+            frame,
+        );
 
         let overlay_area = Self::overlay_area(area, 68, 22);
         if overlay_area.width < 28 || overlay_area.height < 8 {
             return;
         }
+        self.layout_overlay.set(overlay_area);
+
+        // Cache approximate section rects for mouse hit-testing.
+        let inner_x = overlay_area.x + 1;
+        let inner_w = overlay_area.width.saturating_sub(2);
+        let mut cy = overlay_area.y + 2;
+        self.layout_decision.set(Rect::new(inner_x, cy, inner_w, 3));
+        cy += 3;
+        self.layout_posterior
+            .set(Rect::new(inner_x, cy, inner_w, 4));
+        cy += 4;
+        self.layout_observation
+            .set(Rect::new(inner_x, cy, inner_w, 3));
+        cy += 3;
+        let ledger_h = overlay_area
+            .y
+            .saturating_add(overlay_area.height)
+            .saturating_sub(cy)
+            .saturating_sub(1);
+        self.layout_ledger
+            .set(Rect::new(inner_x, cy, inner_w, ledger_h));
 
         let data = if let Some(snapshot) = inline_auto_voi_snapshot() {
             self.data_from_snapshot(&snapshot, "runtime:inline-auto")
@@ -207,8 +334,16 @@ impl Screen for VoiOverlayScreen {
             self.data_from_sampler("demo:fallback")
         };
 
+        let border_style = if self.focused_section.is_some() {
+            Style::new()
+                .fg(theme::accent::SECONDARY)
+                .bg(theme::bg::DEEP)
+        } else {
+            Style::new().fg(theme::accent::PRIMARY).bg(theme::bg::DEEP)
+        };
+
         let style = VoiOverlayStyle {
-            border: Style::new().fg(theme::accent::PRIMARY).bg(theme::bg::DEEP),
+            border: border_style,
             text: Style::new().fg(theme::fg::PRIMARY),
             background: Some(theme::bg::DEEP.into()),
             border_type: BorderType::Rounded,
@@ -217,13 +352,44 @@ impl Screen for VoiOverlayScreen {
         VoiDebugOverlay::new(data)
             .with_style(style)
             .render(overlay_area, frame);
+
+        // Focus indicator below overlay.
+        if self.expanded {
+            let hint_y = overlay_area.y + overlay_area.height;
+            if hint_y < area.y + area.height {
+                let hint = format!(
+                    "ledger[{}] | click section to focus | Esc to clear",
+                    self.selected_ledger_idx
+                );
+                Paragraph::new(hint)
+                    .style(Style::new().fg(theme::fg::MUTED))
+                    .render(
+                        Rect::new(area.x + 1, hint_y, area.width.saturating_sub(2), 1),
+                        frame,
+                    );
+            }
+        }
     }
 
     fn keybindings(&self) -> Vec<HelpEntry> {
-        vec![HelpEntry {
-            key: "r",
-            action: "Reset VOI sampler",
-        }]
+        vec![
+            HelpEntry {
+                key: "r",
+                action: "Reset VOI sampler",
+            },
+            HelpEntry {
+                key: "v",
+                action: "Toggle detail",
+            },
+            HelpEntry {
+                key: "n / p",
+                action: "Navigate ledger",
+            },
+            HelpEntry {
+                key: "Tab",
+                action: "Cycle section",
+            },
+        ]
     }
 
     fn tick(&mut self, tick_count: u64) {
@@ -430,6 +596,184 @@ mod tests {
     #[test]
     fn render_no_panic_standard_area() {
         let screen = VoiOverlayScreen::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 80, 24));
+    }
+
+    // ── Mouse + keyboard interaction tests ──────────────────────────────
+
+    fn key_event(code: KeyCode) -> Event {
+        Event::Key(KeyEvent {
+            code,
+            modifiers: Modifiers::NONE,
+            kind: KeyEventKind::Press,
+        })
+    }
+
+    fn mouse_click(mx: u16, my: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            x: mx,
+            y: my,
+            modifiers: Modifiers::NONE,
+        })
+    }
+
+    fn mouse_scroll_down(mx: u16, my: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            x: mx,
+            y: my,
+            modifiers: Modifiers::NONE,
+        })
+    }
+
+    fn mouse_scroll_up(mx: u16, my: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            x: mx,
+            y: my,
+            modifiers: Modifiers::NONE,
+        })
+    }
+
+    /// Render the screen to populate layout rects for hit-testing.
+    fn render_screen(screen: &VoiOverlayScreen) {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 80, 24));
+    }
+
+    #[test]
+    fn v_toggles_expanded() {
+        let mut screen = VoiOverlayScreen::new();
+        assert!(!screen.expanded);
+        screen.update(&key_event(KeyCode::Char('v')));
+        assert!(screen.expanded);
+        screen.update(&key_event(KeyCode::Char('v')));
+        assert!(!screen.expanded);
+    }
+
+    #[test]
+    fn tab_cycles_sections() {
+        let mut screen = VoiOverlayScreen::new();
+        assert_eq!(screen.focused_section, None);
+        screen.update(&key_event(KeyCode::Tab));
+        assert_eq!(screen.focused_section, Some(VoiSection::Decision));
+        screen.update(&key_event(KeyCode::Tab));
+        assert_eq!(screen.focused_section, Some(VoiSection::Posterior));
+        screen.update(&key_event(KeyCode::Tab));
+        assert_eq!(screen.focused_section, Some(VoiSection::Observation));
+        screen.update(&key_event(KeyCode::Tab));
+        assert_eq!(screen.focused_section, Some(VoiSection::Ledger));
+        screen.update(&key_event(KeyCode::Tab));
+        assert_eq!(screen.focused_section, Some(VoiSection::Decision));
+    }
+
+    #[test]
+    fn escape_clears_focus() {
+        let mut screen = VoiOverlayScreen::new();
+        screen.update(&key_event(KeyCode::Tab));
+        assert!(screen.focused_section.is_some());
+        screen.update(&key_event(KeyCode::Escape));
+        assert_eq!(screen.focused_section, None);
+    }
+
+    #[test]
+    fn n_p_navigate_ledger() {
+        let mut screen = VoiOverlayScreen::new();
+        assert_eq!(screen.selected_ledger_idx, 0);
+        screen.update(&key_event(KeyCode::Char('n')));
+        assert_eq!(screen.selected_ledger_idx, 1);
+        screen.update(&key_event(KeyCode::Char('n')));
+        assert_eq!(screen.selected_ledger_idx, 2);
+        screen.update(&key_event(KeyCode::Char('p')));
+        assert_eq!(screen.selected_ledger_idx, 1);
+        screen.update(&key_event(KeyCode::Char('p')));
+        assert_eq!(screen.selected_ledger_idx, 0);
+        screen.update(&key_event(KeyCode::Char('p')));
+        assert_eq!(screen.selected_ledger_idx, 0);
+    }
+
+    #[test]
+    fn arrow_keys_navigate_ledger() {
+        let mut screen = VoiOverlayScreen::new();
+        screen.update(&key_event(KeyCode::Down));
+        assert_eq!(screen.selected_ledger_idx, 1);
+        screen.update(&key_event(KeyCode::Up));
+        assert_eq!(screen.selected_ledger_idx, 0);
+    }
+
+    #[test]
+    fn mouse_click_focuses_section() {
+        let mut screen = VoiOverlayScreen::new();
+        render_screen(&screen);
+        let rect = screen.layout_decision.get();
+        if !rect.is_empty() {
+            screen.update(&mouse_click(rect.x + 1, rect.y + 1));
+            assert_eq!(screen.focused_section, Some(VoiSection::Decision));
+        }
+    }
+
+    #[test]
+    fn mouse_click_outside_clears_focus() {
+        let mut screen = VoiOverlayScreen::new();
+        render_screen(&screen);
+        screen.focused_section = Some(VoiSection::Decision);
+        screen.update(&mouse_click(0, 0));
+        assert_eq!(screen.focused_section, None);
+    }
+
+    #[test]
+    fn mouse_scroll_in_ledger() {
+        let mut screen = VoiOverlayScreen::new();
+        render_screen(&screen);
+        let rect = screen.layout_ledger.get();
+        if !rect.is_empty() {
+            screen.update(&mouse_scroll_down(rect.x + 1, rect.y + 1));
+            assert_eq!(screen.selected_ledger_idx, 1);
+            screen.update(&mouse_scroll_up(rect.x + 1, rect.y + 1));
+            assert_eq!(screen.selected_ledger_idx, 0);
+        }
+    }
+
+    #[test]
+    fn reset_preserves_focus() {
+        let mut screen = VoiOverlayScreen::new();
+        screen.focused_section = Some(VoiSection::Posterior);
+        screen.expanded = true;
+        screen.reset();
+        assert_eq!(screen.focused_section, Some(VoiSection::Posterior));
+        assert!(screen.expanded);
+        assert_eq!(screen.tick, 0);
+    }
+
+    #[test]
+    fn keybindings_includes_new_entries() {
+        let screen = VoiOverlayScreen::new();
+        let bindings = screen.keybindings();
+        assert!(bindings.len() >= 4);
+        let keys: Vec<&str> = bindings.iter().map(|b| b.key).collect();
+        assert!(keys.contains(&"v"));
+        assert!(keys.contains(&"Tab"));
+        assert!(keys.contains(&"n / p"));
+    }
+
+    #[test]
+    fn render_with_focus_no_panic() {
+        let mut screen = VoiOverlayScreen::new();
+        screen.focused_section = Some(VoiSection::Decision);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 80, 24));
+    }
+
+    #[test]
+    fn render_with_expanded_no_panic() {
+        let mut screen = VoiOverlayScreen::new();
+        screen.expanded = true;
+        screen.focused_section = Some(VoiSection::Ledger);
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(80, 24, &mut pool);
         screen.view(&mut frame, Rect::new(0, 0, 80, 24));
