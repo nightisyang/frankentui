@@ -896,3 +896,58 @@ fn snapshot_palette_no_results() {
     palette.render(area, &mut frame);
     assert_snapshot!("palette_no_results", &frame.buffer);
 }
+
+// ============================================================================
+// List: ANSI selection snapshot (bd-iuvb.17.3)
+// ============================================================================
+
+#[test]
+fn snapshot_list_selection_styled_ansi() {
+    let items = vec![
+        ListItem::new("Apple"),
+        ListItem::new("Banana"),
+        ListItem::new("Cherry"),
+    ];
+    let list = List::new(items)
+        .highlight_symbol("> ")
+        .highlight_style(Style::new().bold());
+    let area = Rect::new(0, 0, 14, 3);
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(14, 3, &mut pool);
+    let mut state = ListState::default();
+    state.select(Some(1));
+    StatefulWidget::render(&list, area, &mut frame, &mut state);
+    assert_snapshot_ansi!("list_selection_styled", &frame.buffer);
+}
+
+// ============================================================================
+// List: hit region with selection (bd-iuvb.17.3)
+// ============================================================================
+
+#[test]
+fn snapshot_list_with_hit_id_and_selection() {
+    let items = vec![
+        ListItem::new("First"),
+        ListItem::new("Second"),
+        ListItem::new("Third"),
+    ];
+    let list = List::new(items)
+        .highlight_symbol("> ")
+        .hit_id(HitId::new(42));
+    let area = Rect::new(0, 0, 14, 3);
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::with_hit_grid(14, 3, &mut pool);
+    let mut state = ListState::default();
+    state.select(Some(0));
+    StatefulWidget::render(&list, area, &mut frame, &mut state);
+
+    // Verify snapshot
+    assert_snapshot!("list_hit_id_selected", &frame.buffer);
+
+    // Verify hit regions are registered
+    for y in 0..3u16 {
+        let hit = frame.hit_test(0, y).expect("expected hit");
+        assert_eq!(hit.0, HitId::new(42));
+        assert_eq!(hit.2, y as u64, "hit data should encode row index");
+    }
+}
