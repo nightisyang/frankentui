@@ -1101,9 +1101,10 @@ mod tests {
 
     #[test]
     fn display_width_emoji_presentation_selector() {
-        assert_eq!(display_width("❤️"), 2);
-        assert_eq!(display_width("⌨️"), 2);
-        assert_eq!(display_width("⚠️"), 2);
+        // Text-default emoji + VS16: terminals render at width 1.
+        assert_eq!(display_width("❤️"), 1);
+        assert_eq!(display_width("⌨️"), 1);
+        assert_eq!(display_width("⚠️"), 1);
     }
 
     #[test]
@@ -1153,11 +1154,16 @@ mod tests {
 
     #[test]
     fn display_width_file_icons() {
-        let icons = [
-            "📁", "🔗", "🦀", "🐍", "📜", "📝", "⚙️", "🖼️", "🎵", "🎬", "⚡️", "📄",
-        ];
-        for icon in icons {
+        // Inherently-wide emoji (Emoji_Presentation=Yes or EAW=W): width 2
+        // ⚡️ (U+26A1+FE0F) has EAW=W, so remains wide after VS16 stripping.
+        let wide_icons = ["📁", "🔗", "🦀", "🐍", "📜", "📝", "🎵", "🎬", "⚡️", "📄"];
+        for icon in wide_icons {
             assert_eq!(display_width(icon), 2, "icon width mismatch: {icon}");
+        }
+        // Text-default (EAW=N) + VS16: terminals render at width 1
+        let narrow_icons = ["⚙️", "🖼️"];
+        for icon in narrow_icons {
+            assert_eq!(display_width(icon), 1, "VS16 icon width mismatch: {icon}");
         }
     }
 

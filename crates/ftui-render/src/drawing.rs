@@ -214,12 +214,17 @@ impl Draw for Buffer {
                 continue;
             };
 
-            // If we can't render the full grapheme, fall back to the first char
-            // but preserve the grapheme's display width to avoid layout gaps.
+            // Buffer has no GraphemePool, so multi-codepoint graphemes must fall back to a
+            // single char. We still preserve the grapheme's display width to keep column
+            // alignment deterministic, but we *must* also fill the extra cells so we don't
+            // leave "holes" that can retain stale content (borders, old text, etc.).
+            let rendered_content = CellContent::from_char(first);
+            let rendered_width = rendered_content.width();
             let mut width = grapheme_width(grapheme);
             if width == 0 {
-                width = CellContent::from_char(first).width();
+                width = rendered_width;
             }
+            width = width.max(rendered_width);
             if width == 0 {
                 continue;
             }
@@ -230,12 +235,26 @@ impl Draw for Buffer {
             }
 
             let cell = Cell {
-                content: CellContent::from_char(first),
+                content: rendered_content,
                 fg: base_cell.fg,
                 bg: base_cell.bg,
                 attrs: base_cell.attrs,
             };
             self.set(cx, y, cell);
+
+            // If we preserved extra display width (e.g., VS16 emoji sequences like "⚙️"),
+            // explicitly clear the trailing cells with spaces in the same style.
+            if rendered_width < width {
+                let filler = Cell {
+                    content: CellContent::from_char(' '),
+                    fg: base_cell.fg,
+                    bg: base_cell.bg,
+                    attrs: base_cell.attrs,
+                };
+                for offset in rendered_width..width {
+                    self.set(cx.saturating_add(offset as u16), y, filler);
+                }
+            }
 
             cx = cx.saturating_add(width as u16);
         }
@@ -525,6 +544,29 @@ mod tests {
         assert_eq!(end_x, 5);
         // Beyond max_x not written
         assert!(buf.get(5, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn print_text_multi_codepoint_grapheme_fills_width() {
+        // "⚙️" is a single grapheme cluster with display width 2, but is multi-codepoint.
+        // Buffer::print_text_clipped must not leave the second cell untouched.
+        let mut buf = Buffer::new(4, 1);
+
+        // Seed a "stale border" sentinel that should be cleared.
+        buf.set_raw(1, 0, Cell::from_char('|'));
+
+        let base = Cell::from_char(' ')
+            .with_fg(PackedRgba::rgb(255, 0, 0))
+            .with_bg(PackedRgba::rgb(0, 0, 255));
+
+        let end_x = buf.print_text_clipped(0, 0, "⚙️", base, 4);
+        assert_eq!(end_x, 2);
+        assert_eq!(char_at(&buf, 0, 0), Some('⚙'));
+        assert_eq!(char_at(&buf, 1, 0), Some(' '));
+
+        let c1 = buf.get(1, 0).unwrap();
+        assert_eq!(c1.fg, base.fg);
+        assert_eq!(c1.bg, base.bg);
     }
 
     #[test]

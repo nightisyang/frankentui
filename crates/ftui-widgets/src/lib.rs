@@ -170,6 +170,8 @@ pub mod measurable;
 /// Measure cache for memoizing widget measure results.
 pub mod measure_cache;
 pub mod modal;
+/// Shared mouse event result type for widget mouse handling.
+pub mod mouse;
 /// Notification queue for managing multiple toast notifications.
 pub mod notification_queue;
 pub mod padding;
@@ -241,6 +243,9 @@ pub use toast::{
 pub use notification_queue::{
     NotificationPriority, NotificationQueue, QueueAction, QueueConfig, QueueStats,
 };
+
+// Shared mouse result type for widget mouse handling
+pub use mouse::MouseResult;
 
 // Measurable widget support for intrinsic sizing
 pub use measurable::{MeasurableWidget, SizeConstraints};

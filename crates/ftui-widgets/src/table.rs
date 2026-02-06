@@ -1,8 +1,10 @@
 use crate::block::Block;
+use crate::mouse::MouseResult;
 use crate::undo_support::{TableUndoExt, UndoSupport, UndoWidgetId};
 use crate::{
     MeasurableWidget, SizeConstraints, StatefulWidget, Widget, apply_style, set_style_area,
 };
+use ftui_core::event::{MouseButton, MouseEvent, MouseEventKind};
 use ftui_core::geometry::{Rect, Size};
 use ftui_layout::{Constraint, Flex};
 use ftui_render::buffer::Buffer;
@@ -397,6 +399,83 @@ impl TableState {
     /// Set the filter text.
     pub fn set_filter(&mut self, filter: impl Into<String>) {
         self.filter = filter.into();
+    }
+
+    /// Handle a mouse event for this table.
+    ///
+    /// # Hit data convention
+    ///
+    /// The hit data (`u64`) encodes the row index. When the table renders with
+    /// a `hit_id`, each visible row registers `HitRegion::Content` with
+    /// `data = row_index as u64`.
+    ///
+    /// # Arguments
+    ///
+    /// * `event` — the mouse event from the terminal
+    /// * `hit` — result of `frame.hit_test(event.x, event.y)`, if available
+    /// * `expected_id` — the `HitId` this table was rendered with
+    /// * `row_count` — total number of rows in the table
+    pub fn handle_mouse(
+        &mut self,
+        event: &MouseEvent,
+        hit: Option<(HitId, HitRegion, u64)>,
+        expected_id: HitId,
+        row_count: usize,
+    ) -> MouseResult {
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some((id, HitRegion::Content, data)) = hit && id == expected_id {
+                    let index = data as usize;
+                    if index < row_count {
+                        self.select(Some(index));
+                        return MouseResult::Selected(index);
+                    }
+                }
+                MouseResult::Ignored
+            }
+            MouseEventKind::Moved => {
+                if let Some((id, HitRegion::Content, data)) = hit && id == expected_id {
+                    let index = data as usize;
+                    if index < row_count {
+                        let changed = self.hovered != Some(index);
+                        self.hovered = Some(index);
+                        return if changed {
+                            MouseResult::HoverChanged
+                        } else {
+                            MouseResult::Ignored
+                        };
+                    }
+                }
+                // Mouse moved off the widget or to non-content region
+                if self.hovered.is_some() {
+                    self.hovered = None;
+                    MouseResult::HoverChanged
+                } else {
+                    MouseResult::Ignored
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                self.scroll_up(3);
+                MouseResult::Scrolled
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_down(3, row_count);
+                MouseResult::Scrolled
+            }
+            _ => MouseResult::Ignored,
+        }
+    }
+
+    /// Scroll the table up by the given number of lines.
+    pub fn scroll_up(&mut self, lines: usize) {
+        self.offset = self.offset.saturating_sub(lines);
+    }
+
+    /// Scroll the table down by the given number of lines.
+    ///
+    /// Clamps so that the last row can still appear at the top of the viewport.
+    pub fn scroll_down(&mut self, lines: usize, row_count: usize) {
+        self.offset = (self.offset + lines).min(row_count.saturating_sub(1));
     }
 }
 
@@ -1755,5 +1834,104 @@ mod tests {
         let mut state = TableState::default();
         let wrong_snapshot: Box<dyn Any + Send> = Box::new(42i32);
         assert!(!state.restore_snapshot(&*wrong_snapshot));
+    }
+
+    // --- Mouse handling tests ---
+
+    use crate::mouse::MouseResult;
+    use ftui_core::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    #[test]
+    fn table_state_click_selects() {
+        let mut state = TableState::default();
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 2);
+        let hit = Some((HitId::new(1), HitRegion::Content, 4u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::Selected(4));
+        assert_eq!(state.selected, Some(4));
+    }
+
+    #[test]
+    fn table_state_click_wrong_id_ignored() {
+        let mut state = TableState::default();
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 2);
+        let hit = Some((HitId::new(99), HitRegion::Content, 4u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::Ignored);
+    }
+
+    #[test]
+    fn table_state_hover_updates() {
+        let mut state = TableState::default();
+        let event = MouseEvent::new(MouseEventKind::Moved, 5, 2);
+        let hit = Some((HitId::new(1), HitRegion::Content, 3u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::HoverChanged);
+        assert_eq!(state.hovered, Some(3));
+    }
+
+    #[test]
+    fn table_state_hover_same_index_ignored() {
+        let mut state = TableState::default();
+        state.hovered = Some(3);
+        let event = MouseEvent::new(MouseEventKind::Moved, 5, 2);
+        let hit = Some((HitId::new(1), HitRegion::Content, 3u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::Ignored);
+        assert_eq!(state.hovered, Some(3));
+    }
+
+    #[test]
+    fn table_state_hover_clears() {
+        let mut state = TableState::default();
+        state.hovered = Some(5);
+        let event = MouseEvent::new(MouseEventKind::Moved, 5, 2);
+        // No hit (mouse moved off the table)
+        let result = state.handle_mouse(&event, None, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::HoverChanged);
+        assert_eq!(state.hovered, None);
+    }
+
+    #[test]
+    fn table_state_hover_clear_when_already_none() {
+        let mut state = TableState::default();
+        let event = MouseEvent::new(MouseEventKind::Moved, 5, 2);
+        let result = state.handle_mouse(&event, None, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::Ignored);
+    }
+
+    #[test]
+    fn table_state_scroll_wheel_up() {
+        let mut state = TableState::default();
+        state.offset = 10;
+        let event = MouseEvent::new(MouseEventKind::ScrollUp, 0, 0);
+        let result = state.handle_mouse(&event, None, HitId::new(1), 20);
+        assert_eq!(result, MouseResult::Scrolled);
+        assert_eq!(state.offset, 7);
+    }
+
+    #[test]
+    fn table_state_scroll_wheel_down() {
+        let mut state = TableState::default();
+        let event = MouseEvent::new(MouseEventKind::ScrollDown, 0, 0);
+        let result = state.handle_mouse(&event, None, HitId::new(1), 20);
+        assert_eq!(result, MouseResult::Scrolled);
+        assert_eq!(state.offset, 3);
+    }
+
+    #[test]
+    fn table_state_scroll_down_clamps() {
+        let mut state = TableState::default();
+        state.offset = 18;
+        state.scroll_down(5, 20);
+        assert_eq!(state.offset, 19);
+    }
+
+    #[test]
+    fn table_state_scroll_up_clamps() {
+        let mut state = TableState::default();
+        state.offset = 1;
+        state.scroll_up(5);
+        assert_eq!(state.offset, 0);
     }
 }

@@ -83,6 +83,21 @@ impl Widget for Paragraph<'_> {
             return;
         }
 
+        // Special-case: an empty Paragraph with no Block is commonly used as a screen-clear.
+        // In that mode we must clear cell *content* (not just paint style), otherwise old
+        // borders/characters can bleed through Flex gaps.
+        let style = if deg.apply_styling() {
+            self.style
+        } else {
+            Style::default()
+        };
+        if self.block.is_none() && self.text.is_empty() {
+            let mut cell = ftui_render::cell::Cell::from_char(' ');
+            crate::apply_style(&mut cell, style);
+            frame.buffer.fill(area, cell);
+            return;
+        }
+
         if deg.apply_styling() {
             set_style_area(&mut frame.buffer, area, self.style);
         }
@@ -100,11 +115,6 @@ impl Widget for Paragraph<'_> {
         }
 
         // At NoStyling, render text without per-span styles
-        let style = if deg.apply_styling() {
-            self.style
-        } else {
-            Style::default()
-        };
         // Background is already applied for the whole area via `set_style_area()`. When drawing
         // text we avoid re-applying the same background, otherwise semi-transparent BG colors
         // get composited multiple times.
@@ -426,6 +436,24 @@ mod tests {
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(1, 1, &mut pool);
         para.render(area, &mut frame);
+    }
+
+    #[test]
+    fn render_empty_text_clears_content() {
+        let para = Paragraph::new("");
+        let area = Rect::new(0, 0, 3, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(3, 1, &mut pool);
+
+        // Seed with non-space content; an empty Paragraph render should clear it.
+        frame
+            .buffer
+            .fill(area, ftui_render::cell::Cell::from_char('X'));
+
+        para.render(area, &mut frame);
+
+        assert_eq!(frame.buffer.get(0, 0).unwrap().content.as_char(), Some(' '));
+        assert_eq!(frame.buffer.get(2, 0).unwrap().content.as_char(), Some(' '));
     }
 
     #[test]

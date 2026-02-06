@@ -6,9 +6,11 @@
 
 use crate::block::Block;
 use crate::measurable::{MeasurableWidget, SizeConstraints};
+use crate::mouse::MouseResult;
 use crate::stateful::{StateKey, Stateful};
 use crate::undo_support::{ListUndoExt, UndoSupport, UndoWidgetId};
 use crate::{StatefulWidget, Widget, draw_text_span, draw_text_span_with_link, set_style_area};
+use ftui_core::event::{MouseButton, MouseEvent, MouseEventKind};
 use ftui_core::geometry::{Rect, Size};
 use ftui_render::frame::{Frame, HitId, HitRegion};
 use ftui_style::Style;
@@ -150,6 +152,87 @@ impl ListState {
     #[must_use]
     pub fn persistence_id(&self) -> Option<&str> {
         self.persistence_id.as_deref()
+    }
+
+    /// Handle a mouse event for this list.
+    ///
+    /// # Hit data convention
+    ///
+    /// The hit data (`u64`) encodes the item index. When the list renders with
+    /// a `hit_id`, each visible row registers `HitRegion::Content` with
+    /// `data = item_index as u64`.
+    ///
+    /// # Arguments
+    ///
+    /// * `event` — the mouse event from the terminal
+    /// * `hit` — result of `frame.hit_test(event.x, event.y)`, if available
+    /// * `expected_id` — the `HitId` this list was rendered with
+    /// * `item_count` — total number of items in the list
+    pub fn handle_mouse(
+        &mut self,
+        event: &MouseEvent,
+        hit: Option<(HitId, HitRegion, u64)>,
+        expected_id: HitId,
+        item_count: usize,
+    ) -> MouseResult {
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some((id, HitRegion::Content, data)) = hit && id == expected_id {
+                    let index = data as usize;
+                    if index < item_count {
+                        self.select(Some(index));
+                        return MouseResult::Selected(index);
+                    }
+                }
+                MouseResult::Ignored
+            }
+            MouseEventKind::ScrollUp => {
+                self.scroll_up(3);
+                MouseResult::Scrolled
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_down(3, item_count);
+                MouseResult::Scrolled
+            }
+            _ => MouseResult::Ignored,
+        }
+    }
+
+    /// Scroll the list up by the given number of lines.
+    pub fn scroll_up(&mut self, lines: usize) {
+        self.offset = self.offset.saturating_sub(lines);
+    }
+
+    /// Scroll the list down by the given number of lines.
+    ///
+    /// Clamps so that the last item can still appear at the top of the viewport.
+    pub fn scroll_down(&mut self, lines: usize, item_count: usize) {
+        self.offset = (self.offset + lines).min(item_count.saturating_sub(1));
+    }
+
+    /// Move selection to the next item.
+    ///
+    /// If nothing is selected, selects the first item. Clamps to the last item.
+    pub fn select_next(&mut self, item_count: usize) {
+        if item_count == 0 {
+            return;
+        }
+        let next = match self.selected {
+            Some(i) => (i + 1).min(item_count - 1),
+            None => 0,
+        };
+        self.selected = Some(next);
+    }
+
+    /// Move selection to the previous item.
+    ///
+    /// If nothing is selected, selects the first item. Clamps to 0.
+    pub fn select_previous(&mut self) {
+        let prev = match self.selected {
+            Some(i) => i.saturating_sub(1),
+            None => 0,
+        };
+        self.selected = Some(prev);
     }
 }
 
@@ -943,5 +1026,163 @@ mod tests {
         let persist = ListPersistState::default();
         assert_eq!(persist.selected, None);
         assert_eq!(persist.offset, 0);
+    }
+
+    // --- Mouse handling tests ---
+
+    use crate::mouse::MouseResult;
+    use ftui_core::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    #[test]
+    fn list_state_click_selects() {
+        let mut state = ListState::default();
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 2);
+        let hit = Some((HitId::new(1), HitRegion::Content, 3u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::Selected(3));
+        assert_eq!(state.selected(), Some(3));
+    }
+
+    #[test]
+    fn list_state_click_wrong_id_ignored() {
+        let mut state = ListState::default();
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 2);
+        let hit = Some((HitId::new(99), HitRegion::Content, 3u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::Ignored);
+        assert_eq!(state.selected(), None);
+    }
+
+    #[test]
+    fn list_state_click_out_of_range() {
+        let mut state = ListState::default();
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 2);
+        let hit = Some((HitId::new(1), HitRegion::Content, 15u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::Ignored);
+        assert_eq!(state.selected(), None);
+    }
+
+    #[test]
+    fn list_state_click_no_hit_ignored() {
+        let mut state = ListState::default();
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 2);
+        let result = state.handle_mouse(&event, None, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::Ignored);
+    }
+
+    #[test]
+    fn list_state_scroll_up() {
+        let mut state = ListState::default();
+        state.offset = 10;
+        state.scroll_up(3);
+        assert_eq!(state.offset, 7);
+    }
+
+    #[test]
+    fn list_state_scroll_up_clamps_to_zero() {
+        let mut state = ListState::default();
+        state.offset = 1;
+        state.scroll_up(5);
+        assert_eq!(state.offset, 0);
+    }
+
+    #[test]
+    fn list_state_scroll_down() {
+        let mut state = ListState::default();
+        state.scroll_down(3, 20);
+        assert_eq!(state.offset, 3);
+    }
+
+    #[test]
+    fn list_state_scroll_down_clamps() {
+        let mut state = ListState::default();
+        state.offset = 18;
+        state.scroll_down(5, 20);
+        assert_eq!(state.offset, 19); // item_count - 1
+    }
+
+    #[test]
+    fn list_state_scroll_wheel_up() {
+        let mut state = ListState::default();
+        state.offset = 10;
+        let event = MouseEvent::new(MouseEventKind::ScrollUp, 0, 0);
+        let result = state.handle_mouse(&event, None, HitId::new(1), 20);
+        assert_eq!(result, MouseResult::Scrolled);
+        assert_eq!(state.offset, 7);
+    }
+
+    #[test]
+    fn list_state_scroll_wheel_down() {
+        let mut state = ListState::default();
+        let event = MouseEvent::new(MouseEventKind::ScrollDown, 0, 0);
+        let result = state.handle_mouse(&event, None, HitId::new(1), 20);
+        assert_eq!(result, MouseResult::Scrolled);
+        assert_eq!(state.offset, 3);
+    }
+
+    #[test]
+    fn list_state_select_next() {
+        let mut state = ListState::default();
+        state.select_next(5);
+        assert_eq!(state.selected(), Some(0));
+        state.select_next(5);
+        assert_eq!(state.selected(), Some(1));
+    }
+
+    #[test]
+    fn list_state_select_next_clamps() {
+        let mut state = ListState::default();
+        state.select(Some(4));
+        state.select_next(5);
+        assert_eq!(state.selected(), Some(4)); // already at last
+    }
+
+    #[test]
+    fn list_state_select_next_empty() {
+        let mut state = ListState::default();
+        state.select_next(0);
+        assert_eq!(state.selected(), None); // no items, no change
+    }
+
+    #[test]
+    fn list_state_select_previous() {
+        let mut state = ListState::default();
+        state.select(Some(3));
+        state.select_previous();
+        assert_eq!(state.selected(), Some(2));
+    }
+
+    #[test]
+    fn list_state_select_previous_clamps() {
+        let mut state = ListState::default();
+        state.select(Some(0));
+        state.select_previous();
+        assert_eq!(state.selected(), Some(0)); // already at first
+    }
+
+    #[test]
+    fn list_state_select_previous_from_none() {
+        let mut state = ListState::default();
+        state.select_previous();
+        assert_eq!(state.selected(), Some(0));
+    }
+
+    #[test]
+    fn list_state_right_click_ignored() {
+        let mut state = ListState::default();
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Right), 5, 2);
+        let hit = Some((HitId::new(1), HitRegion::Content, 3u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::Ignored);
+    }
+
+    #[test]
+    fn list_state_click_border_region_ignored() {
+        let mut state = ListState::default();
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 2);
+        let hit = Some((HitId::new(1), HitRegion::Border, 3u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
+        assert_eq!(result, MouseResult::Ignored);
     }
 }

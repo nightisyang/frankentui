@@ -98,6 +98,50 @@ pub mod text_width {
         *CJK_WIDTH.get_or_init(|| cjk_width_from_env_impl(|key| std::env::var(key).ok()))
     }
 
+    /// Whether the terminal is trusted to render text-default emoji + VS16 at
+    /// width 2 (matching the Unicode spec).  Most terminals do NOT — they
+    /// render these at width 1 — so the default is `false`.
+    ///
+    /// Set `FTUI_EMOJI_VS16_WIDTH=unicode` (or `=2`) to opt in for terminals
+    /// that handle this correctly (WezTerm, Kitty, Ghostty).
+    #[inline]
+    fn trust_vs16_width() -> bool {
+        static TRUST: OnceLock<bool> = OnceLock::new();
+        *TRUST.get_or_init(|| {
+            std::env::var("FTUI_EMOJI_VS16_WIDTH")
+                .map(|v| v.eq_ignore_ascii_case("unicode") || v == "2")
+                .unwrap_or(false)
+        })
+    }
+
+    /// Compute VS16 trust policy using a custom environment lookup (testable).
+    #[inline]
+    pub fn vs16_trust_from_env<F>(get_env: F) -> bool
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        get_env("FTUI_EMOJI_VS16_WIDTH")
+            .map(|v| v.eq_ignore_ascii_case("unicode") || v == "2")
+            .unwrap_or(false)
+    }
+
+    /// Cached VS16 width trust policy (fast path).
+    #[inline]
+    pub fn vs16_width_trusted() -> bool {
+        trust_vs16_width()
+    }
+
+    /// Strip U+FE0F (VS16) from a grapheme cluster.  Returns `None` if the
+    /// grapheme does not contain VS16 (no allocation needed).
+    #[inline]
+    fn strip_vs16(grapheme: &str) -> Option<String> {
+        if grapheme.contains('\u{FE0F}') {
+            Some(grapheme.chars().filter(|&c| c != '\u{FE0F}').collect())
+        } else {
+            None
+        }
+    }
+
     /// Compute CJK width policy using a custom environment lookup.
     #[inline]
     pub fn cjk_width_from_env<F>(get_env: F) -> bool
@@ -172,6 +216,17 @@ pub mod text_width {
         }
         if use_cjk_width() {
             return grapheme.width_cjk();
+        }
+        // Terminal-realistic VS16 handling: most terminals render text-default
+        // emoji (Emoji_Presentation=No) at 1 cell even with VS16 appended.
+        // Strip VS16 so unicode_display_width returns the text-presentation width.
+        if !trust_vs16_width()
+            && let Some(stripped) = strip_vs16(grapheme)
+        {
+            if stripped.is_empty() {
+                return 0;
+            }
+            return unicode_display_width(&stripped) as usize;
         }
         unicode_display_width(grapheme) as usize
     }

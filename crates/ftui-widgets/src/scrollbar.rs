@@ -4,7 +4,9 @@
 //!
 //! A widget to display a scrollbar.
 
+use crate::mouse::MouseResult;
 use crate::{StatefulWidget, Widget, draw_text_span};
+use ftui_core::event::{MouseButton, MouseEvent, MouseEventKind};
 use ftui_core::geometry::Rect;
 use ftui_render::frame::{Frame, HitId, HitRegion};
 use ftui_style::Style;
@@ -114,6 +116,82 @@ impl ScrollbarState {
             position,
             viewport_length,
         }
+    }
+
+    /// Handle a mouse event for this scrollbar.
+    ///
+    /// # Hit data convention
+    ///
+    /// The hit data (`u64`) is encoded as `(part << 56) | track_position` where
+    /// `part` is one of `SCROLLBAR_PART_*` and `track_position` is the index
+    /// within the rendered track.
+    ///
+    /// # Arguments
+    ///
+    /// * `event` — the mouse event from the terminal
+    /// * `hit` — result of `frame.hit_test(event.x, event.y)`, if available
+    /// * `expected_id` — the `HitId` this scrollbar was rendered with
+    pub fn handle_mouse(
+        &mut self,
+        event: &MouseEvent,
+        hit: Option<(HitId, HitRegion, u64)>,
+        expected_id: HitId,
+    ) -> MouseResult {
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some((id, HitRegion::Scrollbar, data)) = hit {
+                    if id == expected_id {
+                        let part = data >> 56;
+                        match part {
+                            SCROLLBAR_PART_BEGIN => {
+                                self.scroll_up(1);
+                                return MouseResult::Scrolled;
+                            }
+                            SCROLLBAR_PART_END => {
+                                self.scroll_down(1);
+                                return MouseResult::Scrolled;
+                            }
+                            SCROLLBAR_PART_TRACK | SCROLLBAR_PART_THUMB => {
+                                // Proportional jump: position in track → position in content
+                                let track_pos = (data & 0x00FFFFFFFFFFFFFF) as usize;
+                                // The track length is at most content_length worth of cells,
+                                // but we don't know the exact rendered track length here.
+                                // We use the track position as a direct scroll target,
+                                // clamped to the valid range.
+                                let max_pos =
+                                    self.content_length.saturating_sub(self.viewport_length);
+                                self.position = track_pos.min(max_pos);
+                                return MouseResult::Scrolled;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                MouseResult::Ignored
+            }
+            MouseEventKind::ScrollUp => {
+                self.scroll_up(3);
+                MouseResult::Scrolled
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_down(3);
+                MouseResult::Scrolled
+            }
+            _ => MouseResult::Ignored,
+        }
+    }
+
+    /// Scroll the content up by the given number of lines.
+    pub fn scroll_up(&mut self, lines: usize) {
+        self.position = self.position.saturating_sub(lines);
+    }
+
+    /// Scroll the content down by the given number of lines.
+    ///
+    /// Clamps so that the viewport stays within content bounds.
+    pub fn scroll_down(&mut self, lines: usize) {
+        let max_pos = self.content_length.saturating_sub(self.viewport_length);
+        self.position = (self.position + lines).min(max_pos);
     }
 }
 
@@ -597,5 +675,107 @@ mod tests {
         assert!(!r1_c0.is_empty() && !r1_c0.is_continuation()); // Head
         let r1_c1 = frame.buffer.get(1, 1).unwrap();
         assert!(r1_c1.is_continuation()); // Tail
+    }
+
+    // --- Mouse handling tests ---
+
+    use crate::mouse::MouseResult;
+    use ftui_core::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    #[test]
+    fn scrollbar_state_begin_button() {
+        let mut state = ScrollbarState::new(100, 10, 20);
+        let data = (SCROLLBAR_PART_BEGIN << 56) | 0u64;
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 0, 0);
+        let hit = Some((HitId::new(1), HitRegion::Scrollbar, data));
+        let result = state.handle_mouse(&event, hit, HitId::new(1));
+        assert_eq!(result, MouseResult::Scrolled);
+        assert_eq!(state.position, 9);
+    }
+
+    #[test]
+    fn scrollbar_state_end_button() {
+        let mut state = ScrollbarState::new(100, 10, 20);
+        let data = (SCROLLBAR_PART_END << 56) | 0u64;
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 0, 0);
+        let hit = Some((HitId::new(1), HitRegion::Scrollbar, data));
+        let result = state.handle_mouse(&event, hit, HitId::new(1));
+        assert_eq!(result, MouseResult::Scrolled);
+        assert_eq!(state.position, 11);
+    }
+
+    #[test]
+    fn scrollbar_state_track_click() {
+        let mut state = ScrollbarState::new(100, 0, 20);
+        let track_pos = 50u64;
+        let data = (SCROLLBAR_PART_TRACK << 56) | track_pos;
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 0, 0);
+        let hit = Some((HitId::new(1), HitRegion::Scrollbar, data));
+        let result = state.handle_mouse(&event, hit, HitId::new(1));
+        assert_eq!(result, MouseResult::Scrolled);
+        assert_eq!(state.position, 50);
+    }
+
+    #[test]
+    fn scrollbar_state_track_click_clamps() {
+        let mut state = ScrollbarState::new(100, 0, 20);
+        let track_pos = 95u64;
+        let data = (SCROLLBAR_PART_TRACK << 56) | track_pos;
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 0, 0);
+        let hit = Some((HitId::new(1), HitRegion::Scrollbar, data));
+        let result = state.handle_mouse(&event, hit, HitId::new(1));
+        assert_eq!(result, MouseResult::Scrolled);
+        assert_eq!(state.position, 80); // content_length - viewport_length
+    }
+
+    #[test]
+    fn scrollbar_state_scroll_wheel_up() {
+        let mut state = ScrollbarState::new(100, 10, 20);
+        let event = MouseEvent::new(MouseEventKind::ScrollUp, 0, 0);
+        let result = state.handle_mouse(&event, None, HitId::new(1));
+        assert_eq!(result, MouseResult::Scrolled);
+        assert_eq!(state.position, 7);
+    }
+
+    #[test]
+    fn scrollbar_state_scroll_wheel_down() {
+        let mut state = ScrollbarState::new(100, 10, 20);
+        let event = MouseEvent::new(MouseEventKind::ScrollDown, 0, 0);
+        let result = state.handle_mouse(&event, None, HitId::new(1));
+        assert_eq!(result, MouseResult::Scrolled);
+        assert_eq!(state.position, 13);
+    }
+
+    #[test]
+    fn scrollbar_state_scroll_down_clamps() {
+        let mut state = ScrollbarState::new(100, 78, 20);
+        state.scroll_down(5);
+        assert_eq!(state.position, 80); // max = 100 - 20
+    }
+
+    #[test]
+    fn scrollbar_state_scroll_up_clamps() {
+        let mut state = ScrollbarState::new(100, 2, 20);
+        state.scroll_up(5);
+        assert_eq!(state.position, 0);
+    }
+
+    #[test]
+    fn scrollbar_state_wrong_id_ignored() {
+        let mut state = ScrollbarState::new(100, 10, 20);
+        let data = (SCROLLBAR_PART_BEGIN << 56) | 0u64;
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 0, 0);
+        let hit = Some((HitId::new(99), HitRegion::Scrollbar, data));
+        let result = state.handle_mouse(&event, hit, HitId::new(1));
+        assert_eq!(result, MouseResult::Ignored);
+        assert_eq!(state.position, 10);
+    }
+
+    #[test]
+    fn scrollbar_state_right_click_ignored() {
+        let mut state = ScrollbarState::new(100, 10, 20);
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Right), 0, 0);
+        let result = state.handle_mouse(&event, None, HitId::new(1));
+        assert_eq!(result, MouseResult::Ignored);
     }
 }

@@ -214,7 +214,7 @@ const EMOJI_BASIC_TESTS: &[WidthTestCase] = &[
     WidthTestCase::new("\u{1F602}", "tears of joy", 2),
     WidthTestCase::new("\u{1F44D}", "thumbs up", 2),
     WidthTestCase::new("\u{2764}", "red heart", 1), // U+2764 is in BMP, often width 1
-    WidthTestCase::new("\u{2764}\u{FE0F}", "red heart with VS16", 2),
+    WidthTestCase::new("\u{2764}\u{FE0F}", "red heart with VS16", 1),
     WidthTestCase::new("\u{1F389}", "party popper", 2),
     WidthTestCase::new("\u{1F680}", "rocket", 2),
     WidthTestCase::new("\u{1F4BB}", "laptop", 2),
@@ -233,28 +233,44 @@ const EMOJI_BASIC_TESTS: &[WidthTestCase] = &[
 ];
 
 #[test]
-fn emoji_presentation_grapheme_width_is_wide() {
+fn text_default_emoji_with_vs16_width_is_narrow() {
+    // Text-default emoji (Emoji_Presentation=No) with VS16 are rendered at
+    // width 1 by most terminals, even though Unicode says width 2.
     let cases = ["⚙️", "🖼️"];
     for case in cases {
         let width = grapheme_width(case);
         assert_eq!(
-            width, 2,
-            "Expected emoji presentation '{}' to be width 2",
+            width, 1,
+            "Expected text-default+VS16 '{}' to be width 1 (terminal-realistic)",
             case
         );
     }
 }
 
 #[test]
-fn file_browser_icons_are_wide() {
-    let cases = [
-        "📁", "🔗", "🦀", "🐍", "📜", "📝", "⚙️", "🖼️", "🎵", "🎬", "⚡️", "📄", "🏠",
-    ];
+fn file_browser_icons_inherently_wide() {
+    // Emoji with Emoji_Presentation=Yes or East_Asian_Width=W: width 2.
+    // ⚡️ (U+26A1) has EAW=W, so it stays wide even after VS16 stripping.
+    let cases = ["📁", "🔗", "🦀", "🐍", "📜", "📝", "🎵", "🎬", "⚡️", "📄", "🏠"];
     for case in cases {
         let width = grapheme_width(case);
         assert_eq!(
             width, 2,
-            "Expected file browser icon '{}' to be width 2",
+            "Expected inherently-wide icon '{}' to be width 2",
+            case
+        );
+    }
+}
+
+#[test]
+fn file_browser_icons_text_default_vs16() {
+    // Text-default emoji (EAW=N) + VS16: terminals render at width 1.
+    let cases = ["⚙️", "🖼️"];
+    for case in cases {
+        let width = grapheme_width(case);
+        assert_eq!(
+            width, 1,
+            "Expected text-default+VS16 icon '{}' to be width 1 (terminal-realistic)",
             case
         );
     }
@@ -565,12 +581,11 @@ fn control_character_width_tests() {
 const VARIATION_SELECTOR_TESTS: &[WidthTestCase] = &[
     // VS15 (text presentation) - should be width 1
     WidthTestCase::new("\u{2764}\u{FE0E}", "heart with VS15 (text)", 1),
-    // VS16 (emoji presentation) - should be width 2
-    WidthTestCase::new("\u{2764}\u{FE0F}", "heart with VS16 (emoji)", 2),
-    // Number sign with VS16
-    WidthTestCase::new("#\u{FE0F}\u{20E3}", "keycap #", 2),
-    // Digit with keycap
-    WidthTestCase::new("1\u{FE0F}\u{20E3}", "keycap 1", 2),
+    // VS16 (emoji presentation) - terminal-realistic width 1 (text-default base)
+    WidthTestCase::new("\u{2764}\u{FE0F}", "heart with VS16 (emoji)", 1),
+    // Keycap sequences: stripping VS16 yields base+combining, width 1
+    WidthTestCase::new("#\u{FE0F}\u{20E3}", "keycap #", 1),
+    WidthTestCase::new("1\u{FE0F}\u{20E3}", "keycap 1", 1),
     // Star with VS16
     WidthTestCase::new("\u{2B50}\u{FE0F}", "star with VS16", 2),
     // Standalone variation selector (edge case)
