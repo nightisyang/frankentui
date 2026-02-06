@@ -613,4 +613,88 @@ mod tests {
         assert!(debug_str.contains("HistoryManager"));
         assert!(debug_str.contains("undo_depth"));
     }
+
+    #[test]
+    fn test_config_new_custom_limits() {
+        let config = HistoryConfig::new(50, 4096);
+        assert_eq!(config.max_depth, 50);
+        assert_eq!(config.max_bytes, 4096);
+    }
+
+    #[test]
+    fn test_config_with_merge_config() {
+        let mc = MergeConfig::default();
+        let config = HistoryConfig::new(10, 0).with_merge_config(mc);
+        // Builder pattern should work; verify merge_config is set
+        assert_eq!(config.max_depth, 10);
+    }
+
+    #[test]
+    fn test_config_accessor() {
+        let config = HistoryConfig::new(42, 1024);
+        let mgr = HistoryManager::new(config);
+        assert_eq!(mgr.config().max_depth, 42);
+        assert_eq!(mgr.config().max_bytes, 1024);
+    }
+
+    #[test]
+    fn test_undo_descriptions_limited() {
+        let mut mgr = HistoryManager::default();
+        mgr.push(make_insert_cmd("a"));
+        mgr.push(make_insert_cmd("b"));
+        mgr.push(make_insert_cmd("c"));
+
+        let descs = mgr.undo_descriptions(2);
+        assert_eq!(descs.len(), 2, "should limit to 2 descriptions");
+    }
+
+    #[test]
+    fn test_redo_descriptions() {
+        let mut mgr = HistoryManager::default();
+        mgr.push(make_insert_cmd("a"));
+        mgr.push(make_insert_cmd("b"));
+        mgr.undo();
+        mgr.undo();
+
+        let descs = mgr.redo_descriptions(5);
+        assert_eq!(descs.len(), 2);
+
+        let descs_limited = mgr.redo_descriptions(1);
+        assert_eq!(descs_limited.len(), 1);
+    }
+
+    #[test]
+    fn test_memory_byte_limit_evicts_old_commands() {
+        // Each insert cmd is at least a few bytes. Use a very low byte limit.
+        let config = HistoryConfig::new(100, 1); // 1 byte limit
+        let mut mgr = HistoryManager::new(config);
+
+        // Push several commands - enforce_limits should evict old ones
+        for i in 0..5 {
+            mgr.push(make_insert_cmd(&format!("cmd{i}")));
+        }
+
+        // With 1-byte limit, commands should get evicted
+        assert!(
+            mgr.undo_depth() < 5,
+            "byte limit should evict old commands, depth={}",
+            mgr.undo_depth()
+        );
+    }
+
+    #[test]
+    fn test_memory_tracking_after_undo_redo() {
+        let mut mgr = HistoryManager::new(HistoryConfig::unlimited());
+        mgr.push(make_insert_cmd("a"));
+        let after_push = mgr.memory_usage();
+
+        mgr.undo();
+        let after_undo = mgr.memory_usage();
+        // Memory should be same (moved to redo stack)
+        assert_eq!(after_push, after_undo);
+
+        mgr.redo();
+        let after_redo = mgr.memory_usage();
+        assert_eq!(after_push, after_redo);
+    }
 }

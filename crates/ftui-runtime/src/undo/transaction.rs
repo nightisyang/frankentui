@@ -561,4 +561,93 @@ mod tests {
         let result = txn.add_executed(make_cmd(buffer, "test"));
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_transaction_execute_method() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let b1 = buffer.clone();
+        let b2 = buffer.clone();
+
+        let cmd = TextInsertCmd::new(WidgetId::new(1), 0, "exec")
+            .with_apply(move |_, _, txt| {
+                let mut buf = b1.lock().unwrap();
+                buf.push_str(txt);
+                Ok(())
+            })
+            .with_remove(move |_, _, _| {
+                let mut buf = b2.lock().unwrap();
+                buf.drain(..4);
+                Ok(())
+            });
+
+        let mut txn = Transaction::begin("Execute Test");
+        txn.execute(Box::new(cmd)).unwrap();
+        assert_eq!(txn.len(), 1);
+        assert_eq!(*buffer.lock().unwrap(), "exec");
+    }
+
+    #[test]
+    fn test_transaction_finalized_rejects_execute() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+
+        let mut txn = Transaction::begin("Finalized");
+        txn.rollback();
+
+        let result = txn.execute(make_cmd(buffer, "test"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_scope_execute_without_transaction() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let mut history = HistoryManager::new(HistoryConfig::unlimited());
+
+        {
+            let mut scope = TransactionScope::new(&mut history);
+            // Execute without begin() - should go directly to history
+            scope.execute(make_cmd(buffer.clone(), "direct")).unwrap();
+        }
+
+        assert_eq!(history.undo_depth(), 1);
+    }
+
+    #[test]
+    fn test_scope_commit_without_begin_errors() {
+        let mut history = HistoryManager::new(HistoryConfig::unlimited());
+
+        let mut scope = TransactionScope::new(&mut history);
+        let result = scope.commit();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_scope_rollback_without_begin_errors() {
+        let mut history = HistoryManager::new(HistoryConfig::unlimited());
+
+        let mut scope = TransactionScope::new(&mut history);
+        let result = scope.rollback();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_transaction_multi_command_rollback_order() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+
+        let mut txn = Transaction::begin("Multi Rollback");
+        txn.add_executed(make_cmd(buffer.clone(), "a")).unwrap();
+        txn.add_executed(make_cmd(buffer.clone(), "b")).unwrap();
+        txn.add_executed(make_cmd(buffer.clone(), "c")).unwrap();
+
+        assert_eq!(*buffer.lock().unwrap(), "abc");
+        txn.rollback();
+        assert_eq!(*buffer.lock().unwrap(), "");
+    }
+
+    #[test]
+    fn test_transaction_debug_impl() {
+        let txn = Transaction::begin("Debug Test");
+        let s = format!("{txn:?}");
+        assert!(s.contains("Transaction"));
+        assert!(s.contains("Debug Test"));
+    }
 }

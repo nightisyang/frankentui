@@ -3744,7 +3744,7 @@ impl AppModel {
         let mut entries = match self.display_screen() {
             ScreenId::GuidedTour => vec![
                 screens::HelpEntry {
-                    key: "Enter / Space",
+                    key: "Click / Enter / Space",
                     action: "Start guided tour",
                 },
                 screens::HelpEntry {
@@ -4140,7 +4140,15 @@ impl AppModel {
             chrome::OVERLAY_TOUR => {
                 if self.tour.is_active() {
                     self.stop_tour(false, "mouse_overlay");
+                    return "overlay_tour_click";
                 }
+
+                // Tour landing screen: allow mouse click to start the tour.
+                if self.current_screen == ScreenId::GuidedTour {
+                    self.start_tour(0, self.tour.speed());
+                    return "overlay_tour_start";
+                }
+
                 "overlay_tour_click"
             }
             chrome::OVERLAY_A11Y => {
@@ -4780,6 +4788,8 @@ impl AppModel {
             );
         let inner = block.inner(panel);
         block.render(panel, frame);
+        // Make the landing panel clickable to start the tour (mouse-first demo UX).
+        frame.register_hit_region(panel, HitId::new(crate::chrome::OVERLAY_TOUR));
 
         if inner.is_empty() {
             return;
@@ -4791,7 +4801,7 @@ impl AppModel {
                 Style::new().fg(theme::fg::PRIMARY),
             )]),
             Line::from_spans([Span::styled(
-                "Press Enter or Space to start.",
+                "Click, Enter, or Space to start.",
                 Style::new().fg(theme::accent::INFO).bold(),
             )]),
             Line::from_spans([Span::styled(
@@ -5483,6 +5493,18 @@ mod tests {
         let action = app.handle_overlay_click(crate::chrome::OVERLAY_A11Y);
         assert_eq!(action, "overlay_a11y_close");
         assert!(!app.a11y_panel_visible);
+    }
+
+    #[test]
+    fn handle_overlay_click_starts_guided_tour_on_landing_screen() {
+        let mut app = AppModel::new();
+        app.current_screen = ScreenId::GuidedTour;
+        assert!(!app.tour.is_active());
+
+        let action = app.handle_overlay_click(crate::chrome::OVERLAY_TOUR);
+        assert_eq!(action, "overlay_tour_start");
+        assert!(app.tour.is_active());
+        assert_eq!(app.current_screen, ScreenId::GuidedTour);
     }
 
     #[test]

@@ -648,13 +648,17 @@ mod tests {
     #[test]
     fn circle_hits_segment_center() {
         // Circle at (5, 1) with r=2, segment from (0,0) to (10,0)
-        assert!(circle_intersects_segment(5.0, 1.0, 2.0, 0.0, 0.0, 10.0, 0.0));
+        assert!(circle_intersects_segment(
+            5.0, 1.0, 2.0, 0.0, 0.0, 10.0, 0.0
+        ));
     }
 
     #[test]
     fn circle_hits_segment_endpoint() {
         // Circle centered at (0.5, 0) with r=1, segment from (1,0) to (10,0)
-        assert!(circle_intersects_segment(0.5, 0.0, 1.0, 1.0, 0.0, 10.0, 0.0));
+        assert!(circle_intersects_segment(
+            0.5, 0.0, 1.0, 1.0, 0.0, 10.0, 0.0
+        ));
     }
 
     #[test]
