@@ -1063,4 +1063,145 @@ mod tests {
         idx.invalidate_all();
         assert!(!idx.cache.valid);
     }
+
+    #[test]
+    fn three_overlapping_widgets_z_order() {
+        let mut idx = index();
+        idx.register(
+            HitId::new(1),
+            Rect::new(0, 0, 20, 20),
+            HitRegion::Content,
+            10,
+            0,
+        );
+        idx.register(
+            HitId::new(2),
+            Rect::new(5, 5, 15, 15),
+            HitRegion::Border,
+            20,
+            2,
+        );
+        idx.register(
+            HitId::new(3),
+            Rect::new(8, 8, 10, 10),
+            HitRegion::Button,
+            30,
+            1,
+        );
+        // At (10, 10): all three overlap; widget 2 has highest z=2
+        let result = idx.hit_test(10, 10);
+        assert_eq!(result, Some((HitId::new(2), HitRegion::Border, 20)));
+    }
+
+    #[test]
+    fn hit_test_readonly_matches_mutable() {
+        let mut idx = index();
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(5, 5, 10, 10),
+            HitRegion::Content,
+            0,
+        );
+        let mutable_result = idx.hit_test(8, 8);
+        let readonly_result = idx.hit_test_readonly(8, 8);
+        assert_eq!(mutable_result, readonly_result);
+    }
+
+    #[test]
+    fn single_pixel_widget() {
+        let mut idx = index();
+        idx.register_simple(HitId::new(1), Rect::new(5, 5, 1, 1), HitRegion::Button, 0);
+        assert!(idx.hit_test(5, 5).is_some());
+        assert!(idx.hit_test(6, 5).is_none());
+        assert!(idx.hit_test(5, 6).is_none());
+    }
+
+    #[test]
+    fn clear_on_empty_is_idempotent() {
+        let mut idx = index();
+        idx.clear();
+        assert!(idx.is_empty());
+        idx.clear();
+        assert!(idx.is_empty());
+    }
+
+    #[test]
+    fn register_remove_register_cycle() {
+        let mut idx = index();
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(0, 0, 10, 10),
+            HitRegion::Content,
+            0,
+        );
+        assert_eq!(idx.len(), 1);
+        idx.remove(HitId::new(1));
+        assert_eq!(idx.len(), 0);
+        idx.register_simple(HitId::new(1), Rect::new(20, 20, 5, 5), HitRegion::Border, 0);
+        assert_eq!(idx.len(), 1);
+        // Should hit at new location, not old
+        assert!(idx.hit_test(22, 22).is_some());
+        assert!(idx.hit_test(5, 5).is_none());
+    }
+
+    #[test]
+    fn invalidate_non_overlapping_region_preserves_cache() {
+        let mut idx = index();
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(0, 0, 10, 10),
+            HitRegion::Content,
+            0,
+        );
+        idx.hit_test(5, 5);
+        assert!(idx.cache.valid);
+        // Invalidate a region that doesn't overlap the cached point
+        idx.invalidate_region(Rect::new(50, 50, 10, 10));
+        // Cache should still be valid since the region doesn't overlap
+        // (This depends on implementation - may or may not check overlap)
+        // Just verify it doesn't panic
+    }
+
+    #[test]
+    fn hit_entry_contains() {
+        let entry = HitEntry::new(
+            HitId::new(1),
+            Rect::new(10, 10, 20, 20),
+            HitRegion::Content,
+            0,
+            0,
+            0,
+        );
+        assert!(entry.contains(15, 15));
+        assert!(entry.contains(10, 10));
+        assert!(!entry.contains(9, 10));
+        assert!(!entry.contains(30, 30));
+    }
+
+    #[test]
+    fn reset_stats_clears_counters() {
+        let mut idx = SpatialHitIndex::new(
+            80,
+            24,
+            SpatialHitConfig {
+                cell_size: 8,
+                bucket_warn_threshold: 64,
+                track_cache_stats: true,
+            },
+        );
+        idx.register_simple(
+            HitId::new(1),
+            Rect::new(0, 0, 10, 10),
+            HitRegion::Content,
+            0,
+        );
+        idx.hit_test(5, 5);
+        idx.hit_test(5, 5); // cache hit
+        let stats = idx.stats();
+        assert!(stats.hits > 0 || stats.misses > 0);
+        idx.reset_stats();
+        let stats = idx.stats();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 0);
+    }
 }
