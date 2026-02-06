@@ -288,11 +288,14 @@ fn mega_e2e_panel_toggles() {
     log_jsonl("env", &[("test", "mega_e2e_panel_toggles")]);
 
     let mut screen = MermaidMegaShowcaseScreen::new();
-    let h0 = capture_frame_hash(&screen, 120, 40);
+    let _h0 = capture_frame_hash(&screen, 120, 40);
 
-    // Toggle each panel on, then off (double toggle = return to original).
+    // Toggle each panel on, then off — verify no panics and that toggling
+    // on changes the frame.
     let panel_keys = ['m', 'c', 'd', 'i', 'e', '?'];
     for &key in &panel_keys {
+        let h_before = capture_frame_hash(&screen, 120, 40);
+
         // Toggle on.
         let _ = screen.update(&char_press(key));
         let h_on = capture_frame_hash(&screen, 120, 40);
@@ -305,15 +308,17 @@ fn mega_e2e_panel_toggles() {
             "panel_toggle",
             &[
                 ("key", &key.to_string()),
+                ("before_hash", &format!("{h_before:016x}")),
                 ("on_hash", &format!("{h_on:016x}")),
                 ("off_hash", &format!("{h_off:016x}")),
             ],
         );
 
-        // After double toggle, frame should match original (or close to it).
-        // Some panels may trigger lazy computations so we allow a mismatch
-        // for the first panel toggled, but subsequent double toggles should
-        // be stable.
+        // Toggling on should change the frame (panel becomes visible).
+        assert_ne!(
+            h_before, h_on,
+            "Panel toggle on should change frame: key={key}"
+        );
     }
 
     log_jsonl("result", &[("status", "passed")]);
