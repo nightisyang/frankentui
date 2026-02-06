@@ -39,6 +39,9 @@ const LOG_CHUNK_LIMIT: usize = 64;
 /// Channel capacity for the outbound message queue.
 const CHANNEL_CAPACITY: usize = 256;
 
+/// Pending render state: buffer, cursor position, cursor visibility.
+type PendingRender = (Buffer, Option<(u16, u16)>, bool);
+
 /// Messages sent from the main thread to the render thread.
 #[derive(Debug)]
 pub enum OutMsg {
@@ -62,6 +65,7 @@ pub struct RenderThread {
     error_rx: mpsc::Receiver<io::Error>,
 }
 
+#[allow(clippy::result_large_err)]
 impl RenderThread {
     pub fn start<W: Write + Send + 'static>(writer: TerminalWriter<W>) -> Self {
         let (tx, rx) = mpsc::sync_channel::<OutMsg>(CHANNEL_CAPACITY);
@@ -124,7 +128,7 @@ fn render_loop<W: Write + Send>(
         };
 
         let mut logs: Vec<Vec<u8>> = Vec::new();
-        let mut latest_render: Option<(Buffer, Option<(u16, u16)>, bool)> = None;
+        let mut latest_render: Option<PendingRender> = None;
         let mut shutdown = false;
 
         process_msg(
@@ -193,7 +197,7 @@ fn render_loop<W: Write + Send>(
         }
 
         // Periodic grapheme pool GC
-        if loop_count % 1000 == 0 {
+        if loop_count.is_multiple_of(1000) {
             writer.gc();
         }
 
@@ -207,7 +211,7 @@ fn render_loop<W: Write + Send>(
 fn process_msg<W: Write>(
     msg: OutMsg,
     logs: &mut Vec<Vec<u8>>,
-    latest_render: &mut Option<(Buffer, Option<(u16, u16)>, bool)>,
+    latest_render: &mut Option<PendingRender>,
     writer: &mut TerminalWriter<W>,
     shutdown: &mut bool,
     _err_tx: &mpsc::SyncSender<io::Error>,
@@ -354,5 +358,167 @@ mod tests {
         // With corrected logic, X should appear after first chunk(64),
         // and potentially again after last chunk (100-64=36).
         assert!(output.contains('X'));
+    }
+
+    #[test]
+    fn constants_have_expected_values() {
+        assert_eq!(LOG_CHUNK_LIMIT, 64);
+        assert_eq!(CHANNEL_CAPACITY, 256);
+    }
+
+    #[test]
+    fn check_error_none_when_clean() {
+        let (writer, _tw) = test_writer();
+        let rt = RenderThread::start(writer);
+        assert!(rt.check_error().is_none());
+        rt.shutdown();
+    }
+
+    #[test]
+    fn try_send_succeeds() {
+        let (writer, tw) = test_writer();
+        let rt = RenderThread::start(writer);
+
+        assert!(
+            rt.try_send(OutMsg::Log(
+                b"try-send-test
+"
+                .to_vec()
+            ))
+            .is_ok()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+        rt.shutdown();
+
+        let bytes = tw.output();
+        let output = String::from_utf8_lossy(&bytes);
+        assert!(output.contains("try-send-test"));
+    }
+
+    #[test]
+    fn drop_triggers_shutdown() {
+        let (writer, _tw) = test_writer();
+        let rt = RenderThread::start(writer);
+        // Drop without explicit shutdown should not hang
+        drop(rt);
+    }
+
+    #[test]
+    fn render_coalescing_uses_latest() {
+        let (mut writer, tw) = test_writer();
+        writer.set_size(10, 5);
+        let rt = RenderThread::start(writer);
+
+        // Send two renders in quick succession: first with 'A', second with 'Z'
+        let mut buf_a = Buffer::new(10, 5);
+        buf_a.set_raw(0, 0, Cell::from_char('A'));
+        let mut buf_z = Buffer::new(10, 5);
+        buf_z.set_raw(0, 0, Cell::from_char('Z'));
+
+        rt.send(OutMsg::Render {
+            buffer: buf_a,
+            cursor: None,
+            cursor_visible: true,
+        })
+        .unwrap();
+        rt.send(OutMsg::Render {
+            buffer: buf_z,
+            cursor: None,
+            cursor_visible: true,
+        })
+        .unwrap();
+
+        std::thread::sleep(Duration::from_millis(100));
+        rt.shutdown();
+
+        let bytes = tw.output();
+        let output = String::from_utf8_lossy(&bytes);
+        // The latest render (Z) must appear
+        assert!(output.contains('Z'));
+    }
+
+    #[test]
+    fn resize_message_processed() {
+        let (writer, _tw) = test_writer();
+        let rt = RenderThread::start(writer);
+        // Resize should not cause errors
+        rt.send(OutMsg::Resize { w: 120, h: 40 }).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(rt.check_error().is_none());
+        rt.shutdown();
+    }
+
+    #[test]
+    fn set_mode_message_processed() {
+        let (writer, _tw) = test_writer();
+        let rt = RenderThread::start(writer);
+        rt.send(OutMsg::SetMode(ScreenMode::AltScreen)).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(rt.check_error().is_none());
+        rt.shutdown();
+    }
+
+    #[test]
+    fn multiple_logs_all_written() {
+        let (writer, tw) = test_writer();
+        let rt = RenderThread::start(writer);
+
+        for i in 0..10 {
+            rt.send(OutMsg::Log(
+                format!(
+                    "msg-{i}
+"
+                )
+                .into_bytes(),
+            ))
+            .unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        rt.shutdown();
+
+        let bytes = tw.output();
+        let output = String::from_utf8_lossy(&bytes);
+        for i in 0..10 {
+            assert!(output.contains(&format!("msg-{i}")), "missing msg-{i}");
+        }
+    }
+
+    #[test]
+    fn outmsg_debug_format() {
+        let log = OutMsg::Log(b"hi".to_vec());
+        let dbg = format!("{log:?}");
+        assert!(dbg.contains("Log"));
+
+        let render = OutMsg::Render {
+            buffer: Buffer::new(1, 1),
+            cursor: Some((0, 0)),
+            cursor_visible: false,
+        };
+        let dbg = format!("{render:?}");
+        assert!(dbg.contains("Render"));
+
+        let resize = OutMsg::Resize { w: 80, h: 24 };
+        let dbg = format!("{resize:?}");
+        assert!(dbg.contains("Resize"));
+
+        let shutdown = OutMsg::Shutdown;
+        let dbg = format!("{shutdown:?}");
+        assert!(dbg.contains("Shutdown"));
+    }
+
+    #[test]
+    fn send_after_shutdown_returns_err() {
+        let (writer, _tw) = test_writer();
+        let rt = RenderThread::start(writer);
+        let _ = rt.sender.send(OutMsg::Shutdown);
+        // Wait for render thread to exit
+        std::thread::sleep(Duration::from_millis(100));
+        // Now sending should fail (disconnected)
+        let result = rt.send(OutMsg::Log(
+            b"late
+"
+            .to_vec(),
+        ));
+        assert!(result.is_err());
     }
 }
