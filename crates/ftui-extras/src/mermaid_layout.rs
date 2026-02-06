@@ -1928,14 +1928,23 @@ fn apply_order_constraints(
                     continue;
                 }
                 let bucket = &mut rank_order[rank];
+                // Build O(1) membership set for constrained nodes
+                let max_node = ordered.iter().copied().max().unwrap_or(0);
+                let mut is_ordered = vec![false; max_node + 1];
+                for &idx in ordered {
+                    is_ordered[idx] = true;
+                }
                 // Remove constrained nodes from their current positions
                 let mut other: Vec<usize> = bucket
                     .iter()
                     .copied()
-                    .filter(|n| !ordered.contains(n))
+                    .filter(|&n| n >= is_ordered.len() || !is_ordered[n])
                     .collect();
                 // Find insertion point: where the first constrained node was
-                let first_pos = bucket.iter().position(|n| ordered.contains(n)).unwrap_or(0);
+                let first_pos = bucket
+                    .iter()
+                    .position(|&n| n < is_ordered.len() && is_ordered[n])
+                    .unwrap_or(0);
                 let insert_at = first_pos.min(other.len());
                 // Insert constrained nodes in specified order at that position
                 for (i, &node) in ordered.iter().enumerate() {
@@ -4583,21 +4592,32 @@ pub fn compute_legend_layout(
     }
 }
 
-/// Truncate a legend entry to fit within max_chars, adding ellipsis if needed.
-fn truncate_legend_text(text: &str, max_chars: usize) -> (String, bool) {
-    if max_chars == 0 {
+/// Truncate a legend entry to fit within max display-width columns, adding ellipsis if needed.
+fn truncate_legend_text(text: &str, max_cols: usize) -> (String, bool) {
+    if max_cols == 0 {
         return (String::new(), !text.is_empty());
     }
-    let char_count = text.chars().count();
-    if char_count <= max_chars {
-        (text.to_string(), false)
-    } else if max_chars <= 3 {
-        (text.chars().take(max_chars).collect(), true)
-    } else {
-        let mut truncated: String = text.chars().take(max_chars - 3).collect();
-        truncated.push_str("...");
-        (truncated, true)
+    let width = visual_width(text);
+    if width <= max_cols {
+        return (text.to_string(), false);
     }
+    // Reserve 1 column for ellipsis character (U+2026 is single-width)
+    let budget = if max_cols > 1 { max_cols - 1 } else { max_cols };
+    let mut result = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let mut buf = [0u8; 4];
+        let ch_w = grapheme_width(ch.encode_utf8(&mut buf));
+        if used + ch_w > budget {
+            break;
+        }
+        result.push(ch);
+        used += ch_w;
+    }
+    if max_cols > 1 {
+        result.push('…');
+    }
+    (result, true)
 }
 
 /// Build footnote text lines from resolved links.
@@ -8142,23 +8162,25 @@ mod label_tests {
     #[test]
     fn truncate_legend_text_long() {
         let (text, truncated) = truncate_legend_text("hello world!", 8);
-        assert_eq!(text, "hello...");
+        assert_eq!(text, "hello w…");
         assert!(truncated);
-        assert_eq!(text.len(), 8);
+        assert_eq!(visual_width(&text), 8);
     }
 
     #[test]
     fn truncate_legend_text_very_short_max() {
         let (text, truncated) = truncate_legend_text("hello", 2);
-        assert_eq!(text, "he");
+        assert_eq!(text, "h…");
         assert!(truncated);
+        assert_eq!(visual_width(&text), 2);
     }
 
     #[test]
     fn truncate_legend_text_unicode_safe() {
+        // CJK characters are width 2 each. max_cols=4, budget=3, so 1 CJK char (w=2) fits + ellipsis
         let (text, truncated) = truncate_legend_text("猫の手も借りたい", 4);
-        assert_eq!(text.chars().count(), 4);
         assert!(truncated);
+        assert!(visual_width(&text) <= 4);
     }
 
     #[test]
