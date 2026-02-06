@@ -763,6 +763,11 @@ impl InspectorState {
         self.diagnostic_log.as_mut()
     }
 
+    #[inline]
+    fn diagnostics_active(&self) -> bool {
+        self.diagnostic_log.is_some() || self.telemetry_hooks.is_some()
+    }
+
     /// Toggle the inspector on/off.
     pub fn toggle(&mut self) {
         let prev = self.mode;
@@ -771,7 +776,7 @@ impl InspectorState {
         } else {
             self.mode = InspectorMode::Full;
         }
-        if self.mode != prev {
+        if self.mode != prev && self.diagnostics_active() {
             self.record_diagnostic(
                 DiagnosticEntry::new(DiagnosticEventKind::InspectorToggled)
                     .with_previous_mode(prev)
@@ -791,7 +796,7 @@ impl InspectorState {
     pub fn cycle_mode(&mut self) {
         let prev = self.mode;
         self.mode = self.mode.cycle();
-        if self.mode != prev {
+        if self.mode != prev && self.diagnostics_active() {
             self.record_diagnostic(
                 DiagnosticEntry::new(DiagnosticEventKind::ModeChanged)
                     .with_previous_mode(prev)
@@ -809,7 +814,7 @@ impl InspectorState {
             2 => InspectorMode::WidgetBounds,
             _ => InspectorMode::Full,
         };
-        if self.mode != prev {
+        if self.mode != prev && self.diagnostics_active() {
             self.record_diagnostic(
                 DiagnosticEntry::new(DiagnosticEventKind::ModeChanged)
                     .with_previous_mode(prev)
@@ -822,9 +827,11 @@ impl InspectorState {
     pub fn set_hover(&mut self, pos: Option<(u16, u16)>) {
         if self.hover_pos != pos {
             self.hover_pos = pos;
-            self.record_diagnostic(
-                DiagnosticEntry::new(DiagnosticEventKind::HoverChanged).with_hover_pos(pos),
-            );
+            if self.diagnostics_active() {
+                self.record_diagnostic(
+                    DiagnosticEntry::new(DiagnosticEventKind::HoverChanged).with_hover_pos(pos),
+                );
+            }
         }
     }
 
@@ -832,9 +839,11 @@ impl InspectorState {
     pub fn select(&mut self, id: Option<HitId>) {
         if self.selected != id {
             self.selected = id;
-            self.record_diagnostic(
-                DiagnosticEntry::new(DiagnosticEventKind::SelectionChanged).with_selected(id),
-            );
+            if self.diagnostics_active() {
+                self.record_diagnostic(
+                    DiagnosticEntry::new(DiagnosticEventKind::SelectionChanged).with_selected(id),
+                );
+            }
         }
     }
 
@@ -846,53 +855,63 @@ impl InspectorState {
     /// Toggle the detail panel.
     pub fn toggle_detail_panel(&mut self) {
         self.show_detail_panel = !self.show_detail_panel;
-        self.record_diagnostic(
-            DiagnosticEntry::new(DiagnosticEventKind::DetailPanelToggled)
-                .with_flag("detail_panel", self.show_detail_panel),
-        );
+        if self.diagnostics_active() {
+            self.record_diagnostic(
+                DiagnosticEntry::new(DiagnosticEventKind::DetailPanelToggled)
+                    .with_flag("detail_panel", self.show_detail_panel),
+            );
+        }
     }
 
     /// Toggle hit regions visibility.
     pub fn toggle_hits(&mut self) {
         self.show_hits = !self.show_hits;
-        self.record_diagnostic(
-            DiagnosticEntry::new(DiagnosticEventKind::HitsToggled)
-                .with_flag("hits", self.show_hits),
-        );
+        if self.diagnostics_active() {
+            self.record_diagnostic(
+                DiagnosticEntry::new(DiagnosticEventKind::HitsToggled)
+                    .with_flag("hits", self.show_hits),
+            );
+        }
     }
 
     /// Toggle widget bounds visibility.
     pub fn toggle_bounds(&mut self) {
         self.show_bounds = !self.show_bounds;
-        self.record_diagnostic(
-            DiagnosticEntry::new(DiagnosticEventKind::BoundsToggled)
-                .with_flag("bounds", self.show_bounds),
-        );
+        if self.diagnostics_active() {
+            self.record_diagnostic(
+                DiagnosticEntry::new(DiagnosticEventKind::BoundsToggled)
+                    .with_flag("bounds", self.show_bounds),
+            );
+        }
     }
 
     /// Toggle name labels visibility.
     pub fn toggle_names(&mut self) {
         self.show_names = !self.show_names;
-        self.record_diagnostic(
-            DiagnosticEntry::new(DiagnosticEventKind::NamesToggled)
-                .with_flag("names", self.show_names),
-        );
+        if self.diagnostics_active() {
+            self.record_diagnostic(
+                DiagnosticEntry::new(DiagnosticEventKind::NamesToggled)
+                    .with_flag("names", self.show_names),
+            );
+        }
     }
 
     /// Toggle render time visibility.
     pub fn toggle_times(&mut self) {
         self.show_times = !self.show_times;
-        self.record_diagnostic(
-            DiagnosticEntry::new(DiagnosticEventKind::TimesToggled)
-                .with_flag("times", self.show_times),
-        );
+        if self.diagnostics_active() {
+            self.record_diagnostic(
+                DiagnosticEntry::new(DiagnosticEventKind::TimesToggled)
+                    .with_flag("times", self.show_times),
+            );
+        }
     }
 
     /// Clear widget info for new frame.
     pub fn clear_widgets(&mut self) {
         let count = self.widgets.len();
         self.widgets.clear();
-        if count > 0 {
+        if count > 0 && self.diagnostics_active() {
             self.record_diagnostic(
                 DiagnosticEntry::new(DiagnosticEventKind::WidgetsCleared).with_widget_count(count),
             );
@@ -903,12 +922,14 @@ impl InspectorState {
     pub fn register_widget(&mut self, info: WidgetInfo) {
         #[cfg(feature = "tracing")]
         trace!(name = info.name, area = ?info.area, "Registered widget for inspection");
-        let widget_count = self.widgets.len() + 1;
-        self.record_diagnostic(
-            DiagnosticEntry::new(DiagnosticEventKind::WidgetRegistered)
-                .with_widget(&info)
-                .with_widget_count(widget_count),
-        );
+        if self.diagnostics_active() {
+            let widget_count = self.widgets.len() + 1;
+            self.record_diagnostic(
+                DiagnosticEntry::new(DiagnosticEventKind::WidgetRegistered)
+                    .with_widget(&info)
+                    .with_widget_count(widget_count),
+            );
+        }
         self.widgets.push(info);
     }
 
