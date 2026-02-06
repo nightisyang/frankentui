@@ -178,7 +178,9 @@ pub(crate) use text_width::{char_width, display_width, grapheme_width};
 
 #[cfg(test)]
 mod tests {
-    use super::{display_width, grapheme_width};
+    use super::{char_width, display_width, grapheme_width};
+
+    // ── display_width ────────────────────────────────────────────────
 
     #[test]
     fn display_width_matches_expected_samples() {
@@ -205,6 +207,54 @@ mod tests {
     }
 
     #[test]
+    fn display_width_empty_string() {
+        assert_eq!(display_width(""), 0);
+    }
+
+    #[test]
+    fn display_width_single_ascii_char() {
+        assert_eq!(display_width("x"), 1);
+        assert_eq!(display_width(" "), 1);
+    }
+
+    #[test]
+    fn display_width_pure_ascii_fast_path() {
+        assert_eq!(display_width("Hello, World!"), 13);
+        assert_eq!(display_width("fn main() {}"), 12);
+    }
+
+    #[test]
+    fn display_width_ascii_with_tabs() {
+        assert_eq!(display_width("a\tb"), 3);
+        assert_eq!(display_width("\n"), 1);
+    }
+
+    #[test]
+    fn display_width_mixed_ascii_emoji() {
+        assert_eq!(display_width("hi 🎉"), 5);
+        assert_eq!(display_width("🚀start"), 7);
+    }
+
+    #[test]
+    fn display_width_zero_width_chars_in_string() {
+        let s = "a\u{00AD}b";
+        assert_eq!(display_width(s), 2);
+    }
+
+    #[test]
+    fn display_width_combining_characters() {
+        let s = "e\u{0301}";
+        assert_eq!(display_width(s), 1);
+    }
+
+    #[test]
+    fn display_width_multiple_emoji() {
+        assert_eq!(display_width("😀😀😀"), 6);
+    }
+
+    // ── grapheme_width ───────────────────────────────────────────────
+
+    #[test]
     fn grapheme_width_matches_expected_samples() {
         let samples = [
             ("a", 1usize),
@@ -224,5 +274,108 @@ mod tests {
                 "grapheme width mismatch for {grapheme:?}"
             );
         }
+    }
+
+    #[test]
+    fn grapheme_width_ascii_space() {
+        assert_eq!(grapheme_width(" "), 1);
+    }
+
+    #[test]
+    fn grapheme_width_ascii_tilde() {
+        assert_eq!(grapheme_width("~"), 1);
+    }
+
+    #[test]
+    fn grapheme_width_tab() {
+        assert_eq!(grapheme_width("\t"), 1);
+    }
+
+    #[test]
+    fn grapheme_width_newline() {
+        assert_eq!(grapheme_width("\n"), 1);
+    }
+
+    #[test]
+    fn grapheme_width_combining_accent() {
+        assert_eq!(grapheme_width("e\u{0301}"), 1);
+    }
+
+    #[test]
+    fn grapheme_width_zero_width_space() {
+        assert_eq!(grapheme_width("\u{200B}"), 0);
+    }
+
+    #[test]
+    fn grapheme_width_zero_width_joiner() {
+        assert_eq!(grapheme_width("\u{200D}"), 0);
+    }
+
+    #[test]
+    fn grapheme_width_skin_tone_modifier() {
+        assert_eq!(grapheme_width("👍🏿"), 2);
+    }
+
+    // ── char_width ───────────────────────────────────────────────────
+
+    #[test]
+    fn char_width_ascii_printable() {
+        assert_eq!(char_width('A'), 1);
+        assert_eq!(char_width('z'), 1);
+        assert_eq!(char_width(' '), 1);
+        assert_eq!(char_width('~'), 1);
+        assert_eq!(char_width('!'), 1);
+    }
+
+    #[test]
+    fn char_width_ascii_whitespace() {
+        assert_eq!(char_width('\t'), 1);
+        assert_eq!(char_width('\n'), 1);
+        assert_eq!(char_width('\r'), 1);
+    }
+
+    #[test]
+    fn char_width_ascii_control() {
+        assert_eq!(char_width('\x00'), 0);
+        assert_eq!(char_width('\x01'), 0);
+        assert_eq!(char_width('\x1F'), 0);
+        assert_eq!(char_width('\x7F'), 0);
+    }
+
+    #[test]
+    fn char_width_zero_width_combining() {
+        assert_eq!(char_width('\u{0300}'), 0);
+        assert_eq!(char_width('\u{0301}'), 0);
+    }
+
+    #[test]
+    fn char_width_zero_width_special() {
+        assert_eq!(char_width('\u{200B}'), 0);
+        assert_eq!(char_width('\u{200D}'), 0);
+        assert_eq!(char_width('\u{FEFF}'), 0);
+        assert_eq!(char_width('\u{00AD}'), 0);
+    }
+
+    #[test]
+    fn char_width_variation_selectors() {
+        assert_eq!(char_width('\u{FE00}'), 0);
+        assert_eq!(char_width('\u{FE0F}'), 0);
+    }
+
+    #[test]
+    fn char_width_bidi_controls() {
+        assert_eq!(char_width('\u{200E}'), 0);
+        assert_eq!(char_width('\u{200F}'), 0);
+    }
+
+    #[test]
+    fn char_width_normal_non_ascii() {
+        assert_eq!(char_width('é'), 1);
+        assert_eq!(char_width('ñ'), 1);
+    }
+
+    #[test]
+    fn char_width_euro_sign() {
+        assert_eq!(char_width('€'), 1);
     }
 }
