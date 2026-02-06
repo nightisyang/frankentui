@@ -196,10 +196,10 @@ impl ExplainabilityCockpit {
             paused: false,
             focused_panel: FocusPanel::Timeline,
             timeline_scroll: 0,
-            layout_diff: StdCell::new(Rect::ZERO),
-            layout_resize: StdCell::new(Rect::ZERO),
-            layout_budget: StdCell::new(Rect::ZERO),
-            layout_timeline: StdCell::new(Rect::ZERO),
+            layout_diff: StdCell::new(Rect::default()),
+            layout_resize: StdCell::new(Rect::default()),
+            layout_budget: StdCell::new(Rect::default()),
+            layout_timeline: StdCell::new(Rect::default()),
         };
         cockpit.refresh(true);
         cockpit
