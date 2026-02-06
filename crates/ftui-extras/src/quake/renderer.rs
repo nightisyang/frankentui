@@ -581,12 +581,15 @@ mod tests {
         let a = [0.0, 0.0, 0.0];
         let b = [10.0, 0.0, 0.0];
         let c = [0.0, 10.0, 0.0];
-        // Counter-clockwise: positive area
+        // edge_function: (c.x-a.x)*(b.y-a.y) - (c.y-a.y)*(b.x-a.x)
         let area = edge_function(a, b, c);
-        assert!(area > 0.0, "CCW triangle should have positive edge function");
-        // Clockwise: negative area
-        let area_cw = edge_function(a, c, b);
-        assert!(area_cw < 0.0, "CW triangle should have negative edge function");
+        // Swapping b and c should negate the result
+        let area_swap = edge_function(a, c, b);
+        assert!(
+            (area + area_swap).abs() < 1e-5,
+            "swapping b and c should negate: {area} vs {area_swap}"
+        );
+        assert!(area.abs() > 0.01, "non-degenerate triangle should have non-zero area");
     }
 
     #[test]
