@@ -8,10 +8,12 @@
 //! - Error summary panel with all current validation errors
 //! - Success feedback via toast notifications
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::time::Duration;
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
+use ftui_core::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind,
+};
 use ftui_core::geometry::Rect;
 use ftui_extras::forms::{Form, FormField, FormState, ValidationError};
 use ftui_layout::{Constraint, Flex};
@@ -69,6 +71,9 @@ pub struct FormValidationDemo {
     status_text: String,
     /// Tick counter for animations.
     tick_count: u64,
+    error_injection: bool,
+    last_form_area: Cell<Rect>,
+    last_error_area: Cell<Rect>,
 }
 
 impl Default for FormValidationDemo {
@@ -256,6 +261,9 @@ impl FormValidationDemo {
             status_text: "Tab/Arrow: navigate | Space: toggle | Enter: submit | M: mode toggle"
                 .into(),
             tick_count: 0,
+            error_injection: false,
+            last_form_area: Cell::new(Rect::default()),
+            last_error_area: Cell::new(Rect::default()),
         }
     }
 
@@ -411,6 +419,70 @@ impl FormValidationDemo {
             .render(area, frame);
     }
 
+    fn inject_errors(&mut self) {
+        self.error_injection = true;
+        if let Some(FormField::Text { value, .. }) = self.form.field_mut(0) {
+            *value = "ab".into();
+        }
+        if let Some(FormField::Text { value, .. }) = self.form.field_mut(1) {
+            *value = "not-an-email".into();
+        }
+        if let Some(FormField::Text { value, .. }) = self.form.field_mut(2) {
+            *value = "short".into();
+        }
+        if let Some(FormField::Text { value, .. }) = self.form.field_mut(3) {
+            *value = "different".into();
+        }
+        if let Some(FormField::Text { value, .. }) = self.form.field_mut(5) {
+            *value = "x".repeat(110);
+        }
+        if let Some(FormField::Text { value, .. }) = self.form.field_mut(6) {
+            *value = "not-a-url".into();
+        }
+        if let Some(FormField::Select { selected, .. }) = self.form.field_mut(7) {
+            *selected = 0;
+        }
+        if let Some(FormField::Checkbox { checked, .. }) = self.form.field_mut(8) {
+            *checked = false;
+        }
+        self.run_validation();
+        self.status_text = "Error injection active".into();
+    }
+    fn reset_form(&mut self) {
+        *self = Self::new();
+    }
+    fn handle_mouse(&mut self, event: &Event) {
+        if let Event::Mouse(mouse) = event {
+            let form_area = self.last_form_area.get();
+            let error_area = self.last_error_area.get();
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if error_area.contains(mouse.x, mouse.y) {
+                        self.toggle_validation_mode();
+                    }
+                }
+                MouseEventKind::ScrollDown => {
+                    if form_area.contains(mouse.x, mouse.y) {
+                        let mut state = self.form_state.borrow_mut();
+                        let count = self.form.field_count();
+                        if count > 0 {
+                            state.focused = (state.focused + 1) % count;
+                        }
+                    }
+                }
+                MouseEventKind::ScrollUp => {
+                    if form_area.contains(mouse.x, mouse.y) {
+                        let mut state = self.form_state.borrow_mut();
+                        let count = self.form.field_count();
+                        if count > 0 {
+                            state.focused = (state.focused + count - 1) % count;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
     /// Render dirty/touched state indicators.
     fn render_state_indicators(&self, frame: &mut Frame, area: Rect) {
         let state = self.form_state.borrow();
@@ -434,16 +506,38 @@ impl Screen for FormValidationDemo {
     type Message = ();
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
-        // Check for mode toggle key
+        if matches!(event, Event::Mouse(_)) {
+            self.handle_mouse(event);
+            return Cmd::None;
+        }
         if let Event::Key(KeyEvent {
-            code: KeyCode::Char('m' | 'M'),
+            code,
             kind: KeyEventKind::Press,
             modifiers: Modifiers::NONE,
             ..
         }) = event
         {
-            self.toggle_validation_mode();
-            return Cmd::None;
+            match code {
+                KeyCode::Char('m' | 'M') => {
+                    self.toggle_validation_mode();
+                    return Cmd::None;
+                }
+                KeyCode::Char('e' | 'E') => {
+                    self.inject_errors();
+                    return Cmd::None;
+                }
+                KeyCode::Char('r' | 'R') => {
+                    self.reset_form();
+                    return Cmd::None;
+                }
+                KeyCode::Char('c' | 'C') => {
+                    self.form_state.borrow_mut().errors.clear();
+                    self.error_injection = false;
+                    self.status_text = "Errors cleared".into();
+                    return Cmd::None;
+                }
+                _ => {}
+            }
         }
 
         // Handle form events
@@ -499,6 +593,7 @@ impl Screen for FormValidationDemo {
             .style(Style::new().fg(theme::fg::PRIMARY).bg(theme::bg::DEEP));
 
         let form_inner = form_block.inner(left_chunks[1]);
+        self.last_form_area.set(left_chunks[1]);
         form_block.render(left_chunks[1], frame);
 
         // Render form
@@ -515,6 +610,7 @@ impl Screen for FormValidationDemo {
             .render(left_chunks[3], frame);
 
         // Right side: error summary
+        self.last_error_area.set(main_chunks[1]);
         self.render_error_summary(frame, main_chunks[1]);
 
         // Notification overlay
@@ -557,8 +653,24 @@ impl Screen for FormValidationDemo {
                 action: "Toggle validation mode",
             },
             HelpEntry {
-                key: "Esc",
-                action: "Cancel / reset",
+                key: "E",
+                action: "Inject errors",
+            },
+            HelpEntry {
+                key: "R",
+                action: "Reset form",
+            },
+            HelpEntry {
+                key: "C",
+                action: "Clear errors",
+            },
+            HelpEntry {
+                key: "Click",
+                action: "Toggle mode (error panel)",
+            },
+            HelpEntry {
+                key: "Scroll",
+                action: "Navigate fields",
             },
         ]
     }
@@ -653,5 +765,89 @@ mod tests {
 
         let error = demo.validate_password_match();
         assert!(error.is_none());
+    }
+    #[test]
+    fn error_injection_fills_bad_data() {
+        let mut demo = FormValidationDemo::new();
+        demo.inject_errors();
+        assert!(demo.error_injection);
+        assert!(demo.form_state.borrow().errors.len() >= 5);
+    }
+    #[test]
+    fn reset_restores_initial_state() {
+        let mut demo = FormValidationDemo::new();
+        demo.inject_errors();
+        demo.reset_form();
+        assert!(!demo.error_injection);
+        assert_eq!(demo.validation_mode, ValidationMode::RealTime);
+    }
+    #[test]
+    fn clear_errors_removes_all() {
+        let mut demo = FormValidationDemo::new();
+        demo.inject_errors();
+        let ev = Event::Key(KeyEvent {
+            code: KeyCode::Char('c'),
+            kind: KeyEventKind::Press,
+            modifiers: Modifiers::NONE,
+        });
+        demo.update(&ev);
+        assert!(demo.form_state.borrow().errors.is_empty());
+    }
+    #[test]
+    fn e_key_injects_errors() {
+        let mut demo = FormValidationDemo::new();
+        let ev = Event::Key(KeyEvent {
+            code: KeyCode::Char('e'),
+            kind: KeyEventKind::Press,
+            modifiers: Modifiers::NONE,
+        });
+        demo.update(&ev);
+        assert!(demo.error_injection);
+    }
+    #[test]
+    fn r_key_resets_form() {
+        let mut demo = FormValidationDemo::new();
+        demo.inject_errors();
+        let ev = Event::Key(KeyEvent {
+            code: KeyCode::Char('r'),
+            kind: KeyEventKind::Press,
+            modifiers: Modifiers::NONE,
+        });
+        demo.update(&ev);
+        assert!(!demo.error_injection);
+    }
+    #[test]
+    fn mouse_scroll_navigates_fields() {
+        use ftui_core::event::{MouseEvent, MouseEventKind};
+        let mut demo = FormValidationDemo::new();
+        demo.last_form_area.set(Rect::new(0, 0, 60, 30));
+        let initial = demo.form_state.borrow().focused;
+        demo.update(&Event::Mouse(MouseEvent::new(
+            MouseEventKind::ScrollDown,
+            10,
+            10,
+        )));
+        assert_ne!(initial, demo.form_state.borrow().focused);
+    }
+    #[test]
+    fn mouse_click_toggles_mode() {
+        use ftui_core::event::{MouseButton, MouseEvent, MouseEventKind};
+        let mut demo = FormValidationDemo::new();
+        demo.last_error_area.set(Rect::new(60, 0, 40, 30));
+        demo.update(&Event::Mouse(MouseEvent::new(
+            MouseEventKind::Down(MouseButton::Left),
+            70,
+            10,
+        )));
+        assert_eq!(demo.validation_mode, ValidationMode::OnSubmit);
+    }
+    #[test]
+    fn keybindings_has_mouse_entries() {
+        let demo = FormValidationDemo::new();
+        let bindings = demo.keybindings();
+        assert!(bindings.len() >= 8);
+        let keys: Vec<&str> = bindings.iter().map(|b| b.key).collect();
+        assert!(keys.contains(&"Click"));
+        assert!(keys.contains(&"Scroll"));
     }
 }
