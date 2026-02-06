@@ -428,6 +428,12 @@ fn pty_mermaid_harness_metrics_jsonl_present() -> Result<(), String> {
         "expected at least one mermaid_render event for diagram_type=block-beta"
     );
 
+    // Ensure the harness cycles through architecture-beta at least once (bd-hudcn.1.17.1).
+    assert!(
+        text.contains("\"diagram_type\":\"architecture-beta\""),
+        "expected at least one mermaid_render event for diagram_type=architecture-beta"
+    );
+
     Ok(())
 }
 

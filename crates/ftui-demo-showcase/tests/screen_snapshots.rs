@@ -3310,3 +3310,77 @@ fn mega_showcase_invalid_diagnostics_120x40() {
     assert!(text.contains("expected: classDef <name> <style>"));
     assert_snapshot!("mega_showcase_invalid_diagnostics_120x40", &frame.buffer);
 }
+
+// ============================================================================
+// Mermaid Mega Showcase — architecture-beta (bd-hudcn.1.17.1)
+// ============================================================================
+
+#[test]
+fn mega_showcase_architecture_beta_basic_80x24() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen =
+        ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
+    mega_showcase_goto_sample(&mut screen, 34);
+    mega_showcase_snapshot(
+        &mut screen,
+        80,
+        24,
+        "mega_showcase_architecture_beta_basic_80x24",
+    );
+}
+
+#[test]
+fn mega_showcase_architecture_beta_basic_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen =
+        ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
+    mega_showcase_goto_sample(&mut screen, 34);
+    mega_showcase_snapshot(
+        &mut screen,
+        120,
+        40,
+        "mega_showcase_architecture_beta_basic_120x40",
+    );
+}
+
+#[test]
+fn mega_showcase_architecture_beta_stress_80x24() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen =
+        ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
+    mega_showcase_goto_sample(&mut screen, 35);
+    mega_showcase_snapshot(
+        &mut screen,
+        80,
+        24,
+        "mega_showcase_architecture_beta_stress_80x24",
+    );
+}
+
+#[test]
+fn mega_showcase_architecture_beta_stress_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen =
+        ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
+    mega_showcase_goto_sample(&mut screen, 35);
+    mega_showcase_snapshot(
+        &mut screen,
+        120,
+        40,
+        "mega_showcase_architecture_beta_stress_120x40",
+    );
+}
+
+#[test]
+fn mega_showcase_architecture_beta_stress_200x60() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen =
+        ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
+    mega_showcase_goto_sample(&mut screen, 35);
+    mega_showcase_snapshot(
+        &mut screen,
+        200,
+        60,
+        "mega_showcase_architecture_beta_stress_200x60",
+    );
+}
