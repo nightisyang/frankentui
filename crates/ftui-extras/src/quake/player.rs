@@ -171,8 +171,9 @@ impl Player {
             self.try_move(map, new_pos, dt);
         }
 
-        // Ground check: find floor height at current position
-        let floor_z = map.floor_height_at(self.pos[0], self.pos[1]);
+        // Ground check: find floor height at current position (Z-aware to avoid
+        // teleporting up to platforms that are far above the player).
+        let floor_z = map.supportive_floor_at(self.pos[0], self.pos[1], self.pos[2]);
         if self.pos[2] <= floor_z || ((self.pos[2] - floor_z).abs() < 1.0 && self.vel[2] <= 0.0) {
             self.pos[2] = floor_z;
             self.vel[2] = 0.0;

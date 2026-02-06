@@ -79,11 +79,14 @@ fn bench_buffer_set(c: &mut Criterion) {
         })
     });
 
-    // set_fast: inline fast path (no scissor/opacity/overlap when trivial)
+    // set_fast: inline fast path (requires opaque bg to take the fast path)
+    let opaque_cell = Cell::from_char('X')
+        .with_fg(PackedRgba::rgb(255, 0, 0))
+        .with_bg(PackedRgba::rgb(0, 0, 0));
     group.bench_function("set_fast_single", |b| {
         let mut buf = Buffer::new(80, 24);
         b.iter(|| {
-            buf.set_fast(black_box(40), black_box(12), cell);
+            buf.set_fast(black_box(40), black_box(12), opaque_cell);
             black_box(&buf);
         })
     });

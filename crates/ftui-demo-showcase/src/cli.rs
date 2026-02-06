@@ -55,8 +55,8 @@ SCREENS:
    13  Macro Recorder     Record/replay input macros and scenarios
    14  Performance        Frame budget, caching, virtualization
    15  Markdown           Rich text and markdown rendering
-   16  Mermaid Showcase   Mermaid diagrams with layout diagnostics
-   17  Mermaid Mega Showcase Comprehensive Mermaid diagram lab with all knobs
+   16  Mermaid Showcase   Interactive Mermaid diagrams with layout diagnostics and live controls
+   17  Mermaid Mega Showcase   Comprehensive Mermaid diagram lab with performance knobs and diagnostics
    18  Visual Effects     Animated braille and canvas effects
    19  Responsive         Breakpoint-driven responsive layout demo
    20  Log Search         Live log search and filter demo
@@ -84,11 +84,19 @@ SCREENS:
    42  Kanban Board       Interactive Kanban board with drag-drop
 
 KEYBINDINGS:
-    1-9, 0          Switch to screens 1-10 by number
-    Tab / Shift-Tab Cycle through all screens
-    ?               Toggle help overlay
-    F12             Toggle debug overlay
-    q / Ctrl+C      Quit
+    1-9, 0                Switch to screens 1-10 by number
+    Tab / Shift-Tab       Cycle through all screens
+    Ctrl+K                Open command palette
+    Ctrl+F                Palette: toggle favorite
+    Ctrl+Shift+F          Palette: favorites-only filter
+    ?                     Toggle help overlay
+    A                     Toggle A11y panel
+    Ctrl+T                Cycle color theme
+    Ctrl+P                Toggle performance HUD
+    F12                   Toggle debug overlay
+    Ctrl+Z                Undo
+    Ctrl+Y / Ctrl+Shift+Z Redo
+    q / Ctrl+C            Quit
 
 ENVIRONMENT VARIABLES:
     FTUI_DEMO_DETERMINISTIC  Force deterministic fixtures (seed/time)
@@ -747,6 +755,22 @@ mod tests {
             HELP_TEXT.contains(DEFAULT_PATH),
             "HELP_TEXT missing VFX JSONL default path {DEFAULT_PATH}"
         );
+    }
+
+    #[test]
+    fn help_text_mentions_command_palette_and_theme_keys() {
+        assert!(HELP_TEXT.contains("Ctrl+K"));
+        assert!(HELP_TEXT.contains("Ctrl+F"));
+        assert!(HELP_TEXT.contains("Ctrl+Shift+F"));
+        assert!(HELP_TEXT.contains("Ctrl+T"));
+    }
+
+    #[test]
+    fn help_text_mentions_undo_redo_and_perf_hud_keys() {
+        assert!(HELP_TEXT.contains("Ctrl+Z"));
+        assert!(HELP_TEXT.contains("Ctrl+Y"));
+        assert!(HELP_TEXT.contains("Ctrl+Shift+Z"));
+        assert!(HELP_TEXT.contains("Ctrl+P"));
     }
 
     #[test]

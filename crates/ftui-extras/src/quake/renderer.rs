@@ -115,15 +115,20 @@ impl QuakeRenderer {
                 let mut cx = 0.0f32;
                 let mut cy = 0.0f32;
                 let mut cz = 0.0f32;
-                let n = face.vertex_indices.len() as f32;
+                let mut n = 0.0f32;
                 for &vi in &face.vertex_indices {
                     if vi < map.vertices.len() {
                         cx += map.vertices[vi][0];
                         cy += map.vertices[vi][1];
                         cz += map.vertices[vi][2];
+                        n += 1.0;
                     }
                 }
-                self.face_centroids.push([cx / n, cy / n, cz / n]);
+                if n > 0.0 {
+                    self.face_centroids.push([cx / n, cy / n, cz / n]);
+                } else {
+                    self.face_centroids.push([0.0, 0.0, 0.0]);
+                }
             }
         }
 

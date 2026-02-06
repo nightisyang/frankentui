@@ -1,5 +1,5 @@
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Tier:auto Glyph:unicode Render:braille Wrap:wordchar Layout:auto Palette:default Zoom:100% VP:88x26 Gen:n24 b2 d25% l│
+│ Tier:auto Glyph:unicode Render:braille Wrap:wordchar Layout:auto Dir:auto Palette:default Zoom:100% VP:88x26 Gen:n24 │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -16,10 +16,10 @@
 │                                             ⡇                                            ││Parse: -                  │
 │                                            ⠹⡿⠁                                           ││Layout: -                 │
 │                                       ⢀⣀⣤⣴⣶⣾⣿⣶⣦⣤⣀⣀                                       ││Render: -                 │
-│                                   ⠤⢶⣾⣿⣿⣿Decision⣿⣿⣿⣷⣶⠤                                   ││Cache: 0/0                │
-│                                      ⠈⠉⠙⠛⠻⠿⢿⣿⠿⠿⠛⠛⠉⠉                                      ││Last: MISS                │
-│                                          ⢀⠤⠒⠑⠢⢄                                          ││                          │
-│                                       ⣀⠤⠊⠁     ⠉⠢⢄⡀                                      ││                          │
+│                                   ⠤⢶⣾⣿⣿⣿Decision⣿⣿⣿⣷⣶⠤                                   ││                          │
+│                                      ⠈⠉⠙⠛⠻⠿⢿⣿⠿⠿⠛⠛⠉⠉                                      ││                          │
+│                                          ⢀⠤⠒⠑⠢⢄                                          ││Cache: 0/0                │
+│                                       ⣀⠤⠊⠁     ⠉⠢⢄⡀                                      ││Last: MISS                │
 │                                    ⡠⠔⠊            ⠈⠒⠤⡀                                   ││                          │
 │                                ⢠⣧⠔⠉                  ⠈⠑⢤⣧                                ││                          │
 │                      ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿Yes     ⣿⣿⣿⣿⣿No⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿                      ││                          │

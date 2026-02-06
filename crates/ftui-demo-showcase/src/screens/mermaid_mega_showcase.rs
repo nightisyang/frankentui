@@ -2730,12 +2730,19 @@ impl MermaidMegaShowcaseScreen {
         }
         // Node/edge counts from IR
         if let Some(ir) = cache.ir.as_ref() {
-            lines.push(format!("Nodes: {} Edges: {}", ir.nodes.len(), ir.edges.len()));
+            lines.push(format!(
+                "Nodes: {} Edges: {}",
+                ir.nodes.len(),
+                ir.edges.len()
+            ));
         }
         // Layout quality
         if let Some(layout) = cache.layout.as_ref() {
             let s = &layout.stats;
-            lines.push(format!("Crossings: {} Bends: {}", s.crossings, s.total_bends));
+            lines.push(format!(
+                "Crossings: {} Bends: {}",
+                s.crossings, s.total_bends
+            ));
             lines.push(format!("Ranks: {} MaxW: {}", s.ranks, s.max_rank_width));
         }
         lines.push(String::new());

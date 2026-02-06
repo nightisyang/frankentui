@@ -740,7 +740,8 @@ impl Buffer {
     /// Bypasses scissor intersection, opacity blending, and overlap cleanup
     /// when all of the following hold:
     ///
-    /// - The cell is single-width (`width_hint() <= 1`) and not a continuation
+    /// - The cell is single-width (`width() <= 1`) and not a continuation
+    /// - The cell background is fully opaque (`bg.a() == 255`)
     /// - Only the base scissor is active (no nested push)
     /// - Only the base opacity is active (no nested push)
     /// - The existing cell at the target is also single-width and not a continuation
@@ -750,9 +751,11 @@ impl Buffer {
     #[inline]
     pub fn set_fast(&mut self, x: u16, y: u16, cell: Cell) {
         // Bail to full path for wide, continuation, or semi-transparent bg cells.
+        // Must use width() not width_hint(): width_hint() returns 1 for all
+        // direct chars including CJK, but width() does a proper unicode lookup.
         // set() always composites bg over the existing cell (src-over), which is
         // a no-op only when bg alpha is 255.
-        if cell.content.width_hint() > 1 || cell.is_continuation() || cell.bg.a() != 255 {
+        if cell.content.width() > 1 || cell.is_continuation() || cell.bg.a() != 255 {
             return self.set(x, y, cell);
         }
 
@@ -766,9 +769,11 @@ impl Buffer {
             return;
         };
 
-        // Check that existing cell doesn't need overlap cleanup
+        // Check that existing cell doesn't need overlap cleanup.
+        // Must use width() for the same reason: a CJK direct char at this
+        // position would have width() == 2 with a continuation at x+1.
         let existing = &self.cells[idx];
-        if existing.content.width_hint() > 1 || existing.is_continuation() {
+        if existing.content.width() > 1 || existing.is_continuation() {
             return self.set(x, y, cell);
         }
 

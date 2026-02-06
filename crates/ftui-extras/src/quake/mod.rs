@@ -100,11 +100,18 @@ impl QuakeEngine {
     pub fn update(&mut self, dt: f64) {
         self.time += dt;
 
-        // Accumulate time for fixed-rate game ticks (Quake runs at 72 Hz)
+        // Accumulate time for fixed-rate game ticks (Quake runs at 72 Hz).
+        // Cap at 10 ticks per frame to prevent lag spikes from causing
+        // hundreds of physics updates (which could teleport through walls).
         self.tick_accumulator += dt;
-        while self.tick_accumulator >= TICK_SECS {
+        let mut ticks = 0u32;
+        while self.tick_accumulator >= TICK_SECS && ticks < 10 {
             self.tick_accumulator -= TICK_SECS;
             self.game_tick();
+            ticks += 1;
+        }
+        if ticks >= 10 {
+            self.tick_accumulator = 0.0;
         }
 
         // Decay muzzle flash
@@ -291,14 +298,16 @@ impl QuakeEngine {
             let rw = (room.width * scale).max(1.0) as u32;
             let rh = (room.height * scale).max(1.0) as u32;
 
-            // Draw room outline
-            for x in rx..rx + rw {
+            // Draw room outline (saturating_add prevents u32 overflow)
+            for x in rx..rx.saturating_add(rw) {
                 self.framebuffer.set_pixel(x, ry, room_color);
-                self.framebuffer.set_pixel(x, ry + rh, room_color);
+                self.framebuffer
+                    .set_pixel(x, ry.saturating_add(rh), room_color);
             }
-            for y in ry..ry + rh {
+            for y in ry..ry.saturating_add(rh) {
                 self.framebuffer.set_pixel(rx, y, room_color);
-                self.framebuffer.set_pixel(rx + rw, y, room_color);
+                self.framebuffer
+                    .set_pixel(rx.saturating_add(rw), y, room_color);
             }
         }
 
@@ -353,7 +362,9 @@ fn draw_line_fb(fb: &mut QuakeFramebuffer, x0: u32, y0: u32, x1: u32, y1: u32, c
     let mut err = dx + dy;
 
     loop {
-        fb.set_pixel(x0 as u32, y0 as u32, color);
+        if x0 >= 0 && y0 >= 0 {
+            fb.set_pixel(x0 as u32, y0 as u32, color);
+        }
         if x0 == x1 && y0 == y1 {
             break;
         }

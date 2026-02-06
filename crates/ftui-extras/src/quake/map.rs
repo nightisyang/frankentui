@@ -153,6 +153,41 @@ impl QuakeMap {
         false
     }
 
+    /// Get the floor height the player is standing on, considering their Z.
+    ///
+    /// Returns the highest floor_z among overlapping rooms where the floor is
+    /// at or below the player (within step-up tolerance). Falls back to
+    /// the lowest matching floor if the player is below all floors (recovery).
+    pub fn supportive_floor_at(&self, x: f32, y: f32, z: f32) -> f32 {
+        // Use STEPSIZE as the upward tolerance so the ground check never snaps
+        // the player higher than try_move's step-up limit would allow.
+        // Floors below the player are always included (the <= check is trivially
+        // true), and the `lowest_match` fallback handles fast-fall overshoot.
+        let fall_tolerance = super::constants::STEPSIZE;
+        let mut best: Option<f32> = None;
+        let mut lowest_match: Option<f32> = None;
+        for room in &self.rooms {
+            if x >= room.x && x <= room.x + room.width && y >= room.y && y <= room.y + room.height {
+                lowest_match = Some(match lowest_match {
+                    Some(prev) => f32::min(prev, room.floor_z),
+                    None => room.floor_z,
+                });
+                if room.floor_z <= z + fall_tolerance {
+                    best = Some(match best {
+                        Some(prev) => f32::max(prev, room.floor_z),
+                        None => room.floor_z,
+                    });
+                }
+            }
+        }
+        best.or(lowest_match).unwrap_or_else(|| {
+            self.rooms
+                .iter()
+                .map(|r| r.floor_z)
+                .fold(f32::MAX, f32::min)
+        })
+    }
+
     /// Get the player start position and angle.
     pub fn player_start(&self) -> (f32, f32, f32, f32) {
         (
@@ -579,5 +614,25 @@ mod tests {
         assert!(map.point_in_solid(-5.0, 128.0, 10.0, 16.0));
         // Player far above the wall (z=500) should NOT collide.
         assert!(!map.point_in_solid(-5.0, 128.0, 500.0, 16.0));
+    }
+
+    #[test]
+    fn supportive_floor_prevents_platform_teleport() {
+        let map = generate_e1m1();
+        // Player on hub floor (z=-32) in platform area (656, 64).
+        // floor_height_at returns 32 (highest floor — the platform).
+        // supportive_floor_at should return -32 (the hub), because the
+        // platform at z=32 is far above the player at z=-32.
+        let h = map.supportive_floor_at(656.0, 64.0, -32.0);
+        assert!((h - (-32.0)).abs() < 0.01, "expected -32.0, got {h}");
+    }
+
+    #[test]
+    fn supportive_floor_on_platform() {
+        let map = generate_e1m1();
+        // Player standing ON the platform (z=32). Both hub (-32) and
+        // platform (32) are at or below z + tolerance, so returns 32.
+        let h = map.supportive_floor_at(656.0, 64.0, 32.0);
+        assert!((h - 32.0).abs() < 0.01, "expected 32.0, got {h}");
     }
 }

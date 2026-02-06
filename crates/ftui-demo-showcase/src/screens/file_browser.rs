@@ -714,11 +714,11 @@ mod icons {
                 "js" => "📜",
                 "ts" => "📝",
                 "md" => theme::icons::TYPE_DOCS,
-                "json" | "toml" | "yaml" | "yml" | "env" | "gitignore" => "⚙️",
-                "png" | "jpg" | "jpeg" | "gif" | "svg" => "🖼️",
+                "json" | "toml" | "yaml" | "yml" | "env" | "gitignore" => "🔧",
+                "png" | "jpg" | "jpeg" | "gif" | "svg" => "📷",
                 "mp3" | "wav" | "flac" => "🎵",
                 "mp4" | "mov" | "mkv" => "🎬",
-                "sh" | "bash" => "⚡️",
+                "sh" | "bash" => "🐚",
                 _ => theme::icons::FILE,
             }
         } else {
@@ -1136,5 +1136,62 @@ mod tests {
                 "{label} entry should have emoji icon, got: {icon:?}"
             );
         }
+    }
+
+    /// Regression: all file icons must have grapheme_width == 2 and must NOT
+    /// contain variation selectors (U+FE0F) which cause terminal width
+    /// mismatches and column misalignment in the Files panel.
+    #[test]
+    fn file_icons_have_stable_width_no_variation_selectors() {
+        let test_names = [
+            "test.rs",
+            "test.py",
+            "test.js",
+            "test.ts",
+            "test.md",
+            "test.json",
+            "test.toml",
+            "test.yaml",
+            "test.png",
+            "test.jpg",
+            "test.mp3",
+            "test.mp4",
+            "test.sh",
+            "test.txt",
+            "test.env",
+            ".gitignore",
+        ];
+        for name in test_names {
+            let icon = icons::file_icon(name);
+            let width = grapheme_width(icon);
+            assert_eq!(
+                width, ICON_COL_WIDTH,
+                "icon for {name:?} ({icon:?}) has width {width}, expected {ICON_COL_WIDTH}"
+            );
+            assert!(
+                !icon.contains('\u{FE0F}'),
+                "icon for {name:?} ({icon:?}) contains VS16 (U+FE0F) which causes terminal width mismatches"
+            );
+        }
+
+        // Also check directory and symlink icons
+        let dir_icon = icons::directory_icon();
+        assert_eq!(
+            grapheme_width(dir_icon),
+            ICON_COL_WIDTH,
+            "directory icon width"
+        );
+        assert!(
+            !dir_icon.contains('\u{FE0F}'),
+            "directory icon contains VS16"
+        );
+
+        let sym_icon = icons::symlink_icon();
+        assert_eq!(
+            grapheme_width(sym_icon),
+            ICON_COL_WIDTH,
+            "symlink icon width"
+        );
+        assert!(!sym_icon.contains('\u{FE0F}'), "symlink icon contains VS16");
     }
 }

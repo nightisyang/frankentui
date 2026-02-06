@@ -1,5 +1,5 @@
 ┌────────────────────────────────╭─ Help (? to close) ────────────────────────────────╮────────────────────────────────┐
-│ Tier:auto Glyph:unicode Render:│                                                    │:100% VP:auto Gen:n24 b2 d25% l6│
+│ Tier:auto Glyph:unicode Render:│                                                    │ault Zoom:100% VP:auto Gen:n24 b│
 │                                │ Navigation                                         │                                │
 │                                │  j / Down        Next sample                       │                                │
 │                                │  k / Up          Previous sample                   │                                │
@@ -16,17 +16,18 @@
 │                                │  b               Cycle render mode (Auto/Cell/Brai │    ││Parse: -                  │
 │                                │  s               Toggle styles (classDef/style)    │    ││Layout: -                 │
 │                                │  w               Cycle wrap mode (None/Word/Char/W │    ││Render: -                 │
-│                                │  l               Cycle layout mode (Dense/Normal/S │    ││Cache: 0/0                │
-│                                │  r               Force relayout                    │    ││Last: MISS                │
-│                                │  p / P           Cycle palette forward / backward  │    ││                          │
+│                                │  l               Cycle layout mode (Dense/Normal/S │    ││                          │
+│                                │  O               Cycle direction (TB/LR/RL/BT/auto │    ││                          │
+│                                │  r               Force relayout                    │    ││Cache: 0/0                │
+│                                │  p / P           Cycle palette forward / backward  │    ││Last: MISS                │
 │                                │                                                    │    ││                          │
-│                                │ Viewport                                           │    ││                          │
-│                              ⢀⣆│  + / =           Zoom in                           │    ││                          │
-│                  ⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣾⣿│  -               Zoom out                          │    ││                          │
+│                              ⢀⣆│ Viewport                                           │    ││                          │
+│                  ⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣾⣿│  + / =           Zoom in                           │    ││                          │
+│                  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  -               Zoom out                          │    ││                          │
 │                  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  0               Reset zoom (+ clear pan)          │    ││                          │
-│                  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  f               Fit to view (+ clear pan)         │    ││                          │
-│                  ⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⡿⠿│  H / J / K / L   Pan left / down / up / right      │    ││                          │
-│                              ⠈⠑│  ] / [           Increase / decrease viewport widt │    ││                          │
+│                  ⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⠿⡿⠿│  f               Fit to view (+ clear pan)         │    ││                          │
+│                              ⠈⠑│  H / J / K / L   Pan left / down / up / right      │    ││                          │
+│                                │  ] / [           Increase / decrease viewport widt │    ││                          │
 │                                │  } / {           Increase / decrease viewport heig │    ││                          │
 │                                │  o               Reset viewport override           │    ││                          │
 │                                │                                                    │    ││                          │
@@ -34,7 +35,6 @@
 │                                │  m               Toggle metrics panel              │    ││                          │
 │                                │  c               Toggle controls strip             │    ││                          │
 │                                │  d               Toggle detail panel               │    ││                          │
-│                                │  i               Toggle status log                 │    ││                          │
-└────────────────────────────────│  e               Toggle diagnostics (errors)       │────┘└──────────────────────────┘
-NORMAL  j/k:sample u/U:nodes x/X:│  ?               Toggle this help overlay          │t /:filter Ctrl+U:clear ?:help   
+└────────────────────────────────│  i               Toggle status log                 │────┘└──────────────────────────┘
+NORMAL  j/k:sample u/U:nodes x/X:│  e               Toggle diagnostics (errors)       │t /:filter Ctrl+U:clear ?:help   
                                  ╰────────────────────────────────────────────────────╯                                 

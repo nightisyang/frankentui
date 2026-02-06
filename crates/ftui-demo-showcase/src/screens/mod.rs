@@ -280,6 +280,7 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
             "layout",
             "diagnostics",
             "controls",
+            "minimap",
         ],
         blurb: "Interactive Mermaid diagrams with layout diagnostics and live controls.",
         default_hotkey: None,

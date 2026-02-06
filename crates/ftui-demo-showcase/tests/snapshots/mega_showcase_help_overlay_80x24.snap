@@ -1,5 +1,5 @@
 ┌────────────╭─ Help (? to close) ────────────────────────────────╮────────────┐
-│ Tier:auto G│                                                    │Palette:defa│
+│ Tier:auto G│                                                    │Dir:auto Pal│
 │            │ Navigation                                         │            │
 │            │  j / Down        Next sample                       │            │
 │            │  k / Up          Previous sample                   │            │
@@ -17,8 +17,8 @@
 │            │  s               Toggle styles (classDef/style)    │            │
 │            │  w               Cycle wrap mode (None/Word/Char/W │            │
 │            │  l               Cycle layout mode (Dense/Normal/S │            │
+│            │  O               Cycle direction (TB/LR/RL/BT/auto │            │
 │            │  r               Force relayout                    │            │
-│            │  p / P           Cycle palette forward / backward  │            │
-└────────────│                                                    │────────────┘
-NORMAL  j/k:s│ Viewport                                           │an []/{}:size
+└────────────│  p / P           Cycle palette forward / backward  │────────────┘
+NORMAL  j/k:s│                                                    │an []/{}:size
              ╰────────────────────────────────────────────────────╯             
