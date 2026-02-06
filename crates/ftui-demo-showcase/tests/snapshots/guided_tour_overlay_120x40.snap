@@ -1,40 +1,40 @@
  1: Tour │ 2: Dash │ 3: Shakes │ 4: Code │ 5: Widgets │ 6: Layout │ 7: Forms │ 8: DataViz │ 9: Files │ 0: Adv           
-╭─────────────────────────────────────────────────────Shakespeare──────────────────────────────────────────────────────╮
-│┏━━━━━━━━━━━━━━━━━━━Complete Works of William Shakespeare━━━━━╭─────────────────────Guided Tour──────────────────────╮│
-│┃      1 The Project Gutenberg eBook of The Complete Works of │2/10 · Text · LIVE matches yet                        ││
-│┃      2                                                      │Speed 1.00x · Next 6.0s                               ││
-│┃      3 This ebook is for the use of anyone anywhere in the U│Shakespeare a│┃│                                      ││
-│┃      4 most other parts of the world at no cost and with alm│Live search over Shakespeare with animated highlights.││
-│┃      5 whatsoever. You may copy it, give it away or re-use i│Live search + highlights                              ││
-│┃      6 of the Project Gutenberg License included with this e│Controls: Space pause · ←/→ step · Esc exit           ││
-│┃      7 at www.gutenberg.org. If you are not located in the U│Steps:tates, │┃│                                      ││
-│┃      8 you will have to check the laws of the country where │• Tour · Dashboard                                    ││
-│┃      9 before using this eBook.                             │▶ Text · Shakespeare                                  ││
-│┃     10                                                      │• Text · Code Explorer                                ││
-│┃     11 Title: The Complete Works of William Shakespeare     │• Core · Layout Lab                                   ││
-│┃     12                                                      │Legend: Tour Core Visuals Interact Text Systems       ││
-│┃     13 Author: William Shakespeare                          ╰──────────────────────────────────────────────────────╯│
-│┃     14                                                                    │┃╭──────────────Navigator───────────────╮│
-│┃     15 Release date: January 1, 1994 [eBook #100]                         │┃│▶ THE SONNETS                         ││
-│┃     16                 Most recently updated: August 24, 2025             │┃│  THE SONNETS                         ││
-│┃     17                                                                    │┃│  ALL’S WELL THAT ENDS WELL           ││
-│┃     18 Language: English                                                  │┃│  KING OF FRANCE.                     ││
-│┃     19                                                                    │┃│  COUNTESS.                           ││
-│┃     20                                                                    │┃│  COUNTESS.                           ││
-│┃     21                                                                    │┃│  COUNTESS.                           ││
-│┃     22 *** START OF THE PROJECT GUTENBERG EBOOK THE COMPLETE WORKS OF WILL│┃│  COUNTESS.                           ││
-│┃     23                                                                    │┃│  COUNTESS.                           ││
-│┃     24                                                                    │┃│  COUNTESS.                           ││
-│┃     25                                                                    │┃╰──────────────────────────────────────╯│
-│┃     26                                                                    │┃╭───────────Search Insights────────────╮│
-│┃     27 The Complete Works of William Shakespeare                          │┃│Section: Preamble                     ││
-│┃     28                                                                    │┃│Matches: 0 · View: 33 lines           ││
-│┃     29 by William Shakespeare                                             │┃│                                      ││
-│┃     30                                                                    │┃│                                      ││
-│┃     31                                                                    │┃│                                      ││
-│┃     32                                                                    │┃│                                      ││
-│┃     33                                                                    │┃│██████████████████████████████████████││
-│┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛╰──────────────────────────────────────╯│
-│ Mode: Library · Line 1/196395 (0%) · Matches: 0 | Preamble                                                           │
+╭──────────────────────────────────────────────────────Dashboard───────────────────────────────────────────────────────╮
+│FRANKENTUI DASHBOARD                                                                                                  │
+│╭────────Plasma────────╮╭─────────Charts · Pulse──────────╮╭───────Code · Rust (1/28)────────╮╭─────────Info─────────╮│
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││g:cycle · sparklines + mini bars ││// runtime.rs                    ││FrankenTUI Kernel · LI││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││CPU ▃ ▃▃▂▂▁▁▄▃▄▂▅▅▅▆▂▄▅▃▆▅▄▄▆ 46%││use std::{collections::HashMap, s││ INLINE   BRAILLE FX  ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││MEM ▅▂ ▃▁▄▄▂▂▇▅▃▅▂▃▄▆▄▇█▂▆▅▄▂ 41%││                                 ││Status: NOMINAL │ Even││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││NET ▁▁▁▁▁  ▁   ▇▁▁    ▁ █▁▁▁▁█ 14││use ftui_core::event::Event;     ││FPS: 0  TicSize: 118x3││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││OUT ▁▁▁▃▁█  ▁▁ ▁  ▁▁▇    ▁   ▁149││use ftui_render::cell::Cell;     ││Events/s: 1Theme: Cybe││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││EPS ██  77% DSK █  67% IO  ░   7%││use ftui_render::frame::Frame;   ││CPU:  46%  Alerts: 1  ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                                 ││use ftui_runtime::{Cmd, Model, Pr││NET:   14↓ Pipeline: B││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                                 ││                                 ││Frame:  0.0Headroom: +││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                                 ││#[derive(Debug, Clone)]          ││                      ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                                 ││enum Msg {                       ││                      ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                                 ││    Tick(u64),                   ││                      ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                                 ││    Resize { w: u16, h: u16 },   ││                      ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                                 ││    Log(String),                 ││CPU ██████░░░░░░░  46%││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                                 ││    Quit,                        ││MEM █████░░░░░░░░  41%││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                                 ││}                                ││NET █░░░░░░░░░░░░   8%││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                                 ││                                 ││FRM                n/a││
+││Click → Visual Effects││Click → Data Viz                 ││Click → Code ExplorerSync + 'stat││Click → Performance163││
+│╰──────────────────────╯╰─────────────────────────────────╯╰─────────────────────────────────╯╰──────────────────────╯│
+│╭───Text FX · 3-Up (1/28)────╮╭──────────────────Activity───────────────────╮╭───────Markdown · Streaming… 0%────────╮│
+││Sample 1 of 3 · 3-Up stack  ││SEV TIME  COMP  MESSAGE                      ││▌                                      ││
+││1 · None · S1               ││ INFO  00:02   CPU spike detect╭─────────────────────Guided Tour──────────────────────╮│
+││# FX Lab · Deterministic Spe││                               │2/16 · Tour · LIVE                                    ││
+││> *"Render truth, not pixels││                               │Speed 1.00x · Next 5.2s                               ││
+││2 · FadeIn · S2             ││                               │Dashboard    ││                                       ││
+││## GFM Stress · Ledger      ││                               │Navigation is instant: everything is searchable and   ││
+││1. **Bold** + _italic_ + ~~s││                               │tagged.      ││                                       ││
+││3 · FadeOut · S3            ││                               │Press Ctrl+K to open the Command Palette.             ││
+││### Runtime Ledger · Mixed  ││                               │Controls: Space pause · ←/→ step · Esc exit           ││
+││- [x] Tasks                 ││                               │Steps:       ││                                       ││
+││- [ ] Benchmarks            ││                               │• Tour · Dashboard                                    ││
+││- [x] Evidence log          ││                               │▶ Tour · Dashboard                                    ││
+││e: next set · click → Visual││Click → Action Timeline        │• Visuals · Mermaid Showcaseown                       ││
+│╰────────────────────────────╯╰───────────────────────────────│• Tour · Inline Mode──────────────────────────────────││
+│g:charts c:code e:fx m:md | 1-9:screens | Tab:next | t:theme |╰──────────────────────────────────────────────────────╯│
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- Shakespeare [1/42]  Cyberpunk Aurora [h] [cmd] [p] [d]  Mouse: ON        Tab/Shift+Tab: next/prev         120x40 00:00 
+ Dashboard [1/42]  Cyberpunk Aurora [h] [cmd] [p] [d]  Mouse: ON         Tab/Shift+Tab: next/prev          120x40 00:00 

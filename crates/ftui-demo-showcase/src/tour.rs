@@ -14,7 +14,7 @@ use crate::screens::{self, ScreenCategory, ScreenMeta};
 
 const SPEED_MIN: f64 = 0.25;
 const SPEED_MAX: f64 = 4.0;
-const DEFAULT_STEP_DURATION_MS: u64 = 5200;
+const DEFAULT_STEP_DURATION_MS: u64 = 6200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TourAdvanceReason {
@@ -325,23 +325,219 @@ impl GuidedTourState {
 }
 
 fn build_steps() -> Vec<TourStep> {
-    screens::screen_registry()
-        .iter()
-        .filter(|meta| meta.tour_step_hint.is_some() && meta.id != ScreenId::GuidedTour)
-        .map(|meta| TourStep {
-            id: format!("step:{}", slugify(meta.title)),
-            screen: meta.id,
+    fn push_step(
+        steps: &mut Vec<TourStep>,
+        screen: ScreenId,
+        suffix: &'static str,
+        blurb: &'static str,
+        hint: &'static str,
+        duration: Duration,
+        highlight: Option<TourHighlight>,
+    ) {
+        let meta = screens::screen_meta(screen);
+        let base = slugify(meta.title);
+        steps.push(TourStep {
+            id: format!("step:{base}:{suffix}"),
+            screen,
             title: meta.title,
-            blurb: meta.blurb,
-            hint: meta.tour_step_hint,
-            duration: step_duration(meta),
-            highlight: None,
-        })
-        .collect()
+            blurb,
+            hint: Some(hint),
+            duration,
+            highlight,
+        });
+    }
+
+    let mut steps = Vec::new();
+
+    // 2-3 minute "cinematic" tour: more steps, slightly longer defaults.
+    //
+    // Key beats:
+    // - Inline mode scrollback story
+    // - Determinism + checksums
+    // - Time travel / snapshots
+    // - Hit testing + hyperlinks
+    // - Performance budgets / tiers
+    // - One big visual (braille VFX)
+
+    // Dashboard: make "click what you see" obvious.
+    push_step(
+        &mut steps,
+        ScreenId::Dashboard,
+        "overview",
+        "This is the home screen. Every tile is meant to be clicked.",
+        "Click a tile (or press Enter) to jump in.",
+        step_duration(screens::screen_meta(ScreenId::Dashboard)),
+        Some(TourHighlight::new_pct(0.03, 0.12, 0.94, 0.72)),
+    );
+    push_step(
+        &mut steps,
+        ScreenId::Dashboard,
+        "palette",
+        "Navigation is instant: everything is searchable and tagged.",
+        "Press Ctrl+K to open the Command Palette.",
+        Duration::from_millis(5200),
+        Some(TourHighlight::new_pct(0.02, 0.0, 0.96, 0.14)),
+    );
+
+    // Mermaid: terminal-native diagrams with diagnostics.
+    push_step(
+        &mut steps,
+        ScreenId::MermaidShowcase,
+        "mermaid",
+        "Mermaid diagrams rendered deterministically, with layout metrics and live controls.",
+        "Press m for metrics, t for tier, and j/k to change samples.",
+        step_duration(screens::screen_meta(ScreenId::MermaidShowcase)),
+        Some(TourHighlight::new_pct(0.40, 0.18, 0.58, 0.72)),
+    );
+
+    // Inline mode story: preserve scrollback while keeping chrome stable.
+    push_step(
+        &mut steps,
+        ScreenId::InlineModeStory,
+        "scrollback",
+        "Inline mode keeps your terminal scrollback. The UI stays pinned; logs stay real.",
+        "Scroll up: the UI doesn't steal your history.",
+        step_duration(screens::screen_meta(ScreenId::InlineModeStory)),
+        Some(TourHighlight::new_pct(0.0, 0.76, 1.0, 0.24)),
+    );
+    push_step(
+        &mut steps,
+        ScreenId::InlineModeStory,
+        "mouse_policy",
+        "Mouse capture is explicit. Inline mode stays scrollback-first by default.",
+        "Toggle mouse and watch what changes (and what doesn't).",
+        Duration::from_millis(5200),
+        Some(TourHighlight::new_pct(0.02, 0.76, 0.96, 0.22)),
+    );
+
+    // Determinism lab: checksums as proof.
+    push_step(
+        &mut steps,
+        ScreenId::DeterminismLab,
+        "checksums",
+        "Determinism isn't a vibe: we compute checksums and demand repeatable output.",
+        "Run a check twice. The checksum should match exactly.",
+        step_duration(screens::screen_meta(ScreenId::DeterminismLab)),
+        Some(TourHighlight::new_pct(0.04, 0.20, 0.92, 0.62)),
+    );
+    push_step(
+        &mut steps,
+        ScreenId::DeterminismLab,
+        "shortcuts",
+        "This is built to be driven by shortcuts and evidence, not hidden state.",
+        "Try the on-screen shortcuts and watch the evidence ledger update.",
+        Duration::from_millis(5200),
+        Some(TourHighlight::new_pct(0.0, 0.0, 1.0, 0.20)),
+    );
+
+    // Time travel: replay and scrub.
+    push_step(
+        &mut steps,
+        ScreenId::SnapshotPlayer,
+        "replay",
+        "Time travel for terminal UIs: replay frames, inspect diffs, stay deterministic.",
+        "Use j/k (or arrows) to scrub the timeline.",
+        step_duration(screens::screen_meta(ScreenId::SnapshotPlayer)),
+        Some(TourHighlight::new_pct(0.04, 0.72, 0.92, 0.22)),
+    );
+    push_step(
+        &mut steps,
+        ScreenId::SnapshotPlayer,
+        "diff",
+        "Diff mode shows what actually changed between frames.",
+        "Toggle diff view and watch the render deltas.",
+        Duration::from_millis(5200),
+        Some(TourHighlight::new_pct(0.04, 0.08, 0.92, 0.62)),
+    );
+
+    // Hyperlinks + hit testing: terminal-native interactivity.
+    push_step(
+        &mut steps,
+        ScreenId::HyperlinkPlayground,
+        "hover_click",
+        "OSC-8 hyperlinks with hit regions: hover/click like a real UI.",
+        "Hover a link, then click it.",
+        step_duration(screens::screen_meta(ScreenId::HyperlinkPlayground)),
+        Some(TourHighlight::new_pct(0.06, 0.18, 0.88, 0.64)),
+    );
+    push_step(
+        &mut steps,
+        ScreenId::LayoutInspector,
+        "hit_testing",
+        "Hit testing is first-class. You can inspect what region you're interacting with.",
+        "Open the inspector overlay and click around.",
+        step_duration(screens::screen_meta(ScreenId::LayoutInspector)),
+        Some(TourHighlight::new_pct(0.0, 0.0, 1.0, 1.0)),
+    );
+
+    // Explainability: evidence ledger for changes.
+    push_step(
+        &mut steps,
+        ScreenId::ExplainabilityCockpit,
+        "evidence",
+        "Evidence-led debugging: diffs, resizes, budgets, and checksums in one cockpit.",
+        "Toggle a knob and watch what evidence gets recorded.",
+        step_duration(screens::screen_meta(ScreenId::ExplainabilityCockpit)),
+        Some(TourHighlight::new_pct(0.04, 0.18, 0.92, 0.66)),
+    );
+
+    // Performance HUD: budgets + degradation tiers.
+    push_step(
+        &mut steps,
+        ScreenId::PerformanceHud,
+        "budgets",
+        "Budgets are enforced. When the frame is expensive, we degrade intentionally.",
+        "Press t to cycle tiers; watch what drops first.",
+        step_duration(screens::screen_meta(ScreenId::PerformanceHud)),
+        Some(TourHighlight::new_pct(0.62, 0.0, 0.38, 0.30)),
+    );
+    push_step(
+        &mut steps,
+        ScreenId::PerformanceHud,
+        "stress",
+        "Stress the system and see recovery: no flicker, no cursor corruption.",
+        "Use the stress controls, then reset.",
+        Duration::from_millis(5200),
+        Some(TourHighlight::new_pct(0.04, 0.24, 0.56, 0.68)),
+    );
+
+    // Big visual: braille VFX.
+    push_step(
+        &mut steps,
+        ScreenId::VisualEffects,
+        "vfx",
+        "A big visual in pure terminal: braille effects, deterministic and fast.",
+        "Switch effects and watch the Perf HUD stay stable.",
+        step_duration(screens::screen_meta(ScreenId::VisualEffects)),
+        Some(TourHighlight::new_pct(0.04, 0.14, 0.92, 0.74)),
+    );
+    push_step(
+        &mut steps,
+        ScreenId::VisualEffects,
+        "vfx_determinism",
+        "Even the flashy stuff is deterministic under fixed seeds and ticks.",
+        "Reseed (deterministically) and compare hashes.",
+        Duration::from_millis(5200),
+        Some(TourHighlight::new_pct(0.62, 0.0, 0.38, 0.26)),
+    );
+
+    steps
 }
 
 fn slugify(input: &str) -> String {
-    input.to_lowercase().replace(' ', "_")
+    let mut out = String::with_capacity(input.len());
+    let mut last_was_sep = true;
+    for ch in input.chars() {
+        let c = ch.to_ascii_lowercase();
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+            last_was_sep = false;
+        } else if !last_was_sep {
+            out.push('_');
+            last_was_sep = true;
+        }
+    }
+    out.trim_matches('_').to_string()
 }
 
 fn step_duration(meta: &ScreenMeta) -> Duration {
@@ -420,11 +616,16 @@ mod tests {
     fn tour_next_prev_clamps() {
         let mut tour = GuidedTourState::new();
         tour.start(ScreenId::Dashboard, 0, 1.0);
-        let first = tour.active_screen();
+        let first_idx = tour.step_index();
+        let first_screen = tour.active_screen();
         let _ = tour.prev_step();
-        assert_eq!(tour.active_screen(), first);
+        assert_eq!(tour.step_index(), first_idx);
+        assert_eq!(tour.active_screen(), first_screen);
+        if tour.step_count() < 2 {
+            return;
+        }
         let _ = tour.next_step(TourAdvanceReason::ManualNext);
-        assert_ne!(tour.active_screen(), first);
+        assert_eq!(tour.step_index(), first_idx + 1);
     }
 
     #[test]
