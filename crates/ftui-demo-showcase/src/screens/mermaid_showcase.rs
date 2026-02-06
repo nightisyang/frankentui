@@ -204,6 +204,9 @@ enum SampleFamily {
     Gantt,
     Mindmap,
     Pie,
+    GitGraph,
+    Journey,
+    Requirement,
     Unsupported,
 }
 
@@ -218,6 +221,9 @@ impl SampleFamily {
             Self::Gantt => "gantt",
             Self::Mindmap => "mindmap",
             Self::Pie => "pie",
+            Self::GitGraph => "gitgraph",
+            Self::Journey => "journey",
+            Self::Requirement => "requirement",
             Self::Unsupported => "unsupported",
         }
     }
@@ -231,6 +237,9 @@ impl SampleFamily {
         Self::Gantt,
         Self::Mindmap,
         Self::Pie,
+        Self::GitGraph,
+        Self::Journey,
+        Self::Requirement,
         Self::Unsupported,
     ];
 }
@@ -977,16 +986,16 @@ B -->|No| D[Fix]"#,
     MermaidSample {
         id: "gitgraph-basic",
         name: "Gitgraph Basic",
-        family: SampleFamily::Unsupported,
+        family: SampleFamily::GitGraph,
         complexity: SampleComplexity::M,
-        tags: &["unsupported"],
+        tags: &["gitgraph", "branches"],
         features: &["branches", "commits"],
-        edge_cases: &["unsupported-diagram"],
+        edge_cases: &[],
         default_size: SampleSizeHint {
             width: 60,
             height: 15,
         },
-        notes: "Unsupported diagram type fallback test",
+        notes: "Basic gitGraph with branches and merges",
         source: r#"gitGraph
   commit
   branch feature
@@ -998,16 +1007,16 @@ B -->|No| D[Fix]"#,
     MermaidSample {
         id: "journey-basic",
         name: "Journey Basic",
-        family: SampleFamily::Unsupported,
+        family: SampleFamily::Journey,
         complexity: SampleComplexity::M,
-        tags: &["unsupported"],
+        tags: &["journey", "sections"],
         features: &["sections", "scores"],
-        edge_cases: &["unsupported-diagram"],
+        edge_cases: &[],
         default_size: SampleSizeHint {
             width: 60,
             height: 15,
         },
-        notes: "Unsupported diagram type fallback test",
+        notes: "User journey with sections and task scores",
         source: r#"journey
   title User Onboarding
   section Discover
@@ -1020,16 +1029,16 @@ B -->|No| D[Fix]"#,
     MermaidSample {
         id: "requirement-basic",
         name: "Requirement Basic",
-        family: SampleFamily::Unsupported,
+        family: SampleFamily::Requirement,
         complexity: SampleComplexity::M,
-        tags: &["unsupported"],
+        tags: &["requirement", "traceability"],
         features: &["requirements"],
-        edge_cases: &["unsupported-diagram"],
+        edge_cases: &[],
         default_size: SampleSizeHint {
             width: 60,
             height: 15,
         },
-        notes: "Unsupported diagram type fallback test",
+        notes: "Requirements with traceability relations",
         source: r#"requirementDiagram
   requirement req1 {
     id: 1

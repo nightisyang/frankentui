@@ -2900,6 +2900,78 @@ fn mermaid_showcase_error_sample_120x40() {
     mermaid_showcase_snapshot(&mut screen, 120, 40, "mermaid_showcase_error_sample_120x40");
 }
 
+// ============================================================================
+// Mermaid Showcase — gitGraph
+// ============================================================================
+
+#[test]
+fn mermaid_showcase_gitgraph_basic_80x24() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen = ftui_demo_showcase::screens::mermaid_showcase::MermaidShowcaseScreen::new();
+    mermaid_showcase_goto_sample(&mut screen, 19);
+    mermaid_showcase_snapshot(&mut screen, 80, 24, "mermaid_showcase_gitgraph_basic_80x24");
+}
+
+#[test]
+fn mermaid_showcase_gitgraph_basic_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen = ftui_demo_showcase::screens::mermaid_showcase::MermaidShowcaseScreen::new();
+    mermaid_showcase_goto_sample(&mut screen, 19);
+    mermaid_showcase_snapshot(
+        &mut screen,
+        120,
+        40,
+        "mermaid_showcase_gitgraph_basic_120x40",
+    );
+}
+
+#[test]
+fn mermaid_showcase_journey_basic_80x24() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen = ftui_demo_showcase::screens::mermaid_showcase::MermaidShowcaseScreen::new();
+    mermaid_showcase_goto_sample(&mut screen, 20);
+    mermaid_showcase_snapshot(&mut screen, 80, 24, "mermaid_showcase_journey_basic_80x24");
+}
+
+#[test]
+fn mermaid_showcase_journey_basic_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen = ftui_demo_showcase::screens::mermaid_showcase::MermaidShowcaseScreen::new();
+    mermaid_showcase_goto_sample(&mut screen, 20);
+    mermaid_showcase_snapshot(
+        &mut screen,
+        120,
+        40,
+        "mermaid_showcase_journey_basic_120x40",
+    );
+}
+
+#[test]
+fn mermaid_showcase_requirement_basic_80x24() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen = ftui_demo_showcase::screens::mermaid_showcase::MermaidShowcaseScreen::new();
+    mermaid_showcase_goto_sample(&mut screen, 21);
+    mermaid_showcase_snapshot(
+        &mut screen,
+        80,
+        24,
+        "mermaid_showcase_requirement_basic_80x24",
+    );
+}
+
+#[test]
+fn mermaid_showcase_requirement_basic_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen = ftui_demo_showcase::screens::mermaid_showcase::MermaidShowcaseScreen::new();
+    mermaid_showcase_goto_sample(&mut screen, 21);
+    mermaid_showcase_snapshot(
+        &mut screen,
+        120,
+        40,
+        "mermaid_showcase_requirement_basic_120x40",
+    );
+}
+
 #[test]
 fn mermaid_showcase_help_overlay_60x20() {
     let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
