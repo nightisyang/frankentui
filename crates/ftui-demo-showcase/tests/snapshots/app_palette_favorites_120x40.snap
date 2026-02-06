@@ -10,10 +10,10 @@
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [View] Toggle Help  Show or hide the keyboard shortcuts overlay     │CPU:  46%  Alerts: 1  ││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [View] Cycle Theme  Switch to the next color theme                  │NET:   14↓ Pipeline: B││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [View] Toggle Debug Overlay  Show or hide the debug information pan…│Frame:  0.0Headroom: +││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [Input] Toggle Mouse Capture  Enable or disable terminal mouse repo…│                      ││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [View] Toggle Performance HUD  Show or hide the performance metrics…│                      ││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [View] Toggle Explainability Cockpit  Show diff/resize/budget decis…│                      ││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿└──────────────────────────────────────────────────────────────────────┘                      ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                                 ││    Resize { w: u16, h: u16 },   ││                      ││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                                 ││    Log(String),                 ││CPU ██████░░░░░░░  46%││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                                 ││    Quit,                        ││MEM █████░░░░░░░░  41%││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││                                 ││}                                ││NET █░░░░░░░░░░░░   8%││
@@ -37,4 +37,4 @@
 │╰────────────────────────────╯╰─────────────────────────────────────────────╯╰───────────────────────────────────────╯│
 │g:charts c:code e:fx m:md | 1-9:screens | Tab:next | t:theme | ?:help | q:quit                                        │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- Dashboard [2/42]  Cyberpunk Aurora           Tab: next screen · Shift+Tab: prev │ tick:0 frm:0            120x40 00:00 
+ Dashboard [2/42]  Cyberpunk Aurora  Mouse: ON      Tab: next screen · Shift+Tab: prev │ tick:0 frm:0      120x40 00:00 

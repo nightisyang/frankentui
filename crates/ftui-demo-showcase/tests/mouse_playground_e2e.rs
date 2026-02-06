@@ -218,12 +218,16 @@ fn e2e_mouse_tab_navigation_switches_screen() {
     let mut frame = Frame::new(120, 40, &mut pool);
     app.view(&mut frame);
 
-    let event = Event::Mouse(MouseEvent::new(
+    // Full click: Down starts pending drag, Up activates tab switch.
+    let down = Event::Mouse(MouseEvent::new(
         MouseEventKind::Down(MouseButton::Left),
         1,
         0,
     ));
-    let _ = app.update(AppMsg::from(event));
+    let _ = app.update(AppMsg::from(down));
+
+    let up = Event::Mouse(MouseEvent::new(MouseEventKind::Up(MouseButton::Left), 1, 0));
+    let _ = app.update(AppMsg::from(up));
 
     log_jsonl(
         "mouse_nav_result",

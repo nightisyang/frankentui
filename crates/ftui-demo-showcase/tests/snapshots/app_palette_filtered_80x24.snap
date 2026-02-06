@@ -11,14 +11,14 @@
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [View] Toggle Help  Show or hide the keyboa…│nfo───────────╮│
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  [View] Cycle Theme  Switch to the next colo…│NAL FPS:0     ││
 ││Click → Visual│  [View] Toggle Debug Overlay  Show or hide t…│formance      ││
-│╰──────────────│  [View] Toggle Performance HUD  Show or hide…│──────────────╯│
-│╭Text FX · 2-Up│  [View] Toggle Explainability Cockpit  Show …│ · Streaming…╮ │
-││Sample 1 of 3 └──────────────────────────────────────────────┘             │ │
-││1 · None · S1        ││ INFO  00:02   CPU spike dete││                     │ │
+│╰──────────────│  [Input] Toggle Mouse Capture  Enable or dis…│──────────────╯│
+│╭Text FX · 2-Up│  [View] Toggle Performance HUD  Show or hide…│ · Streaming…╮ │
+││Sample 1 of 3 │  [View] Toggle Explainability Cockpit  Show …│             │ │
+││1 · None · S1 └──────────────────────────────────────────────┘             │ │
 ││2 · FadeIn · S2      ││                             ││                     │ │
 ││## GFM Stress · Ledge││                             ││                     │ │
 ││e: next set · click →││Click → Action Timeline      ││Click → Markdown     │ │
 │╰─────────────────────╯╰─────────────────────────────╯╰─────────────────────╯ │
 │g:charts c:code e:fx m:md | 1-9:screens | Tab:next | t:theme | ?:help | q:quit│
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Dashboard [2/42]  Cyberpunk Aurora    Tab/Shift+Tab: next/prev     80x24 00:00 
+ Dashboard [2/42]  Mouse: ON        Tab/Shift+Tab: next/prev        80x24 00:00 

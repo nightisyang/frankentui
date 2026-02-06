@@ -9,16 +9,16 @@
 │┌ Flow Basic [d║fView] ───────────────────────────────────────║──────────────┐│
 ││              ║ [?]                      Toggle this help ov ║              ││
 ││              ║ [Esc]                    Dismiss top overlay ║              ││
+││              ║ [m / F6]                 Toggle mouse captur ║              ││
 ││              ║ [Ctrl+P]                 Toggle performance  ║              ││
 ││              ║ [Shift+A]                Toggle A11y panel   ║              ││
 ││              ║ [F12]                    Toggle debug overla ║              ││
-││              ║            ⢰⣶⣶⣶⣶⣶⣾⣿⣿⣿⡆⢰⣾⣿⣿⣿⣶⣶⣶⣶⣶⡆            ║              ││
-││              ║ Editing    ⠸⠿⠿⠿⠿⢿⡿⠿⠿⢿⠇⠸⢿⠿⠿⠿⣿⠿⠿⠿⠿⠇            ║              ││
+││              ║            ⠸⠿⠿⠿⠿⢿⡿⠿⠿⢿⠇⠸⢿⠿⠿⠿⣿⠿⠿⠿⠿⠇            ║              ││
+││              ║ Editing          ⣬⣭⣵⣾⣷⣴⣿⣶⣭⣭                  ║              ││
 ││              ║ [Ctrl+Z]                 Undo                ║              ││
-││              ║ [Ctrl+Y / Ctrl+Shift+Z]  Redo                ║              ││
 ││              ║                                              ║              ││
 │└──────────────╚═══════════Press ? or Esc to close════════════╝──────────────┘│
 │NORMAL  j/k:sample u/U:nodes x/X:density t:tier p:palette H/J/K/L:pan []/{}:si│
 │                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Mermaid Mega Showcase [17/42]       Tab/Shift+Tab: next/prev       80x24 00:00 
+ Mermaid Mega Showcase [17/42]  Mouse: ON Tab/Shift+Tab: next/prev  80x24 00:00 
