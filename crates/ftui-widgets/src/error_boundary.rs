@@ -846,4 +846,96 @@ mod tests {
             Some('G')
         );
     }
+
+    #[test]
+    fn max_recovery_attempts_builder() {
+        let boundary = ErrorBoundary::new(GoodWidget, "good").max_recovery_attempts(5);
+        assert_eq!(boundary.max_recovery_attempts, 5);
+    }
+
+    #[test]
+    fn widget_name_accessor() {
+        let boundary = ErrorBoundary::new(GoodWidget, "my_widget");
+        assert_eq!(boundary.widget_name(), "my_widget");
+    }
+
+    #[test]
+    fn error_state_error_accessor_recovering() {
+        let err = CapturedError {
+            message: "fail".to_string(),
+            widget_name: "w",
+            area: Rect::new(0, 0, 1, 1),
+            timestamp: Instant::now(),
+        };
+        let state = ErrorBoundaryState::Recovering {
+            attempts: 2,
+            last_error: err,
+        };
+        assert!(state.is_failed());
+        assert_eq!(state.error().unwrap().message, "fail");
+    }
+
+    #[test]
+    fn try_recover_on_healthy_returns_true() {
+        let mut state = ErrorBoundaryState::Healthy;
+        assert!(state.try_recover(3));
+        assert!(matches!(state, ErrorBoundaryState::Healthy));
+    }
+
+    #[test]
+    fn captured_error_strips_unreachable_prefix() {
+        let msg = "internal error: entered unreachable code: widget exploded";
+        let payload: Box<dyn std::any::Any + Send> = Box::new(msg.to_string());
+        let error = CapturedError::from_panic(payload, "test", Rect::new(0, 0, 1, 1));
+        assert_eq!(error.message, "widget exploded");
+    }
+
+    #[test]
+    fn default_state_is_healthy() {
+        let state = ErrorBoundaryState::default();
+        assert!(!state.is_failed());
+        assert!(state.error().is_none());
+    }
+
+    #[test]
+    fn custom_boundary_max_recovery_builder() {
+        let boundary = CustomErrorBoundary::new(GoodWidget, "good").max_recovery_attempts(7);
+        assert_eq!(boundary.max_recovery_attempts, 7);
+    }
+
+    #[test]
+    fn fallback_widget_new_directly() {
+        let err = CapturedError {
+            message: "direct error".to_string(),
+            widget_name: "direct",
+            area: Rect::new(0, 0, 10, 5),
+            timestamp: Instant::now(),
+        };
+        let fallback = FallbackWidget::new(err);
+        assert!(fallback.show_retry_hint);
+        assert_eq!(fallback.error.message, "direct error");
+    }
+
+    #[test]
+    fn recovering_state_panics_revert_to_failed() {
+        let boundary = ErrorBoundary::new(PanickingWidget, "bad");
+        let err = CapturedError {
+            message: "initial".to_string(),
+            widget_name: "bad",
+            area: Rect::new(0, 0, 30, 5),
+            timestamp: Instant::now(),
+        };
+        let mut state = ErrorBoundaryState::Recovering {
+            attempts: 1,
+            last_error: err,
+        };
+
+        let area = Rect::new(0, 0, 30, 5);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 5, &mut pool);
+        boundary.render(area, &mut frame, &mut state);
+
+        // Panic during recovery should set state to Failed.
+        assert!(matches!(state, ErrorBoundaryState::Failed(_)));
+    }
 }
