@@ -1,0 +1,12 @@
+%% fixture_id: gitgraph_cherry_pick
+%% purpose: cherry-pick commits from feature branch onto main
+gitGraph
+  commit id: "c0"
+  branch feature
+  checkout feature
+  commit id: "f1"
+  commit id: "f2"
+  checkout main
+  commit id: "m1"
+  cherry-pick id: "f1"
+  cherry-pick id: "f2"

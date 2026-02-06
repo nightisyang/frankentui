@@ -1,0 +1,12 @@
+%% fixture_id: gitgraph_diverge_merge
+%% purpose: diverge/merge topology with lane routing
+gitGraph
+  commit id: "base"
+  branch feature
+  checkout feature
+  commit id: "f1"
+  commit id: "f2"
+  checkout main
+  commit id: "m1"
+  merge feature id: "merge-feature"
+  commit id: "post"

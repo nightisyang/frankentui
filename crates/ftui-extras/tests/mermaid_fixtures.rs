@@ -229,6 +229,30 @@ const FIXTURES: &[MermaidFixture] = &[
         expects_raw_fallback: false,
     },
     MermaidFixture {
+        id: "gitgraph_linear",
+        file: "gitgraph_linear.mmd",
+        source: include_str!("fixtures/mermaid/gitgraph_linear.mmd"),
+        family: "gitGraph",
+        tier: FixtureTier::Basic,
+        expects_raw_fallback: false,
+    },
+    MermaidFixture {
+        id: "gitgraph_diverge_merge",
+        file: "gitgraph_diverge_merge.mmd",
+        source: include_str!("fixtures/mermaid/gitgraph_diverge_merge.mmd"),
+        family: "gitGraph",
+        tier: FixtureTier::Medium,
+        expects_raw_fallback: false,
+    },
+    MermaidFixture {
+        id: "gitgraph_cherry_pick",
+        file: "gitgraph_cherry_pick.mmd",
+        source: include_str!("fixtures/mermaid/gitgraph_cherry_pick.mmd"),
+        family: "gitGraph",
+        tier: FixtureTier::Medium,
+        expects_raw_fallback: false,
+    },
+    MermaidFixture {
         id: "gitgraph_stress",
         file: "gitgraph_stress.mmd",
         source: include_str!("fixtures/mermaid/gitgraph_stress.mmd"),
@@ -786,6 +810,24 @@ mod tests {
                 "gitgraph_basic" => {
                     assert_eq!(parsed.ast.diagram_type, DiagramType::GitGraph);
                     assert!(counts.gitgraph >= 3, "gitgraph_basic gitgraph stmts < 3");
+                }
+                "gitgraph_linear" => {
+                    assert_eq!(parsed.ast.diagram_type, DiagramType::GitGraph);
+                    assert!(counts.gitgraph >= 4, "gitgraph_linear gitgraph stmts < 4");
+                }
+                "gitgraph_diverge_merge" => {
+                    assert_eq!(parsed.ast.diagram_type, DiagramType::GitGraph);
+                    assert!(
+                        counts.gitgraph >= 8,
+                        "gitgraph_diverge_merge gitgraph stmts < 8"
+                    );
+                }
+                "gitgraph_cherry_pick" => {
+                    assert_eq!(parsed.ast.diagram_type, DiagramType::GitGraph);
+                    assert!(
+                        counts.gitgraph >= 9,
+                        "gitgraph_cherry_pick gitgraph stmts < 9"
+                    );
                 }
                 "gitgraph_stress" => {
                     assert_eq!(parsed.ast.diagram_type, DiagramType::GitGraph);
