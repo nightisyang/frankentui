@@ -2782,6 +2782,55 @@ pub struct RouteGrid {
     occupied: Vec<bool>,
 }
 
+/// Reusable scratch buffers for A* pathfinding, avoiding per-edge allocation.
+struct RoutingScratch {
+    /// Best g-cost for each (cell, direction) state.
+    g_best: Vec<f64>,
+    /// Parent link for each (cell, direction) state.
+    parent: Vec<Option<(usize, usize, MoveDir)>>,
+    /// Priority queue for A*.
+    heap: std::collections::BinaryHeap<AStarState>,
+    /// Indices into g_best/parent that were dirtied (for sparse reset).
+    dirty: Vec<usize>,
+    /// Capacity (grid_size * num_dirs) for bounds checking.
+    capacity: usize,
+}
+
+impl RoutingScratch {
+    fn new(grid_size: usize) -> Self {
+        let num_dirs = 5;
+        let cap = grid_size * num_dirs;
+        Self {
+            g_best: vec![f64::INFINITY; cap],
+            parent: vec![None; cap],
+            heap: std::collections::BinaryHeap::new(),
+            dirty: Vec::with_capacity(cap.min(4096)),
+            capacity: cap,
+        }
+    }
+
+    /// Ensure buffers are large enough for the given grid size.
+    fn ensure_capacity(&mut self, grid_size: usize) {
+        let num_dirs = 5;
+        let cap = grid_size * num_dirs;
+        if cap > self.capacity {
+            self.g_best.resize(cap, f64::INFINITY);
+            self.parent.resize(cap, None);
+            self.capacity = cap;
+        }
+    }
+
+    /// Reset only the cells that were dirtied in the last search.
+    fn sparse_reset(&mut self) {
+        for &idx in &self.dirty {
+            self.g_best[idx] = f64::INFINITY;
+            self.parent[idx] = None;
+        }
+        self.dirty.clear();
+        self.heap.clear();
+    }
+}
+
 impl RouteGrid {
     /// Build a RouteGrid from node and cluster rectangles.
     #[must_use]
@@ -3327,6 +3376,190 @@ impl RouteGrid {
             },
         )
     }
+
+    /// A* pathfinding with reusable scratch buffers (avoids per-edge allocation).
+    fn find_path_astar_reuse(
+        &self,
+        from: LayoutPoint,
+        to: LayoutPoint,
+        weights: &RoutingWeights,
+        occupied_routes: &[bool],
+        scratch: &mut RoutingScratch,
+    ) -> (Vec<LayoutPoint>, RouteDiagnostics) {
+        let (sc, sr) = self.to_grid(from);
+        let (ec, er) = self.to_grid(to);
+
+        if sc == ec && sr == er {
+            return (
+                vec![from, to],
+                RouteDiagnostics {
+                    cost: 0.0,
+                    bends: 0,
+                    cells_explored: 0,
+                    fallback: false,
+                },
+            );
+        }
+
+        let grid_size = self.cols * self.rows;
+        let num_dirs = 5;
+        scratch.ensure_capacity(grid_size);
+        scratch.sparse_reset();
+
+        let mut cells_explored = 0usize;
+
+        let start_idx = sr * self.cols + sc;
+        let dir_idx = dir_to_idx(MoveDir::Start);
+        let flat_idx = start_idx * num_dirs + dir_idx;
+        scratch.g_best[flat_idx] = 0.0;
+        scratch.dirty.push(flat_idx);
+        scratch.heap.push(AStarState {
+            col: sc,
+            row: sr,
+            g_cost: 0.0,
+            f_cost: heuristic(sc, sr, ec, er, weights.step_cost),
+            dir: MoveDir::Start,
+        });
+
+        let dirs: [(i32, i32, MoveDir); 4] = [
+            (0, -1, MoveDir::Up),
+            (0, 1, MoveDir::Down),
+            (-1, 0, MoveDir::Left),
+            (1, 0, MoveDir::Right),
+        ];
+
+        let mut found = false;
+        let mut end_dir = MoveDir::Start;
+
+        while let Some(state) = scratch.heap.pop() {
+            let c = state.col;
+            let r = state.row;
+
+            if c == ec && r == er {
+                found = true;
+                end_dir = state.dir;
+                break;
+            }
+
+            let idx = r * self.cols + c;
+            let di = dir_to_idx(state.dir);
+            if state.g_cost > scratch.g_best[idx * num_dirs + di] {
+                continue;
+            }
+
+            cells_explored += 1;
+
+            for &(dc, dr, new_dir) in &dirs {
+                let nc = c as i32 + dc;
+                let nr = r as i32 + dr;
+                if nc < 0 || nr < 0 {
+                    continue;
+                }
+                let nc = nc as usize;
+                let nr = nr as usize;
+                if nc >= self.cols || nr >= self.rows {
+                    continue;
+                }
+
+                if !(self.is_free(nc, nr) || (nc == ec && nr == er)) {
+                    continue;
+                }
+
+                let new_idx = nr * self.cols + nc;
+                let mut step = weights.step_cost;
+
+                if state.dir != MoveDir::Start && state.dir != new_dir {
+                    step += weights.bend_penalty;
+                }
+
+                if !occupied_routes.is_empty()
+                    && new_idx < occupied_routes.len()
+                    && occupied_routes[new_idx]
+                {
+                    step += weights.crossing_penalty;
+                }
+
+                let new_g = state.g_cost + step;
+                let new_di = dir_to_idx(new_dir);
+                let flat = new_idx * num_dirs + new_di;
+                if new_g < scratch.g_best[flat] {
+                    scratch.g_best[flat] = new_g;
+                    scratch.parent[flat] = Some((c, r, state.dir));
+                    scratch.dirty.push(flat);
+                    scratch.heap.push(AStarState {
+                        col: nc,
+                        row: nr,
+                        g_cost: new_g,
+                        f_cost: new_g + heuristic(nc, nr, ec, er, weights.step_cost),
+                        dir: new_dir,
+                    });
+                }
+            }
+        }
+
+        if !found {
+            return (
+                vec![from, to],
+                RouteDiagnostics {
+                    cost: 0.0,
+                    bends: 0,
+                    cells_explored,
+                    fallback: true,
+                },
+            );
+        }
+
+        // Reconstruct path.
+        let mut path_grid = vec![];
+        let mut cur_c = ec;
+        let mut cur_r = er;
+        let mut cur_dir = end_dir;
+        loop {
+            path_grid.push((cur_c, cur_r));
+            let idx = cur_r * self.cols + cur_c;
+            let di = dir_to_idx(cur_dir);
+            match scratch.parent[idx * num_dirs + di] {
+                Some((pc, pr, pd)) => {
+                    cur_c = pc;
+                    cur_r = pr;
+                    cur_dir = pd;
+                }
+                None => break,
+            }
+        }
+        path_grid.reverse();
+
+        // Count bends and compute cost.
+        let end_idx = er * self.cols + ec;
+        let end_di = dir_to_idx(end_dir);
+        let cost = scratch.g_best[end_idx * num_dirs + end_di];
+
+        // Simplify: remove collinear points, count bends.
+        let mut bends = 0;
+        let mut waypoints = vec![from];
+        for i in 1..path_grid.len().saturating_sub(1) {
+            let prev = path_grid[i - 1];
+            let curr = path_grid[i];
+            let next = path_grid[i + 1];
+            let d1 = (curr.0 as i32 - prev.0 as i32, curr.1 as i32 - prev.1 as i32);
+            let d2 = (next.0 as i32 - curr.0 as i32, next.1 as i32 - curr.1 as i32);
+            if d1 != d2 {
+                waypoints.push(self.to_world(curr.0, curr.1));
+                bends += 1;
+            }
+        }
+        waypoints.push(to);
+
+        (
+            waypoints,
+            RouteDiagnostics {
+                cost,
+                bends,
+                cells_explored,
+                fallback: false,
+            },
+        )
+    }
 }
 
 fn dir_to_idx(dir: MoveDir) -> usize {
@@ -3463,8 +3696,7 @@ pub fn route_all_edges(
         LayoutSpacing::default().node_gap,
     );
 
-    let grid_size = grid.cols * grid.rows;
-    let mut occupied_routes = vec![false; grid_size];
+    let mut occupied_routes = vec![false; grid.cols * grid.rows];
     let mut all_paths = Vec::with_capacity(ir.edges.len());
     let mut all_diags = Vec::with_capacity(ir.edges.len());
     let mut ops_used = 0usize;
@@ -3493,6 +3725,9 @@ pub fn route_all_edges(
             edge_offsets[idx] = parallel_edge_offset(i, group.len(), 1.5);
         }
     }
+
+    let grid_size = grid.cols * grid.rows;
+    let mut routing_scratch = RoutingScratch::new(grid_size);
 
     for (idx, edge) in ir.edges.iter().enumerate() {
         let from_idx = endpoint_node_idx(ir, &edge.from);
@@ -3554,8 +3789,13 @@ pub fn route_all_edges(
                 let offset = edge_offsets[idx];
                 let (from_pt, to_pt) = apply_offset(from_port, to_port, offset, ir.direction);
 
-                let (waypoints, diag) =
-                    grid.find_path_astar(from_pt, to_pt, weights, &occupied_routes);
+                let (waypoints, diag) = grid.find_path_astar_reuse(
+                    from_pt,
+                    to_pt,
+                    weights,
+                    &occupied_routes,
+                    &mut routing_scratch,
+                );
 
                 ops_used += diag.cells_explored;
 
