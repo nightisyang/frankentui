@@ -121,15 +121,22 @@ impl SelectionState {
     /// Build selection state from a selected node index and the IR.
     #[must_use]
     pub fn from_selected(node_idx: usize, ir: &MermaidDiagramIr) -> Self {
-        use crate::mermaid::{IrEndpoint, IrNodeId};
-        let target = IrEndpoint::Node(IrNodeId(node_idx));
+        use crate::mermaid::IrEndpoint;
+
+        let endpoint_node_idx = |ep: &IrEndpoint| -> Option<usize> {
+            match ep {
+                IrEndpoint::Node(id) => Some(id.0),
+                IrEndpoint::Port(port_id) => ir.ports.get(port_id.0).map(|p| p.node.0),
+            }
+        };
+
         let mut outgoing = Vec::new();
         let mut incoming = Vec::new();
         for (ei, edge) in ir.edges.iter().enumerate() {
-            if edge.from == target {
+            if endpoint_node_idx(&edge.from) == Some(node_idx) {
                 outgoing.push(ei);
             }
-            if edge.to == target {
+            if endpoint_node_idx(&edge.to) == Some(node_idx) {
                 incoming.push(ei);
             }
         }
@@ -169,11 +176,11 @@ pub fn build_adjacency(ir: &MermaidDiagramIr) -> Vec<Vec<(usize, usize, bool)>> 
     for (ei, edge) in ir.edges.iter().enumerate() {
         let from_idx = match edge.from {
             IrEndpoint::Node(id) => Some(id.0),
-            IrEndpoint::Port(_) => None,
+            IrEndpoint::Port(port_id) => ir.ports.get(port_id.0).map(|p| p.node.0),
         };
         let to_idx = match edge.to {
             IrEndpoint::Node(id) => Some(id.0),
-            IrEndpoint::Port(_) => None,
+            IrEndpoint::Port(port_id) => ir.ports.get(port_id.0).map(|p| p.node.0),
         };
         if let (Some(fi), Some(ti)) = (from_idx, to_idx) {
             if fi < n {
@@ -5077,11 +5084,11 @@ mod tests {
     use super::*;
     use crate::mermaid::{
         DiagramType, GraphDirection, IrEdge, IrEndpoint, IrLabel, IrLabelId, IrLink, IrNode,
-        IrNodeId, LinkKind, LinkSanitizeOutcome, MermaidCompatibilityMatrix, MermaidConfig,
-        MermaidDiagramMeta, MermaidErrorMode, MermaidFallbackPolicy, MermaidGuardReport,
-        MermaidInitConfig, MermaidInitParse, MermaidLinkMode, MermaidSupportLevel,
-        MermaidThemeOverrides, NodeShape, Position, Span, normalize_ast_to_ir,
-        parse_with_diagnostics,
+        IrNodeId, IrPort, IrPortId, IrPortSideHint, LinkKind, LinkSanitizeOutcome,
+        MermaidCompatibilityMatrix, MermaidConfig, MermaidDiagramMeta, MermaidErrorMode,
+        MermaidFallbackPolicy, MermaidGuardReport, MermaidInitConfig, MermaidInitParse,
+        MermaidLinkMode, MermaidSupportLevel, MermaidThemeOverrides, NodeShape, Position, Span,
+        normalize_ast_to_ir, parse_with_diagnostics,
     };
     use crate::mermaid_layout::{LayoutPoint, LayoutStats, layout_diagram};
     use std::fmt::Write as FmtWrite;
@@ -7377,6 +7384,55 @@ mod tests {
         assert_eq!(sel.selected_node, Some(1));
         assert_eq!(sel.outgoing_edges.len(), 1); // edge 1->2
         assert_eq!(sel.incoming_edges.len(), 1); // edge 0->1
+    }
+
+    #[test]
+    fn selection_and_adjacency_include_port_endpoints() {
+        let mut ir = make_ir(2, vec![(0, 1)]);
+        let span = Span {
+            start: Position {
+                line: 0,
+                col: 0,
+                byte: 0,
+            },
+            end: Position {
+                line: 0,
+                col: 0,
+                byte: 0,
+            },
+        };
+        let p0 = IrPort {
+            node: IrNodeId(0),
+            name: "R".to_string(),
+            side_hint: IrPortSideHint::Horizontal,
+            span,
+        };
+        let p1 = IrPort {
+            node: IrNodeId(1),
+            name: "L".to_string(),
+            side_hint: IrPortSideHint::Horizontal,
+            span,
+        };
+        let p0_id = IrPortId(ir.ports.len());
+        ir.ports.push(p0);
+        let p1_id = IrPortId(ir.ports.len());
+        ir.ports.push(p1);
+        ir.edges[0].from = IrEndpoint::Port(p0_id);
+        ir.edges[0].to = IrEndpoint::Port(p1_id);
+
+        let sel0 = SelectionState::from_selected(0, &ir);
+        assert_eq!(sel0.outgoing_edges, vec![0]);
+        let sel1 = SelectionState::from_selected(1, &ir);
+        assert_eq!(sel1.incoming_edges, vec![0]);
+
+        let adj = build_adjacency(&ir);
+        assert_eq!(adj.len(), 2);
+        assert_eq!(adj[0].len(), 1);
+        assert_eq!(adj[0][0].0, 1);
+        assert!(adj[0][0].2);
+        assert_eq!(adj[1].len(), 1);
+        assert_eq!(adj[1][0].0, 0);
+        assert!(!adj[1][0].2);
     }
 
     #[test]

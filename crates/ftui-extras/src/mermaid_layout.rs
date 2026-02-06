@@ -1058,10 +1058,24 @@ fn route_edges(
                     let from_center = node_rects[u].center();
                     let to_center = node_rects[v].center();
 
-                    let from_port =
-                        edge_port(&node_rects[u], from_center, to_center, direction, true);
-                    let to_port =
-                        edge_port(&node_rects[v], to_center, from_center, direction, false);
+                    let from_port = endpoint_port_point(
+                        ir,
+                        &edge.from,
+                        &node_rects[u],
+                        from_center,
+                        to_center,
+                        direction,
+                        true,
+                    );
+                    let to_port = endpoint_port_point(
+                        ir,
+                        &edge.to,
+                        &node_rects[v],
+                        to_center,
+                        from_center,
+                        direction,
+                        false,
+                    );
 
                     let from_rank = if u < ranks.len() { ranks[u] } else { 0 };
                     let to_rank = if v < ranks.len() { ranks[v] } else { 0 };
@@ -1426,6 +1440,65 @@ fn multi_rank_waypoints(
 }
 
 /// Compute the port point on a node boundary for an edge connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PortSide {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+fn port_side_from_name(name: &str) -> Option<PortSide> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "l" | "left" => Some(PortSide::Left),
+        "r" | "right" => Some(PortSide::Right),
+        "t" | "top" => Some(PortSide::Top),
+        "b" | "bottom" => Some(PortSide::Bottom),
+        _ => None,
+    }
+}
+
+fn port_anchor_point(rect: &LayoutRect, side: PortSide) -> LayoutPoint {
+    let center = rect.center();
+    match side {
+        PortSide::Left => LayoutPoint {
+            x: rect.x,
+            y: center.y,
+        },
+        PortSide::Right => LayoutPoint {
+            x: rect.x + rect.width,
+            y: center.y,
+        },
+        PortSide::Top => LayoutPoint {
+            x: center.x,
+            y: rect.y,
+        },
+        PortSide::Bottom => LayoutPoint {
+            x: center.x,
+            y: rect.y + rect.height,
+        },
+    }
+}
+
+fn endpoint_port_point(
+    ir: &MermaidDiagramIr,
+    endpoint: &IrEndpoint,
+    rect: &LayoutRect,
+    self_center: LayoutPoint,
+    other_center: LayoutPoint,
+    direction: GraphDirection,
+    is_source: bool,
+) -> LayoutPoint {
+    if let IrEndpoint::Port(port_id) = endpoint
+        && let Some(port) = ir.ports.get(port_id.0)
+        && let Some(side) = port_side_from_name(&port.name)
+    {
+        return port_anchor_point(rect, side);
+    }
+
+    edge_port(rect, self_center, other_center, direction, is_source)
+}
+
 fn edge_port(
     rect: &LayoutRect,
     _self_center: LayoutPoint,
@@ -5346,14 +5419,18 @@ pub fn route_all_edges(
                 }
 
                 // Compute port points with parallel offset.
-                let from_port = edge_port(
+                let from_port = endpoint_port_point(
+                    ir,
+                    &edge.from,
                     &layout.nodes[u].rect,
                     layout.nodes[u].rect.center(),
                     layout.nodes[v].rect.center(),
                     ir.direction,
                     true,
                 );
-                let to_port = edge_port(
+                let to_port = endpoint_port_point(
+                    ir,
+                    &edge.to,
                     &layout.nodes[v].rect,
                     layout.nodes[v].rect.center(),
                     layout.nodes[u].rect.center(),
@@ -7561,6 +7638,55 @@ mod tests {
             "middle edge should have zero offset"
         );
         assert!(o2 > 0.0);
+    }
+
+    #[test]
+    fn layout_routing_respects_port_side_names() {
+        let mut ir = make_simple_ir(&["A", "B"], &[(0, 1)], GraphDirection::LR);
+
+        let port_a = IrPort {
+            node: IrNodeId(0),
+            name: "T".to_string(),
+            side_hint: IrPortSideHint::Auto,
+            span: empty_span(),
+        };
+        let port_b = IrPort {
+            node: IrNodeId(1),
+            name: "B".to_string(),
+            side_hint: IrPortSideHint::Auto,
+            span: empty_span(),
+        };
+        let port_a_id = IrPortId(ir.ports.len());
+        ir.ports.push(port_a);
+        let port_b_id = IrPortId(ir.ports.len());
+        ir.ports.push(port_b);
+
+        ir.edges[0].from = IrEndpoint::Port(port_a_id);
+        ir.edges[0].to = IrEndpoint::Port(port_b_id);
+
+        let layout = layout_diagram(&ir, &default_config());
+
+        let node_a = layout.nodes.iter().find(|n| n.node_idx == 0).expect("A");
+        let node_b = layout.nodes.iter().find(|n| n.node_idx == 1).expect("B");
+        let path = layout.edges.iter().find(|e| e.edge_idx == 0).expect("edge");
+        assert!(
+            path.waypoints.len() >= 2,
+            "expected at least start/end waypoints"
+        );
+        let start = path.waypoints[0];
+        let end = path.waypoints[path.waypoints.len() - 1];
+
+        let a_center = node_a.rect.center();
+        let b_center = node_b.rect.center();
+        let eps = 1e-6;
+
+        // From A:T -> should anchor at top edge of A.
+        assert!((start.x - a_center.x).abs() < eps);
+        assert!((start.y - node_a.rect.y).abs() < eps);
+
+        // To B:B -> should anchor at bottom edge of B.
+        assert!((end.x - b_center.x).abs() < eps);
+        assert!((end.y - (node_b.rect.y + node_b.rect.height)).abs() < eps);
     }
 
     #[test]
