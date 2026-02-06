@@ -3190,11 +3190,18 @@ impl MermaidMegaShowcaseScreen {
         // Auto-fit results
         if let Some(fit) = &cache.auto_fit {
             colored_lines.push((
-                format!("AutoFit: {} ({:.0}%)", fit.chosen_label, fit.overflow_ratio * 100.0),
+                format!(
+                    "AutoFit: {} ({:.0}%)",
+                    fit.chosen_label,
+                    fit.overflow_ratio * 100.0
+                ),
                 info_cell.fg,
             ));
             colored_lines.push((
-                format!("Score: {:.1} ({} tried)", fit.quality_score, fit.candidates_tried),
+                format!(
+                    "Score: {:.1} ({} tried)",
+                    fit.quality_score, fit.candidates_tried
+                ),
                 info_cell.fg,
             ));
         }
@@ -3229,13 +3236,22 @@ impl MermaidMegaShowcaseScreen {
         colored_lines.push((String::new(), info_cell.fg));
         // Running averages
         if cache.parse_stats.count() > 1 {
-            colored_lines.push((format!("Parse avg: {}", cache.parse_stats.summary()), info_cell.fg));
+            colored_lines.push((
+                format!("Parse avg: {}", cache.parse_stats.summary()),
+                info_cell.fg,
+            ));
         }
         if cache.layout_stats.count() > 1 {
-            colored_lines.push((format!("Layout avg: {}", cache.layout_stats.summary()), info_cell.fg));
+            colored_lines.push((
+                format!("Layout avg: {}", cache.layout_stats.summary()),
+                info_cell.fg,
+            ));
         }
         if cache.render_stats.count() > 1 {
-            colored_lines.push((format!("Render avg: {}", cache.render_stats.summary()), info_cell.fg));
+            colored_lines.push((
+                format!("Render avg: {}", cache.render_stats.summary()),
+                info_cell.fg,
+            ));
         }
         colored_lines.push((String::new(), info_cell.fg));
         colored_lines.push((
@@ -3243,7 +3259,10 @@ impl MermaidMegaShowcaseScreen {
             info_cell.fg,
         ));
         colored_lines.push((
-            format!("Last: {}", if cache.last_cache_hit { "HIT" } else { "MISS" }),
+            format!(
+                "Last: {}",
+                if cache.last_cache_hit { "HIT" } else { "MISS" }
+            ),
             if cache.last_cache_hit {
                 PackedRgba::rgb(80, 200, 120) // green for HIT
             } else {
@@ -7280,10 +7299,10 @@ mod tests {
         let mut fg_colors = std::collections::HashSet::new();
         for y in 0..40 {
             for x in 0..40 {
-                if let Some(cell) = frame.buffer.get(x, y) {
-                    if cell.content.as_char().is_some_and(|c| c != ' ') {
-                        fg_colors.insert(cell.fg);
-                    }
+                if let Some(cell) = frame.buffer.get(x, y)
+                    && cell.content.as_char().is_some_and(|c| c != ' ')
+                {
+                    fg_colors.insert(cell.fg);
                 }
             }
         }
