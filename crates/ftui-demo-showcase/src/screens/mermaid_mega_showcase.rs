@@ -276,6 +276,11 @@ const MEGA_SAMPLES: &[MegaSample] = &[
         name: "Sequence Dense",
         source: "sequenceDiagram\n    participant A\n    participant B\n    participant C\n    participant D\n    participant E\n    A->>B: msg1\n    B->>C: msg2\n    C->>D: msg3\n    D->>E: msg4\n    E-->>D: reply4\n    D-->>C: reply3\n    C-->>B: reply2\n    B-->>A: reply1\n    A->>C: direct\n    C->>E: skip\n    B->>D: cross\n    D->>A: back",
     },
+    // Intentionally invalid sample (bd-3oaig.15): exercise error overlay + diagnostics view.
+    MegaSample {
+        name: "Flow Invalid (Parse Error)",
+        source: "graph TD\n    A[Start] --> B[Ok]\n    B -->",
+    },
     MegaSample {
         name: "Generated",
         source: GENERATED_SAMPLE_SOURCE,

@@ -38,6 +38,16 @@ pub struct QuakeRenderer {
     projection: f32,
     /// Rendering stats.
     pub stats: RenderStats,
+    /// Cached face centroids (computed once from static geometry).
+    face_centroids: Vec<[f32; 3]>,
+    /// Reusable face-order buffer (avoids per-frame allocation).
+    face_order_buf: Vec<(usize, f32)>,
+    /// Reusable view-vertex buffer (avoids per-face allocation).
+    view_verts_buf: Vec<[f32; 3]>,
+    /// Cached background gradient row colors.
+    bg_cache: Vec<PackedRgba>,
+    /// Dimensions for which bg_cache was computed.
+    bg_cache_dims: (u32, u32),
 }
 
 impl QuakeRenderer {
@@ -55,6 +65,11 @@ impl QuakeRenderer {
             half_height,
             projection,
             stats: RenderStats::default(),
+            face_centroids: Vec::new(),
+            face_order_buf: Vec::new(),
+            view_verts_buf: Vec::new(),
+            bg_cache: Vec::new(),
+            bg_cache_dims: (0, 0),
         }
     }
 
@@ -73,65 +88,74 @@ impl QuakeRenderer {
         self.stats = RenderStats::default();
         fb.clear();
 
-        // Draw sky/floor background
+        // Draw sky/floor background using cached gradient.
         self.draw_background(fb);
 
         // Build view matrix from player
         let eye = player.eye_pos();
-        let cos_yaw = player.yaw.cos();
-        let sin_yaw = player.yaw.sin();
-        let cos_pitch = player.pitch.cos();
-        let sin_pitch = player.pitch.sin();
 
-        // View space transform: world -> camera
-        // Forward = (cos_yaw * cos_pitch, sin_yaw * cos_pitch, -sin_pitch)
-        // Right   = (cos(yaw - pi/2), sin(yaw - pi/2), 0)
-        // Up      = cross(right, forward)
-
+        // Compute direction vectors once. Inline cross(right, fwd) instead of
+        // player.up() which redundantly re-calls forward() and right().
         let fwd = player.forward();
         let right = player.right();
-        let up = player.up();
+        let up = [
+            right[1] * fwd[2] - right[2] * fwd[1],
+            right[2] * fwd[0] - right[0] * fwd[2],
+            right[0] * fwd[1] - right[1] * fwd[0],
+        ];
 
-        // Sort faces by distance (painter's algorithm fallback for non-BSP)
-        let mut face_order: Vec<(usize, f32)> = Vec::with_capacity(map.faces.len());
-        for (i, face) in map.faces.iter().enumerate() {
-            // Approximate face center distance
-            if face.vertex_indices.is_empty() {
+        // Lazily compute face centroids once (static geometry).
+        if self.face_centroids.len() != map.faces.len() {
+            self.face_centroids.clear();
+            for face in &map.faces {
+                if face.vertex_indices.is_empty() {
+                    self.face_centroids.push([0.0, 0.0, 0.0]);
+                    continue;
+                }
+                let mut cx = 0.0f32;
+                let mut cy = 0.0f32;
+                let mut cz = 0.0f32;
+                let n = face.vertex_indices.len() as f32;
+                for &vi in &face.vertex_indices {
+                    if vi < map.vertices.len() {
+                        cx += map.vertices[vi][0];
+                        cy += map.vertices[vi][1];
+                        cz += map.vertices[vi][2];
+                    }
+                }
+                self.face_centroids.push([cx / n, cy / n, cz / n]);
+            }
+        }
+
+        // Sort faces by distance using cached centroids and reusable buffer.
+        self.face_order_buf.clear();
+        for (i, centroid) in self.face_centroids.iter().enumerate() {
+            if map.faces[i].vertex_indices.is_empty() {
                 continue;
             }
-            let mut cx = 0.0f32;
-            let mut cy = 0.0f32;
-            let mut cz = 0.0f32;
-            let n = face.vertex_indices.len() as f32;
-            for &vi in &face.vertex_indices {
-                if vi < map.vertices.len() {
-                    cx += map.vertices[vi][0];
-                    cy += map.vertices[vi][1];
-                    cz += map.vertices[vi][2];
-                }
-            }
-            cx /= n;
-            cy /= n;
-            cz /= n;
-
-            let dx = cx - eye[0];
-            let dy = cy - eye[1];
-            let dz = cz - eye[2];
+            let dx = centroid[0] - eye[0];
+            let dy = centroid[1] - eye[1];
+            let dz = centroid[2] - eye[2];
             let dist_sq = dx * dx + dy * dy + dz * dz;
-
-            face_order.push((i, dist_sq));
+            self.face_order_buf.push((i, dist_sq));
         }
 
         // Sort back-to-front (we use z-buffer so order is advisory for early-z)
-        face_order
+        self.face_order_buf
             .sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        for &(face_idx, _dist_sq) in &face_order {
+        // Precompute fog denominator (use division, not reciprocal, for FP determinism).
+        let fog_range = FOG_END - FOG_START;
+
+        // Use index-based iteration to avoid borrow conflict with self.
+        let face_count = self.face_order_buf.len();
+        for fi in 0..face_count {
+            let (face_idx, _dist_sq) = self.face_order_buf[fi];
             let face = &map.faces[face_idx];
             self.stats.faces_tested += 1;
 
-            // Transform face vertices to view space
-            let mut view_verts: Vec<[f32; 3]> = Vec::with_capacity(face.vertex_indices.len());
+            // Transform face vertices to view space (reuse buffer).
+            self.view_verts_buf.clear();
             let mut all_behind = true;
 
             for &vi in &face.vertex_indices {
@@ -139,12 +163,10 @@ impl QuakeRenderer {
                     continue;
                 }
                 let v = map.vertices[vi];
-                // Translate to eye-relative
                 let dx = v[0] - eye[0];
                 let dy = v[1] - eye[1];
                 let dz = v[2] - eye[2];
 
-                // Transform to view space (right-handed, Z forward)
                 let vx = dx * right[0] + dy * right[1] + dz * right[2];
                 let vy = dx * up[0] + dy * up[1] + dz * up[2];
                 let vz = dx * fwd[0] + dy * fwd[1] + dz * fwd[2];
@@ -152,36 +174,30 @@ impl QuakeRenderer {
                 if vz > NEAR_CLIP {
                     all_behind = false;
                 }
-                view_verts.push([vx, vy, vz]);
+                self.view_verts_buf.push([vx, vy, vz]);
             }
 
-            if all_behind || view_verts.len() < 3 {
+            if all_behind || self.view_verts_buf.len() < 3 {
                 self.stats.faces_culled += 1;
                 continue;
             }
 
             // Backface culling in view space
-            let v0 = view_verts[0];
-            let v1 = view_verts[1];
-            let v2 = view_verts[2];
+            let v0 = self.view_verts_buf[0];
+            let v1 = self.view_verts_buf[1];
+            let v2 = self.view_verts_buf[2];
             let e1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
             let e2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
-            let nz = e1[0] * e2[1] - e1[1] * e2[0]; // Z component of cross product
-            // In our view space, positive Z is forward. Faces pointing toward the camera
-            // have a negative Z cross product component when wound correctly.
-            // We want to draw faces whose normal points toward the camera (nz < 0 for CCW,
-            // or nz > 0 for CW). Since our geometry is mixed, skip true backface test
-            // for floors/ceilings and use a dot-product check instead.
-            let face_center_z =
-                view_verts.iter().map(|v| v[2]).sum::<f32>() / view_verts.len() as f32;
+            let nz = e1[0] * e2[1] - e1[1] * e2[0];
+            let face_center_z = self.view_verts_buf.iter().map(|v| v[2]).sum::<f32>()
+                / self.view_verts_buf.len() as f32;
             let face_normal_view = [
                 e1[1] * e2[2] - e1[2] * e2[1],
                 e1[2] * e2[0] - e1[0] * e2[2],
                 nz,
             ];
-            // Dot with view direction to face center
-            let dot = face_normal_view[0] * view_verts[0][0]
-                + face_normal_view[1] * view_verts[0][1]
+            let dot = face_normal_view[0] * self.view_verts_buf[0][0]
+                + face_normal_view[1] * self.view_verts_buf[0][1]
                 + face_normal_view[2] * face_center_z;
             if dot > 0.0 && !matches!(face.tex_type, TexType::Floor | TexType::Ceiling) {
                 self.stats.faces_culled += 1;
@@ -190,32 +206,29 @@ impl QuakeRenderer {
 
             self.stats.faces_drawn += 1;
 
-            // Compute face color with lighting
             let base_color = face_base_color(face);
             let light = face.light_level;
 
             // Triangulate the face (fan from vertex 0)
-            for tri_i in 1..view_verts.len() - 1 {
-                let tri = [view_verts[0], view_verts[tri_i], view_verts[tri_i + 1]];
-                self.rasterize_triangle(
-                    fb, &tri, base_color, light, cos_yaw, sin_yaw, cos_pitch, sin_pitch,
-                );
+            for tri_i in 1..self.view_verts_buf.len() - 1 {
+                let tri = [
+                    self.view_verts_buf[0],
+                    self.view_verts_buf[tri_i],
+                    self.view_verts_buf[tri_i + 1],
+                ];
+                self.rasterize_triangle(fb, &tri, base_color, light, fog_range);
             }
         }
     }
 
     /// Rasterize a single triangle with z-buffer and lighting.
-    #[allow(clippy::too_many_arguments)]
     fn rasterize_triangle(
         &mut self,
         fb: &mut QuakeFramebuffer,
         verts: &[[f32; 3]; 3],
         base_color: [u8; 3],
         light: f32,
-        _cos_yaw: f32,
-        _sin_yaw: f32,
-        _cos_pitch: f32,
-        _sin_pitch: f32,
+        fog_range: f32,
     ) {
         // Clip and project vertices
         let mut screen: [[f32; 3]; 3] = [[0.0; 3]; 3]; // [sx, sy, 1/z]
@@ -327,7 +340,7 @@ impl QuakeRenderer {
                 let z = 1.0 / inv_z;
 
                 // Distance-based fog (Quake brown atmosphere)
-                let fog_t = ((z - FOG_START) / (FOG_END - FOG_START)).clamp(0.0, 1.0);
+                let fog_t = ((z - FOG_START) / fog_range).clamp(0.0, 1.0);
 
                 // Distance-based light falloff
                 let dist_light = (1.0 / (1.0 + z * 0.003)).clamp(0.0, 1.0);
@@ -349,27 +362,34 @@ impl QuakeRenderer {
         }
     }
 
-    /// Draw the sky and floor background (Quake brown/dark atmosphere).
-    fn draw_background(&self, fb: &mut QuakeFramebuffer) {
-        let horizon = self.height / 2;
+    /// Draw the sky and floor background using cached per-row colors.
+    fn draw_background(&mut self, fb: &mut QuakeFramebuffer) {
+        // Cache per-row gradient colors (dimensions-dependent, static otherwise).
+        if self.bg_cache_dims != (self.width, self.height) {
+            let horizon = self.height / 2;
+            self.bg_cache.clear();
+            self.bg_cache.reserve(self.height as usize);
+            for y in 0..self.height {
+                let color = if y < horizon {
+                    let t = y as f32 / horizon as f32;
+                    let r = lerp_u8(SKY_TOP[0], SKY_BOTTOM[0], t);
+                    let g = lerp_u8(SKY_TOP[1], SKY_BOTTOM[1], t);
+                    let b = lerp_u8(SKY_TOP[2], SKY_BOTTOM[2], t);
+                    PackedRgba::rgb(r, g, b)
+                } else {
+                    let t = ((y - horizon) as f32 / (self.height - horizon).max(1) as f32).min(1.0);
+                    let r = lerp_u8(FLOOR_FAR[0], FLOOR_NEAR[0], t);
+                    let g = lerp_u8(FLOOR_FAR[1], FLOOR_NEAR[1], t);
+                    let b = lerp_u8(FLOOR_FAR[2], FLOOR_NEAR[2], t);
+                    PackedRgba::rgb(r, g, b)
+                };
+                self.bg_cache.push(color);
+            }
+            self.bg_cache_dims = (self.width, self.height);
+        }
 
         for y in 0..self.height {
-            let color = if y < horizon {
-                // Sky gradient (Quake dark brown sky)
-                let t = y as f32 / horizon as f32;
-                let r = lerp_u8(SKY_TOP[0], SKY_BOTTOM[0], t);
-                let g = lerp_u8(SKY_TOP[1], SKY_BOTTOM[1], t);
-                let b = lerp_u8(SKY_TOP[2], SKY_BOTTOM[2], t);
-                PackedRgba::rgb(r, g, b)
-            } else {
-                // Floor gradient
-                let t = ((y - horizon) as f32 / (self.height - horizon).max(1) as f32).min(1.0);
-                let r = lerp_u8(FLOOR_FAR[0], FLOOR_NEAR[0], t);
-                let g = lerp_u8(FLOOR_FAR[1], FLOOR_NEAR[1], t);
-                let b = lerp_u8(FLOOR_FAR[2], FLOOR_NEAR[2], t);
-                PackedRgba::rgb(r, g, b)
-            };
-
+            let color = self.bg_cache[y as usize];
             for x in 0..self.width {
                 fb.set_pixel(x, y, color);
             }

@@ -2970,3 +2970,30 @@ fn mega_showcase_viewport_override_120x40() {
         "mega_showcase_viewport_override_120x40",
     );
 }
+
+// Intentionally invalid sample (bd-3oaig.15): exercise error surfaces.
+#[test]
+fn mega_showcase_invalid_overlay_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen =
+        ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
+    // Note: this index is kept stable by inserting the invalid sample right before "Generated".
+    mega_showcase_goto_sample(&mut screen, 30);
+    mega_showcase_snapshot(&mut screen, 120, 40, "mega_showcase_invalid_overlay_120x40");
+}
+
+#[test]
+fn mega_showcase_invalid_diagnostics_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen =
+        ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
+    mega_showcase_goto_sample(&mut screen, 30);
+    // Toggle the dedicated diagnostics view (error list + line/col).
+    screen.update(&press(KeyCode::Char('e')));
+    mega_showcase_snapshot(
+        &mut screen,
+        120,
+        40,
+        "mega_showcase_invalid_diagnostics_120x40",
+    );
+}
