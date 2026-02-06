@@ -2973,6 +2973,19 @@ fn mermaid_showcase_requirement_basic_120x40() {
 }
 
 #[test]
+fn mermaid_showcase_requirement_basic_200x60() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen = ftui_demo_showcase::screens::mermaid_showcase::MermaidShowcaseScreen::new();
+    mermaid_showcase_goto_sample(&mut screen, 21);
+    mermaid_showcase_snapshot(
+        &mut screen,
+        200,
+        60,
+        "mermaid_showcase_requirement_basic_200x60",
+    );
+}
+
+#[test]
 fn mermaid_showcase_help_overlay_60x20() {
     let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
     let mut screen = ftui_demo_showcase::screens::mermaid_showcase::MermaidShowcaseScreen::new();

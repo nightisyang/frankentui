@@ -1804,7 +1804,7 @@ pub const FEATURE_MATRIX: &[FeatureMatrixEntry] = &[
         feature: "commit / branch / checkout / merge",
         level: MermaidSupportLevel::Supported,
         fixture: None,
-        note: "parser+IR done; uses graph layout/render",
+        note: "parser+IR+layout+render done; specialized entity box rendering",
     },
     FeatureMatrixEntry {
         family: DiagramType::GitGraph,
@@ -1846,9 +1846,9 @@ pub const FEATURE_MATRIX: &[FeatureMatrixEntry] = &[
     FeatureMatrixEntry {
         family: DiagramType::Requirement,
         feature: "requirement-specific rendering (type badges/risk indicators)",
-        level: MermaidSupportLevel::Unsupported,
+        level: MermaidSupportLevel::Partial,
         fixture: None,
-        note: "uses generic graph layout; no requirement-specific visuals",
+        note: "entity boxes with borders + kind labels; risk/verify badges pending",
     },
     // ── Cross-cutting ───────────────────────────────────────────────
     FeatureMatrixEntry {
@@ -2251,16 +2251,16 @@ pub const DIAGRAM_FAMILY_REGISTRY: &[DiagramFamilyEntry] = &[
         pipeline: [
             StageStatus::Done,
             StageStatus::Done,
+            StageStatus::Done,
+            StageStatus::Done,
             StageStatus::Partial,
-            StageStatus::Partial,
-            StageStatus::NotStarted,
             StageStatus::NotStarted,
             StageStatus::NotStarted,
             StageStatus::NotStarted,
         ],
         min_feature_slice: "requirement entities, typed relations, categories, risk/verify/derive links",
         terminal_degradations: "entity boxes simplified; relation arrows as ASCII",
-        notes: "planned: bd-hudcn.1.9",
+        notes: "layout+render done (bd-hudcn.1.9.3); risk/verify badges pending",
     },
     DiagramFamilyEntry {
         family: DiagramType::Timeline,
@@ -4224,7 +4224,9 @@ pub fn normalize_ast_to_ir(
                     &mut warnings,
                 );
                 if let Some(draft) = node_drafts.last_mut() {
-                    draft.classes.push(format!("journey_score_{}", task.score.min(5)));
+                    draft
+                        .classes
+                        .push(format!("journey_score_{}", task.score.min(5)));
                 }
                 if let Some(cluster_idx) = cluster_stack.last().copied() {
                     cluster_drafts[cluster_idx].members.push(id);
@@ -4246,9 +4248,15 @@ pub fn normalize_ast_to_ir(
                 let label_text = if evt.events.is_empty() {
                     evt.period.clone()
                 } else {
-                    format!("{}
-{}", evt.period, evt.events.join("
-"))
+                    format!(
+                        "{}
+{}",
+                        evt.period,
+                        evt.events.join(
+                            "
+"
+                        )
+                    )
                 };
                 let _ = upsert_node(
                     &id,
@@ -8232,8 +8240,12 @@ fn journey_score_bar(score: u8) -> String {
     let filled = score.min(5) as usize;
     let empty = 5 - filled;
     let mut bar = String::with_capacity(5);
-    for _ in 0..filled { bar.push('\u{25cf}'); }
-    for _ in 0..empty { bar.push('\u{25cb}'); }
+    for _ in 0..filled {
+        bar.push('\u{25cf}');
+    }
+    for _ in 0..empty {
+        bar.push('\u{25cb}');
+    }
     bar
 }
 
@@ -11445,7 +11457,9 @@ B --> C
         );
         assert!(!ir.ir.nodes.is_empty(), "expected at least one node");
         assert!(
-            ir.ir.nodes[0].classes.contains(&"timeline_period".to_string()),
+            ir.ir.nodes[0]
+                .classes
+                .contains(&"timeline_period".to_string()),
             "expected timeline_period class on node"
         );
     }
@@ -11464,8 +11478,14 @@ B --> C
         let label_id = ir.ir.nodes[0].label.expect("node should have label");
         let label_text = &ir.ir.labels[label_id.0].text;
         assert!(label_text.contains("2020"), "label should include period");
-        assert!(label_text.contains("Alpha"), "label should include first event");
-        assert!(label_text.contains("Beta"), "label should include second event");
+        assert!(
+            label_text.contains("Alpha"),
+            "label should include first event"
+        );
+        assert!(
+            label_text.contains("Beta"),
+            "label should include second event"
+        );
     }
 
     #[test]
@@ -11662,7 +11682,6 @@ B --> C
         );
     }
 
-
     #[test]
     fn journey_score_bar_visualization() {
         let bar5 = journey_score_bar(5);
@@ -11685,12 +11704,21 @@ B --> C
         );
         let ast = parse(input).expect("parse journey");
         let ir = normalize_ast_to_ir(
-            &ast, &MermaidConfig::default(),
+            &ast,
+            &MermaidConfig::default(),
             &MermaidCompatibilityMatrix::default(),
             &MermaidFallbackPolicy::default(),
         );
-        let has_5 = ir.ir.nodes.iter().any(|n| n.classes.iter().any(|c| c == "journey_score_5"));
-        let has_1 = ir.ir.nodes.iter().any(|n| n.classes.iter().any(|c| c == "journey_score_1"));
+        let has_5 = ir
+            .ir
+            .nodes
+            .iter()
+            .any(|n| n.classes.iter().any(|c| c == "journey_score_5"));
+        let has_1 = ir
+            .ir
+            .nodes
+            .iter()
+            .any(|n| n.classes.iter().any(|c| c == "journey_score_1"));
         assert!(has_5, "should have journey_score_5 class");
         assert!(has_1, "should have journey_score_1 class");
     }
@@ -11704,15 +11732,24 @@ B --> C
         );
         let ast = parse(input).expect("parse");
         let ir = normalize_ast_to_ir(
-            &ast, &MermaidConfig::default(),
+            &ast,
+            &MermaidConfig::default(),
             &MermaidCompatibilityMatrix::default(),
             &MermaidFallbackPolicy::default(),
         );
         assert!(!ir.ir.nodes.is_empty());
         let node = &ir.ir.nodes[0];
         let label = ir.ir.labels.get(node.label.unwrap().0).unwrap();
-        assert!(label.text.contains("Alice"), "should contain Alice: {}", label.text);
-        assert!(label.text.contains("Bob"), "should contain Bob: {}", label.text);
+        assert!(
+            label.text.contains("Alice"),
+            "should contain Alice: {}",
+            label.text
+        );
+        assert!(
+            label.text.contains("Bob"),
+            "should contain Bob: {}",
+            label.text
+        );
     }
 
     #[test]
