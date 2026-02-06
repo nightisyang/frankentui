@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn f32_le_roundtrip() {
-        let val: f32 = 3.14159;
+        let val: f32 = std::f32::consts::PI;
         let bytes = val.to_le_bytes();
         assert!((f32_le(&bytes, 0) - val).abs() < 1e-6);
     }
