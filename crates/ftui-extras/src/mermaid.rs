@@ -2311,9 +2311,18 @@ pub const DIAGRAM_FAMILY_REGISTRY: &[DiagramFamilyEntry] = &[
         family: DiagramType::BlockBeta,
         canonical_keyword: "block-beta",
         introduced_version: "10.9",
-        support_level: MermaidSupportLevel::Unsupported,
+        support_level: MermaidSupportLevel::Supported,
         is_beta: true,
-        pipeline: [StageStatus::NotStarted; 8],
+        pipeline: [
+            StageStatus::Done, // parser
+            StageStatus::Done, // ir
+            StageStatus::Done, // layout
+            StageStatus::Done, // render
+            StageStatus::Done, // fixtures
+            StageStatus::Done, // snapshots
+            StageStatus::Done, // pty_e2e
+            StageStatus::Done, // demo_picker
+        ],
         min_feature_slice: "columns, blocks, block labels, nested blocks, spacing",
         terminal_degradations: "grid layout with box-drawing chars",
         notes: "planned: bd-hudcn.1.15",
@@ -2885,7 +2894,7 @@ impl MermaidCompatibilityMatrix {
             quadrant_chart: MermaidSupportLevel::Supported,
             sankey: MermaidSupportLevel::Partial,
             xy_chart: MermaidSupportLevel::Partial,
-            block_beta: MermaidSupportLevel::Partial,
+            block_beta: MermaidSupportLevel::Supported,
             packet_beta: MermaidSupportLevel::Supported,
             architecture_beta: MermaidSupportLevel::Partial,
             c4_context: MermaidSupportLevel::Partial,
@@ -2945,7 +2954,7 @@ impl Default for MermaidCompatibilityMatrix {
             quadrant_chart: MermaidSupportLevel::Supported,
             sankey: MermaidSupportLevel::Partial,
             xy_chart: MermaidSupportLevel::Partial,
-            block_beta: MermaidSupportLevel::Partial,
+            block_beta: MermaidSupportLevel::Supported,
             packet_beta: MermaidSupportLevel::Supported,
             architecture_beta: MermaidSupportLevel::Supported,
             c4_context: MermaidSupportLevel::Partial,
