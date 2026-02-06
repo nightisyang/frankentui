@@ -253,6 +253,11 @@ pub enum Cmd<M> {
     /// No-op if persistence is not configured. Returns a message via
     /// callback if state was successfully restored.
     RestoreState,
+    /// Toggle mouse capture at runtime.
+    ///
+    /// Instructs the terminal session to enable or disable mouse event capture.
+    /// No-op in test simulators.
+    SetMouseCapture(bool),
 }
 
 impl<M: std::fmt::Debug> std::fmt::Debug for Cmd<M> {
@@ -268,6 +273,7 @@ impl<M: std::fmt::Debug> std::fmt::Debug for Cmd<M> {
             Self::Task(spec, _) => f.debug_struct("Task").field("spec", spec).finish(),
             Self::SaveState => write!(f, "SaveState"),
             Self::RestoreState => write!(f, "RestoreState"),
+            Self::SetMouseCapture(b) => write!(f, "SetMouseCapture({b})"),
         }
     }
 }
@@ -336,6 +342,7 @@ impl<M> Cmd<M> {
             Self::Task(..) => "Task",
             Self::SaveState => "SaveState",
             Self::RestoreState => "RestoreState",
+            Self::SetMouseCapture(_) => "SetMouseCapture",
         }
     }
 
@@ -397,6 +404,15 @@ impl<M> Cmd<M> {
     #[inline]
     pub fn restore_state() -> Self {
         Self::RestoreState
+    }
+
+    /// Create a mouse capture toggle command.
+    ///
+    /// Instructs the runtime to enable or disable mouse event capture on the
+    /// underlying terminal session.
+    #[inline]
+    pub fn set_mouse_capture(enabled: bool) -> Self {
+        Self::SetMouseCapture(enabled)
     }
 
     /// Count the number of atomic commands in this command.
@@ -2171,6 +2187,11 @@ impl<M: Model, W: Write + Send> Program<M, W> {
             }
             Cmd::RestoreState => {
                 self.load_state();
+            }
+            Cmd::SetMouseCapture(enabled) => {
+                // TODO(bd-iuvb.17.1): call self.session.set_mouse_capture(enabled)
+                // once TerminalSession gains the method.
+                let _ = enabled;
             }
         }
         Ok(())

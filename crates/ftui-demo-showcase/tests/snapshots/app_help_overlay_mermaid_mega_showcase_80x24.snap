@@ -4,18 +4,18 @@
 ││ Tier:auto Glyph:unicode Render:braille Wrap:wordchar Layout:auto Dir:auto P││
 ││              ╔═════════ ⌨ Keyboard Shortcuts (Esc) ═════════╗              ││
 ││              ║ Navigation                                   ║              ││
-││              ║ [1-9, 0]                 Switch to screen by ║              ││
-│└──────────────║─[Tab]                    Next screen─────────║──────────────┘│
-│┌ Flow Basic [d║f[Shift+Tab]              Previous screen─────║──────────────┐│
-││              ║                                              ║              ││
-││              ║ View             ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿                  ║              ││
+││              ║ [Ctrl+K]                 Open command palett ║              ││
+│└──────────────║──────────────────────────────────────────────║──────────────┘│
+│┌ Flow Basic [d║fView] ───────────────────────────────────────║──────────────┐│
 ││              ║ [?]                      Toggle this help ov ║              ││
 ││              ║ [Esc]                    Dismiss top overlay ║              ││
-││              ║ [A]                      Toggle A11y panel   ║              ││
+││              ║ [Ctrl+P]                 Toggle performance  ║              ││
+││              ║ [Shift+A]                Toggle A11y panel   ║              ││
 ││              ║ [F12]                    Toggle debug overla ║              ││
-││              ║            ⠸⠿⠿⠿⠿⢿⡿⠿⠿⢿⠇⠸⢿⠿⠿⠿⣿⠿⠿⠿⠿⠇            ║              ││
-││              ║ Editing          ⣬⣭⣵⣾⣷⣴⣿⣶⣭⣭                  ║              ││
+││              ║            ⢰⣶⣶⣶⣶⣶⣾⣿⣿⣿⡆⢰⣾⣿⣿⣿⣶⣶⣶⣶⣶⡆            ║              ││
+││              ║ Editing    ⠸⠿⠿⠿⠿⢿⡿⠿⠿⢿⠇⠸⢿⠿⠿⠿⣿⠿⠿⠿⠿⠇            ║              ││
 ││              ║ [Ctrl+Z]                 Undo                ║              ││
+││              ║ [Ctrl+Y / Ctrl+Shift+Z]  Redo                ║              ││
 ││              ║                                              ║              ││
 │└──────────────╚═══════════Press ? or Esc to close════════════╝──────────────┘│
 │NORMAL  j/k:sample u/U:nodes x/X:density t:tier p:palette H/J/K/L:pan []/{}:si│

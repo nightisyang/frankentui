@@ -4,18 +4,18 @@
 │╭──────Plasma──────╮╭───────Charts · Pulse────────╮╭───Code · Rust (1/28)────╮│
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿╔═════════ ⌨ Keyboard Shortcuts (Esc) ═════════╗rs            ││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿Navigation▃▃▂▂▁▁▄▃▄▂▅▅▅▆▂▄▅▃▆ 46%││use std::{║ollections::Ha││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[1-9, 0]                 Switch to screen by ║              ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[Tab]                    Next screense ftui_c║re::event::Eve││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[Shift+Tab]              Previous screen → Co║e Explorer::Ce││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿⣿⣿││EPS ████░ DSK ███░░ IO  ░░░░░│╰──────────║──────────────╯│
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿View                             │╭──────────║nfo───────────╮│
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[?]                      Toggle this help ovM║NAL FPS:0     ││
-││Click → Visual║E[Esc]                    Dismiss top overlaye║formance      ││
-│╰──────────────║─[A]                      Toggle A11y panel───║──────────────╯│
-│╭Text FX · 2-Up║([F12]                    Toggle debug overlaw║ · Streaming…╮ │
-││Sample 1 of 3 ║ 2-Up ││SEV TIME  COMP  MESSAGE      ││▌      ║             │ │
-││1 · None · S1 ║ Editing INFO  00:02   CPU spike dete││       ║             │ │
-││2 · FadeIn · S║ [Ctrl+Z]                 Undo       ││       ║             │ │
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[Ctrl+K]                 Open command palett ║              ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿⣿⣿││NET ▁▁▁▁▁  ▁   ▇▁▁    ▁ █▁ 14││use ftui_c║re::event::Eve││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿ViewOUT ▁▁▁▃▁█  ▁▁ ▁  ▁▁▇    ▁149││Click → Co║e Explorer::Ce││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[?]                      Toggle this help ov─║──────────────╯│
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[Esc]                    Dismiss top overlay─║nfo───────────╮│
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[Ctrl+P]                 Toggle performance M║NAL FPS:0     ││
+││Click → Visual║E[Shift+A]                Toggle A11y panel Pe║formance      ││
+│╰──────────────║─[F12]                    Toggle debug overla─║──────────────╯│
+│╭Text FX · 2-Up║(1/28)╮╭──────────Activity───────────╮╭Markdow║ · Streaming…╮ │
+││Sample 1 of 3 ║ EditingSEV TIME  COMP  MESSAGE      ││▌      ║             │ │
+││1 · None · S1 ║ [Ctrl+Z]                 Undoke dete││       ║             │ │
+││2 · FadeIn · S║ [Ctrl+Y / Ctrl+Shift+Z]  Redo       ││       ║             │ │
 ││## GFM Stress ║ Ledge││                             ││       ║             │ │
 ││e: next set · ╚═══════════Press ? or Esc to close════════════╝Markdown     │ │
 │╰─────────────────────╯╰─────────────────────────────╯╰─────────────────────╯ │

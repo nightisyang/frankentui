@@ -6,29 +6,29 @@
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿││CPU ▃ ▃▃▂▂▁▁▄▃▄▂▅▅▅▆▂▄▅▃▆▅▄▄▆ 46%││use std::{collections::HashMap, s││ INLINE   BRAILLE FX  ││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿╔═════════════════════ ⌨ Keyboard Shortcuts (Esc) ═════════════════════╗Status: NOMINAL │ Even││
 ││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│Navigation ▁   ▇▁▁    ▁ █▁▁▁▁█ 14││use ftui_core::event::Event;     │║FPS: 0  TicSize: 118x3││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[1-9, 0]                 Switch to screen by number:cell::Cell;     │║Events/s: 1Theme: Cybe││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Tab]                    Next screense ftui_render::frame::Frame;   │║CPU:  46%  Alerts: 1  ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Shift+Tab]              Previous screentui_runtime::{Cmd, Model, Pr│║NET:   14↓ Pipeline: B││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│                                 ││                                 │║Frame:  0.0Headroom: +││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│View                             ││#[derive(Debug, Clone)]          │║                      ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[?]                      Toggle this help overlay                   │║                      ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Esc]                    Dismiss top overlayu64),                   │║                      ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[A]                      Toggle A11y panelize { w: u16, h: u16 },   │║                      ││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[F12]                    Toggle debug overlayring),                 │║CPU ██████░░░░░░░  46%││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│                                 ││    Quit,                        │║MEM █████░░░░░░░░  41%││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│Editing                          ││}                                │║NET █░░░░░░░░░░░░   8%││
-││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Ctrl+Z]                 Undo    ││                                 │║FRM                n/a││
-││Click → Visual Effects║│[Ctrl+Y / Ctrl+Shift+Z]  Redo    ││Click → Code ExplorerSync + 'stat│║Click → Performance163││
-│╰──────────────────────║╰─────────────────────────────────╯╰─────────────────────────────────╯║──────────────────────╯│
-│╭───Text FX · 3-Up (1/2║)Global──────────────────Activity───────────────────╮╭───────Markdown ║ Streaming… 0%────────╮│
-││Sample 1 of 3 · 3-Up s║a[Ctrl+K]                 Open command palette      ││▌               ║                      ││
-││1 · None · S1         ║ [Ctrl+T]                 Cycle color theme core 3  ││                ║                      ││
-││# FX Lab · Determinist║c[H/M/L]                  A11y: high contrast, reduced motion, large  ║                      ││
-││> *"Render truth, not ║i[Ctrl+1..6]              Palette: filter by category│                ║                      ││
-││2 · FadeIn · S2       ║ [Ctrl+0]                 Palette: clear category filter              ║                      ││
-││## GFM Stress · Ledger║ [Ctrl+F]                 Palette: toggle favorite  ││                ║                      ││
-││1. **Bold** + _italic_║+[Ctrl+Shift+F]           Palette: favorites only   ││                ║                      ││
-││3 · FadeOut · S3      ║ [q / Ctrl+C]             Quit application          ││                ║                      ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Ctrl+K]                 Open command paletteender::cell::Cell;     │║Events/s: 1Theme: Cybe││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│EPS ██  77% DSK █  67% IO  ░   7%││use ftui_render::frame::Frame;   │║CPU:  46%  Alerts: 1  ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│View                             ││use ftui_runtime::{Cmd, Model, Pr│║NET:   14↓ Pipeline: B││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[?]                      Toggle this help overlay                   │║Frame:  0.0Headroom: +││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Esc]                    Dismiss top overlayDebug, Clone)]          │║                      ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Ctrl+P]                 Toggle performance HUD                     │║                      ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Shift+A]                Toggle A11y panelk(u64),                   │║                      ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[F12]                    Toggle debug overlay { w: u16, h: u16 },   │║                      ││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│                                 ││    Log(String),                 │║CPU ██████░░░░░░░  46%││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│Editing                          ││    Quit,                        │║MEM █████░░░░░░░░  41%││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Ctrl+Z]                 Undo    ││}                                │║NET █░░░░░░░░░░░░   8%││
+││⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿║│[Ctrl+Y / Ctrl+Shift+Z]  Redo    ││                                 │║FRM                n/a││
+││Click → Visual Effects║│Click → Data Viz                 ││Click → Code ExplorerSync + 'stat│║Click → Performance163││
+│╰──────────────────────║╰Global───────────────────────────╯╰─────────────────────────────────╯║──────────────────────╯│
+│╭───Text FX · 3-Up (1/2║)[Ctrl+T]                 Cycle color theme─────────╮╭───────Markdown ║ Streaming… 0%────────╮│
+││Sample 1 of 3 · 3-Up s║a[H/M/L]                  A11y: high contrast, reduced motion, large  ║                      ││
+││1 · None · S1         ║ [Ctrl+1..6]              Palette: filter by category│                ║                      ││
+││# FX Lab · Determinist║c[Ctrl+0]                 Palette: clear category filter              ║                      ││
+││> *"Render truth, not ║i[Ctrl+F]                 Palette: toggle favorite  ││                ║                      ││
+││2 · FadeIn · S2       ║ [Ctrl+Shift+F]           Palette: favorites only   ││                ║                      ││
+││## GFM Stress · Ledger║ [Ctrl+C]                 Quit application          ││                ║                      ││
+││1. **Bold** + _italic_║+ ~~s││                                             ││                ║                      ││
+││3 · FadeOut · S3      ║ Dashboard Controls                                 ││                ║                      ││
 ││### Runtime Ledger · M║xCategories: Tour Core Visuals Interact Text Systems││                ║                      ││
 ││- [x] Tasks           ║     ││                                             ││                ║                      ││
 ││- [ ] Benchmarks      ╚═══════════════════════Press ? or Esc to close════════════════════════╝                      ││

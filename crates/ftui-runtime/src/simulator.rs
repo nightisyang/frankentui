@@ -47,6 +47,8 @@ pub enum CmdRecord {
     Log(String),
     /// Background task executed synchronously.
     Task,
+    /// Mouse capture toggle (no-op in simulator).
+    MouseCapture(bool),
 }
 
 /// Deterministic simulator for [`Model`] testing.
@@ -256,6 +258,9 @@ impl<M: Model> ProgramSimulator<M> {
             Cmd::Log(text) => {
                 self.command_log.push(CmdRecord::Log(text.clone()));
                 self.logs.push(text);
+            }
+            Cmd::SetMouseCapture(enabled) => {
+                self.command_log.push(CmdRecord::MouseCapture(enabled));
             }
             Cmd::Task(_, f) => {
                 self.command_log.push(CmdRecord::Task);

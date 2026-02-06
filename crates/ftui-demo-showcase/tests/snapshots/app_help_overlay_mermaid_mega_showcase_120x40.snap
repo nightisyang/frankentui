@@ -6,29 +6,29 @@
 ││                                                                                                                    ││
 ││                      ╔═════════════════════ ⌨ Keyboard Shortcuts (Esc) ═════════════════════╗                      ││
 │└──────────────────────║─Navigation───────────────────────────────────────────────────────────║──────────────────────┘│
-│┌ Flow Basic [default] ║─[1-9, 0]                 Switch to screen by number─────────────┐┌ Me║rics ─────────────────┐│
-││                      ║ [Tab]                    Next screen                            ││   ║                      ││
-││                      ║ [Shift+Tab]              Previous screen                        ││Mod║: normal              ││
-││                      ║      ⢸⣿⣿⣿⣿⣿⣿⣿⣿   Start    ⣿⣿⣿⣿⣿⣿⣿⣿⡇                             ││Sam║le: Flow Basic        ││
-││                      ║ View ⢸⣿⣿⣿⣿⣿⣿⣿⣿            ⣿⣿⣿⣿⣿⣿⣿⣿⡇                             ││Pal║tte: default          ││
-││                      ║ [?]                      Toggle this help overlay               ││Nod║: -                   ││
-││                      ║ [Esc]                    Dismiss top overlay                    ││Epo║h: a0/l0/r0           ││
-││                      ║ [A]                      Toggle A11y panel                      ││VP:║auto                  ││
-││                      ║ [F12]                    Toggle debug overlay                   ││   ║                      ││
-││                      ║            ⢀⣀⣤⣴⣶⣿⣿⣿⣿⣿⣿⣿⣿⣶⣦⣤⣀⣀                                   ││Par║e: -                  ││
-││                      ║ Editing⣤⣶⣶⣿⣿⣿⣿  Decision  ⣿⣿⣿⣿⣷⣶⣤⣄⡀                             ││Lay║ut: -                 ││
-││                      ║ [Ctrl+Z]                 Undo⠿⠛⠋⠉⠁                              ││Ren║er: -                 ││
-││                      ║ [Ctrl+Y / Ctrl+Shift+Z]  Redo                                   ││   ║                      ││
-││                      ║              ⣀⣀⠤⠤⠒⠒⠉⠉⠑⠒⠢⠤⢄⣀⡀                                    ││   ║                      ││
-││                      ║ Global⣀⠤⠤⠒⠒⠉⠉              ⠈⠉⠑⠒⠢⠤⢄⣀⣦⡀                           ││Cac║e: 0/0                ││
-││            ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[Ctrl+K]                 Open command palette⣿⣿⣿⣿⣿⣿⡇            ││Las║: MISS                ││
-││            ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[Ctrl+T]                 Cycle color theme⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇            ││   ║                      ││
-││            ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[H/M/L]                  A11y: high contrast, reduced motion, large  ║                      ││
+│┌ Flow Basic [default] ║─[Ctrl+K]                 Open command palette───────────────────┐┌ Me║rics ─────────────────┐│
+││                      ║                                                                 ││   ║                      ││
+││                      ║ View ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇                             ││Mod║: normal              ││
+││                      ║ [?]                      Toggle this help overlay               ││Sam║le: Flow Basic        ││
+││                      ║ [Esc]                    Dismiss top overlay                    ││Pal║tte: default          ││
+││                      ║ [Ctrl+P]                 Toggle performance HUD                 ││Nod║: -                   ││
+││                      ║ [Shift+A]                Toggle A11y panel                      ││Epo║h: a0/l0/r0           ││
+││                      ║ [F12]                    Toggle debug overlay                   ││VP:║auto                  ││
+││                      ║                   ⣀⣨⣯⣀⡀                                         ││   ║                      ││
+││                      ║ Editing    ⢀⣀⣤⣴⣶⣿⣿⣿⣿⣿⣿⣿⣿⣶⣦⣤⣀⣀                                   ││Par║e: -                  ││
+││                      ║ [Ctrl+Z]                 Undo⣿⣷⣶⣤⣄⡀                             ││Lay║ut: -                 ││
+││                      ║ [Ctrl+Y / Ctrl+Shift+Z]  Redo⠿⠛⠋⠉⠁                              ││Ren║er: -                 ││
+││                      ║               ⠉⠙⠛⠻⠿⢿⣿⠿⠿⠛⠋⠉⠁                                     ││   ║                      ││
+││                      ║ Global       ⣀⣀⠤⠤⠒⠒⠉⠉⠑⠒⠢⠤⢄⣀⡀                                    ││   ║                      ││
+││                      ║ [Ctrl+T]                 Cycle color theme                      ││Cac║e: 0/0                ││
+││            ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[H/M/L]                  A11y: high contrast, reduced motion, large s║: MISS                ││
 ││            ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[Ctrl+1..6]              Palette: filter by category            ││   ║                      ││
-││            ⠘⠛⠛⠛⠛⠛⠛⠛⠛⠛║⠛[Ctrl+0]                 Palette: clear category filter         ││   ║                      ││
-││                      ║ [Ctrl+F]                 Palette: toggle favorite               ││   ║                      ││
-││                      ║ [Ctrl+Shift+F]           Palette: favorites only                ││   ║                      ││
-││                      ║ [q / Ctrl+C]             Quit application                       ││   ║                      ││
+││            ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[Ctrl+0]                 Palette: clear category filter         ││   ║                      ││
+││            ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿║⣿[Ctrl+F]                 Palette: toggle favorite⣿⣿⡇            ││   ║                      ││
+││            ⠘⠛⠛⠛⠛⠛⠛⠛⠛⠛║⠛[Ctrl+Shift+F]           Palette: favorites only⠛⠛⠛⠃            ││   ║                      ││
+││                      ║ [Ctrl+C]                 Quit application                       ││   ║                      ││
+││                      ║      ⢀⣀⣀⣀⣀⣀⣀⣀⣀⣉⣑⣒⣢⣼⣦⣠⣾⣤⣒⣒⣉⣁⣀⣀⣀⣀⣀⣀⣀⡀                             ││   ║                      ││
+││                      ║ Mermaid Mega Showcase Controls⣿⣿⣿⣿⡇                             ││   ║                      ││
 ││                      ║ Categories: Tour Core Visuals Interact Text Systems             ││   ║                      ││
 ││                      ║      ⢸⣿⣿⣿⣿⣿⣿⣿⣿            ⣿⣿⣿⣿⣿⣿⣿⣿⡇                             ││   ║                      ││
 ││                      ╚═══════════════════════Press ? or Esc to close════════════════════════╝                      ││

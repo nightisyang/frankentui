@@ -1875,6 +1875,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn table_state_hover_same_index_ignored() {
         let mut state = {
             let mut s = TableState::default();
@@ -1889,6 +1890,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn table_state_hover_clears() {
         let mut state = {
             let mut s = TableState::default();
@@ -1911,6 +1913,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn table_state_scroll_wheel_up() {
         let mut state = {
             let mut s = TableState::default();
@@ -1933,6 +1936,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn table_state_scroll_down_clamps() {
         let mut state = {
             let mut s = TableState::default();
@@ -1944,6 +1948,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn table_state_scroll_up_clamps() {
         let mut state = {
             let mut s = TableState::default();

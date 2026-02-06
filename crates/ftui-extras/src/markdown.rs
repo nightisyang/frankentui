@@ -1103,10 +1103,13 @@ impl AdmonitionKind {
 
     fn icon(self) -> &'static str {
         match self {
-            Self::Note => "ℹ️ ",
+            // Avoid VS16 (U+FE0F) here: ftui-core's default width policy strips it,
+            // but many terminals still render the emoji presentation as width=2,
+            // which corrupts box borders / column alignment.
+            Self::Note => "ℹ ",
             Self::Tip => "💡",
             Self::Important => "❗",
-            Self::Warning => "⚠️ ",
+            Self::Warning => "⚠ ",
             Self::Caution => "🔴",
         }
     }
@@ -3243,10 +3246,21 @@ The end.
 
     #[test]
     fn admonition_kind_icons_and_labels() {
-        assert!(!AdmonitionKind::Note.icon().is_empty());
-        assert!(!AdmonitionKind::Note.label().is_empty());
-        assert!(!AdmonitionKind::Warning.icon().is_empty());
-        assert!(!AdmonitionKind::Warning.label().is_empty());
+        for kind in [
+            AdmonitionKind::Note,
+            AdmonitionKind::Tip,
+            AdmonitionKind::Important,
+            AdmonitionKind::Warning,
+            AdmonitionKind::Caution,
+        ] {
+            let icon = kind.icon();
+            assert!(!icon.is_empty());
+            assert!(
+                !icon.contains('\u{FE0F}'),
+                "admonition icon {icon:?} contains VS16 (U+FE0F) which causes terminal width mismatches"
+            );
+            assert!(!kind.label().is_empty());
+        }
     }
 
     // =========================================================================

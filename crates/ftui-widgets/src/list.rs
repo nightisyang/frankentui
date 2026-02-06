@@ -1074,6 +1074,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn list_state_scroll_up() {
         let mut state = {
             let mut s = ListState::default();
@@ -1085,6 +1086,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn list_state_scroll_up_clamps_to_zero() {
         let mut state = {
             let mut s = ListState::default();
@@ -1103,6 +1105,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn list_state_scroll_down_clamps() {
         let mut state = ListState::default();
         state.offset = 18;
@@ -1111,6 +1114,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::field_reassign_with_default)]
     fn list_state_scroll_wheel_up() {
         let mut state = {
             let mut s = ListState::default();

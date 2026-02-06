@@ -4,18 +4,18 @@
 ││ 1  Welcome to the Advanced Text Editor!                                    ││
 ││ 2            ╔═════════ ⌨ Keyboard Shortcuts (Esc) ═════════╗              ││
 ││ 3  This is a ║eNavigationn of FrankenTUI's text editing capa║ilities.      ││
-││ 4  You can ed║t[1-9, 0]                    Switch to screen ║              ││
-││ 5            ║ [Tab]                       Next screen      ║              ││
-││ 6  Features: ║ [Shift+Tab]                 Previous screen  ║              ││
-││ 7  - Multi-li║e editing with line numbers                   ║              ││
-││ 8  - Selectio║ View Shift+Arrow keys                        ║              ││
-││ 9  - Undo (Ct║l[?]                         Toggle this help ║              ││
-││10  - Search (║t[Esc]                       Dismiss top over ║              ││
-││11  - Replace ║C[A]                         Toggle A11y pane ║              ││
-││12            ║ [F12]                       Toggle debug ove ║              ││
-││13  Try editin║ this text or loading your own content.       ║              ││
-││14            ║ Editing                                      ║              ││
-││15  Unicode su║p[Ctrl+Z]                    Undo             ║              ││
+││ 4  You can ed║t[Ctrl+K]                    Open command pal ║              ││
+││ 5            ║                                              ║              ││
+││ 6  Features: ║ View                                         ║              ││
+││ 7  - Multi-li║e[?]                         Toggle this help ║              ││
+││ 8  - Selectio║ [Esc]                       Dismiss top over ║              ││
+││ 9  - Undo (Ct║l[Ctrl+P]                    Toggle performan ║              ││
+││10  - Search (║t[Shift+A]                   Toggle A11y pane ║              ││
+││11  - Replace ║C[F12]                       Toggle debug ove ║              ││
+││12            ║                                              ║              ││
+││13  Try editin║ Editingxt or loading your own content.       ║              ││
+││14            ║ [Ctrl+Z]                    Undo             ║              ││
+││15  Unicode su║p[Ctrl+Y / Ctrl+Shift+Z]     Redo             ║              ││
 ││16  - Emoji:  ║ ?? ??                                        ║              ││
 ││17  - CJK: ?? ╚═══════════Press ? or Esc to close════════════╝              ││
 │╰────────────────────────────────────────────────────────────────────────────╯│
