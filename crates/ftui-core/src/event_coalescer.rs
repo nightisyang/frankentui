@@ -608,6 +608,88 @@ mod tests {
     }
 
     #[test]
+    fn default_coalescer_has_no_pending() {
+        let coalescer = EventCoalescer::default();
+        assert!(!coalescer.has_pending());
+        assert_eq!(coalescer.pending_scroll_count(), 0);
+    }
+
+    #[test]
+    fn scroll_direction_change_flushes_old() {
+        let mut coalescer = EventCoalescer::new();
+
+        // Scroll up twice
+        coalescer.push(Event::Mouse(MouseEvent::new(
+            MouseEventKind::ScrollUp,
+            0,
+            0,
+        )));
+        coalescer.push(Event::Mouse(MouseEvent::new(
+            MouseEventKind::ScrollUp,
+            0,
+            0,
+        )));
+
+        // Change direction -> returns old scroll event
+        let result = coalescer.push(Event::Mouse(MouseEvent::new(
+            MouseEventKind::ScrollDown,
+            0,
+            0,
+        )));
+        assert!(result.is_some());
+        if let Some(Event::Mouse(m)) = result {
+            assert!(matches!(m.kind, MouseEventKind::ScrollUp));
+        }
+
+        // Pending should be the new down scroll
+        assert_eq!(coalescer.pending_scroll_count(), 1);
+        let pending = coalescer.flush();
+        assert_eq!(pending.len(), 1);
+        if let Event::Mouse(m) = &pending[0] {
+            assert!(matches!(m.kind, MouseEventKind::ScrollDown));
+        }
+    }
+
+    #[test]
+    fn pending_scroll_count_zero_after_flush() {
+        let mut coalescer = EventCoalescer::new();
+        coalescer.push(Event::Mouse(MouseEvent::new(
+            MouseEventKind::ScrollUp,
+            0,
+            0,
+        )));
+        assert_eq!(coalescer.pending_scroll_count(), 1);
+        let _ = coalescer.flush();
+        assert_eq!(coalescer.pending_scroll_count(), 0);
+    }
+
+    #[test]
+    fn scroll_right_coalesces() {
+        let mut coalescer = EventCoalescer::new();
+
+        coalescer.push(Event::Mouse(MouseEvent::new(
+            MouseEventKind::ScrollRight,
+            5,
+            10,
+        )));
+        coalescer.push(Event::Mouse(MouseEvent::new(
+            MouseEventKind::ScrollRight,
+            6,
+            11,
+        )));
+
+        assert_eq!(coalescer.pending_scroll_count(), 2);
+
+        let pending = coalescer.flush();
+        assert_eq!(pending.len(), 1);
+        if let Event::Mouse(m) = &pending[0] {
+            assert!(matches!(m.kind, MouseEventKind::ScrollRight));
+            assert_eq!(m.x, 6);
+            assert_eq!(m.y, 11);
+        }
+    }
+
+    #[test]
     fn mixed_coalescing_workflow() {
         let mut coalescer = EventCoalescer::new();
         let mut processed = Vec::new();

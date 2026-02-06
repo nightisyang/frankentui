@@ -676,6 +676,30 @@ mod tests {
     }
 
     #[test]
+    fn widget_id_from_ptr_differs_for_different_objects() {
+        let a = 42u64;
+        let b = 42u64;
+        let id_a = WidgetId::from_ptr(&a);
+        let id_b = WidgetId::from_ptr(&b);
+        assert_ne!(id_a, id_b);
+    }
+
+    #[test]
+    fn new_cache_is_empty() {
+        let cache = MeasureCache::new(100);
+        assert!(cache.is_empty());
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[test]
+    fn stats_zero_total_gives_zero_hit_rate() {
+        let cache = MeasureCache::new(100);
+        let stats = cache.stats();
+        assert_eq!(stats.hit_rate, 0.0);
+        assert_eq!(stats.entries, 0);
+    }
+
+    #[test]
     fn hit_count_increments_on_each_access() {
         let mut cache = MeasureCache::new(100);
         let id = WidgetId(42);

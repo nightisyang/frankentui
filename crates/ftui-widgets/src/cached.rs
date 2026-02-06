@@ -535,6 +535,59 @@ mod tests {
     }
 
     #[test]
+    fn with_hash_uses_hash_key() {
+        // with_hash requires W: Hash, so use a simple hashable wrapper
+        #[derive(Debug, Clone, Hash)]
+        struct HashableLabel(String);
+
+        impl Widget for HashableLabel {
+            fn render(&self, area: Rect, frame: &mut Frame) {
+                if !area.is_empty() {
+                    frame.buffer.set(area.x, area.y, Cell::from_char('h'));
+                }
+            }
+        }
+
+        let widget = HashableLabel("hello".to_string());
+        let cached = CachedWidget::with_hash(widget);
+        let mut state = CachedWidgetState::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 5, &mut pool);
+        let area = Rect::new(0, 0, 3, 3);
+
+        // First render: miss
+        cached.render(area, &mut frame, &mut state);
+        assert!(state.cache.is_some());
+
+        // Same hash => hit (no key change)
+        cached.render(area, &mut frame, &mut state);
+        // Verify the cache key was set
+        assert!(state.last_key.is_some());
+    }
+
+    #[test]
+    fn no_cache_key_default() {
+        let key = NoCacheKey::default();
+        assert_eq!(CacheKey::<u32>::cache_key(&key, &100), None);
+    }
+
+    #[test]
+    fn hash_key_default() {
+        let key = HashKey::default();
+        let result = CacheKey::<u32>::cache_key(&key, &42);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn cached_widget_state_new_equals_default() {
+        let a = CachedWidgetState::new();
+        let b = CachedWidgetState::default();
+        assert_eq!(a.cache_size_bytes(), b.cache_size_bytes());
+        assert!(!a.dirty);
+        assert!(!b.dirty);
+    }
+
+    #[test]
     fn same_key_no_rerender() {
         let count = Rc::new(CounterCell::new(0));
         let key = Rc::new(CounterCell::new(42));

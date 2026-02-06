@@ -384,4 +384,53 @@ mod tests {
         assert_eq!(pager.current_page, 3);
         assert_eq!(pager.total_pages, 10);
     }
+
+    #[test]
+    fn render_page_mode() {
+        let area = Rect::new(0, 0, 15, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(15, 1, &mut pool);
+        let pager = Paginator::with_pages(2, 5).mode(PaginatorMode::Page);
+        pager.render(area, &mut frame);
+        let mut text = String::new();
+        for x in 0..15u16 {
+            if let Some(cell) = frame.buffer.get(x, 0)
+                && let Some(ch) = cell.content.as_char()
+            {
+                text.push(ch);
+            }
+        }
+        assert!(text.starts_with("Page 2/5"), "got: {text}");
+    }
+
+    #[test]
+    fn render_dots_mode() {
+        let area = Rect::new(0, 0, 10, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        let pager = Paginator::with_pages(3, 5).mode(PaginatorMode::Dots);
+        pager.render(area, &mut frame);
+        let mut text = String::new();
+        for x in 0..10u16 {
+            if let Some(cell) = frame.buffer.get(x, 0)
+                && let Some(ch) = cell.content.as_char()
+            {
+                text.push(ch);
+            }
+        }
+        assert_eq!(text, "..*..", "got: {text}");
+    }
+
+    #[test]
+    fn dots_middle_page() {
+        let pager = Paginator::with_pages(3, 5).mode(PaginatorMode::Dots);
+        assert_eq!(pager.format_for_width(10), "..*..");
+    }
+
+    #[test]
+    fn dots_symbols_default_star_and_dot() {
+        let pager = Paginator::new();
+        assert_eq!(pager.active_symbol, "*");
+        assert_eq!(pager.inactive_symbol, ".");
+    }
 }
