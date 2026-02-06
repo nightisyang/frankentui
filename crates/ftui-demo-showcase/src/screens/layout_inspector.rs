@@ -482,10 +482,10 @@ impl Screen for LayoutInspector {
                 MouseEventKind::Down(MouseButton::Left) => {
                     if self.layout_info.get().contains(x, y) {
                         self.scenario_idx = (self.scenario_idx + 1) % SCENARIO_COUNT;
-                    } else if self.layout_viz.get().contains(x, y) {
-                        self.step_idx = (self.step_idx + 1) % STEP_COUNT;
                     } else if self.layout_tree.get().contains(x, y) {
                         self.show_tree = !self.show_tree;
+                    } else if self.layout_viz.get().contains(x, y) {
+                        self.step_idx = (self.step_idx + 1) % STEP_COUNT;
                     }
                 }
                 MouseEventKind::Down(MouseButton::Right) => {
