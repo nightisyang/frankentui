@@ -1475,6 +1475,7 @@ mod tests {
                 guard: MermaidGuardReport::default(),
             },
             constraints: vec![],
+            journey_tasks: vec![],
         }
     }
 
