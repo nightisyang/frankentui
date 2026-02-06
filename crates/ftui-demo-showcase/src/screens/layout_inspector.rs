@@ -836,7 +836,10 @@ mod tests {
     fn keybindings_include_mouse_hints() {
         let screen = LayoutInspector::new();
         let bindings = screen.keybindings();
-        assert!(bindings.len() >= 8, "should have at least 8 keybinding entries");
+        assert!(
+            bindings.len() >= 8,
+            "should have at least 8 keybinding entries"
+        );
         let keys: Vec<&str> = bindings.iter().map(|b| b.key).collect();
         assert!(keys.contains(&"Click info"));
         assert!(keys.contains(&"Click viz"));

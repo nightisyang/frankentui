@@ -1010,5 +1010,4 @@ mod tests {
         )));
         assert_eq!(lab.palette.selected_index(), initial);
     }
-
 }

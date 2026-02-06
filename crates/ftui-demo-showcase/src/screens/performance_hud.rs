@@ -17,7 +17,9 @@ use std::env;
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind};
+use ftui_core::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind,
+};
 use ftui_core::geometry::Rect;
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
@@ -1102,7 +1104,6 @@ impl PerformanceHud {
         }
     }
 }
-
 
 impl Screen for PerformanceHud {
     type Message = Event;

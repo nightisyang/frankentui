@@ -8,7 +8,9 @@
 //! - WCAG contrast ratio validation
 //! - Export to FrankenTUI JSON and Ghostty formats
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind};
+use ftui_core::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind,
+};
 use ftui_core::geometry::Rect;
 use ftui_render::cell::{Cell, PackedRgba};
 use ftui_render::frame::Frame;
@@ -638,7 +640,6 @@ impl ThemeStudioDemo {
             log.record(entry);
         }
     }
-
 
     /// Handle mouse events on the presets and token inspector panels.
     fn handle_mouse(&mut self, kind: MouseEventKind, x: u16, y: u16) {
@@ -1389,7 +1390,9 @@ impl Screen for ThemeStudioDemo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind};
+    use ftui_core::event::{
+        Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind,
+    };
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

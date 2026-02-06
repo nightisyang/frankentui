@@ -340,9 +340,10 @@ fn is_table_line(plain: &str) -> bool {
         return false;
     }
 
-    if trimmed.chars().any(|c| {
-        matches!(c, '┌' | '┬' | '┐' | '├' | '┼' | '┤' | '└' | '┴' | '┘' | '─')
-    }) {
+    if trimmed
+        .chars()
+        .any(|c| matches!(c, '┌' | '┬' | '┐' | '├' | '┼' | '┤' | '└' | '┴' | '┘' | '─'))
+    {
         return true;
     }
 

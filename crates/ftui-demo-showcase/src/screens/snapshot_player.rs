@@ -1178,9 +1178,7 @@ impl SnapshotPlayer {
             return Some(0);
         }
 
-        let right_edge = timeline
-            .x
-            .saturating_add(timeline.width.saturating_sub(1));
+        let right_edge = timeline.x.saturating_add(timeline.width.saturating_sub(1));
         let clamped_x = x.clamp(timeline.x, right_edge);
         let rel_x = clamped_x.saturating_sub(timeline.x) as f64;
         let width = timeline.width.saturating_sub(1).max(1) as f64;
@@ -2162,10 +2160,7 @@ mod tests {
 
         player.update(&Event::Mouse(ftui_core::event::MouseEvent {
             kind: MouseEventKind::Drag(MouseButton::Left),
-            x: timeline
-                .x
-                .saturating_add(timeline.width)
-                .saturating_add(25),
+            x: timeline.x.saturating_add(timeline.width).saturating_add(25),
             y: timeline.y,
             modifiers: ftui_core::event::Modifiers::NONE,
         }));

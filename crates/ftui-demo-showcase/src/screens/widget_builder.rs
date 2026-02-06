@@ -11,7 +11,9 @@ use std::cell::RefCell;
 use std::fs::OpenOptions;
 use std::io::Write;
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind};
+use ftui_core::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind,
+};
 use ftui_core::geometry::Rect;
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
@@ -311,7 +313,6 @@ impl WidgetBuilder {
             layout_preview: StdCell::new(Rect::default()),
         }
     }
-
 
     /// Handle mouse events for preset list, widget tree, and preview area.
     fn handle_mouse(&mut self, kind: MouseEventKind, x: u16, y: u16) {

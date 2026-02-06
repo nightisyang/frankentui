@@ -11,7 +11,9 @@
 use std::cell::Cell;
 use std::time::Duration;
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind};
+use ftui_core::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind,
+};
 use ftui_core::geometry::Rect;
 use ftui_extras::timer::{DisplayFormat, Timer};
 use ftui_extras::traceback::{Traceback, TracebackFrame};

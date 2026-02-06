@@ -213,10 +213,7 @@ fn esc_closes_help() {
     app.help_visible = true;
 
     app.update(AppMsg::from(press(KeyCode::Escape)));
-    assert!(
-        !app.help_visible,
-        "Esc should close help overlay"
-    );
+    assert!(!app.help_visible, "Esc should close help overlay");
 }
 
 #[test]
@@ -226,10 +223,7 @@ fn esc_closes_debug() {
     app.debug_visible = true;
 
     app.update(AppMsg::from(press(KeyCode::Escape)));
-    assert!(
-        !app.debug_visible,
-        "Esc should close debug overlay"
-    );
+    assert!(!app.debug_visible, "Esc should close debug overlay");
 }
 
 #[test]
@@ -239,10 +233,7 @@ fn esc_closes_perf_hud() {
     app.perf_hud_visible = true;
 
     app.update(AppMsg::from(press(KeyCode::Escape)));
-    assert!(
-        !app.perf_hud_visible,
-        "Esc should close perf HUD overlay"
-    );
+    assert!(!app.perf_hud_visible, "Esc should close perf HUD overlay");
 }
 
 #[test]
@@ -280,11 +271,20 @@ fn esc_with_help_and_a11y_closes_help_first() {
     app.a11y_panel_visible = true;
 
     app.update(AppMsg::from(press(KeyCode::Escape)));
-    assert!(!app.help_visible, "first Esc should close help (higher priority)");
-    assert!(app.a11y_panel_visible, "a11y should remain visible after first Esc");
+    assert!(
+        !app.help_visible,
+        "first Esc should close help (higher priority)"
+    );
+    assert!(
+        app.a11y_panel_visible,
+        "a11y should remain visible after first Esc"
+    );
 
     app.update(AppMsg::from(press(KeyCode::Escape)));
-    assert!(!app.a11y_panel_visible, "second Esc should close a11y panel");
+    assert!(
+        !app.a11y_panel_visible,
+        "second Esc should close a11y panel"
+    );
 }
 
 #[test]

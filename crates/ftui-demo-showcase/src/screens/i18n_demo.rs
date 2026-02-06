@@ -15,13 +15,13 @@ use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::Style;
 use ftui_text::{
-    display_width, grapheme_count, grapheme_width, graphemes, truncate_to_width_with_info,
-    truncate_with_ellipsis, wrap_text, WrapMode,
+    WrapMode, display_width, grapheme_count, grapheme_width, graphemes,
+    truncate_to_width_with_info, truncate_with_ellipsis, wrap_text,
 };
+use ftui_widgets::Widget;
 use ftui_widgets::block::{Alignment, Block};
 use ftui_widgets::borders::{BorderType, Borders};
 use ftui_widgets::paragraph::Paragraph;
-use ftui_widgets::Widget;
 use serde_json::json;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -137,8 +137,7 @@ const SAMPLE_SET_RTL: &[SampleCase] = &[
     SampleCase {
         id: "arabic_hello",
         label: "Arabic greeting",
-        text:
-            "\u{645}\u{631}\u{62D}\u{628}\u{627} \u{628}\u{627}\u{644}\u{639}\u{627}\u{644}\u{645}",
+        text: "\u{645}\u{631}\u{62D}\u{628}\u{627} \u{628}\u{627}\u{644}\u{639}\u{627}\u{644}\u{645}",
     },
     SampleCase {
         id: "arabic_mixed",

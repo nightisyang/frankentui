@@ -10,7 +10,9 @@
 
 use std::cell::Cell;
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind};
+use ftui_core::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind,
+};
 use ftui_core::geometry::Rect;
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
@@ -875,7 +877,8 @@ impl DragDropDemo {
                     }
                 } else if left.contains(x, y) {
                     // Click in left list — select item
-                    if self.mode == DemoMode::CrossContainer || self.mode == DemoMode::KeyboardDrag {
+                    if self.mode == DemoMode::CrossContainer || self.mode == DemoMode::KeyboardDrag
+                    {
                         self.focused_list = 0;
                     }
                     let row = y.saturating_sub(left.y) as usize;
@@ -885,7 +888,8 @@ impl DragDropDemo {
                     }
                 } else if right.contains(x, y) {
                     // Click in right list — select item (cross-container and keyboard modes)
-                    if self.mode == DemoMode::CrossContainer || self.mode == DemoMode::KeyboardDrag {
+                    if self.mode == DemoMode::CrossContainer || self.mode == DemoMode::KeyboardDrag
+                    {
                         self.focused_list = 1;
                     }
                     let row = y.saturating_sub(right.y) as usize;

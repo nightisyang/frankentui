@@ -12,9 +12,7 @@ use std::io::{self, BufRead};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use ftui_core::event::{
-    Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEventKind,
-};
+use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEventKind};
 use ftui_core::geometry::Rect;
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;

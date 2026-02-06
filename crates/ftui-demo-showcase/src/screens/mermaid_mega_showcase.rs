@@ -4299,7 +4299,10 @@ mod tests {
         screen.view(&mut frame, area);
 
         let diagram = screen.layout_diagram.get();
-        assert!(diagram.width > 0 && diagram.height > 0, "diagram region must be non-empty");
+        assert!(
+            diagram.width > 0 && diagram.height > 0,
+            "diagram region must be non-empty"
+        );
 
         let cx = diagram.x + diagram.width / 2;
         let cy = diagram.y + diagram.height / 2;
@@ -4376,7 +4379,10 @@ mod tests {
         screen.view(&mut frame, area);
 
         let footer = screen.layout_footer.get();
-        assert!(footer.width > 0 && footer.height > 0, "footer must be visible");
+        assert!(
+            footer.width > 0 && footer.height > 0,
+            "footer must be visible"
+        );
         let was = screen.state.panels.help_overlay;
         let cx = footer.x + footer.width / 2;
         let cy = footer.y + footer.height / 2;
