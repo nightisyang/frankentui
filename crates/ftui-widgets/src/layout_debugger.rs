@@ -357,9 +357,9 @@ mod tests {
     #[test]
     fn constraints_width_overflow() {
         let c = LayoutConstraints::new(0, 10, 0, 0);
-        assert!(!c.width_overflow(10));   // at max = ok
-        assert!(c.width_overflow(11));    // over max = overflow
-        assert!(!c.width_overflow(5));    // under max = ok
+        assert!(!c.width_overflow(10)); // at max = ok
+        assert!(c.width_overflow(11)); // over max = overflow
+        assert!(!c.width_overflow(5)); // under max = ok
     }
 
     #[test]
@@ -378,8 +378,8 @@ mod tests {
     #[test]
     fn constraints_width_underflow() {
         let c = LayoutConstraints::new(5, 0, 0, 0);
-        assert!(!c.width_underflow(5));  // at min = ok
-        assert!(c.width_underflow(4));   // below min = underflow
+        assert!(!c.width_underflow(5)); // at min = ok
+        assert!(c.width_underflow(4)); // below min = underflow
         assert!(!c.width_underflow(10)); // above min = ok
     }
 
@@ -521,8 +521,10 @@ mod tests {
         let dbg = LayoutDebugger::new();
         let dot = dbg.export_dot();
         assert!(dot.starts_with("digraph Layout"));
-        assert!(dot.ends_with("}
-"));
+        assert!(dot.ends_with(
+            "}
+"
+        ));
         assert!(!dot.contains("n0"));
     }
 

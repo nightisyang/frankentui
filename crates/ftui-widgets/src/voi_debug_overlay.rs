@@ -585,7 +585,9 @@ mod tests {
         let overlay = VoiDebugOverlay::new(data);
         let lines = overlay.build_lines(40);
         assert!(
-            lines.iter().any(|l| l.contains("a=1.00") && l.contains("b=1.00")),
+            lines
+                .iter()
+                .any(|l| l.contains("a=1.00") && l.contains("b=1.00")),
             "missing alpha/beta: {lines:?}"
         );
         assert!(

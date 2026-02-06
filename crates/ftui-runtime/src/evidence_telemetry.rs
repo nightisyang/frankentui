@@ -133,3 +133,296 @@ pub fn budget_snapshot() -> Option<BudgetDecisionSnapshot> {
 pub fn clear_budget_snapshot() {
     set_budget_snapshot(None);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ftui_render::budget::{BudgetDecision, DegradationLevel};
+    use ftui_render::diff_strategy::{DiffStrategy, StrategyEvidence};
+
+    use crate::bocpd::{BocpdEvidence, BocpdRegime};
+
+    // ── helpers ──────────────────────────────────────────────────────
+
+    fn make_diff_snapshot(event_idx: u64) -> DiffDecisionSnapshot {
+        DiffDecisionSnapshot {
+            event_idx,
+            screen_mode: "alt".into(),
+            cols: 80,
+            rows: 24,
+            evidence: StrategyEvidence {
+                strategy: DiffStrategy::DirtyRows,
+                cost_full: 1.0,
+                cost_dirty: 0.5,
+                cost_redraw: 2.0,
+                posterior_mean: 0.05,
+                posterior_variance: 0.001,
+                alpha: 2.0,
+                beta: 38.0,
+                dirty_rows: 3,
+                total_rows: 24,
+                total_cells: 1920,
+                guard_reason: "none",
+                hysteresis_applied: false,
+                hysteresis_ratio: 0.05,
+            },
+            span_count: 2,
+            span_coverage_pct: 6.25,
+            max_span_len: 12,
+            scan_cost_estimate: 200,
+            fallback_reason: "none".into(),
+            tile_used: false,
+            tile_fallback: String::new(),
+            strategy_used: DiffStrategy::DirtyRows,
+        }
+    }
+
+    fn make_resize_snapshot(event_idx: u64) -> ResizeDecisionSnapshot {
+        ResizeDecisionSnapshot {
+            event_idx,
+            action: "apply",
+            dt_ms: 150.0,
+            event_rate: 5.0,
+            regime: Regime::Steady,
+            pending_size: None,
+            applied_size: Some((120, 40)),
+            time_since_render_ms: 100.0,
+            bocpd: None,
+        }
+    }
+
+    fn make_budget_snapshot(frame_idx: u64) -> BudgetDecisionSnapshot {
+        BudgetDecisionSnapshot {
+            frame_idx,
+            decision: BudgetDecision::Hold,
+            controller_decision: BudgetDecision::Hold,
+            degradation_before: DegradationLevel::Full,
+            degradation_after: DegradationLevel::Full,
+            frame_time_us: 8000.0,
+            budget_us: 16000.0,
+            pid_output: 0.1,
+            e_value: 0.5,
+            frames_observed: 100,
+            frames_since_change: 50,
+            in_warmup: false,
+            conformal: None,
+        }
+    }
+
+    // ── diff snapshot tests ─────────────────────────────────────────
+
+    #[test]
+    fn diff_snapshot_initially_none() {
+        clear_diff_snapshot();
+        assert!(diff_snapshot().is_none());
+    }
+
+    #[test]
+    fn diff_snapshot_store_and_retrieve() {
+        let snap = make_diff_snapshot(42);
+        set_diff_snapshot(Some(snap));
+        let retrieved = diff_snapshot().expect("should be Some");
+        assert_eq!(retrieved.event_idx, 42);
+        assert_eq!(retrieved.cols, 80);
+        assert_eq!(retrieved.rows, 24);
+        clear_diff_snapshot();
+    }
+
+    #[test]
+    fn diff_snapshot_overwrite() {
+        set_diff_snapshot(Some(make_diff_snapshot(1)));
+        set_diff_snapshot(Some(make_diff_snapshot(2)));
+        let snap = diff_snapshot().expect("should be Some");
+        assert_eq!(snap.event_idx, 2);
+        clear_diff_snapshot();
+    }
+
+    #[test]
+    fn diff_snapshot_clear() {
+        set_diff_snapshot(Some(make_diff_snapshot(10)));
+        clear_diff_snapshot();
+        assert!(diff_snapshot().is_none());
+    }
+
+    #[test]
+    fn diff_snapshot_preserves_evidence_fields() {
+        let snap = make_diff_snapshot(7);
+        set_diff_snapshot(Some(snap));
+        let retrieved = diff_snapshot().unwrap();
+        assert_eq!(retrieved.evidence.strategy, DiffStrategy::DirtyRows);
+        assert!((retrieved.evidence.cost_full - 1.0).abs() < f64::EPSILON);
+        assert!((retrieved.evidence.posterior_mean - 0.05).abs() < f64::EPSILON);
+        assert_eq!(retrieved.span_count, 2);
+        assert_eq!(retrieved.strategy_used, DiffStrategy::DirtyRows);
+        clear_diff_snapshot();
+    }
+
+    // ── resize snapshot tests ───────────────────────────────────────
+
+    #[test]
+    fn resize_snapshot_initially_none() {
+        clear_resize_snapshot();
+        assert!(resize_snapshot().is_none());
+    }
+
+    #[test]
+    fn resize_snapshot_store_and_retrieve() {
+        let snap = make_resize_snapshot(5);
+        set_resize_snapshot(Some(snap));
+        let retrieved = resize_snapshot().expect("should be Some");
+        assert_eq!(retrieved.event_idx, 5);
+        assert_eq!(retrieved.action, "apply");
+        assert_eq!(retrieved.regime, Regime::Steady);
+        assert_eq!(retrieved.applied_size, Some((120, 40)));
+        clear_resize_snapshot();
+    }
+
+    #[test]
+    fn resize_snapshot_overwrite() {
+        set_resize_snapshot(Some(make_resize_snapshot(1)));
+        set_resize_snapshot(Some(make_resize_snapshot(2)));
+        let snap = resize_snapshot().unwrap();
+        assert_eq!(snap.event_idx, 2);
+        clear_resize_snapshot();
+    }
+
+    #[test]
+    fn resize_snapshot_clear() {
+        set_resize_snapshot(Some(make_resize_snapshot(10)));
+        clear_resize_snapshot();
+        assert!(resize_snapshot().is_none());
+    }
+
+    #[test]
+    fn resize_snapshot_with_bocpd_evidence() {
+        let mut snap = make_resize_snapshot(3);
+        snap.regime = Regime::Burst;
+        snap.bocpd = Some(BocpdEvidence {
+            p_burst: 0.85,
+            log_bayes_factor: 1.5,
+            observation_ms: 15.0,
+            regime: BocpdRegime::Burst,
+            likelihood_steady: 0.001,
+            likelihood_burst: 0.05,
+            expected_run_length: 3.0,
+            run_length_variance: 2.0,
+            run_length_mode: 2,
+            run_length_p95: 8,
+            run_length_tail_mass: 0.01,
+            recommended_delay_ms: Some(20),
+            hard_deadline_forced: None,
+            observation_count: 50,
+            timestamp: std::time::Instant::now(),
+        });
+        set_resize_snapshot(Some(snap));
+        let retrieved = resize_snapshot().unwrap();
+        assert_eq!(retrieved.regime, Regime::Burst);
+        let bocpd = retrieved.bocpd.as_ref().unwrap();
+        assert!((bocpd.p_burst - 0.85).abs() < f64::EPSILON);
+        assert_eq!(bocpd.regime, BocpdRegime::Burst);
+        clear_resize_snapshot();
+    }
+
+    // ── budget snapshot tests ───────────────────────────────────────
+
+    #[test]
+    fn budget_snapshot_initially_none() {
+        clear_budget_snapshot();
+        assert!(budget_snapshot().is_none());
+    }
+
+    #[test]
+    fn budget_snapshot_store_and_retrieve() {
+        let snap = make_budget_snapshot(100);
+        set_budget_snapshot(Some(snap));
+        let retrieved = budget_snapshot().expect("should be Some");
+        assert_eq!(retrieved.frame_idx, 100);
+        assert_eq!(retrieved.decision, BudgetDecision::Hold);
+        assert_eq!(retrieved.degradation_before, DegradationLevel::Full);
+        assert_eq!(retrieved.frames_observed, 100);
+        clear_budget_snapshot();
+    }
+
+    #[test]
+    fn budget_snapshot_overwrite() {
+        set_budget_snapshot(Some(make_budget_snapshot(1)));
+        set_budget_snapshot(Some(make_budget_snapshot(2)));
+        let snap = budget_snapshot().unwrap();
+        assert_eq!(snap.frame_idx, 2);
+        clear_budget_snapshot();
+    }
+
+    #[test]
+    fn budget_snapshot_clear() {
+        set_budget_snapshot(Some(make_budget_snapshot(10)));
+        clear_budget_snapshot();
+        assert!(budget_snapshot().is_none());
+    }
+
+    #[test]
+    fn budget_snapshot_with_conformal() {
+        let mut snap = make_budget_snapshot(50);
+        snap.decision = BudgetDecision::Degrade;
+        snap.conformal = Some(ConformalSnapshot {
+            bucket_key: "alt:DirtyRows:medium".into(),
+            sample_count: 30,
+            upper_us: 20000.0,
+            risk: true,
+        });
+        set_budget_snapshot(Some(snap));
+        let retrieved = budget_snapshot().unwrap();
+        assert_eq!(retrieved.decision, BudgetDecision::Degrade);
+        let conformal = retrieved.conformal.as_ref().unwrap();
+        assert_eq!(conformal.bucket_key, "alt:DirtyRows:medium");
+        assert_eq!(conformal.sample_count, 30);
+        assert!(conformal.risk);
+        clear_budget_snapshot();
+    }
+
+    #[test]
+    fn budget_snapshot_degradation_levels() {
+        let mut snap = make_budget_snapshot(1);
+        snap.degradation_before = DegradationLevel::Full;
+        snap.degradation_after = DegradationLevel::SimpleBorders;
+        snap.decision = BudgetDecision::Degrade;
+        set_budget_snapshot(Some(snap));
+        let retrieved = budget_snapshot().unwrap();
+        assert!(retrieved.degradation_after > retrieved.degradation_before);
+        clear_budget_snapshot();
+    }
+
+    #[test]
+    fn budget_snapshot_warmup_flag() {
+        let mut snap = make_budget_snapshot(1);
+        snap.in_warmup = true;
+        snap.frames_observed = 5;
+        set_budget_snapshot(Some(snap));
+        let retrieved = budget_snapshot().unwrap();
+        assert!(retrieved.in_warmup);
+        assert_eq!(retrieved.frames_observed, 5);
+        clear_budget_snapshot();
+    }
+
+    // ── set_*_snapshot(None) tests ──────────────────────────────────
+
+    #[test]
+    fn set_diff_none_clears() {
+        set_diff_snapshot(Some(make_diff_snapshot(1)));
+        set_diff_snapshot(None);
+        assert!(diff_snapshot().is_none());
+    }
+
+    #[test]
+    fn set_resize_none_clears() {
+        set_resize_snapshot(Some(make_resize_snapshot(1)));
+        set_resize_snapshot(None);
+        assert!(resize_snapshot().is_none());
+    }
+
+    #[test]
+    fn set_budget_none_clears() {
+        set_budget_snapshot(Some(make_budget_snapshot(1)));
+        set_budget_snapshot(None);
+        assert!(budget_snapshot().is_none());
+    }
+}

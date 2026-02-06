@@ -274,6 +274,127 @@ fn emit_mouse_jsonl(
     );
 }
 
+fn emit_mouse_capture_toggle_jsonl(
+    enabled: bool,
+    source: &str,
+    inline_mode: bool,
+    current: ScreenId,
+) {
+    let Some(logger) = mouse_jsonl_logger() else {
+        return;
+    };
+    let state = if enabled { "on" } else { "off" };
+    let mode = if inline_mode { "inline" } else { "alt" };
+    let current_label = current.title().to_string();
+    logger.log(
+        "mouse_capture_toggle",
+        &[
+            ("state", state),
+            ("mode", mode),
+            ("source", source),
+            ("current_screen", &current_label),
+        ],
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Central Mouse Dispatcher (bd-iuvb.17.2)
+// ---------------------------------------------------------------------------
+
+/// Tracks the current drag state for deterministic drag lifecycle management.
+///
+/// The state machine is: Idle → PendingDrag → Dragging → Idle.
+/// A PendingDrag transitions to Dragging when the mouse moves beyond threshold,
+/// or back to Idle on MouseUp (which is treated as a click).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DragPhase {
+    /// No drag in progress.
+    Idle,
+    /// Button pressed, waiting to see if it becomes a click or drag.
+    PendingDrag {
+        button: MouseButton,
+        start_x: u16,
+        start_y: u16,
+        hit_id: Option<HitId>,
+    },
+    /// Active drag in progress.
+    Dragging {
+        button: MouseButton,
+        start_x: u16,
+        start_y: u16,
+        last_x: u16,
+        last_y: u16,
+        hit_id: Option<HitId>,
+    },
+}
+
+/// Result of dispatching a mouse event through the priority chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MouseDispatchResult {
+    /// Event was consumed by the dispatcher; do not forward.
+    Consumed,
+    /// Event was not consumed; forward to subsequent handlers.
+    NotConsumed,
+}
+
+/// Minimum distance (in cells) before a pending-drag becomes a real drag.
+const DRAG_THRESHOLD: u16 = 2;
+
+/// Central mouse dispatcher that routes mouse events through the priority
+/// chain: palette → overlay → status → chrome → screen.
+///
+/// Invariants:
+/// - Click activation uses MouseUp (prevents accidental drags).
+/// - Hover state only updates when the target HitId actually changes.
+/// - Drag lifecycle is deterministic (no timing-based heuristics).
+/// - All events are logged via emit_mouse_jsonl when logging is enabled.
+#[derive(Debug)]
+struct MouseDispatcher {
+    /// Current hover target (None = no hit region under pointer).
+    hover_hit: Option<HitId>,
+    /// Current drag state machine phase.
+    drag: DragPhase,
+}
+
+impl Default for MouseDispatcher {
+    fn default() -> Self {
+        Self {
+            hover_hit: None,
+            drag: DragPhase::Idle,
+        }
+    }
+}
+
+impl MouseDispatcher {
+    /// Update hover state. Returns true if the hover target changed.
+    fn update_hover(&mut self, new_hit: Option<HitId>) -> bool {
+        if self.hover_hit != new_hit {
+            self.hover_hit = new_hit;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Cancel any in-progress drag, returning to Idle.
+    fn cancel_drag(&mut self) {
+        self.drag = DragPhase::Idle;
+    }
+
+    /// Check if a drag is currently in progress.
+    fn is_dragging(&self) -> bool {
+        matches!(self.drag, DragPhase::Dragging { .. })
+    }
+
+    /// Get the hit ID associated with the current drag, if any.
+    fn drag_hit_id(&self) -> Option<HitId> {
+        match self.drag {
+            DragPhase::PendingDrag { hit_id, .. } | DragPhase::Dragging { hit_id, .. } => hit_id,
+            DragPhase::Idle => None,
+        }
+    }
+}
+
 #[cfg(test)]
 #[derive(Debug, Clone, Copy)]
 struct ScreenInitEvent {
@@ -1333,6 +1454,8 @@ pub enum AppMsg {
     ToggleDebug,
     /// Toggle the performance HUD overlay.
     TogglePerfHud,
+    /// Toggle terminal mouse capture (mouse reporting).
+    ToggleMouseCapture,
     /// Toggle the explainability cockpit overlay.
     ToggleEvidenceLedger,
     /// Toggle the accessibility panel overlay.
@@ -2295,6 +2418,10 @@ pub struct AppModel {
     pub perf_hud_visible: bool,
     /// Whether the explainability cockpit overlay is visible.
     pub evidence_ledger_visible: bool,
+    /// Whether the demo is running in inline modes (scrollback preserved).
+    pub inline_mode: bool,
+    /// Whether terminal mouse capture is currently enabled.
+    pub mouse_capture_enabled: bool,
     /// Accessibility settings (high contrast, reduced motion, large text).
     pub a11y: theme::A11ySettings,
     /// Whether the accessibility panel is visible.
@@ -2347,6 +2474,8 @@ pub struct AppModel {
     pub history: HistoryManager,
     /// Optional telemetry hooks for A11y mode changes.
     a11y_telemetry: Option<A11yTelemetryHooks>,
+    /// Central mouse dispatcher for priority-based event routing (bd-iuvb.17.2).
+    mouse_dispatcher: MouseDispatcher,
 }
 
 impl Default for AppModel {
@@ -2379,6 +2508,8 @@ impl AppModel {
             debug_visible: false,
             perf_hud_visible: false,
             evidence_ledger_visible: false,
+            inline_mode: false,
+            mouse_capture_enabled: true,
             a11y: theme::A11ySettings::default(),
             a11y_panel_visible: false,
             base_theme,
@@ -2405,6 +2536,7 @@ impl AppModel {
             tick_stall_last_log: Cell::new(None),
             history: HistoryManager::default(),
             a11y_telemetry: None,
+            mouse_dispatcher: MouseDispatcher::default(),
         };
         app.refresh_palette_actions();
         app.screens
@@ -2689,6 +2821,14 @@ impl AppModel {
                 .with_category("View"),
         );
         actions.push(
+            ActionItem::new("cmd:toggle_mouse_capture", "Toggle Mouse Capture")
+                .with_description(
+                    "Enable or disable terminal mouse reporting (steals scrollback in inline mode)",
+                )
+                .with_tags(&["mouse", "scroll", "scrollback", "input"])
+                .with_category("Input"),
+        );
+        actions.push(
             ActionItem::new(
                 "cmd:toggle_evidence_ledger",
                 "Toggle Explainability Cockpit",
@@ -2869,6 +3009,35 @@ impl AppModel {
                 );
 
                 Cmd::None
+            }
+
+            AppMsg::ToggleMouseCapture => {
+                self.mouse_capture_enabled = !self.mouse_capture_enabled;
+                let state = if self.mouse_capture_enabled {
+                    "on"
+                } else {
+                    "off"
+                };
+                let mode = if self.inline_mode { "inline" } else { "alt" };
+                self.screens.action_timeline.record_command_event(
+                    self.tick_count,
+                    "Toggle mouse capture",
+                    vec![
+                        ("state".to_string(), state.to_string()),
+                        ("screen_mode".to_string(), mode.to_string()),
+                    ],
+                );
+                let source_label = match source {
+                    EventSource::User => "user",
+                    EventSource::Playback => "playback",
+                };
+                emit_mouse_capture_toggle_jsonl(
+                    self.mouse_capture_enabled,
+                    source_label,
+                    self.inline_mode,
+                    self.display_screen(),
+                );
+                Cmd::set_mouse_capture(self.mouse_capture_enabled)
             }
 
             AppMsg::ToggleEvidenceLedger => {
@@ -3289,6 +3458,10 @@ impl AppModel {
                             self.debug_visible = !self.debug_visible;
                             return Cmd::None;
                         }
+                        // Mouse capture toggle
+                        (KeyCode::F(6), _) => {
+                            return self.handle_msg(AppMsg::ToggleMouseCapture, source);
+                        }
                         // Performance HUD
                         (KeyCode::Char('p'), Modifiers::CTRL) => {
                             self.perf_hud_visible = !self.perf_hud_visible;
@@ -3331,6 +3504,10 @@ impl AppModel {
                         // Theme cycling
                         (KeyCode::Char('t'), Modifiers::CTRL) => {
                             return self.handle_msg(AppMsg::CycleTheme, source);
+                        }
+                        // Mouse capture toggle
+                        (KeyCode::Char('m'), Modifiers::NONE) => {
+                            return self.handle_msg(AppMsg::ToggleMouseCapture, source);
                         }
                         // Tab cycling (Tab/BackTab, or Shift+H/Shift+L for Vim users)
                         (KeyCode::Tab, Modifiers::NONE) => {
@@ -3522,6 +3699,8 @@ impl Model for AppModel {
             terminal_width: self.terminal_width,
             terminal_height: self.terminal_height,
             theme_name: theme::current_theme_name(),
+            inline_mode: self.inline_mode,
+            mouse_capture_enabled: self.mouse_capture_enabled,
             a11y_high_contrast: self.a11y.high_contrast,
             a11y_reduced_motion: self.a11y.reduced_motion,
             a11y_large_text: self.a11y.large_text,
@@ -3666,29 +3845,335 @@ impl AppModel {
         }
     }
 
-    fn handle_mouse_tab_click(&mut self, mouse: &MouseEvent) -> bool {
-        let is_click = matches!(
-            mouse.kind,
-            MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
-        );
-        let current = self.current_screen;
-        let hit = self.hit_test_screen(mouse);
+    // -----------------------------------------------------------------
+    // Central Mouse Dispatcher (bd-iuvb.17.2)
+    // -----------------------------------------------------------------
 
-        if !is_click {
-            let hit_id = hit.as_ref().map(|(id, _)| *id);
-            let target = hit.as_ref().map(|(_, screen)| *screen);
-            emit_mouse_jsonl(mouse, hit_id, "ignored", target, current);
-            return false;
+    /// Dispatch a mouse event through the priority chain.
+    ///
+    /// Priority order (highest first):
+    ///   1. Command palette (if visible) — consumes all mouse events
+    ///   2. Overlays (help, tour, a11y, perf HUD, evidence, debug)
+    ///   3. Status bar toggles
+    ///   4. Tab bar / category tabs
+    ///   5. Screen pane content
+    ///
+    /// Click activation uses MouseUp to prevent accidental drags.
+    /// Hover state is coalesced — only updated when the target changes.
+    fn dispatch_mouse(&mut self, mouse: &MouseEvent) -> MouseDispatchResult {
+        let current = self.current_screen;
+
+        // Hit test at the mouse position using the cached grid.
+        let hit = self.hit_test_full(mouse);
+        let hit_id = hit.map(|(id, _, _)| id);
+
+        // Update hover state (coalesced — only logs when target changes).
+        let hover_changed = self.mouse_dispatcher.update_hover(hit_id);
+        if hover_changed && matches!(mouse.kind, MouseEventKind::Moved | MouseEventKind::Drag(_)) {
+            emit_mouse_jsonl(mouse, hit_id, "hover_change", None, current);
         }
 
-        let Some((hit_id, target)) = hit else {
-            emit_mouse_jsonl(mouse, None, "no_hit", None, current);
-            return false;
+        // Handle drag state machine transitions.
+        match mouse.kind {
+            MouseEventKind::Down(button) => {
+                // Start a pending drag — will become click (on Up) or drag
+                // (on sufficient movement).
+                self.mouse_dispatcher.drag = DragPhase::PendingDrag {
+                    button,
+                    start_x: mouse.x,
+                    start_y: mouse.y,
+                    hit_id,
+                };
+                emit_mouse_jsonl(mouse, hit_id, "down", None, current);
+                // Down alone does not activate — wait for Up or drag.
+                return MouseDispatchResult::Consumed;
+            }
+            MouseEventKind::Drag(button) => {
+                match self.mouse_dispatcher.drag {
+                    DragPhase::PendingDrag {
+                        start_x,
+                        start_y,
+                        hit_id: drag_hit,
+                        ..
+                    } => {
+                        let dx = mouse.x.abs_diff(start_x);
+                        let dy = mouse.y.abs_diff(start_y);
+                        if dx >= DRAG_THRESHOLD || dy >= DRAG_THRESHOLD {
+                            self.mouse_dispatcher.drag = DragPhase::Dragging {
+                                button,
+                                start_x,
+                                start_y,
+                                last_x: mouse.x,
+                                last_y: mouse.y,
+                                hit_id: drag_hit,
+                            };
+                            emit_mouse_jsonl(mouse, drag_hit, "drag_start", None, current);
+                        }
+                        // Still pending — absorb the event.
+                        return MouseDispatchResult::Consumed;
+                    }
+                    DragPhase::Dragging {
+                        hit_id: drag_hit, ..
+                    } => {
+                        // Update last position.
+                        if let DragPhase::Dragging {
+                            ref mut last_x,
+                            ref mut last_y,
+                            ..
+                        } = self.mouse_dispatcher.drag
+                        {
+                            *last_x = mouse.x;
+                            *last_y = mouse.y;
+                        }
+                        emit_mouse_jsonl(mouse, drag_hit, "drag_move", None, current);
+                        return MouseDispatchResult::Consumed;
+                    }
+                    DragPhase::Idle => {
+                        // Spurious drag without a preceding Down — ignore.
+                    }
+                }
+            }
+            MouseEventKind::Up(button) => {
+                let was_dragging = self.mouse_dispatcher.is_dragging();
+                let drag_hit = self.mouse_dispatcher.drag_hit_id();
+
+                if was_dragging {
+                    // End drag.
+                    self.mouse_dispatcher.cancel_drag();
+                    emit_mouse_jsonl(mouse, drag_hit, "drag_end", None, current);
+                    return MouseDispatchResult::Consumed;
+                }
+
+                // Not dragging — this is a click activation (MouseUp).
+                self.mouse_dispatcher.cancel_drag();
+
+                // Only left-click activates targets.
+                if button != MouseButton::Left {
+                    emit_mouse_jsonl(mouse, hit_id, "click_non_left", None, current);
+                    return MouseDispatchResult::Consumed;
+                }
+
+                return self.dispatch_click(mouse, hit, current);
+            }
+            MouseEventKind::Moved => {
+                // Pure move (no button) — hover tracking only (handled above).
+                if hover_changed {
+                    return MouseDispatchResult::Consumed;
+                }
+                emit_mouse_jsonl(mouse, hit_id, "move", None, current);
+                return MouseDispatchResult::NotConsumed;
+            }
+            MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight => {
+                return self.dispatch_scroll(mouse, hit, current);
+            }
+        }
+
+        MouseDispatchResult::NotConsumed
+    }
+
+    /// Handle a left-click activation at the given hit position.
+    ///
+    /// Routes through priority: palette → overlay → status → tab → pane.
+    fn dispatch_click(
+        &mut self,
+        mouse: &MouseEvent,
+        hit: Option<(
+            HitId,
+            ftui_render::frame::HitRegion,
+            ftui_render::frame::HitData,
+        )>,
+        current: ScreenId,
+    ) -> MouseDispatchResult {
+        use crate::chrome::HitLayer;
+
+        // 1) Command palette (highest priority) — if visible, clicks outside
+        //    dismiss it; clicks inside are handled by palette widget.
+        if self.command_palette.is_visible() {
+            emit_mouse_jsonl(mouse, hit.map(|h| h.0), "palette_dismiss", None, current);
+            self.command_palette.close();
+            return MouseDispatchResult::Consumed;
+        }
+
+        let Some((hit_id, _region, _data)) = hit else {
+            emit_mouse_jsonl(mouse, None, "click_no_hit", None, current);
+            return MouseDispatchResult::NotConsumed;
         };
 
-        if target == self.current_screen {
-            emit_mouse_jsonl(mouse, Some(hit_id), "no_change", Some(target), current);
-            return false;
+        let layer = crate::chrome::classify_hit(hit_id);
+
+        match layer {
+            // 2) Overlay clicks.
+            HitLayer::Overlay(raw) => {
+                let action = self.handle_overlay_click(raw);
+                emit_mouse_jsonl(mouse, Some(hit_id), action, None, current);
+                MouseDispatchResult::Consumed
+            }
+            // 3) Status bar toggles.
+            HitLayer::StatusToggle(raw) => {
+                let action = self.handle_status_click(raw);
+                emit_mouse_jsonl(mouse, Some(hit_id), action, None, current);
+                MouseDispatchResult::Consumed
+            }
+            // 4) Tab bar.
+            HitLayer::Tab(target) => {
+                self.handle_tab_click(mouse, hit_id, target, current);
+                MouseDispatchResult::Consumed
+            }
+            // 4b) Category tab.
+            HitLayer::Category(cat) => {
+                if let Some(first) = screens::first_in_category(cat) {
+                    self.handle_tab_click(mouse, hit_id, first, current);
+                }
+                MouseDispatchResult::Consumed
+            }
+            // 5) Screen pane content — forward to screen.
+            HitLayer::Pane(_screen) => {
+                emit_mouse_jsonl(mouse, Some(hit_id), "pane_click", None, current);
+                // Not consumed — let the event flow to the screen's update.
+                MouseDispatchResult::NotConsumed
+            }
+            // Unknown hit ID — forward to screen.
+            HitLayer::Unknown => {
+                emit_mouse_jsonl(mouse, Some(hit_id), "unknown_hit", None, current);
+                MouseDispatchResult::NotConsumed
+            }
+        }
+    }
+
+    /// Handle a scroll event at the given hit position.
+    fn dispatch_scroll(
+        &mut self,
+        mouse: &MouseEvent,
+        hit: Option<(
+            HitId,
+            ftui_render::frame::HitRegion,
+            ftui_render::frame::HitData,
+        )>,
+        current: ScreenId,
+    ) -> MouseDispatchResult {
+        let hit_id = hit.map(|h| h.0);
+
+        // Scroll on command palette list.
+        if self.command_palette.is_visible() {
+            emit_mouse_jsonl(mouse, hit_id, "palette_scroll", None, current);
+            // Forward scroll to palette (handled via standard event routing).
+            return MouseDispatchResult::NotConsumed;
+        }
+
+        // Tab bar scroll = cycle screens.
+        if let Some((id, _, _)) = hit {
+            let layer = crate::chrome::classify_hit(id);
+            if matches!(layer, crate::chrome::HitLayer::Tab(_)) {
+                match mouse.kind {
+                    MouseEventKind::ScrollDown => {
+                        let target = self.display_screen().next();
+                        if self.tour.is_active() {
+                            self.stop_tour(false, "mouse_scroll");
+                        }
+                        self.current_screen = target;
+                        emit_mouse_jsonl(mouse, Some(id), "scroll_next_tab", None, current);
+                        return MouseDispatchResult::Consumed;
+                    }
+                    MouseEventKind::ScrollUp => {
+                        let target = self.display_screen().prev();
+                        if self.tour.is_active() {
+                            self.stop_tour(false, "mouse_scroll");
+                        }
+                        self.current_screen = target;
+                        emit_mouse_jsonl(mouse, Some(id), "scroll_prev_tab", None, current);
+                        return MouseDispatchResult::Consumed;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Otherwise, forward scroll to screen content.
+        emit_mouse_jsonl(mouse, hit_id, "scroll_forward", None, current);
+        MouseDispatchResult::NotConsumed
+    }
+
+    /// Handle a click on an overlay element.
+    fn handle_overlay_click(&mut self, raw_id: u32) -> &'static str {
+        use crate::chrome;
+        match raw_id {
+            chrome::OVERLAY_HELP_CLOSE | chrome::OVERLAY_HELP_CONTENT => {
+                self.help_visible = false;
+                "overlay_help_close"
+            }
+            chrome::OVERLAY_TOUR => {
+                if self.tour.is_active() {
+                    self.stop_tour(false, "mouse_overlay");
+                }
+                "overlay_tour_click"
+            }
+            chrome::OVERLAY_A11Y => {
+                self.a11y_panel_visible = false;
+                "overlay_a11y_close"
+            }
+            chrome::OVERLAY_PERF_HUD => {
+                self.perf_hud_visible = false;
+                "overlay_perf_close"
+            }
+            chrome::OVERLAY_EVIDENCE => {
+                self.evidence_ledger_visible = false;
+                "overlay_evidence_close"
+            }
+            chrome::OVERLAY_DEBUG => {
+                self.debug_visible = false;
+                "overlay_debug_close"
+            }
+            _ => "overlay_unknown",
+        }
+    }
+
+    /// Handle a click on a status bar toggle.
+    fn handle_status_click(&mut self, raw_id: u32) -> &'static str {
+        use crate::chrome;
+        match raw_id {
+            chrome::STATUS_HELP_TOGGLE => {
+                self.help_visible = !self.help_visible;
+                "status_toggle_help"
+            }
+            chrome::STATUS_PALETTE_TOGGLE => {
+                if self.command_palette.is_visible() {
+                    self.command_palette.close();
+                } else {
+                    self.command_palette.open();
+                    self.refresh_palette_actions();
+                }
+                "status_toggle_palette"
+            }
+            chrome::STATUS_A11Y_TOGGLE => {
+                self.a11y_panel_visible = !self.a11y_panel_visible;
+                "status_toggle_a11y"
+            }
+            chrome::STATUS_PERF_TOGGLE => {
+                self.perf_hud_visible = !self.perf_hud_visible;
+                "status_toggle_perf"
+            }
+            chrome::STATUS_DEBUG_TOGGLE => {
+                self.debug_visible = !self.debug_visible;
+                "status_toggle_debug"
+            }
+            _ => "status_unknown",
+        }
+    }
+
+    /// Handle a tab bar click that switches to a different screen.
+    fn handle_tab_click(
+        &mut self,
+        mouse: &MouseEvent,
+        hit_id: HitId,
+        target: ScreenId,
+        current: ScreenId,
+    ) {
+        if target == current {
+            emit_mouse_jsonl(mouse, Some(hit_id), "tab_no_change", Some(target), current);
+            return;
         }
 
         if self.tour.is_active() {
@@ -3706,15 +4191,30 @@ impl AppModel {
             ],
         );
         emit_mouse_jsonl(mouse, Some(hit_id), "switch_screen", Some(target), current);
-        true
     }
 
-    fn hit_test_screen(&self, mouse: &MouseEvent) -> Option<(HitId, ScreenId)> {
+    /// Legacy wrapper — delegates to the central mouse dispatcher.
+    fn handle_mouse_tab_click(&mut self, mouse: &MouseEvent) -> bool {
+        self.dispatch_mouse(mouse) == MouseDispatchResult::Consumed
+    }
+
+    /// Full hit test returning (HitId, HitRegion, HitData).
+    fn hit_test_full(
+        &self,
+        mouse: &MouseEvent,
+    ) -> Option<(
+        HitId,
+        ftui_render::frame::HitRegion,
+        ftui_render::frame::HitData,
+    )> {
         let grid = self.last_hit_grid.borrow();
-        let hit = grid
-            .as_ref()
-            .and_then(|grid| grid.hit_test(mouse.x, mouse.y));
-        let (id, _region, _data) = hit?;
+        grid.as_ref()
+            .and_then(|grid| grid.hit_test(mouse.x, mouse.y))
+    }
+
+    /// Hit test returning (HitId, ScreenId) for screen-level routing.
+    fn hit_test_screen(&self, mouse: &MouseEvent) -> Option<(HitId, ScreenId)> {
+        let (id, _region, _data) = self.hit_test_full(mouse)?;
         let target = crate::chrome::screen_from_any_hit_id(id)?;
         Some((id, target))
     }
@@ -3821,6 +4321,9 @@ impl AppModel {
                             "Toggle performance HUD (palette)",
                             vec![("state".to_string(), state.to_string())],
                         );
+                    }
+                    "cmd:toggle_mouse_capture" => {
+                        return self.handle_msg(AppMsg::ToggleMouseCapture, EventSource::User);
                     }
                     "cmd:toggle_evidence_ledger" => {
                         self.evidence_ledger_visible = !self.evidence_ledger_visible;

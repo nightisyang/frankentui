@@ -2189,9 +2189,7 @@ impl<M: Model, W: Write + Send> Program<M, W> {
                 self.load_state();
             }
             Cmd::SetMouseCapture(enabled) => {
-                // TODO(bd-iuvb.17.1): call self.session.set_mouse_capture(enabled)
-                // once TerminalSession gains the method.
-                let _ = enabled;
+                self.session.set_mouse_capture(enabled)?;
             }
         }
         Ok(())

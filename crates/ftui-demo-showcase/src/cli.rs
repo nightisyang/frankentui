@@ -25,7 +25,8 @@ OPTIONS:
     --tour               Start the guided tour on launch
     --tour-speed=F       Guided tour speed multiplier (default: 1.0)
     --tour-start-step=N  Start tour at step N, 1-indexed (default: 1)
-    --no-mouse           Disable mouse event capture
+    --mouse=MODE         Mouse capture mode: 'on', 'off', or 'auto' (default: auto)
+    --no-mouse           Alias for --mouse=off
     --vfx-harness        Run deterministic VFX harness (locks effect/size/tick)
     --vfx-effect=NAME    VFX harness effect name (e.g., doom, quake, plasma)
     --vfx-tick-ms=N      VFX harness tick cadence in ms (default: 16)
@@ -100,6 +101,7 @@ KEYBINDINGS:
     q / Ctrl+C            Quit
 
 ENVIRONMENT VARIABLES:
+    FTUI_DEMO_MOUSE           Mouse mode override: 'on', 'off', or 'auto'
     FTUI_DEMO_DETERMINISTIC  Force deterministic fixtures (seed/time)
     FTUI_DEMO_SEED           Deterministic seed for demo fixtures
     FTUI_DEMO_TICK_MS        Override demo tick interval in ms
@@ -149,8 +151,9 @@ pub struct Opts {
     pub tour_speed: f64,
     /// Guided tour starting step (1-indexed).
     pub tour_start_step: usize,
-    /// Whether mouse events are enabled.
-    pub mouse: bool,
+    /// Mouse capture mode: "on", "off", or "auto".
+    /// Auto means AltScreen=on, Inline=off.
+    pub mouse_mode: String,
     /// Auto-exit after this many milliseconds (0 = disabled).
     pub exit_after_ms: u64,
     /// Enable deterministic VFX harness mode.
@@ -208,7 +211,7 @@ impl Default for Opts {
             tour: false,
             tour_speed: 1.0,
             tour_start_step: 1,
-            mouse: true,
+            mouse_mode: "auto".into(),
             exit_after_ms: 0,
             vfx_harness: false,
             vfx_effect: None,
@@ -304,6 +307,12 @@ impl Opts {
             && let Ok(n) = val.parse()
         {
             opts.tour_start_step = n;
+        }
+        if let Some(val) = get_env("FTUI_DEMO_MOUSE") {
+            let lower = val.trim().to_ascii_lowercase();
+            if lower == "on" || lower == "off" || lower == "auto" {
+                opts.mouse_mode = lower;
+            }
         }
         if let Some(val) = get_env("FTUI_DEMO_EXIT_AFTER_MS")
             && let Ok(n) = val.parse()
@@ -411,7 +420,7 @@ impl Opts {
                     return Err(ParseError::Version);
                 }
                 "--no-mouse" => {
-                    opts.mouse = false;
+                    opts.mouse_mode = "off".into();
                 }
                 "--vfx-harness" => {
                     opts.vfx_harness = true;
@@ -426,7 +435,18 @@ impl Opts {
                     opts.tour = true;
                 }
                 other => {
-                    if let Some(val) = other.strip_prefix("--screen-mode=") {
+                    if let Some(val) = other.strip_prefix("--mouse=") {
+                        let lower = val.to_ascii_lowercase();
+                        match lower.as_str() {
+                            "on" | "off" | "auto" => opts.mouse_mode = lower,
+                            _ => {
+                                return Err(ParseError::InvalidValue {
+                                    flag: "--mouse",
+                                    value: val.to_string(),
+                                });
+                            }
+                        }
+                    } else if let Some(val) = other.strip_prefix("--screen-mode=") {
                         opts.screen_mode = val.to_string();
                     } else if let Some(val) = other.strip_prefix("--ui-height=") {
                         match val.parse() {
@@ -620,6 +640,22 @@ impl Opts {
     }
 }
 
+impl Opts {
+    /// Resolve whether mouse capture should be initially enabled based on the
+    /// mouse mode setting and the active screen mode.
+    ///
+    /// - `"on"` → always enabled
+    /// - `"off"` → always disabled
+    /// - `"auto"` → enabled for AltScreen, disabled for Inline/InlineAuto
+    pub fn resolve_mouse_enabled(&self, is_alt_screen: bool) -> bool {
+        match self.mouse_mode.as_str() {
+            "on" => true,
+            "off" => false,
+            _ => is_alt_screen,
+        }
+    }
+}
+
 fn parse_size(raw: &str) -> Option<(u16, u16)> {
     let trimmed = raw.trim();
     let mut parts = trimmed.split(['x', 'X']);
@@ -661,7 +697,7 @@ mod tests {
         assert!(!opts.tour);
         assert_eq!(opts.tour_speed, 1.0);
         assert_eq!(opts.tour_start_step, 1);
-        assert!(opts.mouse);
+        assert_eq!(opts.mouse_mode, "auto");
         assert_eq!(opts.exit_after_ms, 0);
         assert!(!opts.vfx_harness);
         assert!(opts.vfx_effect.is_none());
@@ -727,6 +763,7 @@ mod tests {
 
     #[test]
     fn help_text_contains_env_vars() {
+        assert!(HELP_TEXT.contains("FTUI_DEMO_MOUSE"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_SCREEN_MODE"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_EXIT_AFTER_MS"));
         assert!(HELP_TEXT.contains("FTUI_DEMO_UI_MIN_HEIGHT"));
@@ -924,5 +961,95 @@ mod tests {
                 "args={args:?} expected UnknownArg for --mystery-flag, got {err:?}"
             );
         }
+    }
+
+    #[test]
+    fn mouse_mode_cli_on() {
+        let opts = parse_with_env(["--mouse=on"], &[]).expect("parse");
+        assert_eq!(opts.mouse_mode, "on");
+    }
+
+    #[test]
+    fn mouse_mode_cli_off() {
+        let opts = parse_with_env(["--mouse=off"], &[]).expect("parse");
+        assert_eq!(opts.mouse_mode, "off");
+    }
+
+    #[test]
+    fn mouse_mode_cli_auto() {
+        let opts = parse_with_env(["--mouse=auto"], &[]).expect("parse");
+        assert_eq!(opts.mouse_mode, "auto");
+    }
+
+    #[test]
+    fn mouse_mode_no_mouse_alias() {
+        let opts = parse_with_env(["--no-mouse"], &[]).expect("parse");
+        assert_eq!(opts.mouse_mode, "off");
+    }
+
+    #[test]
+    fn mouse_mode_invalid() {
+        let err = parse_with_env(["--mouse=maybe"], &[]);
+        assert!(
+            matches!(
+                err,
+                Err(ParseError::InvalidValue {
+                    flag: "--mouse",
+                    ..
+                })
+            ),
+            "expected InvalidValue for --mouse=maybe, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn mouse_mode_env_override() {
+        let opts =
+            parse_with_env(Vec::<String>::new(), &[("FTUI_DEMO_MOUSE", "off")]).expect("parse");
+        assert_eq!(opts.mouse_mode, "off");
+    }
+
+    #[test]
+    fn mouse_mode_cli_overrides_env() {
+        let opts = parse_with_env(["--mouse=on"], &[("FTUI_DEMO_MOUSE", "off")]).expect("parse");
+        assert_eq!(opts.mouse_mode, "on");
+    }
+
+    #[test]
+    fn resolve_mouse_enabled_auto_altscreen() {
+        let opts = Opts {
+            mouse_mode: "auto".into(),
+            ..Opts::default()
+        };
+        assert!(opts.resolve_mouse_enabled(true));
+    }
+
+    #[test]
+    fn resolve_mouse_enabled_auto_inline() {
+        let opts = Opts {
+            mouse_mode: "auto".into(),
+            ..Opts::default()
+        };
+        assert!(!opts.resolve_mouse_enabled(false));
+    }
+
+    #[test]
+    fn resolve_mouse_enabled_on() {
+        let opts = Opts {
+            mouse_mode: "on".into(),
+            ..Opts::default()
+        };
+        assert!(opts.resolve_mouse_enabled(false));
+        assert!(opts.resolve_mouse_enabled(true));
+    }
+
+    #[test]
+    fn resolve_mouse_enabled_off() {
+        let opts = Opts {
+            mouse_mode: "off".into(),
+            ..Opts::default()
+        };
+        assert!(!opts.resolve_mouse_enabled(false));
+        assert!(!opts.resolve_mouse_enabled(true));
     }
 }

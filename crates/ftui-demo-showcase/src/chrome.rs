@@ -27,6 +27,39 @@ pub const TAB_HIT_BASE: u32 = 1000;
 pub const CATEGORY_HIT_BASE: u32 = 2000;
 /// Base hit ID for clickable panes (one per screen).
 pub const PANE_HIT_BASE: u32 = 4000;
+/// Base hit ID for overlay elements (help, a11y panel, tour).
+pub const OVERLAY_HIT_BASE: u32 = 5000;
+/// Base hit ID for status bar toggles.
+pub const STATUS_HIT_BASE: u32 = 6000;
+
+// Overlay hit ID sub-ranges within OVERLAY_HIT_BASE.
+/// Help overlay close button.
+pub const OVERLAY_HELP_CLOSE: u32 = OVERLAY_HIT_BASE;
+/// Help overlay content area (for scroll).
+pub const OVERLAY_HELP_CONTENT: u32 = OVERLAY_HIT_BASE + 1;
+/// Tour overlay area.
+pub const OVERLAY_TOUR: u32 = OVERLAY_HIT_BASE + 10;
+/// A11y panel area.
+pub const OVERLAY_A11Y: u32 = OVERLAY_HIT_BASE + 20;
+/// Performance HUD area.
+pub const OVERLAY_PERF_HUD: u32 = OVERLAY_HIT_BASE + 30;
+/// Evidence ledger area.
+pub const OVERLAY_EVIDENCE: u32 = OVERLAY_HIT_BASE + 40;
+/// Debug overlay area.
+pub const OVERLAY_DEBUG: u32 = OVERLAY_HIT_BASE + 50;
+
+// Status bar toggle hit IDs within STATUS_HIT_BASE.
+/// Status bar: help toggle.
+pub const STATUS_HELP_TOGGLE: u32 = STATUS_HIT_BASE;
+/// Status bar: palette toggle.
+pub const STATUS_PALETTE_TOGGLE: u32 = STATUS_HIT_BASE + 1;
+/// Status bar: a11y toggle.
+pub const STATUS_A11Y_TOGGLE: u32 = STATUS_HIT_BASE + 2;
+/// Status bar: perf HUD toggle.
+pub const STATUS_PERF_TOGGLE: u32 = STATUS_HIT_BASE + 3;
+/// Status bar: debug toggle.
+pub const STATUS_DEBUG_TOGGLE: u32 = STATUS_HIT_BASE + 4;
+
 const TAB_ACCENT_ALPHA: u8 = 220;
 
 /// Convert a hit ID back to a ScreenId if it falls in the tab range.
@@ -67,6 +100,56 @@ pub fn screen_from_any_hit_id(id: HitId) -> Option<ScreenId> {
     screen_from_hit_id(id)
         .or_else(|| screen_from_pane_hit_id(id))
         .or_else(|| category_from_hit_id(id).and_then(screens::first_in_category))
+}
+
+/// Classify a hit ID into a dispatch layer for routing priority.
+///
+/// Priority order (highest first):
+///   1. Overlay (palette, help, tour, a11y, perf HUD, evidence, debug)
+///   2. Status bar toggles
+///   3. Tab bar / category tabs
+///   4. Pane (screen content)
+///   5. Unknown
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HitLayer {
+    /// Hit falls in an overlay region.
+    Overlay(u32),
+    /// Hit falls in a status bar toggle.
+    StatusToggle(u32),
+    /// Hit resolves to a tab bar entry.
+    Tab(ScreenId),
+    /// Hit resolves to a category tab.
+    Category(ScreenCategory),
+    /// Hit resolves to a screen pane content area.
+    Pane(ScreenId),
+    /// Unknown hit ID — pass to screen for handling.
+    Unknown,
+}
+
+/// Classify a hit ID into its dispatch layer.
+pub fn classify_hit(id: HitId) -> HitLayer {
+    let raw = id.id();
+    // Overlay range: OVERLAY_HIT_BASE..STATUS_HIT_BASE
+    if (OVERLAY_HIT_BASE..STATUS_HIT_BASE).contains(&raw) {
+        return HitLayer::Overlay(raw);
+    }
+    // Status bar range: STATUS_HIT_BASE..STATUS_HIT_BASE+100
+    if (STATUS_HIT_BASE..STATUS_HIT_BASE + 100).contains(&raw) {
+        return HitLayer::StatusToggle(raw);
+    }
+    // Tab bar
+    if let Some(screen) = screen_from_hit_id(id) {
+        return HitLayer::Tab(screen);
+    }
+    // Category tab
+    if let Some(cat) = category_from_hit_id(id) {
+        return HitLayer::Category(cat);
+    }
+    // Pane
+    if let Some(screen) = screen_from_pane_hit_id(id) {
+        return HitLayer::Pane(screen);
+    }
+    HitLayer::Unknown
 }
 
 /// Register a pane-sized hit region to route clicks to a screen.
@@ -475,6 +558,10 @@ pub struct StatusBarState<'a> {
     pub terminal_width: u16,
     pub terminal_height: u16,
     pub theme_name: &'a str,
+    /// Whether the demo is running in inline modes (scrollback preserved).
+    pub inline_mode: bool,
+    /// Whether terminal mouse capture is currently enabled.
+    pub mouse_capture_enabled: bool,
     pub a11y_high_contrast: bool,
     pub a11y_reduced_motion: bool,
     pub a11y_large_text: bool,
@@ -533,6 +620,25 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
         String::new()
     };
 
+    // Mouse capture indicator (bd-iuvb.17.1)
+    let mouse_label_compact = if state.mouse_capture_enabled {
+        "  Mouse:ON".to_string()
+    } else {
+        "  Mouse:OFF".to_string()
+    };
+    let mouse_label_full = if state.inline_mode {
+        if state.mouse_capture_enabled {
+            "  Mouse: ON (UI scroll)".to_string()
+        } else {
+            "  Mouse: OFF (scrollback)".to_string()
+        }
+    } else if state.mouse_capture_enabled {
+        "  Mouse: ON".to_string()
+    } else {
+        "  Mouse: OFF".to_string()
+    };
+    let mut mouse_label = mouse_label_full;
+
     // Style definitions for segments
     let title_style = theme::apply_large_text(
         Style::new()
@@ -549,6 +655,21 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
             .fg(theme::fg::MUTED)
             .attrs(StyleFlags::DIM),
     );
+    let mouse_style = if state.mouse_capture_enabled {
+        theme::apply_large_text(
+            Style::new()
+                .bg(bg_color)
+                .fg(theme::accent::INFO)
+                .attrs(StyleFlags::BOLD),
+        )
+    } else {
+        theme::apply_large_text(
+            Style::new()
+                .bg(bg_color)
+                .fg(theme::fg::MUTED)
+                .attrs(StyleFlags::DIM),
+        )
+    };
     let time_style = theme::apply_large_text(Style::new().bg(bg_color).fg(theme::fg::SECONDARY));
     let pad_style = Style::new().bg(bg_color);
 
@@ -581,6 +702,7 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
         + 1
         + display_width(&position_str)
         + display_width(&theme_str)
+        + display_width(&mouse_label)
         + display_width(&a11y_label)
         + display_width(&undo_label);
     let mut total_content = left_content_len + center_content_len + right_content_len;
@@ -597,6 +719,19 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
             + 1
             + display_width(&position_str)
             + display_width(&theme_str)
+            + display_width(&mouse_label)
+            + display_width(&a11y_label)
+            + display_width(&undo_label);
+        total_content = left_content_len + center_content_len + right_content_len;
+    }
+    if total_content > available && mouse_label != mouse_label_compact {
+        mouse_label = mouse_label_compact;
+        left_content_len = 1
+            + display_width(state.screen_title)
+            + 1
+            + display_width(&position_str)
+            + display_width(&theme_str)
+            + display_width(&mouse_label)
             + display_width(&a11y_label)
             + display_width(&undo_label);
         total_content = left_content_len + center_content_len + right_content_len;
@@ -609,13 +744,26 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
             + 1
             + display_width(&position_str)
             + display_width(&theme_str)
+            + display_width(&mouse_label)
+            + display_width(&a11y_label)
+            + display_width(&undo_label);
+        total_content = left_content_len + center_content_len + right_content_len;
+    }
+    if total_content > available && !mouse_label.is_empty() {
+        mouse_label.clear();
+        left_content_len = 1
+            + display_width(state.screen_title)
+            + 1
+            + display_width(&position_str)
+            + display_width(&theme_str)
+            + display_width(&mouse_label)
             + display_width(&a11y_label)
             + display_width(&undo_label);
         total_content = left_content_len + center_content_len + right_content_len;
     }
 
     // Build spans for the line
-    let mut spans = Vec::with_capacity(12);
+    let mut spans = Vec::with_capacity(14);
 
     // Left segment: title with accent, position, theme
     spans.push(Span::styled(" ", pad_style));
@@ -623,6 +771,9 @@ pub fn render_status_bar(state: &StatusBarState<'_>, frame: &mut Frame, area: Re
     spans.push(Span::styled(" ", pad_style));
     spans.push(Span::styled(position_str, position_style));
     spans.push(Span::styled(theme_str, muted_style));
+    if !mouse_label.is_empty() {
+        spans.push(Span::styled(mouse_label, mouse_style));
+    }
     if !a11y_label.is_empty() {
         spans.push(Span::styled(a11y_label, dim_style));
     }
@@ -799,6 +950,7 @@ fn build_help_overlay_hints(current: ScreenId, screen_bindings: &[HelpEntry]) ->
         // View
         .global_entry_categorized("?", "Toggle this help overlay", HelpCategory::View)
         .global_entry_categorized("Esc", "Dismiss top overlay", HelpCategory::View)
+        .global_entry_categorized("m / F6", "Toggle mouse capture", HelpCategory::View)
         .global_entry_categorized("Ctrl+P", "Toggle performance HUD", HelpCategory::View)
         .global_entry_categorized("Shift+A", "Toggle A11y panel", HelpCategory::View)
         .global_entry_categorized("F12", "Toggle debug overlay", HelpCategory::View)
@@ -1069,6 +1221,8 @@ mod tests {
             terminal_width: 120,
             terminal_height: 40,
             theme_name: "default",
+            inline_mode: false,
+            mouse_capture_enabled: true,
             a11y_high_contrast: false,
             a11y_reduced_motion: false,
             a11y_large_text: false,
@@ -1127,6 +1281,12 @@ mod tests {
                 .iter()
                 .any(|e| e.key == "[Ctrl+K]" && e.desc.contains("palette")),
             "expected [Ctrl+K] global palette entry, got: {entries:?}"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|e| e.key == "[F6]" && e.desc.contains("mouse")),
+            "expected [F6] mouse capture entry, got: {entries:?}"
         );
     }
 

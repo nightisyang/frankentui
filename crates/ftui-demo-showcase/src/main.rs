@@ -61,7 +61,7 @@ fn main() {
         let frame_timing = model.perf_logger().map(FrameTimingConfig::new);
         let config = ProgramConfig {
             screen_mode,
-            mouse: opts.mouse,
+            mouse: opts.resolve_mouse_enabled(matches!(screen_mode, ScreenMode::AltScreen)),
             budget,
             frame_timing,
             forced_size: Some((opts.vfx_cols.max(1), opts.vfx_rows.max(1))),
@@ -145,6 +145,11 @@ fn main() {
     };
 
     let mut model = AppModel::new();
+    model.inline_mode = matches!(
+        screen_mode,
+        ScreenMode::Inline { .. } | ScreenMode::InlineAuto { .. }
+    );
+    model.mouse_capture_enabled = opts.resolve_mouse_enabled(!model.inline_mode);
     model.current_screen = start_screen;
     model.exit_after_ms = opts.exit_after_ms;
     if opts.tour || start_screen == ScreenId::GuidedTour {
@@ -168,7 +173,7 @@ fn main() {
 
     let config = ProgramConfig {
         screen_mode,
-        mouse: opts.mouse,
+        mouse: opts.resolve_mouse_enabled(matches!(screen_mode, ScreenMode::AltScreen)),
         budget,
         ..ProgramConfig::default()
     };

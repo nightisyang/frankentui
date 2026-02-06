@@ -281,7 +281,7 @@ run_in_pty() {
 if $QUICK; then
     TOTAL_STEPS=3
 else
-    TOTAL_STEPS=24  # Updated: added explainability cockpit evidence step
+    TOTAL_STEPS=25  # Updated: added mouse capture policy assertion (bd-iuvb.17.1)
 fi
 
 echo "=============================================="
@@ -394,6 +394,38 @@ if $CAN_SMOKE; then
     # ────────────────────────────────────────────────────────────────────────
     run_smoke_step "Smoke test (inline)" "$LOG_DIR/06_smoke_inline.log" \
         "run_in_pty 'FTUI_DEMO_EXIT_AFTER_MS=3000 FTUI_DEMO_SCREEN_MODE=inline timeout 10 $DEMO_BIN'" || true
+
+    # ────────────────────────────────────────────────────────────────────────
+    # Step 6b: Mouse Capture Policy (bd-iuvb.17.1)
+    #
+    # Assert that:
+    # - Alt-screen defaults mouse capture ON (mouse reporting enabled)
+    # - Inline defaults mouse capture OFF (scrollback preserved)
+    # ────────────────────────────────────────────────────────────────────────
+    run_step "Mouse capture policy (inline vs alt)" "$LOG_DIR/06b_mouse_policy.log" \
+        bash -lc '
+            set -euo pipefail
+            ALT_LOG="'"$LOG_DIR"'/05_smoke_alt.log"
+            INLINE_LOG="'"$LOG_DIR"'/06_smoke_inline.log"
+            MOUSE_ENABLE=$'\''\x1b[?1000h'\''
+
+            echo "Alt log:    $ALT_LOG"
+            echo "Inline log: $INLINE_LOG"
+
+            if grep -aFq "$MOUSE_ENABLE" "$ALT_LOG"; then
+                echo "alt-screen: mouse capture enabled (found ?1000h)"
+            else
+                echo "alt-screen: expected mouse capture enabled, but did not find ?1000h"
+                exit 1
+            fi
+
+            if grep -aFq "$MOUSE_ENABLE" "$INLINE_LOG"; then
+                echo "inline: expected mouse capture disabled, but found ?1000h"
+                exit 1
+            else
+                echo "inline: mouse capture disabled (no ?1000h)"
+            fi
+        ' || true
 
     # ────────────────────────────────────────────────────────────────────────
     # Step 7: Screen Navigation
@@ -2489,6 +2521,7 @@ PY
 else
     # No PTY support — skip all smoke/interactive tests
     for step in "Smoke test (alt-screen)" "Smoke test (inline)" \
+                "Mouse capture policy (inline vs alt)" \
                 "Screen navigation" "Search test (Shakespeare)" \
                 "Resize (SIGWINCH) test" "VisualEffects backdrop" \
                 "Layout Inspector" "Terminal caps report" "i18n stress report" \

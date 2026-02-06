@@ -271,4 +271,337 @@ pub mod text_width {
         }
         text.graphemes(true).map(grapheme_width).sum()
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        // ── env helpers (testable without OnceLock) ─────────────────
+
+        #[test]
+        fn cjk_width_env_explicit_true() {
+            let get = |key: &str| match key {
+                "FTUI_GLYPH_DOUBLE_WIDTH" => Some("1".into()),
+                _ => None,
+            };
+            assert!(cjk_width_from_env(get));
+        }
+
+        #[test]
+        fn cjk_width_env_explicit_false() {
+            let get = |key: &str| match key {
+                "FTUI_GLYPH_DOUBLE_WIDTH" => Some("0".into()),
+                _ => None,
+            };
+            assert!(!cjk_width_from_env(get));
+        }
+
+        #[test]
+        fn cjk_width_env_text_cjk_key() {
+            let get = |key: &str| match key {
+                "FTUI_TEXT_CJK_WIDTH" => Some("true".into()),
+                _ => None,
+            };
+            assert!(cjk_width_from_env(get));
+        }
+
+        #[test]
+        fn cjk_width_env_fallback_key() {
+            let get = |key: &str| match key {
+                "FTUI_CJK_WIDTH" => Some("yes".into()),
+                _ => None,
+            };
+            assert!(cjk_width_from_env(get));
+        }
+
+        #[test]
+        fn cjk_width_env_japanese_locale() {
+            let get = |key: &str| match key {
+                "LC_CTYPE" => Some("ja_JP.UTF-8".into()),
+                _ => None,
+            };
+            assert!(cjk_width_from_env(get));
+        }
+
+        #[test]
+        fn cjk_width_env_chinese_locale() {
+            let get = |key: &str| match key {
+                "LANG" => Some("zh_CN.UTF-8".into()),
+                _ => None,
+            };
+            assert!(cjk_width_from_env(get));
+        }
+
+        #[test]
+        fn cjk_width_env_korean_locale() {
+            let get = |key: &str| match key {
+                "LC_CTYPE" => Some("ko_KR.UTF-8".into()),
+                _ => None,
+            };
+            assert!(cjk_width_from_env(get));
+        }
+
+        #[test]
+        fn cjk_width_env_english_locale_returns_false() {
+            let get = |key: &str| match key {
+                "LANG" => Some("en_US.UTF-8".into()),
+                _ => None,
+            };
+            assert!(!cjk_width_from_env(get));
+        }
+
+        #[test]
+        fn cjk_width_env_no_vars_returns_false() {
+            let get = |_: &str| -> Option<String> { None };
+            assert!(!cjk_width_from_env(get));
+        }
+
+        #[test]
+        fn cjk_width_env_glyph_overrides_locale() {
+            // FTUI_GLYPH_DOUBLE_WIDTH=0 should override a CJK locale
+            let get = |key: &str| match key {
+                "FTUI_GLYPH_DOUBLE_WIDTH" => Some("0".into()),
+                "LANG" => Some("ja_JP.UTF-8".into()),
+                _ => None,
+            };
+            assert!(!cjk_width_from_env(get));
+        }
+
+        #[test]
+        fn cjk_width_env_on_is_true() {
+            let get = |key: &str| match key {
+                "FTUI_GLYPH_DOUBLE_WIDTH" => Some("on".into()),
+                _ => None,
+            };
+            assert!(cjk_width_from_env(get));
+        }
+
+        #[test]
+        fn cjk_width_env_case_insensitive() {
+            let get = |key: &str| match key {
+                "FTUI_CJK_WIDTH" => Some("TRUE".into()),
+                _ => None,
+            };
+            assert!(cjk_width_from_env(get));
+        }
+
+        // ── VS16 trust from env ─────────────────────────────────────
+
+        #[test]
+        fn vs16_trust_unicode_string() {
+            let get = |key: &str| match key {
+                "FTUI_EMOJI_VS16_WIDTH" => Some("unicode".into()),
+                _ => None,
+            };
+            assert!(vs16_trust_from_env(get));
+        }
+
+        #[test]
+        fn vs16_trust_value_2() {
+            let get = |key: &str| match key {
+                "FTUI_EMOJI_VS16_WIDTH" => Some("2".into()),
+                _ => None,
+            };
+            assert!(vs16_trust_from_env(get));
+        }
+
+        #[test]
+        fn vs16_trust_not_set() {
+            let get = |_: &str| -> Option<String> { None };
+            assert!(!vs16_trust_from_env(get));
+        }
+
+        #[test]
+        fn vs16_trust_other_value() {
+            let get = |key: &str| match key {
+                "FTUI_EMOJI_VS16_WIDTH" => Some("1".into()),
+                _ => None,
+            };
+            assert!(!vs16_trust_from_env(get));
+        }
+
+        #[test]
+        fn vs16_trust_case_insensitive() {
+            let get = |key: &str| match key {
+                "FTUI_EMOJI_VS16_WIDTH" => Some("UNICODE".into()),
+                _ => None,
+            };
+            assert!(vs16_trust_from_env(get));
+        }
+
+        // ── ascii_width fast path ───────────────────────────────────
+
+        #[test]
+        fn ascii_width_pure_ascii() {
+            assert_eq!(ascii_width("hello"), Some(5));
+        }
+
+        #[test]
+        fn ascii_width_empty() {
+            assert_eq!(ascii_width(""), Some(0));
+        }
+
+        #[test]
+        fn ascii_width_with_space() {
+            assert_eq!(ascii_width("hello world"), Some(11));
+        }
+
+        #[test]
+        fn ascii_width_non_ascii_returns_none() {
+            assert_eq!(ascii_width("héllo"), None);
+        }
+
+        #[test]
+        fn ascii_width_with_tab_returns_none() {
+            // Tab (0x09) is outside 0x20..=0x7E
+            assert_eq!(ascii_width("hello\tworld"), None);
+        }
+
+        #[test]
+        fn ascii_width_with_newline_returns_none() {
+            assert_eq!(ascii_width("hello\n"), None);
+        }
+
+        #[test]
+        fn ascii_width_control_char_returns_none() {
+            assert_eq!(ascii_width("\x01"), None);
+        }
+
+        // ── char_width ──────────────────────────────────────────────
+
+        #[test]
+        fn char_width_ascii_letter() {
+            assert_eq!(char_width('A'), 1);
+        }
+
+        #[test]
+        fn char_width_space() {
+            assert_eq!(char_width(' '), 1);
+        }
+
+        #[test]
+        fn char_width_tab() {
+            assert_eq!(char_width('\t'), 1);
+        }
+
+        #[test]
+        fn char_width_newline() {
+            assert_eq!(char_width('\n'), 1);
+        }
+
+        #[test]
+        fn char_width_nul() {
+            // NUL (0x00) is an ASCII control char, zero width
+            assert_eq!(char_width('\0'), 0);
+        }
+
+        #[test]
+        fn char_width_bell() {
+            // BEL (0x07) is an ASCII control char, zero width
+            assert_eq!(char_width('\x07'), 0);
+        }
+
+        #[test]
+        fn char_width_combining_accent() {
+            // U+0301 COMBINING ACUTE ACCENT is zero-width
+            assert_eq!(char_width('\u{0301}'), 0);
+        }
+
+        #[test]
+        fn char_width_zwj() {
+            // U+200D ZERO WIDTH JOINER
+            assert_eq!(char_width('\u{200D}'), 0);
+        }
+
+        #[test]
+        fn char_width_zwnbsp() {
+            // U+FEFF ZERO WIDTH NO-BREAK SPACE
+            assert_eq!(char_width('\u{FEFF}'), 0);
+        }
+
+        #[test]
+        fn char_width_soft_hyphen() {
+            // U+00AD SOFT HYPHEN
+            assert_eq!(char_width('\u{00AD}'), 0);
+        }
+
+        #[test]
+        fn char_width_wide_east_asian() {
+            // '⚡' (U+26A1) has east_asian_width=W, always width 2
+            assert_eq!(char_width('⚡'), 2);
+        }
+
+        #[test]
+        fn char_width_cjk_ideograph() {
+            // CJK ideographs are always width 2
+            assert_eq!(char_width('中'), 2);
+        }
+
+        #[test]
+        fn char_width_variation_selector() {
+            // U+FE0F VARIATION SELECTOR-16 is zero-width
+            assert_eq!(char_width('\u{FE0F}'), 0);
+        }
+
+        // ── display_width ───────────────────────────────────────────
+
+        #[test]
+        fn display_width_ascii() {
+            assert_eq!(display_width("hello"), 5);
+        }
+
+        #[test]
+        fn display_width_empty() {
+            assert_eq!(display_width(""), 0);
+        }
+
+        #[test]
+        fn display_width_cjk_chars() {
+            // Each CJK character is width 2
+            assert_eq!(display_width("中文"), 4);
+        }
+
+        #[test]
+        fn display_width_mixed_ascii_cjk() {
+            // 'a' = 1, '中' = 2, 'b' = 1
+            assert_eq!(display_width("a中b"), 4);
+        }
+
+        #[test]
+        fn display_width_combining_chars() {
+            // 'e' + combining acute = 1 grapheme, width 1
+            assert_eq!(display_width("e\u{0301}"), 1);
+        }
+
+        #[test]
+        fn display_width_ascii_with_control_codes() {
+            // Non-printable ASCII control chars in non-pure-ASCII path
+            // Tab/newline/CR get width 1 via ascii_display_width
+            assert_eq!(display_width("a\tb"), 3);
+        }
+
+        // ── grapheme_width ──────────────────────────────────────────
+
+        #[test]
+        fn grapheme_width_ascii_char() {
+            assert_eq!(grapheme_width("A"), 1);
+        }
+
+        #[test]
+        fn grapheme_width_cjk_ideograph() {
+            assert_eq!(grapheme_width("中"), 2);
+        }
+
+        #[test]
+        fn grapheme_width_combining_sequence() {
+            // 'e' + combining accent is one grapheme, width 1
+            assert_eq!(grapheme_width("e\u{0301}"), 1);
+        }
+
+        #[test]
+        fn grapheme_width_zwj_cluster() {
+            // ZWJ alone is zero-width
+            assert_eq!(grapheme_width("\u{200D}"), 0);
+        }
+    }
 }

@@ -39,3 +39,6 @@ golden_checksums.txt
 
 # Local scratch DBs
 storage.sqlite3
+
+# Local agent scratch
+.plan
