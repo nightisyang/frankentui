@@ -208,3 +208,160 @@ pub mod parse {
         buf
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- lump_name_str ---
+
+    #[test]
+    fn lump_name_str_full_name() {
+        let name = [b'E', b'1', b'M', b'1', 0, 0, 0, 0];
+        assert_eq!(lump_name_str(&name), "E1M1");
+    }
+
+    #[test]
+    fn lump_name_str_full_8_chars() {
+        let name = [b'L', b'I', b'N', b'E', b'D', b'E', b'F', b'S'];
+        assert_eq!(lump_name_str(&name), "LINEDEFS");
+    }
+
+    #[test]
+    fn lump_name_str_all_zeroes() {
+        let name = [0u8; 8];
+        assert_eq!(lump_name_str(&name), "");
+    }
+
+    #[test]
+    fn lump_name_str_lowercase_uppercased() {
+        let name = [b'f', b'l', b'a', b't', 0, 0, 0, 0];
+        assert_eq!(lump_name_str(&name), "FLAT");
+    }
+
+    // --- DirEntry::name_str ---
+
+    #[test]
+    fn dir_entry_name_str() {
+        let entry = DirEntry {
+            filepos: 0,
+            size: 100,
+            name: [b'T', b'H', b'I', b'N', b'G', b'S', 0, 0],
+        };
+        assert_eq!(entry.name_str(), "THINGS");
+    }
+
+    // --- RawSideDef texture names ---
+
+    #[test]
+    fn sidedef_texture_names() {
+        let sd = RawSideDef {
+            x_offset: 0,
+            y_offset: 0,
+            upper_texture: [b'S', b'K', b'Y', b'1', 0, 0, 0, 0],
+            lower_texture: [b'-', 0, 0, 0, 0, 0, 0, 0],
+            middle_texture: [b'D', b'O', b'O', b'R', b'1', 0, 0, 0],
+            sector: 0,
+        };
+        assert_eq!(sd.upper_name(), "SKY1");
+        assert_eq!(sd.lower_name(), "-");
+        assert_eq!(sd.middle_name(), "DOOR1");
+    }
+
+    // --- RawSector texture names ---
+
+    #[test]
+    fn sector_texture_names() {
+        let sector = RawSector {
+            floor_height: 0,
+            ceiling_height: 128,
+            floor_texture: [b'F', b'L', b'A', b'T', b'1', 0, 0, 0],
+            ceiling_texture: [b'C', b'E', b'I', b'L', b'3', 0, 0, 0],
+            light_level: 160,
+            special: 0,
+            tag: 0,
+        };
+        assert_eq!(sector.floor_name(), "FLAT1");
+        assert_eq!(sector.ceiling_name(), "CEIL3");
+    }
+
+    // --- parse helpers ---
+
+    #[test]
+    fn parse_i16_le_positive() {
+        let data = [0x34, 0x12]; // 0x1234 = 4660
+        assert_eq!(parse::i16_le(&data, 0), 0x1234);
+    }
+
+    #[test]
+    fn parse_i16_le_negative() {
+        let data = [0xFF, 0xFF]; // -1
+        assert_eq!(parse::i16_le(&data, 0), -1);
+    }
+
+    #[test]
+    fn parse_i16_le_with_offset() {
+        let data = [0xAA, 0xBB, 0x34, 0x12];
+        assert_eq!(parse::i16_le(&data, 2), 0x1234);
+    }
+
+    #[test]
+    fn parse_u16_le() {
+        let data = [0xFF, 0xFF]; // 65535
+        assert_eq!(parse::u16_le(&data, 0), 0xFFFF);
+    }
+
+    #[test]
+    fn parse_i32_le() {
+        let data = [0x78, 0x56, 0x34, 0x12]; // 0x12345678
+        assert_eq!(parse::i32_le(&data, 0), 0x12345678);
+    }
+
+    #[test]
+    fn parse_i32_le_negative() {
+        let data = [0xFF, 0xFF, 0xFF, 0xFF]; // -1
+        assert_eq!(parse::i32_le(&data, 0), -1);
+    }
+
+    #[test]
+    fn parse_name8() {
+        let data = [0, 0, b'T', b'E', b'S', b'T', 0, 0, 0, 0];
+        let name = parse::name8(&data, 2);
+        assert_eq!(&name, b"TEST\0\0\0\0");
+    }
+
+    // --- LineDef flags ---
+
+    #[test]
+    fn linedef_flag_values() {
+        assert_eq!(ML_BLOCKING, 1);
+        assert_eq!(ML_TWOSIDED, 4);
+        assert_eq!(ML_DONTPEGTOP, 8);
+        assert_eq!(ML_DONTPEGBOTTOM, 16);
+        assert_eq!(ML_SECRET, 32);
+        assert_eq!(ML_SOUNDBLOCK, 64);
+        assert_eq!(ML_DONTDRAW, 128);
+        assert_eq!(ML_MAPPED, 256);
+    }
+
+    // --- Thing flags ---
+
+    #[test]
+    fn thing_flag_values() {
+        assert_eq!(MTF_EASY, 1);
+        assert_eq!(MTF_NORMAL, 2);
+        assert_eq!(MTF_HARD, 4);
+        assert_eq!(MTF_AMBUSH, 8);
+        assert_eq!(MTF_MULTI, 16);
+    }
+
+    #[test]
+    fn nf_subsector_flag() {
+        assert_eq!(NF_SUBSECTOR, 0x8000);
+    }
+
+    #[test]
+    fn thing_player1_type() {
+        assert_eq!(THING_PLAYER1, 1);
+    }
+}
