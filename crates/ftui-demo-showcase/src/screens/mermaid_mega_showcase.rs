@@ -49,6 +49,24 @@ const PAN_STEP: i16 = 4;
 const LAYOUT_DEBOUNCE_MS: u128 = 50;
 /// Layout computation budget in milliseconds.  Exceeding this triggers a warning.
 const LAYOUT_BUDGET_MS: f32 = 16.0;
+
+// ── Timing threshold constants for color-coded metrics overlay ─────
+/// Parse timing: values at or below this are "good" (green).
+const PARSE_MS_GOOD: f32 = 2.0;
+/// Parse timing: values above good but at or below this are "ok" (yellow).
+const PARSE_MS_OK: f32 = 8.0;
+/// Layout timing: "good" threshold.
+const LAYOUT_MS_GOOD: f32 = 5.0;
+/// Layout timing: "ok" threshold.
+const LAYOUT_MS_OK: f32 = 16.0;
+/// Render timing: "good" threshold.
+const RENDER_MS_GOOD: f32 = 3.0;
+/// Render timing: "ok" threshold.
+const RENDER_MS_OK: f32 = 10.0;
+/// Total timing: "good" threshold.
+const TOTAL_MS_GOOD: f32 = 10.0;
+/// Total timing: "ok" threshold.
+const TOTAL_MS_OK: f32 = 25.0;
 /// Default viewport override columns.
 const VIEWPORT_OVERRIDE_DEFAULT_COLS: u16 = 80;
 /// Default viewport override rows.
@@ -3019,6 +3037,17 @@ impl MermaidMegaShowcaseScreen {
         );
     }
 
+    /// Classify a timing value into good/ok/bad color.
+    fn classify_timing_color(ms: f32, good: f32, ok: f32) -> PackedRgba {
+        if ms <= good {
+            PackedRgba::rgb(80, 200, 120) // green
+        } else if ms <= ok {
+            PackedRgba::rgb(220, 180, 50) // yellow
+        } else {
+            PackedRgba::rgb(220, 60, 60) // red
+        }
+    }
+
     /// Render the side panel (metrics / detail) with cache stats.
     fn render_side_panel(&self, area: Rect, frame: &mut Frame) {
         if area.is_empty() {
@@ -3042,6 +3071,7 @@ impl MermaidMegaShowcaseScreen {
         );
 
         let cache = self.cache.borrow();
+        let info_cell = Cell::from_char(' ').with_fg(PackedRgba::rgb(160, 160, 180));
         let mut lines: Vec<String> = Vec::new();
 
         lines.push(format!("Mode: {}", self.state.mode.as_str()));
@@ -3096,68 +3126,84 @@ impl MermaidMegaShowcaseScreen {
         }
         lines.push(String::new());
 
-        // Cache performance metrics
-        lines.push(format!(
-            "Parse: {}",
-            cache
-                .parse_ms
-                .map_or("-".to_string(), |ms| format!("{ms:.1}ms"))
-        ));
-        lines.push(format!(
-            "Layout: {}",
-            cache
-                .layout_ms
-                .map_or("-".to_string(), |ms| format!("{ms:.1}ms"))
-        ));
-        lines.push(format!(
-            "Render: {}",
-            cache
-                .render_ms
-                .map_or("-".to_string(), |ms| format!("{ms:.1}ms"))
-        ));
+        // Cache performance metrics (color-coded)
+        // Use (text, color) pairs for timing lines to show thresholds.
+        let mut colored_lines: Vec<(String, PackedRgba)> = Vec::new();
+        // Flush plain lines accumulated so far as info-colored entries.
+        for l in lines.drain(..) {
+            colored_lines.push((l, info_cell.fg));
+        }
+        if let Some(ms) = cache.parse_ms {
+            colored_lines.push((
+                format!("Parse: {ms:.1}ms"),
+                Self::classify_timing_color(ms, PARSE_MS_GOOD, PARSE_MS_OK),
+            ));
+        } else {
+            colored_lines.push(("Parse: -".to_string(), info_cell.fg));
+        }
+        if let Some(ms) = cache.layout_ms {
+            colored_lines.push((
+                format!("Layout: {ms:.1}ms"),
+                Self::classify_timing_color(ms, LAYOUT_MS_GOOD, LAYOUT_MS_OK),
+            ));
+        } else {
+            colored_lines.push(("Layout: -".to_string(), info_cell.fg));
+        }
+        if let Some(ms) = cache.render_ms {
+            colored_lines.push((
+                format!("Render: {ms:.1}ms"),
+                Self::classify_timing_color(ms, RENDER_MS_GOOD, RENDER_MS_OK),
+            ));
+        } else {
+            colored_lines.push(("Render: -".to_string(), info_cell.fg));
+        }
         // Total time
         let total_ms = [cache.parse_ms, cache.layout_ms, cache.render_ms]
             .iter()
             .filter_map(|v| *v)
             .sum::<f32>();
         if total_ms > 0.0 {
-            lines.push(format!("Total: {total_ms:.1}ms"));
+            colored_lines.push((
+                format!("Total: {total_ms:.1}ms"),
+                Self::classify_timing_color(total_ms, TOTAL_MS_GOOD, TOTAL_MS_OK),
+            ));
         }
         // Node/edge counts from IR
         if let Some(ir) = cache.ir.as_ref() {
-            lines.push(format!(
-                "Nodes: {} Edges: {}",
-                ir.nodes.len(),
-                ir.edges.len()
+            colored_lines.push((
+                format!("Nodes: {} Edges: {}", ir.nodes.len(), ir.edges.len()),
+                info_cell.fg,
             ));
         }
         // Layout quality
         if let Some(layout) = cache.layout.as_ref() {
             let s = &layout.stats;
-            lines.push(format!(
-                "Crossings: {} Bends: {}",
-                s.crossings, s.total_bends
+            colored_lines.push((
+                format!("Crossings: {} Bends: {}", s.crossings, s.total_bends),
+                info_cell.fg,
             ));
-            lines.push(format!("Ranks: {} MaxW: {}", s.ranks, s.max_rank_width));
+            colored_lines.push((
+                format!("Ranks: {} MaxW: {}", s.ranks, s.max_rank_width),
+                info_cell.fg,
+            ));
         }
         // Auto-fit results
         if let Some(fit) = &cache.auto_fit {
-            lines.push(format!(
-                "AutoFit: {} ({:.0}%)",
-                fit.chosen_label,
-                fit.overflow_ratio * 100.0
+            colored_lines.push((
+                format!("AutoFit: {} ({:.0}%)", fit.chosen_label, fit.overflow_ratio * 100.0),
+                info_cell.fg,
             ));
-            lines.push(format!(
-                "Score: {:.1} ({} tried)",
-                fit.quality_score, fit.candidates_tried
+            colored_lines.push((
+                format!("Score: {:.1} ({} tried)", fit.quality_score, fit.candidates_tried),
+                info_cell.fg,
             ));
         }
         if let Some(zoom) = cache.auto_scale_zoom {
-            lines.push(format!("AutoZoom: {:.0}%", zoom * 100.0));
+            colored_lines.push((format!("AutoZoom: {:.0}%", zoom * 100.0), info_cell.fg));
         }
         // Sweep status
         if !self.state.sweep.results.is_empty() || self.state.sweep.running {
-            lines.push(String::new());
+            colored_lines.push((String::new(), info_cell.fg));
             let status = if self.state.sweep.running {
                 format!(
                     "Sweep: {}/{}...",
@@ -3173,58 +3219,68 @@ impl MermaidMegaShowcaseScreen {
                     SWEEP_NODE_STEPS.len()
                 )
             };
-            lines.push(status);
+            colored_lines.push((status, info_cell.fg));
             // Show last 3 results.
             let skip = self.state.sweep.results.len().saturating_sub(3);
             for r in self.state.sweep.results.iter().skip(skip) {
-                lines.push(r.summary());
+                colored_lines.push((r.summary(), info_cell.fg));
             }
         }
-        lines.push(String::new());
+        colored_lines.push((String::new(), info_cell.fg));
         // Running averages
         if cache.parse_stats.count() > 1 {
-            lines.push(format!("Parse avg: {}", cache.parse_stats.summary()));
+            colored_lines.push((format!("Parse avg: {}", cache.parse_stats.summary()), info_cell.fg));
         }
         if cache.layout_stats.count() > 1 {
-            lines.push(format!("Layout avg: {}", cache.layout_stats.summary()));
+            colored_lines.push((format!("Layout avg: {}", cache.layout_stats.summary()), info_cell.fg));
         }
         if cache.render_stats.count() > 1 {
-            lines.push(format!("Render avg: {}", cache.render_stats.summary()));
+            colored_lines.push((format!("Render avg: {}", cache.render_stats.summary()), info_cell.fg));
         }
-        lines.push(String::new());
-        lines.push(format!(
-            "Cache: {}/{}",
-            cache.cache_hits, cache.cache_misses
+        colored_lines.push((String::new(), info_cell.fg));
+        colored_lines.push((
+            format!("Cache: {}/{}", cache.cache_hits, cache.cache_misses),
+            info_cell.fg,
         ));
-        lines.push(format!(
-            "Last: {}",
-            if cache.last_cache_hit { "HIT" } else { "MISS" }
+        colored_lines.push((
+            format!("Last: {}", if cache.last_cache_hit { "HIT" } else { "MISS" }),
+            if cache.last_cache_hit {
+                PackedRgba::rgb(80, 200, 120) // green for HIT
+            } else {
+                PackedRgba::rgb(220, 180, 50) // yellow for MISS
+            },
         ));
 
         if cache.debounce_skips > 0 {
-            lines.push(format!("Debounce: {}", cache.debounce_skips));
+            colored_lines.push((format!("Debounce: {}", cache.debounce_skips), info_cell.fg));
         }
         if let Some(last) = cache.last_layout_instant {
             let ago_ms = last.elapsed().as_millis();
             if ago_ms < 2000 {
-                lines.push(format!("Recomputed: {ago_ms}ms ago"));
+                colored_lines.push((format!("Recomputed: {ago_ms}ms ago"), info_cell.fg));
             }
         }
         if cache.layout_budget_exceeded {
-            lines.push(format!("Budget: OVER ({LAYOUT_BUDGET_MS:.0}ms)"));
+            colored_lines.push((
+                format!("Budget: OVER ({LAYOUT_BUDGET_MS:.0}ms)"),
+                PackedRgba::rgb(220, 60, 60), // red
+            ));
         }
         if !cache.errors.is_empty() {
-            lines.push(format!("Errors: {} (e=diag)", cache.errors.len()));
+            colored_lines.push((
+                format!("Errors: {} (e=diag)", cache.errors.len()),
+                PackedRgba::rgb(220, 60, 60), // red for errors
+            ));
         }
 
-        let info_cell = Cell::from_char(' ').with_fg(PackedRgba::rgb(160, 160, 180));
         let max_x = area.x + area.width - 1;
-        for (row, line) in lines.iter().enumerate() {
+        for (row, (text, color)) in colored_lines.iter().enumerate() {
             let y = area.y + 2 + row as u16;
             if y >= area.y + area.height - 1 {
                 break;
             }
-            frame.print_text_clipped(area.x + 1, y, line, info_cell, max_x);
+            let cell = Cell::from_char(' ').with_fg(*color);
+            frame.print_text_clipped(area.x + 1, y, text, cell, max_x);
         }
     }
 
@@ -7166,6 +7222,80 @@ mod tests {
         assert_eq!(cache.debounce_skips, 0);
         assert!(cache.last_layout_instant.is_none());
         assert!(!cache.layout_budget_exceeded);
+    }
+
+    #[test]
+    fn classify_timing_color_thresholds() {
+        // Green for values at or below 'good'
+        let green = PackedRgba::rgb(80, 200, 120);
+        let yellow = PackedRgba::rgb(220, 180, 50);
+        let red = PackedRgba::rgb(220, 60, 60);
+
+        // Parse thresholds: good=2.0, ok=8.0
+        assert_eq!(
+            MermaidMegaShowcaseScreen::classify_timing_color(1.0, 2.0, 8.0),
+            green,
+        );
+        assert_eq!(
+            MermaidMegaShowcaseScreen::classify_timing_color(2.0, 2.0, 8.0),
+            green,
+        );
+        assert_eq!(
+            MermaidMegaShowcaseScreen::classify_timing_color(5.0, 2.0, 8.0),
+            yellow,
+        );
+        assert_eq!(
+            MermaidMegaShowcaseScreen::classify_timing_color(8.0, 2.0, 8.0),
+            yellow,
+        );
+        assert_eq!(
+            MermaidMegaShowcaseScreen::classify_timing_color(20.0, 2.0, 8.0),
+            red,
+        );
+    }
+
+    #[test]
+    fn metrics_panel_shows_color_coded_timings() {
+        use ftui_render::grapheme_pool::GraphemePool;
+
+        let screen = MermaidMegaShowcaseScreen::new();
+        // Ensure the render cache is populated with timing data.
+        let area = Rect::new(0, 0, 120, 40);
+        screen.ensure_render_cache(area);
+
+        // Inject timing values: parse=1.0 (good), layout=10.0 (ok), render=15.0 (bad)
+        {
+            let mut cache = screen.cache.borrow_mut();
+            cache.parse_ms = Some(1.0);
+            cache.layout_ms = Some(10.0);
+            cache.render_ms = Some(15.0);
+        }
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(40, 40, &mut pool);
+        let side_area = Rect::new(0, 0, 40, 40);
+        screen.render_side_panel(side_area, &mut frame);
+
+        // Collect all unique foreground colors used in the panel.
+        let mut fg_colors = std::collections::HashSet::new();
+        for y in 0..40 {
+            for x in 0..40 {
+                if let Some(cell) = frame.buffer.get(x, y) {
+                    if cell.content.as_char().is_some_and(|c| c != ' ') {
+                        fg_colors.insert(cell.fg);
+                    }
+                }
+            }
+        }
+
+        // With mixed timing quality, we should see more than just the info color.
+        // At minimum: info gray, green (parse), yellow (layout), red (render).
+        assert!(
+            fg_colors.len() >= 3,
+            "expected at least 3 distinct colors in metrics panel, got {}: {:?}",
+            fg_colors.len(),
+            fg_colors
+        );
     }
 
     #[test]
