@@ -139,7 +139,9 @@ impl ScrollbarState {
     ) -> MouseResult {
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some((id, HitRegion::Scrollbar, data)) = hit && id == expected_id {
+                if let Some((id, HitRegion::Scrollbar, data)) = hit
+                    && id == expected_id
+                {
                     let part = data >> 56;
                     match part {
                         SCROLLBAR_PART_BEGIN => {

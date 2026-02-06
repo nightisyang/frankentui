@@ -1876,8 +1876,11 @@ mod tests {
 
     #[test]
     fn table_state_hover_same_index_ignored() {
-        let mut state = TableState::default();
-        state.hovered = Some(3);
+        let mut state = {
+            let mut s = TableState::default();
+            s.hovered = Some(3);
+            s
+        };
         let event = MouseEvent::new(MouseEventKind::Moved, 5, 2);
         let hit = Some((HitId::new(1), HitRegion::Content, 3u64));
         let result = state.handle_mouse(&event, hit, HitId::new(1), 10);
@@ -1887,8 +1890,11 @@ mod tests {
 
     #[test]
     fn table_state_hover_clears() {
-        let mut state = TableState::default();
-        state.hovered = Some(5);
+        let mut state = {
+            let mut s = TableState::default();
+            s.hovered = Some(5);
+            s
+        };
         let event = MouseEvent::new(MouseEventKind::Moved, 5, 2);
         // No hit (mouse moved off the table)
         let result = state.handle_mouse(&event, None, HitId::new(1), 10);
@@ -1906,8 +1912,11 @@ mod tests {
 
     #[test]
     fn table_state_scroll_wheel_up() {
-        let mut state = TableState::default();
-        state.offset = 10;
+        let mut state = {
+            let mut s = TableState::default();
+            s.offset = 10;
+            s
+        };
         let event = MouseEvent::new(MouseEventKind::ScrollUp, 0, 0);
         let result = state.handle_mouse(&event, None, HitId::new(1), 20);
         assert_eq!(result, MouseResult::Scrolled);
@@ -1925,16 +1934,22 @@ mod tests {
 
     #[test]
     fn table_state_scroll_down_clamps() {
-        let mut state = TableState::default();
-        state.offset = 18;
+        let mut state = {
+            let mut s = TableState::default();
+            s.offset = 18;
+            s
+        };
         state.scroll_down(5, 20);
         assert_eq!(state.offset, 19);
     }
 
     #[test]
     fn table_state_scroll_up_clamps() {
-        let mut state = TableState::default();
-        state.offset = 1;
+        let mut state = {
+            let mut s = TableState::default();
+            s.offset = 1;
+            s
+        };
         state.scroll_up(5);
         assert_eq!(state.offset, 0);
     }

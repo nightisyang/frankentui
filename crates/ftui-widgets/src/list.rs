@@ -1075,16 +1075,22 @@ mod tests {
 
     #[test]
     fn list_state_scroll_up() {
-        let mut state = ListState::default();
-        state.offset = 10;
+        let mut state = {
+            let mut s = ListState::default();
+            s.offset = 10;
+            s
+        };
         state.scroll_up(3);
         assert_eq!(state.offset, 7);
     }
 
     #[test]
     fn list_state_scroll_up_clamps_to_zero() {
-        let mut state = ListState::default();
-        state.offset = 1;
+        let mut state = {
+            let mut s = ListState::default();
+            s.offset = 1;
+            s
+        };
         state.scroll_up(5);
         assert_eq!(state.offset, 0);
     }
@@ -1106,8 +1112,11 @@ mod tests {
 
     #[test]
     fn list_state_scroll_wheel_up() {
-        let mut state = ListState::default();
-        state.offset = 10;
+        let mut state = {
+            let mut s = ListState::default();
+            s.offset = 10;
+            s
+        };
         let event = MouseEvent::new(MouseEventKind::ScrollUp, 0, 0);
         let result = state.handle_mouse(&event, None, HitId::new(1), 20);
         assert_eq!(result, MouseResult::Scrolled);

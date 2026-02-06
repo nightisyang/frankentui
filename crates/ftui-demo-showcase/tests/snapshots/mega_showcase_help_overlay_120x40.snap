@@ -18,23 +18,23 @@
 │                               ⣀│  w               Cycle wrap mode (None/Word/Char/W │    ││Render: -                 │
 │                            ⠒⠿⠿⣿│  l               Cycle layout mode (Dense/Normal/S │    ││                          │
 │                                │  A               Toggle auto-scale zoom (zoom-to-f │    ││                          │
-│                                │  O               Cycle direction (TB/LR/RL/BT/auto │    ││Cache: 0/0                │
-│                                │  r               Force relayout                    │    ││Last: MISS                │
-│                          ⢀⡄⢀⣀⡠⠤│  p / P           Cycle palette forward / backward  │    ││                          │
-│        ⢰⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣿⣿⣷⣶⣶⣶│                                                    │    ││                          │
+│                                │  S               Toggle perf sweep (auto-run node  │    ││Cache: 0/0                │
+│                                │  O               Cycle direction (TB/LR/RL/BT/auto │    ││Last: MISS                │
+│                          ⢀⡄⢀⣀⡠⠤│  r               Force relayout                    │    ││                          │
+│        ⢰⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣶⣿⣿⣷⣶⣶⣶│  p / P           Cycle palette forward / backward  │    ││                          │
+│        ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿    │                                                    │    ││                          │
 │        ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿    │ Viewport                                           │    ││                          │
 │        ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿    │  + / =           Zoom in                           │    ││                          │
-│        ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿    │  -               Zoom out                          │    ││                          │
-│        ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  0               Reset zoom (+ clear pan)          │    ││                          │
-│        ⠈⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠙⠫⠭⢍⣉⠉⠉│  f               Fit to view (+ clear pan)         │    ││                          │
-│                              ⠉⠉│  H / J / K / L   Pan left / down / up / right      │    ││                          │
-│                                │  ] / [           Increase / decrease viewport widt │    ││                          │
+│        ⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│  -               Zoom out                          │    ││                          │
+│        ⠈⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠙⠫⠭⢍⣉⠉⠉│  0               Reset zoom (+ clear pan)          │    ││                          │
+│                              ⠉⠉│  f               Fit to view (+ clear pan)         │    ││                          │
+│                                │  H / J / K / L   Pan left / down / up / right      │    ││                          │
+│                            ⣿⣿⣿⣿│  ] / [           Increase / decrease viewport widt │    ││                          │
 │                            ⣿⣿⣿⣿│  } / {           Increase / decrease viewport heig │    ││                          │
 │                            ⣿⣿⣿⣿│  o               Reset viewport override           │    ││                          │
 │                            ⣿⣿⣿⣿│                                                    │    ││                          │
 │                            ⣿⣿⣿⣿│ Panels                                             │    ││                          │
-│                            ⣿⣿⣿⣿│  m               Toggle metrics panel              │    ││                          │
-│                                │  c               Toggle controls strip             │    ││                          │
-└────────────────────────────────│  d               Toggle detail panel               │────┘└──────────────────────────┘
-NORMAL  j/k:sample u/U:nodes x/X:│  i               Toggle status log                 │t /:filter Ctrl+U:clear ?:help   
+│                                │  m               Toggle metrics panel              │    ││                          │
+└────────────────────────────────│  c               Toggle controls strip             │────┘└──────────────────────────┘
+NORMAL  j/k:sample u/U:nodes x/X:│  d               Toggle detail panel               │t /:filter Ctrl+U:clear ?:help   
                                  ╰────────────────────────────────────────────────────╯                                 

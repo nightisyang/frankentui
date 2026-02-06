@@ -36,8 +36,8 @@ use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
 use ftui_core::geometry::Rect;
 use ftui_demo_showcase::screens::Screen;
 use ftui_demo_showcase::screens::mermaid_mega_showcase::{
-    MermaidMegaShowcaseScreen, validate_mega_telemetry_line, MEGA_TELEMETRY_REQUIRED_FIELDS,
-    MEGA_TELEMETRY_NULLABLE_FIELDS,
+    MEGA_TELEMETRY_NULLABLE_FIELDS, MEGA_TELEMETRY_REQUIRED_FIELDS, MermaidMegaShowcaseScreen,
+    validate_mega_telemetry_line,
 };
 use ftui_render::frame::Frame;
 use ftui_render::grapheme_pool::GraphemePool;
@@ -129,13 +129,7 @@ fn mega_e2e_initial_renders_without_panic() {
 
     let screen = MermaidMegaShowcaseScreen::new();
 
-    let sizes: &[(u16, u16)] = &[
-        (120, 40),
-        (80, 24),
-        (200, 60),
-        (40, 15),
-        (20, 10),
-    ];
+    let sizes: &[(u16, u16)] = &[(120, 40), (80, 24), (200, 60), (40, 15), (20, 10)];
 
     for &(w, h) in sizes {
         let hash = capture_frame_hash(&screen, w, h);
@@ -278,10 +272,7 @@ fn mega_e2e_direction_cycling() {
         let h = capture_frame_hash(&screen, 120, 40);
         log_jsonl(
             "direction",
-            &[
-                ("step", &i.to_string()),
-                ("hash", &format!("{h:016x}")),
-            ],
+            &[("step", &i.to_string()), ("hash", &format!("{h:016x}"))],
         );
     }
 
@@ -419,7 +410,10 @@ fn mega_e2e_tier_glyph_wrap_cycling() {
     for i in 0..4 {
         let _ = screen.update(&char_press('t'));
         let h = capture_frame_hash(&screen, 120, 40);
-        log_jsonl("tier", &[("step", &i.to_string()), ("hash", &format!("{h:016x}"))]);
+        log_jsonl(
+            "tier",
+            &[("step", &i.to_string()), ("hash", &format!("{h:016x}"))],
+        );
     }
 
     // Toggle glyph mode ('g') — Unicode/ASCII.
@@ -439,7 +433,10 @@ fn mega_e2e_tier_glyph_wrap_cycling() {
     for i in 0..4 {
         let _ = screen.update(&char_press('w'));
         let h = capture_frame_hash(&screen, 120, 40);
-        log_jsonl("wrap", &[("step", &i.to_string()), ("hash", &format!("{h:016x}"))]);
+        log_jsonl(
+            "wrap",
+            &[("step", &i.to_string()), ("hash", &format!("{h:016x}"))],
+        );
     }
 
     log_jsonl("result", &[("status", "passed")]);
@@ -503,7 +500,10 @@ fn mega_e2e_sweep_lifecycle() {
 
     // Render after some sweep steps — should not panic.
     let h_mid = capture_frame_hash(&screen, 120, 40);
-    log_jsonl("sweep", &[("action", "mid"), ("hash", &format!("{h_mid:016x}"))]);
+    log_jsonl(
+        "sweep",
+        &[("action", "mid"), ("hash", &format!("{h_mid:016x}"))],
+    );
 
     // Run many more ticks to complete the sweep (7 steps × 3 ticks = 21 ticks needed).
     for tick in 31..=60 {
@@ -511,12 +511,21 @@ fn mega_e2e_sweep_lifecycle() {
     }
 
     let h_done = capture_frame_hash(&screen, 120, 40);
-    log_jsonl("sweep", &[("action", "done"), ("hash", &format!("{h_done:016x}"))]);
+    log_jsonl(
+        "sweep",
+        &[("action", "done"), ("hash", &format!("{h_done:016x}"))],
+    );
 
     // Stop sweep with another 'S' (toggles off, or resets if complete).
     let _ = screen.update(&char_press('S'));
     let h_stopped = capture_frame_hash(&screen, 120, 40);
-    log_jsonl("sweep", &[("action", "stopped"), ("hash", &format!("{h_stopped:016x}"))]);
+    log_jsonl(
+        "sweep",
+        &[
+            ("action", "stopped"),
+            ("hash", &format!("{h_stopped:016x}")),
+        ],
+    );
 }
 
 // ===========================================================================
@@ -571,7 +580,10 @@ fn mega_e2e_search_enter_exit() {
     // Enter search mode with '/'.
     let _ = screen.update(&char_press('/'));
     let h_search = capture_frame_hash(&screen, 120, 40);
-    log_jsonl("search", &[("action", "entered"), ("hash", &format!("{h_search:016x}"))]);
+    log_jsonl(
+        "search",
+        &[("action", "entered"), ("hash", &format!("{h_search:016x}"))],
+    );
 
     // Type a query.
     let _ = screen.update(&char_press('F'));
@@ -579,17 +591,32 @@ fn mega_e2e_search_enter_exit() {
     let _ = screen.update(&char_press('o'));
     let _ = screen.update(&char_press('w'));
     let h_typed = capture_frame_hash(&screen, 120, 40);
-    log_jsonl("search", &[("action", "typed_Flow"), ("hash", &format!("{h_typed:016x}"))]);
+    log_jsonl(
+        "search",
+        &[
+            ("action", "typed_Flow"),
+            ("hash", &format!("{h_typed:016x}")),
+        ],
+    );
 
     // Accept search with Enter.
     let _ = screen.update(&press(KeyCode::Enter));
     let h_accepted = capture_frame_hash(&screen, 120, 40);
-    log_jsonl("search", &[("action", "accepted"), ("hash", &format!("{h_accepted:016x}"))]);
+    log_jsonl(
+        "search",
+        &[
+            ("action", "accepted"),
+            ("hash", &format!("{h_accepted:016x}")),
+        ],
+    );
 
     // Exit with Escape.
     let _ = screen.update(&press(KeyCode::Escape));
     let h_exit = capture_frame_hash(&screen, 120, 40);
-    log_jsonl("search", &[("action", "exited"), ("hash", &format!("{h_exit:016x}"))]);
+    log_jsonl(
+        "search",
+        &[("action", "exited"), ("hash", &format!("{h_exit:016x}"))],
+    );
 }
 
 // ===========================================================================
@@ -626,7 +653,10 @@ fn mega_e2e_all_samples_render_cleanly() {
         }
     }
 
-    log_jsonl("result", &[("status", "passed"), ("samples_rendered", "35")]);
+    log_jsonl(
+        "result",
+        &[("status", "passed"), ("samples_rendered", "35")],
+    );
 }
 
 // ===========================================================================
@@ -643,17 +673,11 @@ fn mega_e2e_render_determinism() {
     let h1 = capture_frame_hash(&screen1, 120, 40);
     let h2 = capture_frame_hash(&screen2, 120, 40);
 
-    assert_eq!(
-        h1, h2,
-        "Two fresh screens should produce identical renders"
-    );
+    assert_eq!(h1, h2, "Two fresh screens should produce identical renders");
 
     log_jsonl(
         "determinism",
-        &[
-            ("h1", &format!("{h1:016x}")),
-            ("h2", &format!("{h2:016x}")),
-        ],
+        &[("h1", &format!("{h1:016x}")), ("h2", &format!("{h2:016x}"))],
     );
 }
 
@@ -690,10 +714,7 @@ fn mega_e2e_interaction_determinism() {
 
     log_jsonl(
         "interaction_determinism",
-        &[
-            ("h1", &format!("{h1:016x}")),
-            ("h2", &format!("{h2:016x}")),
-        ],
+        &[("h1", &format!("{h1:016x}")), ("h2", &format!("{h2:016x}"))],
     );
 }
 
@@ -709,9 +730,8 @@ fn mega_e2e_rapid_key_presses() {
 
     // Rapid-fire various keys in sequence.
     let keys = [
-        'j', 'j', 'j', 'l', 't', 'g', 'w', 'm', 'c', 'd',
-        '+', '+', '-', '0', 'f', 'j', 'k', 'O', 's', 'A',
-        'v', 'V', 'v', 'p', 'P', 'e', '?', 'i', 'r',
+        'j', 'j', 'j', 'l', 't', 'g', 'w', 'm', 'c', 'd', '+', '+', '-', '0', 'f', 'j', 'k', 'O',
+        's', 'A', 'v', 'V', 'v', 'p', 'P', 'e', '?', 'i', 'r',
     ];
 
     for &key in &keys {
@@ -725,7 +745,10 @@ fn mega_e2e_rapid_key_presses() {
 
     // Should still render without panic.
     let h = capture_frame_hash(&screen, 120, 40);
-    log_jsonl("rapid", &[("hash", &format!("{h:016x}")), ("no_panic", "true")]);
+    log_jsonl(
+        "rapid",
+        &[("hash", &format!("{h:016x}")), ("no_panic", "true")],
+    );
 }
 
 // ===========================================================================
@@ -768,7 +791,10 @@ fn mega_e2e_cache_hit_faster() {
 
 #[test]
 fn mega_e2e_telemetry_required_fields_nonempty() {
-    log_jsonl("env", &[("test", "mega_e2e_telemetry_required_fields_nonempty")]);
+    log_jsonl(
+        "env",
+        &[("test", "mega_e2e_telemetry_required_fields_nonempty")],
+    );
 
     assert!(
         !MEGA_TELEMETRY_REQUIRED_FIELDS.is_empty(),
@@ -782,13 +808,19 @@ fn mega_e2e_telemetry_required_fields_nonempty() {
 
     log_jsonl(
         "schema",
-        &[("required_count", &MEGA_TELEMETRY_REQUIRED_FIELDS.len().to_string())],
+        &[(
+            "required_count",
+            &MEGA_TELEMETRY_REQUIRED_FIELDS.len().to_string(),
+        )],
     );
 }
 
 #[test]
 fn mega_e2e_telemetry_nullable_fields_nonempty() {
-    log_jsonl("env", &[("test", "mega_e2e_telemetry_nullable_fields_nonempty")]);
+    log_jsonl(
+        "env",
+        &[("test", "mega_e2e_telemetry_nullable_fields_nonempty")],
+    );
 
     assert!(
         !MEGA_TELEMETRY_NULLABLE_FIELDS.is_empty(),
@@ -802,7 +834,10 @@ fn mega_e2e_telemetry_nullable_fields_nonempty() {
 
     log_jsonl(
         "schema",
-        &[("nullable_count", &MEGA_TELEMETRY_NULLABLE_FIELDS.len().to_string())],
+        &[(
+            "nullable_count",
+            &MEGA_TELEMETRY_NULLABLE_FIELDS.len().to_string(),
+        )],
     );
 }
 
@@ -859,7 +894,10 @@ fn mega_e2e_validator_rejects_bad_schema() {
 
 #[test]
 fn mega_e2e_validator_rejects_invalid_json() {
-    log_jsonl("env", &[("test", "mega_e2e_validator_rejects_invalid_json")]);
+    log_jsonl(
+        "env",
+        &[("test", "mega_e2e_validator_rejects_invalid_json")],
+    );
 
     let result = validate_mega_telemetry_line("not json at all");
     assert!(result.is_err(), "Invalid JSON should fail validation");
@@ -888,17 +926,26 @@ fn mega_e2e_generator_controls() {
     // Increase node count with 'U'.
     let _ = screen.update(&char_press('U'));
     let h_more = capture_frame_hash(&screen, 120, 40);
-    log_jsonl("generator", &[("after_inc_nodes", &format!("{h_more:016x}"))]);
+    log_jsonl(
+        "generator",
+        &[("after_inc_nodes", &format!("{h_more:016x}"))],
+    );
 
     // Decrease node count with 'u'.
     let _ = screen.update(&char_press('u'));
     let h_dec = capture_frame_hash(&screen, 120, 40);
-    log_jsonl("generator", &[("after_dec_nodes", &format!("{h_dec:016x}"))]);
+    log_jsonl(
+        "generator",
+        &[("after_dec_nodes", &format!("{h_dec:016x}"))],
+    );
 
     // New seed with 'R'.
     let _ = screen.update(&char_press('R'));
     let h_seed = capture_frame_hash(&screen, 120, 40);
-    log_jsonl("generator", &[("after_new_seed", &format!("{h_seed:016x}"))]);
+    log_jsonl(
+        "generator",
+        &[("after_new_seed", &format!("{h_seed:016x}"))],
+    );
 
     log_jsonl("result", &[("status", "passed")]);
 }
@@ -1019,7 +1066,10 @@ fn mega_e2e_style_palette_cycling() {
     );
 
     // Palette cycling should produce different frames.
-    assert_ne!(h_palette1, h_palette2, "Different palettes should look different");
+    assert_ne!(
+        h_palette1, h_palette2,
+        "Different palettes should look different"
+    );
 }
 
 // ===========================================================================

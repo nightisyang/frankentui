@@ -567,7 +567,9 @@ impl Tree {
     ) -> MouseResult {
         match event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some((id, HitRegion::Content, data)) = hit && id == expected_id {
+                if let Some((id, HitRegion::Content, data)) = hit
+                    && id == expected_id
+                {
                     let index = data as usize;
                     if let Some(node) = self.node_at_visible_index_mut(index) {
                         if node.children.is_empty() {

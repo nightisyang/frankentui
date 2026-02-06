@@ -251,7 +251,9 @@ fn text_default_emoji_with_vs16_width_is_narrow() {
 fn file_browser_icons_inherently_wide() {
     // Emoji with Emoji_Presentation=Yes or East_Asian_Width=W: width 2.
     // ⚡️ (U+26A1) has EAW=W, so it stays wide even after VS16 stripping.
-    let cases = ["📁", "🔗", "🦀", "🐍", "📜", "📝", "🎵", "🎬", "⚡️", "📄", "🏠"];
+    let cases = [
+        "📁", "🔗", "🦀", "🐍", "📜", "📝", "🎵", "🎬", "⚡️", "📄", "🏠",
+    ];
     for case in cases {
         let width = grapheme_width(case);
         assert_eq!(
