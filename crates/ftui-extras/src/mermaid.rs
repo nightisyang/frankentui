@@ -1804,7 +1804,7 @@ pub const FEATURE_MATRIX: &[FeatureMatrixEntry] = &[
         feature: "commit / branch / checkout / merge",
         level: MermaidSupportLevel::Supported,
         fixture: None,
-        note: "parser+IR+layout+render done; specialized entity box rendering",
+        note: "parser+IR done; uses graph layout/render",
     },
     FeatureMatrixEntry {
         family: DiagramType::GitGraph,
@@ -1846,9 +1846,9 @@ pub const FEATURE_MATRIX: &[FeatureMatrixEntry] = &[
     FeatureMatrixEntry {
         family: DiagramType::Requirement,
         feature: "requirement-specific rendering (type badges/risk indicators)",
-        level: MermaidSupportLevel::Partial,
+        level: MermaidSupportLevel::Unsupported,
         fixture: None,
-        note: "entity boxes with borders + kind labels; risk/verify badges pending",
+        note: "uses generic graph layout; no requirement-specific visuals",
     },
     // ── Cross-cutting ───────────────────────────────────────────────
     FeatureMatrixEntry {
@@ -2251,16 +2251,16 @@ pub const DIAGRAM_FAMILY_REGISTRY: &[DiagramFamilyEntry] = &[
         pipeline: [
             StageStatus::Done,
             StageStatus::Done,
-            StageStatus::Done,
-            StageStatus::Done,
             StageStatus::Partial,
+            StageStatus::Partial,
+            StageStatus::NotStarted,
             StageStatus::NotStarted,
             StageStatus::NotStarted,
             StageStatus::NotStarted,
         ],
         min_feature_slice: "requirement entities, typed relations, categories, risk/verify/derive links",
         terminal_degradations: "entity boxes simplified; relation arrows as ASCII",
-        notes: "layout+render done (bd-hudcn.1.9.3); risk/verify badges pending",
+        notes: "planned: bd-hudcn.1.9",
     },
     DiagramFamilyEntry {
         family: DiagramType::Timeline,
@@ -2875,7 +2875,7 @@ impl MermaidCompatibilityMatrix {
             timeline: MermaidSupportLevel::Partial,
             quadrant_chart: MermaidSupportLevel::Unsupported,
             sankey: MermaidSupportLevel::Unsupported,
-            xy_chart: MermaidSupportLevel::Unsupported,
+            xy_chart: MermaidSupportLevel::Partial,
             block_beta: MermaidSupportLevel::Unsupported,
             packet_beta: MermaidSupportLevel::Unsupported,
             architecture_beta: MermaidSupportLevel::Unsupported,
@@ -2935,7 +2935,7 @@ impl Default for MermaidCompatibilityMatrix {
             timeline: MermaidSupportLevel::Partial,
             quadrant_chart: MermaidSupportLevel::Unsupported,
             sankey: MermaidSupportLevel::Unsupported,
-            xy_chart: MermaidSupportLevel::Unsupported,
+            xy_chart: MermaidSupportLevel::Partial,
             block_beta: MermaidSupportLevel::Unsupported,
             packet_beta: MermaidSupportLevel::Unsupported,
             architecture_beta: MermaidSupportLevel::Unsupported,
@@ -4224,9 +4224,7 @@ pub fn normalize_ast_to_ir(
                     &mut warnings,
                 );
                 if let Some(draft) = node_drafts.last_mut() {
-                    draft
-                        .classes
-                        .push(format!("journey_score_{}", task.score.min(5)));
+                    draft.classes.push(format!("journey_score_{}", task.score.min(5)));
                 }
                 if let Some(cluster_idx) = cluster_stack.last().copied() {
                     cluster_drafts[cluster_idx].members.push(id);
@@ -4248,15 +4246,9 @@ pub fn normalize_ast_to_ir(
                 let label_text = if evt.events.is_empty() {
                     evt.period.clone()
                 } else {
-                    format!(
-                        "{}
-{}",
-                        evt.period,
-                        evt.events.join(
-                            "
-"
-                        )
-                    )
+                    format!("{}
+{}", evt.period, evt.events.join("
+"))
                 };
                 let _ = upsert_node(
                     &id,
@@ -4275,6 +4267,44 @@ pub fn normalize_ast_to_ir(
                 }
                 if let Some(cluster_idx) = cluster_stack.last().copied() {
                     cluster_drafts[cluster_idx].members.push(id);
+                }
+            }
+            Statement::XyChartXAxis { labels, span } => {
+                // X-axis labels become a single node for reference
+                let id = format!("xy_xaxis_L{}", span.start.line);
+                let label_text = labels.join(", ");
+                let _ = upsert_node(
+                    &id, Some(&label_text), NodeShape::Rect, *span, false, idx,
+                    &mut node_map, &mut node_drafts, &mut implicit_warned, &mut warnings,
+                );
+                if let Some(draft) = node_drafts.last_mut() {
+                    draft.classes.push("xychart_xaxis".to_string());
+                }
+            }
+            Statement::XyChartYAxis { label, span, .. } => {
+                let id = format!("xy_yaxis_L{}", span.start.line);
+                let _ = upsert_node(
+                    &id, Some(label), NodeShape::Rect, *span, false, idx,
+                    &mut node_map, &mut node_drafts, &mut implicit_warned, &mut warnings,
+                );
+                if let Some(draft) = node_drafts.last_mut() {
+                    draft.classes.push("xychart_yaxis".to_string());
+                }
+            }
+            Statement::XyChartSeries(series) => {
+                let kind_str = match series.kind {
+                    XySeriesKind::Bar => "bar",
+                    XySeriesKind::Line => "line",
+                };
+                let id = format!("xy_{}_L{}", kind_str, series.span.start.line);
+                let data_str = series.data.iter().map(|v| format!("{v}")).collect::<Vec<_>>().join(", ");
+                let label_text = format!("{kind_str}: [{data_str}]");
+                let _ = upsert_node(
+                    &id, Some(&label_text), NodeShape::Rect, series.span, false, idx,
+                    &mut node_map, &mut node_drafts, &mut implicit_warned, &mut warnings,
+                );
+                if let Some(draft) = node_drafts.last_mut() {
+                    draft.classes.push(format!("xychart_{kind_str}"));
                 }
             }
             Statement::RequirementDef(req) => {
@@ -5038,6 +5068,19 @@ pub struct TimelineEvent {
     pub span: Span,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum XySeriesKind {
+    Bar,
+    Line,
+}
+
+#[derive(Debug, Clone)]
+pub struct XyChartSeries {
+    pub kind: XySeriesKind,
+    pub data: Vec<f64>,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone)]
 pub struct RequirementDef {
     pub kind: String,
@@ -5151,6 +5194,17 @@ pub enum Statement {
         span: Span,
     },
     TimelineEvent(TimelineEvent),
+    XyChartXAxis {
+        labels: Vec<String>,
+        span: Span,
+    },
+    XyChartYAxis {
+        label: String,
+        min: Option<f64>,
+        max: Option<f64>,
+        span: Span,
+    },
+    XyChartSeries(XyChartSeries),
     RequirementDef(RequirementDef),
     RequirementRelation(RequirementRelation),
     RequirementElement(RequirementElement),
@@ -6567,10 +6621,19 @@ pub fn parse_with_diagnostics(input: &str) -> MermaidParse {
                     });
                 }
             }
+            DiagramType::XyChart => {
+                if let Some(stmt) = parse_xychart_line(trimmed, raw_line, span) {
+                    statements.push(stmt);
+                } else {
+                    statements.push(Statement::Raw {
+                        text: normalize_ws(trimmed),
+                        span,
+                    });
+                }
+            }
             DiagramType::Unknown
             | DiagramType::QuadrantChart
             | DiagramType::Sankey
-            | DiagramType::XyChart
             | DiagramType::BlockBeta
             | DiagramType::PacketBeta
             | DiagramType::ArchitectureBeta
@@ -7047,6 +7110,9 @@ fn statement_span(statement: &Statement) -> Span {
         Statement::JourneyTask(t) => t.span,
         Statement::TimelineSection { span, .. } => *span,
         Statement::TimelineEvent(t) => t.span,
+        Statement::XyChartXAxis { span, .. } => *span,
+        Statement::XyChartYAxis { span, .. } => *span,
+        Statement::XyChartSeries(s) => s.span,
         Statement::RequirementDef(r) => r.span,
         Statement::RequirementRelation(r) => r.span,
         Statement::RequirementElement(e) => e.span,
@@ -8240,12 +8306,8 @@ fn journey_score_bar(score: u8) -> String {
     let filled = score.min(5) as usize;
     let empty = 5 - filled;
     let mut bar = String::with_capacity(5);
-    for _ in 0..filled {
-        bar.push('\u{25cf}');
-    }
-    for _ in 0..empty {
-        bar.push('\u{25cb}');
-    }
+    for _ in 0..filled { bar.push('\u{25cf}'); }
+    for _ in 0..empty { bar.push('\u{25cb}'); }
     bar
 }
 
@@ -8295,6 +8357,91 @@ fn parse_journey_line(trimmed: &str, line: &str, span: Span) -> Option<Statement
         }
     }
     None
+}
+
+fn parse_xychart_line(trimmed: &str, _line: &str, span: Span) -> Option<Statement> {
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("title") {
+        return None; // Let Raw handle title
+    }
+    // x-axis [label1, label2, ...] or x-axis "Label" min --> max
+    if lower.starts_with("x-axis") {
+        let rest = trimmed["x-axis".len()..].trim();
+        if rest.starts_with('[')
+            && let Some(end) = rest.find(']')
+        {
+            let labels: Vec<String> = rest[1..end]
+                .split(',')
+                .map(|s| normalize_ws(s.trim().trim_matches('"')))
+                .filter(|s| !s.is_empty())
+                .collect();
+            return Some(Statement::XyChartXAxis { labels, span });
+        }
+        // Simple text x-axis label
+        let label = rest.trim_matches('"').to_string();
+        if !label.is_empty() {
+            return Some(Statement::XyChartXAxis { labels: vec![label], span });
+        }
+    }
+    // y-axis "Label" min --> max
+    if lower.starts_with("y-axis") {
+        let rest = trimmed["y-axis".len()..].trim();
+        let mut label = String::new();
+        let mut remaining = rest;
+        if remaining.starts_with('"')
+            && let Some(end_q) = remaining[1..].find('"')
+        {
+            label = remaining[1..1 + end_q].to_string();
+            remaining = remaining[2 + end_q..].trim();
+        }
+        let mut min_val = None;
+        let mut max_val = None;
+        if let Some(arrow_pos) = remaining.find("-->") {
+            let before = remaining[..arrow_pos].trim();
+            let after = remaining[arrow_pos + 3..].trim();
+            min_val = before.parse::<f64>().ok();
+            max_val = after.parse::<f64>().ok();
+        } else if !remaining.is_empty() && label.is_empty() {
+            label = remaining.trim_matches('"').to_string();
+        }
+        return Some(Statement::XyChartYAxis { label, min: min_val, max: max_val, span });
+    }
+    // bar [v1, v2, ...]
+    if lower.starts_with("bar") {
+        let rest = trimmed["bar".len()..].trim();
+        if let Some(data) = parse_xychart_data_array(rest) {
+            return Some(Statement::XyChartSeries(XyChartSeries {
+                kind: XySeriesKind::Bar,
+                data,
+                span,
+            }));
+        }
+    }
+    // line [v1, v2, ...]
+    if lower.starts_with("line") {
+        let rest = trimmed["line".len()..].trim();
+        if let Some(data) = parse_xychart_data_array(rest) {
+            return Some(Statement::XyChartSeries(XyChartSeries {
+                kind: XySeriesKind::Line,
+                data,
+                span,
+            }));
+        }
+    }
+    None
+}
+
+fn parse_xychart_data_array(s: &str) -> Option<Vec<f64>> {
+    let s = s.trim();
+    if !s.starts_with('[') { return None; }
+    let end = s.find(']')?;
+    let inner = &s[1..end];
+    let vals: Vec<f64> = inner
+        .split(',')
+        .filter_map(|v| v.trim().parse::<f64>().ok())
+        .collect();
+    if vals.is_empty() { return None; }
+    Some(vals)
 }
 
 fn parse_timeline_line(trimmed: &str, line: &str, span: Span) -> Option<Statement> {
@@ -11408,6 +11555,67 @@ B --> C
     }
 
     #[test]
+    fn parse_xychart_bar_and_line_series() {
+        let input = concat!(
+            "xychart-beta\n",
+            "    title Sales\n",
+            "    x-axis [jan, feb, mar]\n",
+            "    y-axis \"Revenue\" 0 --> 100\n",
+            "    bar [10, 20, 30]\n",
+            "    line [15, 25, 35]\n",
+        );
+        let ast = parse(input).expect("parse");
+        assert_eq!(ast.diagram_type, DiagramType::XyChart);
+        let xaxes: Vec<_> = ast.statements.iter()
+            .filter(|s| matches!(s, Statement::XyChartXAxis { .. }))
+            .collect();
+        assert_eq!(xaxes.len(), 1);
+        if let Statement::XyChartXAxis { labels, .. } = &xaxes[0] {
+            assert_eq!(labels, &["jan", "feb", "mar"]);
+        }
+        let yaxes: Vec<_> = ast.statements.iter()
+            .filter(|s| matches!(s, Statement::XyChartYAxis { .. }))
+            .collect();
+        assert_eq!(yaxes.len(), 1);
+        if let Statement::XyChartYAxis { label, min, max, .. } = &yaxes[0] {
+            assert_eq!(label, "Revenue");
+            assert_eq!(*min, Some(0.0));
+            assert_eq!(*max, Some(100.0));
+        }
+        let series: Vec<_> = ast.statements.iter()
+            .filter(|s| matches!(s, Statement::XyChartSeries(_)))
+            .collect();
+        assert_eq!(series.len(), 2);
+        if let Statement::XyChartSeries(s) = &series[0] {
+            assert_eq!(s.kind, XySeriesKind::Bar);
+            assert_eq!(s.data, vec![10.0, 20.0, 30.0]);
+        }
+        if let Statement::XyChartSeries(s) = &series[1] {
+            assert_eq!(s.kind, XySeriesKind::Line);
+            assert_eq!(s.data, vec![15.0, 25.0, 35.0]);
+        }
+    }
+
+    #[test]
+    fn xychart_ir_produces_series_nodes() {
+        let input = concat!(
+            "xychart-beta\n",
+            "    x-axis [a, b]\n",
+            "    bar [1, 2]\n",
+        );
+        let ast = parse(input).expect("parse");
+        let ir = normalize_ast_to_ir(
+            &ast,
+            &MermaidConfig::default(),
+            &MermaidCompatibilityMatrix::default(),
+            &MermaidFallbackPolicy::default(),
+        );
+        assert!(ir.ir.nodes.len() >= 2, "expected xaxis + series nodes");
+        let has_bar = ir.ir.nodes.iter().any(|n| n.classes.contains(&"xychart_bar".to_string()));
+        assert!(has_bar, "expected xychart_bar class on a node");
+    }
+
+    #[test]
     fn parse_timeline_sections_and_events() {
         let input = concat!(
             "timeline\n",
@@ -11457,9 +11665,7 @@ B --> C
         );
         assert!(!ir.ir.nodes.is_empty(), "expected at least one node");
         assert!(
-            ir.ir.nodes[0]
-                .classes
-                .contains(&"timeline_period".to_string()),
+            ir.ir.nodes[0].classes.contains(&"timeline_period".to_string()),
             "expected timeline_period class on node"
         );
     }
@@ -11478,14 +11684,8 @@ B --> C
         let label_id = ir.ir.nodes[0].label.expect("node should have label");
         let label_text = &ir.ir.labels[label_id.0].text;
         assert!(label_text.contains("2020"), "label should include period");
-        assert!(
-            label_text.contains("Alpha"),
-            "label should include first event"
-        );
-        assert!(
-            label_text.contains("Beta"),
-            "label should include second event"
-        );
+        assert!(label_text.contains("Alpha"), "label should include first event");
+        assert!(label_text.contains("Beta"), "label should include second event");
     }
 
     #[test]
@@ -11682,6 +11882,7 @@ B --> C
         );
     }
 
+
     #[test]
     fn journey_score_bar_visualization() {
         let bar5 = journey_score_bar(5);
@@ -11704,21 +11905,12 @@ B --> C
         );
         let ast = parse(input).expect("parse journey");
         let ir = normalize_ast_to_ir(
-            &ast,
-            &MermaidConfig::default(),
+            &ast, &MermaidConfig::default(),
             &MermaidCompatibilityMatrix::default(),
             &MermaidFallbackPolicy::default(),
         );
-        let has_5 = ir
-            .ir
-            .nodes
-            .iter()
-            .any(|n| n.classes.iter().any(|c| c == "journey_score_5"));
-        let has_1 = ir
-            .ir
-            .nodes
-            .iter()
-            .any(|n| n.classes.iter().any(|c| c == "journey_score_1"));
+        let has_5 = ir.ir.nodes.iter().any(|n| n.classes.iter().any(|c| c == "journey_score_5"));
+        let has_1 = ir.ir.nodes.iter().any(|n| n.classes.iter().any(|c| c == "journey_score_1"));
         assert!(has_5, "should have journey_score_5 class");
         assert!(has_1, "should have journey_score_1 class");
     }
@@ -11732,24 +11924,15 @@ B --> C
         );
         let ast = parse(input).expect("parse");
         let ir = normalize_ast_to_ir(
-            &ast,
-            &MermaidConfig::default(),
+            &ast, &MermaidConfig::default(),
             &MermaidCompatibilityMatrix::default(),
             &MermaidFallbackPolicy::default(),
         );
         assert!(!ir.ir.nodes.is_empty());
         let node = &ir.ir.nodes[0];
         let label = ir.ir.labels.get(node.label.unwrap().0).unwrap();
-        assert!(
-            label.text.contains("Alice"),
-            "should contain Alice: {}",
-            label.text
-        );
-        assert!(
-            label.text.contains("Bob"),
-            "should contain Bob: {}",
-            label.text
-        );
+        assert!(label.text.contains("Alice"), "should contain Alice: {}", label.text);
+        assert!(label.text.contains("Bob"), "should contain Bob: {}", label.text);
     }
 
     #[test]

@@ -518,6 +518,7 @@ mod tests {
         journey: usize,
         requirement: usize,
         timeline: usize,
+        xy_chart: usize,
         raw: usize,
     }
 
@@ -555,6 +556,7 @@ mod tests {
                 | Statement::RequirementRelation(_)
                 | Statement::RequirementElement(_) => counts.requirement += 1,
                 Statement::TimelineSection { .. } | Statement::TimelineEvent(_) => counts.timeline += 1,
+                Statement::XyChartXAxis { .. } | Statement::XyChartYAxis { .. } | Statement::XyChartSeries(_) => counts.xy_chart += 1,
                 Statement::Raw { .. } => counts.raw += 1,
             }
         }
@@ -586,6 +588,7 @@ mod tests {
             + c.journey
             + c.requirement
             + c.timeline
+            + c.xy_chart
             + c.raw
     }
 
