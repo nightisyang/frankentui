@@ -79,6 +79,15 @@ fn bench_buffer_set(c: &mut Criterion) {
         })
     });
 
+    // set_fast: inline fast path (no scissor/opacity/overlap when trivial)
+    group.bench_function("set_fast_single", |b| {
+        let mut buf = Buffer::new(80, 24);
+        b.iter(|| {
+            buf.set_fast(black_box(40), black_box(12), cell);
+            black_box(&buf);
+        })
+    });
+
     // set_raw: fill a full row
     group.bench_function("set_raw_row_80", |b| {
         let mut buf = Buffer::new(80, 24);
@@ -135,6 +144,17 @@ fn bench_buffer_fill(c: &mut Criterion) {
         let rect = Rect::new(0, 0, 40, 12);
         b.iter(|| {
             buf.fill(rect, cell);
+            black_box(&buf);
+        })
+    });
+
+    // Partial fill on large buffer (medium path target)
+    group.bench_function("fill_half_width_200x60", |b| {
+        let mut buf = Buffer::new(200, 60);
+        let rect = Rect::new(0, 0, 100, 60);
+        let fill_cell = Cell::from_char('.').with_bg(PackedRgba::rgb(0, 0, 64));
+        b.iter(|| {
+            buf.fill(rect, fill_cell);
             black_box(&buf);
         })
     });
