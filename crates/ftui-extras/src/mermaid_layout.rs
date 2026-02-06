@@ -5575,6 +5575,7 @@ mod tests {
                 guard: empty_guard_report(),
             },
             constraints: vec![],
+            journey_tasks: vec![],
         }
     }
     fn count_crossings_bruteforce(
@@ -6826,6 +6827,7 @@ mod tests {
                 guard: MermaidGuardReport::default(),
             },
             constraints: vec![],
+            journey_tasks: vec![],
         }
     }
     #[test]
@@ -7890,6 +7892,7 @@ mod tests {
                 guard: empty_guard_report(),
             },
             constraints: vec![],
+            journey_tasks: vec![],
         }
     }
     #[test]
@@ -7994,6 +7997,7 @@ mod tests {
                 guard: empty_guard_report(),
             },
             constraints: vec![],
+            journey_tasks: vec![],
         }
     }
     #[test]
@@ -8711,6 +8715,7 @@ mod label_tests {
                 guard: MermaidGuardReport::default(),
             },
             constraints: vec![],
+            journey_tasks: vec![],
         }
     }
 

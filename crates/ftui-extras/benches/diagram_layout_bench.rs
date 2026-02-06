@@ -94,6 +94,7 @@ fn make_ir(
             guard: MermaidGuardReport::default(),
         },
         constraints: Vec::new(),
+        journey_tasks: Vec::new(),
     }
 }
 

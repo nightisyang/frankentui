@@ -3822,6 +3822,7 @@ pub fn normalize_ast_to_ir(
     }
 
     let mut constraints: Vec<LayoutConstraint> = Vec::new();
+    let mut journey_tasks_out: Vec<IrJourneyTask> = Vec::new();
 
     for statement in &ast.statements {
         match statement {
@@ -4211,7 +4212,7 @@ pub fn normalize_ast_to_ir(
                 } else {
                     format!("{}\n{} {}", task.title, score_bar, task.actors.join(", "))
                 };
-                let _ = upsert_node(
+                let node_idx = upsert_node(
                     &id,
                     Some(&label_text),
                     NodeShape::Rect,
@@ -4223,8 +4224,16 @@ pub fn normalize_ast_to_ir(
                     &mut implicit_warned,
                     &mut warnings,
                 );
+                journey_tasks_out.push(IrJourneyTask {
+                    node_id: IrNodeId(node_idx),
+                    title: task.title.clone(),
+                    score: task.score,
+                    actors: task.actors.clone(),
+                });
                 if let Some(draft) = node_drafts.last_mut() {
-                    draft.classes.push(format!("journey_score_{}", task.score.min(5)));
+                    draft
+                        .classes
+                        .push(format!("journey_score_{}", task.score.min(5)));
                 }
                 if let Some(cluster_idx) = cluster_stack.last().copied() {
                     cluster_drafts[cluster_idx].members.push(id);
@@ -4690,6 +4699,7 @@ pub fn normalize_ast_to_ir(
         links: resolved_links,
         meta,
         constraints,
+        journey_tasks: journey_tasks_out,
     };
 
     let degradation = ir.meta.guard.degradation.clone();
@@ -4982,6 +4992,15 @@ pub struct JourneyTask {
     pub score: u8,
     pub actors: Vec<String>,
     pub span: Span,
+}
+
+/// Journey task with score and actor data preserved for layout/rendering.
+#[derive(Debug, Clone)]
+pub struct IrJourneyTask {
+    pub node_id: IrNodeId,
+    pub title: String,
+    pub score: u8,
+    pub actors: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -5749,6 +5768,7 @@ pub struct MermaidDiagramIr {
     pub links: Vec<IrLink>,
     pub meta: MermaidDiagramMeta,
     pub constraints: Vec<LayoutConstraint>,
+    pub journey_tasks: Vec<IrJourneyTask>,
 }
 
 #[derive(Debug, Clone)]
@@ -8170,8 +8190,12 @@ fn journey_score_bar(score: u8) -> String {
     let filled = score.min(5) as usize;
     let empty = 5 - filled;
     let mut bar = String::with_capacity(5);
-    for _ in 0..filled { bar.push('\u{25cf}'); }
-    for _ in 0..empty { bar.push('\u{25cb}'); }
+    for _ in 0..filled {
+        bar.push('\u{25cf}');
+    }
+    for _ in 0..empty {
+        bar.push('\u{25cb}');
+    }
     bar
 }
 
@@ -10483,6 +10507,7 @@ mod tests {
                 guard: MermaidGuardReport::default(),
             },
             constraints: vec![],
+            journey_tasks: vec![],
         }
     }
 
@@ -11493,7 +11518,6 @@ B --> C
         );
     }
 
-
     #[test]
     fn journey_score_bar_visualization() {
         let bar5 = journey_score_bar(5);
@@ -11516,12 +11540,21 @@ B --> C
         );
         let ast = parse(input).expect("parse journey");
         let ir = normalize_ast_to_ir(
-            &ast, &MermaidConfig::default(),
+            &ast,
+            &MermaidConfig::default(),
             &MermaidCompatibilityMatrix::default(),
             &MermaidFallbackPolicy::default(),
         );
-        let has_5 = ir.ir.nodes.iter().any(|n| n.classes.iter().any(|c| c == "journey_score_5"));
-        let has_1 = ir.ir.nodes.iter().any(|n| n.classes.iter().any(|c| c == "journey_score_1"));
+        let has_5 = ir
+            .ir
+            .nodes
+            .iter()
+            .any(|n| n.classes.iter().any(|c| c == "journey_score_5"));
+        let has_1 = ir
+            .ir
+            .nodes
+            .iter()
+            .any(|n| n.classes.iter().any(|c| c == "journey_score_1"));
         assert!(has_5, "should have journey_score_5 class");
         assert!(has_1, "should have journey_score_1 class");
     }
@@ -11535,15 +11568,24 @@ B --> C
         );
         let ast = parse(input).expect("parse");
         let ir = normalize_ast_to_ir(
-            &ast, &MermaidConfig::default(),
+            &ast,
+            &MermaidConfig::default(),
             &MermaidCompatibilityMatrix::default(),
             &MermaidFallbackPolicy::default(),
         );
         assert!(!ir.ir.nodes.is_empty());
         let node = &ir.ir.nodes[0];
         let label = ir.ir.labels.get(node.label.unwrap().0).unwrap();
-        assert!(label.text.contains("Alice"), "should contain Alice: {}", label.text);
-        assert!(label.text.contains("Bob"), "should contain Bob: {}", label.text);
+        assert!(
+            label.text.contains("Alice"),
+            "should contain Alice: {}",
+            label.text
+        );
+        assert!(
+            label.text.contains("Bob"),
+            "should contain Bob: {}",
+            label.text
+        );
     }
 
     #[test]
