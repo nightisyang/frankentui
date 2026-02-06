@@ -12,13 +12,13 @@
 ││Block math:              │ │                         │ ╭──Unicode Showcase──╮│
 ││                         │ │                         │ │Text        │Type  │││
 ││  ∑ᵢ₌₁ⁿ xᵢ = n(n+1)/2    │ │                         │ │Hello       │ASCII │││
-││                         │ │                         │ │????    │CJK   │││
-││  ∫_{−∞}^{∞} e^{−x²} dx  │ │                         │ │?????  │Hiraga│││
-││= √{π}                   │ │                         │ │???      │Emoji │││
+││                         │ │                         │ │????????    │CJK   │││
+││  ∫_{−∞}^{∞} e^{−x²} dx  │ │                         │ │??????????  │Hiraga│││
+││= √{π}                   │ │                         │ │??????      │Emoji │││
 ││                         │ │  [░░░░░░░░░░░░░░░░░░░░░]│ │café        │Latin+│││
 ││Admonitions              │ │  Detection: 0 indicators│ │α β γ δ     │Greek │││
 ││                         │ │  Confidence: 0% | Chars:│ │→ ← ↑ ↓     │Arrows│││
-││?  NOTE                 │ │  Space: play/pause | r: │ ╰────────────────────╯│
+││??  NOTE                 │ │  Space: play/pause | r: │ ╰────────────────────╯│
 │╰─────────────────────────╯ ╰─────────────────────────╯                       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
  Markdown [15/42]  Cyberpunk Aurora     Tab/Shift+Tab: next/prev      0x0 00:00 

@@ -9,14 +9,14 @@
 │3  - Soft wrap enabled      │╰────────────────────────╯│INFO  render: diff    │
 │4  - Line numbers           │╭File Picker─────────────╮╰──────────────────────╯
 │                            ││.                       │╭ProgressBar───────────╮
-│                            ││> ? benches            ││          0%          │
-│                            ││  ? data               ││         25%          │
-│                            ││  ? proptest-regression││         50%          │
-╰────────────────────────────╯│  ? src                ││         75%          │
+│                            ││> ?? benches            ││          0%          │
+│                            ││  ?? data               ││         25%          │
+│                            ││  ?? proptest-regression││         50%          │
+╰────────────────────────────╯│  ?? src                ││         75%          │
 ╭Checkbo╮╭Select╮╭Validation ╮╰────────────────────────╯╰──────────────────────╯
 │[ ] Ena││Select││! Invalid …│╭Notifications───────────╮╭Spinners──────────────╮
 │[x] Syn││Number││ETA  00:59 ││                        ││⠋ Loading (DOTS)      │
-│( ) Lig││Slider││? …       ││                        │╰──────────────────────╯
+│( ) Lig││Slider││?? …       ││                        │╰──────────────────────╯
 │(*) Dar││      ││           ││                        │╭Toast─────────────────╮
 │       ││      ││           ││                        ││                      │
 │       ││      ││           ││                        ││                      │

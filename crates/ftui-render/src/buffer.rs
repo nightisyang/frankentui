@@ -749,8 +749,10 @@ impl Buffer {
     /// always identical to calling `set()` directly.
     #[inline]
     pub fn set_fast(&mut self, x: u16, y: u16, cell: Cell) {
-        // Bail to full path for wide or continuation cells
-        if cell.content.width_hint() > 1 || cell.is_continuation() {
+        // Bail to full path for wide, continuation, or semi-transparent bg cells.
+        // set() always composites bg over the existing cell (src-over), which is
+        // a no-op only when bg alpha is 255.
+        if cell.content.width_hint() > 1 || cell.is_continuation() || cell.bg.a() != 255 {
             return self.set(x, y, cell);
         }
 
@@ -770,7 +772,9 @@ impl Buffer {
             return self.set(x, y, cell);
         }
 
-        // All fast-path conditions met: direct write
+        // All fast-path conditions met: direct write.
+        // bg compositing is safe to skip: cell.bg.a() == 255 means
+        // cell.bg.over(existing_bg) == cell.bg for any existing_bg.
         self.cells[idx] = cell;
         self.mark_dirty_span(y, x, x.saturating_add(1));
     }
@@ -935,8 +939,8 @@ impl Buffer {
         }
 
         // Medium path: partial-width fill with opaque, single-width cell, base scissor/opacity.
-        // Direct cell writes with per-row dirty span (no per-cell overlap cleanup needed since
-        // fill overwrites the entire clipped region).
+        // Direct slice::fill per row instead of per-cell set(). We only need to handle
+        // wide-char fragments at the fill boundaries (interior cells are fully overwritten).
         if cell_width <= 1
             && !cell.is_continuation()
             && self.current_opacity() >= 1.0
@@ -948,8 +952,40 @@ impl Buffer {
             let x_end = clipped.right() as usize;
             for y in clipped.y..clipped.bottom() {
                 let row_start = y as usize * row_width;
+                let mut dirty_left = clipped.x;
+                let mut dirty_right = clipped.right();
+
+                // Left boundary: if first fill cell is a continuation, its wide-char
+                // head is outside the fill region and would be orphaned. Clear it.
+                if x_start > 0 && self.cells[row_start + x_start].is_continuation() {
+                    for hx in (0..x_start).rev() {
+                        let c = self.cells[row_start + hx];
+                        if c.is_continuation() {
+                            self.cells[row_start + hx] = Cell::default();
+                            dirty_left = hx as u16;
+                        } else {
+                            if c.content.width() > 1 {
+                                self.cells[row_start + hx] = Cell::default();
+                                dirty_left = hx as u16;
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // Right boundary: clear orphaned continuations past the fill whose
+                // head is being overwritten.
+                {
+                    let mut cx = x_end;
+                    while cx < row_width && self.cells[row_start + cx].is_continuation() {
+                        self.cells[row_start + cx] = Cell::default();
+                        dirty_right = (cx as u16).saturating_add(1);
+                        cx += 1;
+                    }
+                }
+
                 self.cells[row_start + x_start..row_start + x_end].fill(cell);
-                self.mark_dirty_span(y, clipped.x, clipped.right());
+                self.mark_dirty_span(y, dirty_left, dirty_right);
             }
             return;
         }

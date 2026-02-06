@@ -1182,6 +1182,8 @@ struct MermaidShowcaseState {
     palette: DiagramPalettePreset,
     /// Whether the help overlay is visible.
     help_visible: bool,
+    /// Whether the minimap overlay is visible.
+    show_minimap: bool,
     /// Whether the debug overlay is visible.
     /// Debug overlay flags (node bounds, edge routes, ports, grid).
     debug_overlay: DebugOverlayFlags,
@@ -1259,6 +1261,7 @@ impl MermaidShowcaseState {
             search_matches: Vec::new(),
             palette: DiagramPalettePreset::Default,
             help_visible: false,
+            show_minimap: false,
             debug_overlay: DebugOverlayFlags::default(),
         };
         state.recompute_metrics();
@@ -1667,6 +1670,9 @@ impl MermaidShowcaseState {
                     if self.help_visible { "show" } else { "hide" }.to_string(),
                 );
             }
+            MermaidShowcaseAction::ToggleMinimap => {
+                self.show_minimap = !self.show_minimap;
+            }
             MermaidShowcaseAction::ToggleDebugOverlay => {
                 self.debug_overlay.toggle_all();
                 self.bump_render();
@@ -1839,6 +1845,7 @@ enum MermaidShowcaseAction {
     CyclePalette,
     PrevPalette,
     ToggleHelp,
+    ToggleMinimap,
     ToggleDebugOverlay,
     ToggleDebugBounds,
     ToggleDebugRoutes,
@@ -2627,6 +2634,9 @@ impl MermaidShowcaseScreen {
         if let KeyCode::Char('?') = event.code {
             return Some(MermaidShowcaseAction::ToggleHelp);
         }
+        if let KeyCode::Char('M') = event.code {
+            return Some(MermaidShowcaseAction::ToggleMinimap);
+        }
 
         // Mode-specific dispatch
         match self.state.mode {
@@ -2860,6 +2870,30 @@ impl MermaidShowcaseScreen {
         self.ensure_render_cache(inner);
         let cache = self.cache.borrow();
         self.blit_buffer(frame, inner, &cache.buffer, self.state.viewport_pan);
+
+        // Minimap overlay.
+        if self.state.show_minimap
+            && let Some(ref layout) = cache.layout
+        {
+            let minimap = ftui_extras::mermaid_minimap::Minimap::new(
+                layout,
+                ftui_extras::mermaid_minimap::MinimapConfig::default(),
+            );
+            if !minimap.is_trivial() {
+                let viewport_rect = ftui_extras::mermaid_layout::LayoutRect {
+                    x: f64::from(-self.state.viewport_pan.0),
+                    y: f64::from(-self.state.viewport_pan.1),
+                    width: f64::from(inner.width),
+                    height: f64::from(inner.height),
+                };
+                minimap.render(
+                    inner,
+                    &mut frame.buffer,
+                    Some(&viewport_rect),
+                    self.state.selected_node_idx,
+                );
+            }
+        }
     }
 
     fn render_controls_panel(&self, frame: &mut Frame, area: Rect) {

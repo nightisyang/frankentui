@@ -23,8 +23,11 @@
 use std::cell::Cell;
 use std::collections::VecDeque;
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
+
+#[cfg(not(test))]
+use std::sync::atomic::AtomicU64;
 
 use ftui_core::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
@@ -54,8 +57,18 @@ const MAX_EVENT_LOG: usize = 12;
 
 /// Global diagnostic enable flag (checked once at startup).
 static DIAGNOSTICS_ENABLED: AtomicBool = AtomicBool::new(false);
-/// Global monotonic event counter for deterministic ordering.
+/// Monotonic event counter for deterministic ordering.
+///
+/// Note: tests in this crate run in parallel by default. A single global
+/// counter makes `reset_event_counter()` inherently racy across tests, so we
+/// use a per-thread counter under `cfg(test)` to keep unit tests deterministic.
+#[cfg(not(test))]
 static EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+thread_local! {
+    static EVENT_COUNTER: Cell<u64> = const { Cell::new(0) };
+}
 
 /// Initialize diagnostic settings from environment.
 ///
@@ -81,11 +94,27 @@ pub fn set_diagnostics_enabled(enabled: bool) {
 /// Get next monotonic event sequence number.
 #[inline]
 fn next_event_seq() -> u64 {
-    EVENT_COUNTER.fetch_add(1, Ordering::Relaxed)
+    #[cfg(test)]
+    {
+        EVENT_COUNTER.with(|counter| {
+            let seq = counter.get();
+            counter.set(seq.saturating_add(1));
+            seq
+        })
+    }
+
+    #[cfg(not(test))]
+    {
+        EVENT_COUNTER.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 /// Reset event counter (for testing determinism).
 pub fn reset_event_counter() {
+    #[cfg(test)]
+    EVENT_COUNTER.with(|counter| counter.set(0));
+
+    #[cfg(not(test))]
     EVENT_COUNTER.store(0, Ordering::Relaxed);
 }
 

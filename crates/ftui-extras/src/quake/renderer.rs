@@ -189,16 +189,14 @@ impl QuakeRenderer {
             let e1 = [v1[0] - v0[0], v1[1] - v0[1], v1[2] - v0[2]];
             let e2 = [v2[0] - v0[0], v2[1] - v0[1], v2[2] - v0[2]];
             let nz = e1[0] * e2[1] - e1[1] * e2[0];
-            let face_center_z = self.view_verts_buf.iter().map(|v| v[2]).sum::<f32>()
-                / self.view_verts_buf.len() as f32;
             let face_normal_view = [
                 e1[1] * e2[2] - e1[2] * e2[1],
                 e1[2] * e2[0] - e1[0] * e2[2],
                 nz,
             ];
-            let dot = face_normal_view[0] * self.view_verts_buf[0][0]
-                + face_normal_view[1] * self.view_verts_buf[0][1]
-                + face_normal_view[2] * face_center_z;
+            let dot = face_normal_view[0] * v0[0]
+                + face_normal_view[1] * v0[1]
+                + face_normal_view[2] * v0[2];
             if dot > 0.0 && !matches!(face.tex_type, TexType::Floor | TexType::Ceiling) {
                 self.stats.faces_culled += 1;
                 continue;
@@ -259,7 +257,11 @@ impl QuakeRenderer {
                 let next = (i + 1) % 3;
                 let prev = (i + 2) % 3;
                 if verts[next][2] >= NEAR_CLIP {
-                    let t = (NEAR_CLIP - verts[i][2]) / (verts[next][2] - verts[i][2]);
+                    let denom = verts[next][2] - verts[i][2];
+                    if denom.abs() < 1e-6 {
+                        return; // Both at near-clip boundary — degenerate
+                    }
+                    let t = (NEAR_CLIP - verts[i][2]) / denom;
                     let z = NEAR_CLIP;
                     let x = verts[i][0] + t * (verts[next][0] - verts[i][0]);
                     let y = verts[i][1] + t * (verts[next][1] - verts[i][1]);
@@ -270,7 +272,11 @@ impl QuakeRenderer {
                         inv_z,
                     ];
                 } else if verts[prev][2] >= NEAR_CLIP {
-                    let t = (NEAR_CLIP - verts[i][2]) / (verts[prev][2] - verts[i][2]);
+                    let denom = verts[prev][2] - verts[i][2];
+                    if denom.abs() < 1e-6 {
+                        return; // Both at near-clip boundary — degenerate
+                    }
+                    let t = (NEAR_CLIP - verts[i][2]) / denom;
                     let z = NEAR_CLIP;
                     let x = verts[i][0] + t * (verts[prev][0] - verts[i][0]);
                     let y = verts[i][1] + t * (verts[prev][1] - verts[i][1]);

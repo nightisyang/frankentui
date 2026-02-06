@@ -10,15 +10,15 @@
 │Block math:              │ │                         │ ╭───Unicode Showcase───╮
 │                         │ │                         │ │Text        │Type    ││
 │  ∑ᵢ₌₁ⁿ xᵢ = n(n+1)/2    │ │                         │ │Hello       │ASCII   ││
-│                         │ │                         │ │????    │CJK     ││
-│  ∫_{−∞}^{∞} e^{−x²} dx  │ │                         │ │?????  │Hiragana││
-│= √{π}                   │ │                         │ │???      │Emoji   ││
+│                         │ │                         │ │????????    │CJK     ││
+│  ∫_{−∞}^{∞} e^{−x²} dx  │ │                         │ │??????????  │Hiragana││
+│= √{π}                   │ │                         │ │??????      │Emoji   ││
 │                         │ │                         │ │café        │Latin+ac││
 │Admonitions              │ │                         │ │α β γ δ     │Greek   ││
 │                         │ │                         │ │→ ← ↑ ↓     │Arrows  ││
-│?  NOTE                 │ │                         │ ╰──────────────────────╯
+│??  NOTE                 │ │                         │ ╰──────────────────────╯
 │┃ Information note with  │ │  [░░░░░░░░░░░░░░░░░░░░░]│                         
 │rich emphasis.           │ │  Detection: 0 indicators│ ╭Wrap: Word | Align: Le╮
 │                         │ │  Confidence: 0% | Chars:│ │w: cycle wrap | a: cyc│
-│? TIP                   │ │  Space: play/pause | r: │ │The quick brown fox   │
+│?? TIP                   │ │  Space: play/pause | r: │ │The quick brown fox   │
 ╰─────────────────────────╯ ╰─────────────────────────╯ ╰──────────────────────╯

@@ -1,4 +1,4 @@
-                                 [English]  Español  Français  Русский  العربية  ???                                 
+                                 [English]  Español  Français  Русский  العربية  ??????                                 
                                                                                                                         
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 ╭Unicode Stress Lab────────────────────────────────────────────────────────────────────────────────────────────────────╮
@@ -33,8 +33,8 @@
 │Cursor 1/13  (Shift+Left/Right)                                │ │Known tricky cases (expected width)                 │
 │Idx  Grapheme  Width  Bytes                                    │ │                                                    │
 │> 0  م  w=1  b=2                                               │ │Combining ?       exp=1 got=1 ok                    │
-│  1  ر  w=1  b=2                                               │ │CJK       ?        exp=2 got=2 ok                  │
-│  2  ح  w=1  b=2                                               │ │Emoji     ?        exp=2 got=2 ok                  │
-│  3  ب  w=1  b=2                                               │ │Flag      ?       exp=2 got=2 ok                   │
+│  1  ر  w=1  b=2                                               │ │CJK       ??        exp=2 got=2 ok                  │
+│  2  ح  w=1  b=2                                               │ │Emoji     ??        exp=2 got=2 ok                  │
+│  3  ب  w=1  b=2                                               │ │Flag      ??       exp=2 got=2 ok                   │
 ╰───────────────────────────────────────────────────────────────╯ ╰────────────────────────────────────────────────────╯
  Tab/1-4: panels (Stress Lab)  L/R: locale  Set: rtl  Sample: 1/3  Cursor: 1/13  Current: English (en)                  

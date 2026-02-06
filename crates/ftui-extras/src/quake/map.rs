@@ -93,33 +93,59 @@ impl QuakeMap {
     }
 
     /// Get floor height at a 2D position by finding which room contains it.
+    ///
+    /// When multiple rooms overlap (e.g. a platform inside a hub), returns the
+    /// highest floor — the surface the player would actually stand on.
     pub fn floor_height_at(&self, x: f32, y: f32) -> f32 {
+        let mut best = None;
         for room in &self.rooms {
             if x >= room.x && x <= room.x + room.width && y >= room.y && y <= room.y + room.height {
-                return room.floor_z;
+                best = Some(match best {
+                    Some(prev) => f32::max(prev, room.floor_z),
+                    None => room.floor_z,
+                });
             }
         }
-        // Default: lowest floor
-        self.rooms
-            .iter()
-            .map(|r| r.floor_z)
-            .fold(f32::MAX, f32::min)
+        best.unwrap_or_else(|| {
+            // Default: lowest floor
+            self.rooms
+                .iter()
+                .map(|r| r.floor_z)
+                .fold(f32::MAX, f32::min)
+        })
     }
 
     /// Get ceiling height at a 2D position.
+    ///
+    /// When multiple rooms overlap, returns the lowest ceiling — the surface
+    /// that would actually block the player's head.
     pub fn ceiling_height_at(&self, x: f32, y: f32) -> f32 {
+        let mut best = None;
         for room in &self.rooms {
             if x >= room.x && x <= room.x + room.width && y >= room.y && y <= room.y + room.height {
-                return room.ceil_z;
+                best = Some(match best {
+                    Some(prev) => f32::min(prev, room.ceil_z),
+                    None => room.ceil_z,
+                });
             }
         }
-        1000.0 // default high ceiling
+        best.unwrap_or(1000.0)
     }
 
     /// Check if a point (with radius) is inside solid geometry.
-    pub fn point_in_solid(&self, x: f32, y: f32, _z: f32, radius: f32) -> bool {
-        // Check wall collisions
+    ///
+    /// Only checks walls whose vertical extent overlaps the player's Z range.
+    /// This prevents collisions with walls that are above or below the player
+    /// (e.g. step edges of platforms the player is standing on top of).
+    pub fn point_in_solid(&self, x: f32, y: f32, z: f32, radius: f32) -> bool {
+        // Player occupies roughly z..z+PLAYER_HEIGHT; a wall blocks if its
+        // vertical extent overlaps that range.
+        let player_top = z + super::constants::PLAYER_HEIGHT;
         for wall in &self.walls {
+            if wall.ceil_z <= z || wall.floor_z >= player_top {
+                // Wall is entirely above or below the player — skip.
+                continue;
+            }
             if circle_intersects_segment(x, y, radius, wall.x1, wall.y1, wall.x2, wall.y2) {
                 return true;
             }
@@ -524,5 +550,34 @@ mod tests {
         let map = generate_e1m1();
         // Very close to the west wall of spawn room (x=0)
         assert!(map.point_in_solid(-5.0, 128.0, 10.0, 16.0));
+    }
+
+    #[test]
+    fn platform_floor_height_returns_highest() {
+        let map = generate_e1m1();
+        // The raised platform is at (608, 16, 96x96) with floor_z=32,
+        // inside the central hub which has floor_z=-32.
+        // floor_height_at should return 32 (the platform), not -32 (the hub).
+        let h = map.floor_height_at(656.0, 64.0);
+        assert!((h - 32.0).abs() < 0.01, "expected 32.0, got {h}");
+    }
+
+    #[test]
+    fn ceiling_height_returns_lowest() {
+        let map = generate_e1m1();
+        // Platform ceiling is 32+160=192, hub ceiling is 256.
+        // Should return the lower one (192).
+        let h = map.ceiling_height_at(656.0, 64.0);
+        assert!((h - 192.0).abs() < 0.01, "expected 192.0, got {h}");
+    }
+
+    #[test]
+    fn collision_respects_z_bounds() {
+        let map = generate_e1m1();
+        // West wall of spawn room has floor_z=0, ceil_z=192.
+        // Player at z=10 (within wall range) should collide.
+        assert!(map.point_in_solid(-5.0, 128.0, 10.0, 16.0));
+        // Player far above the wall (z=500) should NOT collide.
+        assert!(!map.point_in_solid(-5.0, 128.0, 500.0, 16.0));
     }
 }

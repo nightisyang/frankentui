@@ -61,6 +61,7 @@ use std::path::{Path, PathBuf};
 use ftui_core::terminal_capabilities::{TerminalCapabilities, TerminalProfile};
 use ftui_render::buffer::Buffer;
 use ftui_render::cell::{PackedRgba, StyleFlags};
+use ftui_render::grapheme_pool::GraphemePool;
 
 // Re-export types useful for harness users.
 pub use ftui_core::geometry::Rect;
@@ -79,7 +80,8 @@ pub use time_travel_inspector::TimeTravelInspector;
 /// their natural display width in the output string.
 ///
 /// Grapheme-pool references (multi-codepoint clusters) are rendered as `?`
-/// since the pool is not available here.
+/// repeated to match the grapheme's display width, since the pool is not
+/// available here. This ensures each output line has consistent display width.
 pub fn buffer_to_text(buf: &Buffer) -> String {
     let capacity = (buf.width() as usize + 1) * buf.height() as usize;
     let mut out = String::with_capacity(capacity);
@@ -98,8 +100,55 @@ pub fn buffer_to_text(buf: &Buffer) -> String {
             } else if let Some(c) = cell.content.as_char() {
                 out.push(c);
             } else {
-                // Grapheme ID — pool not available, use placeholder
-                out.push('?');
+                // Grapheme ID — pool not available, use width-correct placeholder
+                let w = cell.content.width();
+                for _ in 0..w.max(1) {
+                    out.push('?');
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Convert a `Buffer` to a plain text string, resolving grapheme pool references.
+///
+/// Like [`buffer_to_text`], but takes an optional [`GraphemePool`] to resolve
+/// multi-codepoint grapheme clusters to their actual text. When the pool is
+/// `None` or a grapheme ID cannot be resolved, falls back to `?` repeated to
+/// match the grapheme's display width.
+pub fn buffer_to_text_with_pool(buf: &Buffer, pool: Option<&GraphemePool>) -> String {
+    let capacity = (buf.width() as usize + 1) * buf.height() as usize;
+    let mut out = String::with_capacity(capacity);
+
+    for y in 0..buf.height() {
+        if y > 0 {
+            out.push('\n');
+        }
+        for x in 0..buf.width() {
+            let cell = buf.get(x, y).unwrap();
+            if cell.is_continuation() {
+                continue;
+            }
+            if cell.is_empty() {
+                out.push(' ');
+            } else if let Some(c) = cell.content.as_char() {
+                out.push(c);
+            } else if let (Some(pool), Some(gid)) = (pool, cell.content.grapheme_id()) {
+                if let Some(text) = pool.get(gid) {
+                    out.push_str(text);
+                } else {
+                    let w = cell.content.width();
+                    for _ in 0..w.max(1) {
+                        out.push('?');
+                    }
+                }
+            } else {
+                // No pool or not a grapheme — width-correct placeholder
+                let w = cell.content.width();
+                for _ in 0..w.max(1) {
+                    out.push('?');
+                }
             }
         }
     }
@@ -199,7 +248,11 @@ pub fn buffer_to_ansi(buf: &Buffer) -> String {
             } else if let Some(c) = cell.content.as_char() {
                 out.push(c);
             } else {
-                out.push('?');
+                // Grapheme ID — pool not available, use width-correct placeholder
+                let w = cell.content.width();
+                for _ in 0..w.max(1) {
+                    out.push('?');
+                }
             }
         }
 
@@ -629,7 +682,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ftui_render::cell::Cell;
+    use ftui_render::cell::{Cell, CellContent, GraphemeId};
 
     #[test]
     fn buffer_to_text_empty() {
@@ -666,6 +719,61 @@ mod tests {
         let text = buffer_to_text(&buf);
         // '中' occupies 1 char in text, continuation skipped, '!' at col 2, space at col 3
         assert_eq!(text, "中! ");
+    }
+
+    #[test]
+    fn buffer_to_text_grapheme_width_correct_placeholder() {
+        // Simulate a width-2 grapheme (e.g., emoji like "⚙️") stored in pool
+        let gid = GraphemeId::new(1, 2); // slot 1, width 2
+        let content = CellContent::from_grapheme(gid);
+        let mut buf = Buffer::new(6, 1);
+        // Buffer::set automatically writes CONTINUATION at x=1 for width-2 content
+        buf.set(0, 0, Cell::new(content));
+        buf.set(2, 0, Cell::from_char('A'));
+        buf.set(3, 0, Cell::from_char('B'));
+        let text = buffer_to_text(&buf);
+        // Grapheme should produce "??" (2 chars for width 2), then "AB", then 2 spaces
+        assert_eq!(text, "??AB  ");
+    }
+
+    #[test]
+    fn buffer_to_text_with_pool_resolves_grapheme() {
+        let mut pool = GraphemePool::new();
+        let gid = pool.intern("⚙\u{fe0f}", 2);
+        let content = CellContent::from_grapheme(gid);
+        let mut buf = Buffer::new(6, 1);
+        // Buffer::set automatically writes CONTINUATION at x=1 for width-2 content
+        buf.set(0, 0, Cell::new(content));
+        buf.set(2, 0, Cell::from_char('A'));
+        let text = buffer_to_text_with_pool(&buf, Some(&pool));
+        // Pool resolves to actual emoji text, then "A", then 3 spaces
+        assert_eq!(text, "⚙\u{fe0f}A   ");
+    }
+
+    #[test]
+    fn buffer_to_text_with_pool_none_falls_back() {
+        let gid = GraphemeId::new(1, 2);
+        let content = CellContent::from_grapheme(gid);
+        let mut buf = Buffer::new(4, 1);
+        // Buffer::set automatically writes CONTINUATION at x=1 for width-2 content
+        buf.set(0, 0, Cell::new(content));
+        buf.set(2, 0, Cell::from_char('!'));
+        let text = buffer_to_text_with_pool(&buf, None);
+        // No pool → falls back to "??" placeholder (width 2)
+        assert_eq!(text, "??! ");
+    }
+
+    #[test]
+    fn buffer_to_ansi_grapheme_width_correct_placeholder() {
+        let gid = GraphemeId::new(1, 2);
+        let content = CellContent::from_grapheme(gid);
+        let mut buf = Buffer::new(4, 1);
+        // Buffer::set automatically writes CONTINUATION at x=1 for width-2 content
+        buf.set(0, 0, Cell::new(content));
+        buf.set(2, 0, Cell::from_char('X'));
+        let ansi = buffer_to_ansi(&buf);
+        // No style → no escapes. Grapheme produces "??", then "X", then space
+        assert_eq!(ansi, "??X ");
     }
 
     #[test]

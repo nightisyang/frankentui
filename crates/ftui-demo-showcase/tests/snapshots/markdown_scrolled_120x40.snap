@@ -4,15 +4,15 @@
 │                                       │ │                                       │ │Dbl-Underline  Curly-Underline  [H│
 │Admonitions                            │ │                                       │ │                                  │
 │                                       │ │                                       │ │Error  Success  Warning  Link  Cod│
-│?  NOTE                               │ │                                       │ │                                  │
+│??  NOTE                               │ │                                       │ │                                  │
 │┃ Information note with rich emphasis. │ │                                       │ ╰──────────────────────────────────╯
 │                                       │ │                                       │                                     
-│? TIP                                 │ │                                       │ ╭─────────Unicode Showcase─────────╮
+│?? TIP                                 │ │                                       │ ╭─────────Unicode Showcase─────────╮
 │┃ Use Tab and Shift+Tab to navigate.   │ │                                       │ │Text         │Type         │Cells │
 │                                       │ │                                       │ │Hello        │ASCII        │5     │
-│?  WARNING                            │ │                                       │ │????     │CJK          │8     │
-│┃ Unsafe mode is forbidden in this     │ │                                       │ │?????   │Hiragana     │10    │
-│project.                               │ │                                       │ │???       │Emoji        │6     │
+│??  WARNING                            │ │                                       │ │????????     │CJK          │8     │
+│┃ Unsafe mode is forbidden in this     │ │                                       │ │??????????   │Hiragana     │10    │
+│project.                               │ │                                       │ │??????       │Emoji        │6     │
 │                                       │ │                                       │ │café         │Latin+accent │4     │
 │Task Lists + Links                     │ │                                       │ │α β γ δ      │Greek        │7     │
 │✓ Inline mode + scrollback             │ │                                       │ │→ ← ↑ ↓      │Arrows       │7     │
@@ -25,8 +25,8 @@
 │Code Blocks                            │ │                                       │ │Supercalifragilisticexpialidocious│
 │                                       │ │                                       │ │is quite a long word that tests   │
 │─── rust ───                           │ │                                       │ │character-level wrapping behavior.│
-│  #[derive(Debug, Clone)]              │ │                                       │ │???? contains CJK characters  │
-│  pub enum Strategy { Full, DirtyRows, │ │                                       │ │that are double-width. ? Ferris  │
+│  #[derive(Debug, Clone)]              │ │                                       │ │???????? contains CJK characters  │
+│  pub enum Strategy { Full, DirtyRows, │ │                                       │ │that are double-width. ?? Ferris  │
 │Redraw }                               │ │                                       │ │says hello!                       │
 │                                       │ │                                       │ │                                  │
 │  pub fn choose(costs: &[f64; 3]) ->   │ │                                       │ │                                  │

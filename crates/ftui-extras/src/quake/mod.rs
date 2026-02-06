@@ -209,9 +209,9 @@ impl QuakeEngine {
 
         for i in 1..=size {
             self.framebuffer.set_pixel(cx + i, cy, color);
-            self.framebuffer.set_pixel(cx.wrapping_sub(i), cy, color);
+            self.framebuffer.set_pixel(cx.saturating_sub(i), cy, color);
             self.framebuffer.set_pixel(cx, cy + i, color);
-            self.framebuffer.set_pixel(cx, cy.wrapping_sub(i), color);
+            self.framebuffer.set_pixel(cx, cy.saturating_sub(i), color);
         }
     }
 
@@ -302,9 +302,9 @@ impl QuakeEngine {
             }
         }
 
-        // Draw player position
-        let px = ox + 2 + ((self.player.pos[0] - min_x) * scale) as u32;
-        let py = oy + 2 + ((self.player.pos[1] - min_y) * scale) as u32;
+        // Draw player position (clamp to minimap bounds)
+        let px = ox + 2 + ((self.player.pos[0] - min_x) * scale).max(0.0) as u32;
+        let py = oy + 2 + ((self.player.pos[1] - min_y) * scale).max(0.0) as u32;
         let player_color = PackedRgba::rgb(255, 255, 0);
         for dy in -1i32..=1 {
             for dx in -1i32..=1 {
@@ -318,8 +318,8 @@ impl QuakeEngine {
 
         // Draw player direction
         let dir_len = 6.0;
-        let dir_x = px as f32 + self.player.yaw.cos() * dir_len;
-        let dir_y = py as f32 + self.player.yaw.sin() * dir_len;
+        let dir_x = (px as f32 + self.player.yaw.cos() * dir_len).max(0.0);
+        let dir_y = (py as f32 + self.player.yaw.sin() * dir_len).max(0.0);
         draw_line_fb(
             &mut self.framebuffer,
             px,

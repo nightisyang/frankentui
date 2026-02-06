@@ -9,14 +9,14 @@
 ││1  FrankenTUI text area     │╰───────────────────────╯│resolved 6         1 ││
 ││2  - Multi-line editing     │╭File Picker────────────╮╰─────────────────────╯│
 ││3  - Soft wrap enabled      ││.                      │╭ProgressBar──────────╮│
-││4  - Line numbers           ││> ? benches           ││         0%          ││
-││                            ││  ? data              ││         25%         ││
-││                            ││  ? proptest-regressio││         50%         ││
+││4  - Line numbers           ││> ?? benches           ││         0%          ││
+││                            ││  ?? data              ││         25%         ││
+││                            ││  ?? proptest-regressio││         50%         ││
 │╰────────────────────────────╯╰───────────────────────╯╰─────────────────────╯│
 │╭Checkbo╮╭Select╮╭Validation ╮╭Notifications──────────╮╭Spinners─────────────╮│
 ││[ ] Ena││Select││! Invalid …││                       ││⠋ Loading (DOTS)     ││
 ││[x] Syn││Number││ETA  00:59 ││                       │╰─────────────────────╯│
-││( ) Lig││Slider││? …       ││                       │╭Toast────────────────╮│
+││( ) Lig││Slider││?? …       ││                       │╭Toast────────────────╮│
 ││(*) Dar││      ││           │╰───────────────────────╯│                     ││
 │╰───────╯╰──────╯╰───────────╯                         ╰─────────────────────╯│
 │*.......                                                                      │

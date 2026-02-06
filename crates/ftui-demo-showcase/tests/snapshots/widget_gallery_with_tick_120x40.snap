@@ -15,11 +15,11 @@
 │                                            │╰────────────────────────────────────╯│                                  │
 │                                            │╭File Picker─────────────────────────╮╰──────────────────────────────────╯
 │                                            ││.                                   │╭ProgressBar───────────────────────╮
-│                                            ││> ? benches                        ││                0%                │
-│                                            ││  ? data                           ││               25%                │
-│                                            ││  ? proptest-regressions           ││               50%                │
-│                                            ││  ? src                            ││               75%                │
-│                                            ││  ? tests                          ││               100%               │
+│                                            ││> ?? benches                        ││                0%                │
+│                                            ││  ?? data                           ││               25%                │
+│                                            ││  ?? proptest-regressions           ││               50%                │
+│                                            ││  ?? src                            ││               75%                │
+│                                            ││  ?? tests                          ││               100%               │
 │                                            ││    .ubsignore                      ││                                  │
 │                                            ││    a.out                           ││                                  │
 │                                            ││    Cargo.toml                      ││                                  │
@@ -27,7 +27,7 @@
 ╭Checkboxes ╮╭Select + N╮╭Validation + Timer─╮│                                    │╭Spinners──────────────────────────╮
 │[ ] Enable ││Select: [H││! Invalid email ad…│╰────────────────────────────────────╯│⠙ Loading (DOTS)                  │
 │[x] Sync on││Number: [-││ETA  00:59         │╭Notifications───────────────────────╮╰──────────────────────────────────╯
-│( ) Light t││Slider: 30││? j/k Navigate …  ││                                    │╭Toast─────────────────────────────╮
+│( ) Light t││Slider: 30││?? j/k Navigate …  ││                                    │╭Toast─────────────────────────────╮
 │(*) Dark th││          ││                   ││                                    ││┌───────────────────────────────┐ │
 │           ││          ││                   ││                                    │││Success                        │ │
 │           ││          ││                   ││                                    │││✓ Settings saved successfully  │ │

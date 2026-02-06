@@ -10,23 +10,23 @@
 │                                       │ │                                       │ ╭─────────Unicode Showcase─────────╮
 │  ∑ᵢ₌₁ⁿ xᵢ = n(n+1)/2                  │ │                                       │ │Text         │Type         │Cells │
 │                                       │ │                                       │ │Hello        │ASCII        │5     │
-│  ∫_{−∞}^{∞} e^{−x²} dx = √{π}         │ │                                       │ │????     │CJK          │8     │
-│                                       │ │                                       │ │?????   │Hiragana     │10    │
-│Admonitions                            │ │                                       │ │???       │Emoji        │6     │
+│  ∫_{−∞}^{∞} e^{−x²} dx = √{π}         │ │                                       │ │????????     │CJK          │8     │
+│                                       │ │                                       │ │??????????   │Hiragana     │10    │
+│Admonitions                            │ │                                       │ │??????       │Emoji        │6     │
 │                                       │ │                                       │ │café         │Latin+accent │4     │
-│?  NOTE                               │ │                                       │ │α β γ δ      │Greek        │7     │
+│??  NOTE                               │ │                                       │ │α β γ δ      │Greek        │7     │
 │┃ Information note with rich emphasis. │ │                                       │ │→ ← ↑ ↓      │Arrows       │7     │
 │                                       │ │                                       │ ╰──────────────────────────────────╯
-│? TIP                                 │ │                                       │                                     
+│?? TIP                                 │ │                                       │                                     
 │┃ Use Tab and Shift+Tab to navigate.   │ │                                       │ ╭─────Wrap: Char | Align: Left─────╮
 │                                       │ │                                       │ │w: cycle wrap | a: cycle alignment│
-│?  WARNING                            │ │                                       │ │The quick brown fox jumps over the│
+│??  WARNING                            │ │                                       │ │The quick brown fox jumps over the│
 │┃ Unsafe mode is forbidden in this     │ │                                       │ │ lazy dog. Supercalifragilisticexp│
 │project.                               │ │                                       │ │ialidocious is quite a long word t│
 │                                       │ │                                       │ │hat tests character-level wrapping│
-│Task Lists + Links                     │ │                                       │ │ behavior. ???? contains CJK c│
+│Task Lists + Links                     │ │                                       │ │ behavior. ???????? contains CJK c│
 │✓ Inline mode + scrollback             │ │                                       │ │haracters that are double-width.  │
-│✓ Deterministic output                 │ │                                       │ │? Ferris says hello!             │
+│✓ Deterministic output                 │ │                                       │ │?? Ferris says hello!             │
 │☐ Time-travel diff heatmap             │ │                                       │ │                                  │
 │☐ Conformal frame-time predictor       │ │                                       │ │                                  │
 │                                       │ │                                       │ │                                  │
