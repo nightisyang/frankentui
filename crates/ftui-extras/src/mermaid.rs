@@ -2879,11 +2879,11 @@ impl MermaidCompatibilityMatrix {
             block_beta: MermaidSupportLevel::Unsupported,
             packet_beta: MermaidSupportLevel::Unsupported,
             architecture_beta: MermaidSupportLevel::Unsupported,
-            c4_context: MermaidSupportLevel::Unsupported,
-            c4_container: MermaidSupportLevel::Unsupported,
-            c4_component: MermaidSupportLevel::Unsupported,
-            c4_dynamic: MermaidSupportLevel::Unsupported,
-            c4_deployment: MermaidSupportLevel::Unsupported,
+            c4_context: MermaidSupportLevel::Partial,
+            c4_container: MermaidSupportLevel::Partial,
+            c4_component: MermaidSupportLevel::Partial,
+            c4_dynamic: MermaidSupportLevel::Partial,
+            c4_deployment: MermaidSupportLevel::Partial,
         }
     }
 
@@ -2939,11 +2939,11 @@ impl Default for MermaidCompatibilityMatrix {
             block_beta: MermaidSupportLevel::Unsupported,
             packet_beta: MermaidSupportLevel::Unsupported,
             architecture_beta: MermaidSupportLevel::Unsupported,
-            c4_context: MermaidSupportLevel::Unsupported,
-            c4_container: MermaidSupportLevel::Unsupported,
-            c4_component: MermaidSupportLevel::Unsupported,
-            c4_dynamic: MermaidSupportLevel::Unsupported,
-            c4_deployment: MermaidSupportLevel::Unsupported,
+            c4_context: MermaidSupportLevel::Partial,
+            c4_container: MermaidSupportLevel::Partial,
+            c4_component: MermaidSupportLevel::Partial,
+            c4_dynamic: MermaidSupportLevel::Partial,
+            c4_deployment: MermaidSupportLevel::Partial,
         }
     }
 }
@@ -4224,7 +4224,9 @@ pub fn normalize_ast_to_ir(
                     &mut warnings,
                 );
                 if let Some(draft) = node_drafts.last_mut() {
-                    draft.classes.push(format!("journey_score_{}", task.score.min(5)));
+                    draft
+                        .classes
+                        .push(format!("journey_score_{}", task.score.min(5)));
                 }
                 if let Some(cluster_idx) = cluster_stack.last().copied() {
                     cluster_drafts[cluster_idx].members.push(id);
@@ -4246,9 +4248,15 @@ pub fn normalize_ast_to_ir(
                 let label_text = if evt.events.is_empty() {
                     evt.period.clone()
                 } else {
-                    format!("{}
-{}", evt.period, evt.events.join("
-"))
+                    format!(
+                        "{}
+{}",
+                        evt.period,
+                        evt.events.join(
+                            "
+"
+                        )
+                    )
                 };
                 let _ = upsert_node(
                     &id,
@@ -4274,8 +4282,16 @@ pub fn normalize_ast_to_ir(
                 let id = format!("xy_xaxis_L{}", span.start.line);
                 let label_text = labels.join(", ");
                 let _ = upsert_node(
-                    &id, Some(&label_text), NodeShape::Rect, *span, false, idx,
-                    &mut node_map, &mut node_drafts, &mut implicit_warned, &mut warnings,
+                    &id,
+                    Some(&label_text),
+                    NodeShape::Rect,
+                    *span,
+                    false,
+                    idx,
+                    &mut node_map,
+                    &mut node_drafts,
+                    &mut implicit_warned,
+                    &mut warnings,
                 );
                 if let Some(draft) = node_drafts.last_mut() {
                     draft.classes.push("xychart_xaxis".to_string());
@@ -4284,8 +4300,16 @@ pub fn normalize_ast_to_ir(
             Statement::XyChartYAxis { label, span, .. } => {
                 let id = format!("xy_yaxis_L{}", span.start.line);
                 let _ = upsert_node(
-                    &id, Some(label), NodeShape::Rect, *span, false, idx,
-                    &mut node_map, &mut node_drafts, &mut implicit_warned, &mut warnings,
+                    &id,
+                    Some(label),
+                    NodeShape::Rect,
+                    *span,
+                    false,
+                    idx,
+                    &mut node_map,
+                    &mut node_drafts,
+                    &mut implicit_warned,
+                    &mut warnings,
                 );
                 if let Some(draft) = node_drafts.last_mut() {
                     draft.classes.push("xychart_yaxis".to_string());
@@ -4297,11 +4321,24 @@ pub fn normalize_ast_to_ir(
                     XySeriesKind::Line => "line",
                 };
                 let id = format!("xy_{}_L{}", kind_str, series.span.start.line);
-                let data_str = series.data.iter().map(|v| format!("{v}")).collect::<Vec<_>>().join(", ");
+                let data_str = series
+                    .data
+                    .iter()
+                    .map(|v| format!("{v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 let label_text = format!("{kind_str}: [{data_str}]");
                 let _ = upsert_node(
-                    &id, Some(&label_text), NodeShape::Rect, series.span, false, idx,
-                    &mut node_map, &mut node_drafts, &mut implicit_warned, &mut warnings,
+                    &id,
+                    Some(&label_text),
+                    NodeShape::Rect,
+                    series.span,
+                    false,
+                    idx,
+                    &mut node_map,
+                    &mut node_drafts,
+                    &mut implicit_warned,
+                    &mut warnings,
                 );
                 if let Some(draft) = node_drafts.last_mut() {
                     draft.classes.push(format!("xychart_{kind_str}"));
@@ -4312,12 +4349,28 @@ pub fn normalize_ast_to_ir(
                 let src_id = normalize_id(&link.source);
                 let tgt_id = normalize_id(&link.target);
                 let _ = upsert_node(
-                    &src_id, Some(&link.source), NodeShape::Rect, link.span, false, idx,
-                    &mut node_map, &mut node_drafts, &mut implicit_warned, &mut warnings,
+                    &src_id,
+                    Some(&link.source),
+                    NodeShape::Rect,
+                    link.span,
+                    false,
+                    idx,
+                    &mut node_map,
+                    &mut node_drafts,
+                    &mut implicit_warned,
+                    &mut warnings,
                 );
                 let _ = upsert_node(
-                    &tgt_id, Some(&link.target), NodeShape::Rect, link.span, false, idx,
-                    &mut node_map, &mut node_drafts, &mut implicit_warned, &mut warnings,
+                    &tgt_id,
+                    Some(&link.target),
+                    NodeShape::Rect,
+                    link.span,
+                    false,
+                    idx,
+                    &mut node_map,
+                    &mut node_drafts,
+                    &mut implicit_warned,
+                    &mut warnings,
                 );
                 // Add an edge with the flow value as the label
                 edge_drafts.push(EdgeDraft {
@@ -4402,6 +4455,89 @@ pub fn normalize_ast_to_ir(
                     });
                 }
             }
+            Statement::C4Element(elem) => {
+                let id = normalize_id(&elem.alias);
+                let label_text = if let Some(ref tech) = elem.technology {
+                    format!("[{}]\n{}\n({})", elem.kind, elem.label, tech)
+                } else {
+                    format!("[{}]\n{}", elem.kind, elem.label)
+                };
+                let _ = upsert_node(
+                    &id,
+                    Some(&label_text),
+                    NodeShape::Rect,
+                    elem.span,
+                    false,
+                    idx,
+                    &mut node_map,
+                    &mut node_drafts,
+                    &mut implicit_warned,
+                    &mut warnings,
+                );
+                if let Some(cluster_idx) = cluster_stack.last().copied() {
+                    cluster_drafts[cluster_idx].members.push(id);
+                }
+            }
+            Statement::C4Relation(rel) => {
+                let from = normalize_id(&rel.from);
+                let to = normalize_id(&rel.to);
+                if !from.is_empty() && !to.is_empty() {
+                    upsert_node(
+                        &from,
+                        None,
+                        NodeShape::Rect,
+                        rel.span,
+                        true,
+                        idx,
+                        &mut node_map,
+                        &mut node_drafts,
+                        &mut implicit_warned,
+                        &mut warnings,
+                    );
+                    upsert_node(
+                        &to,
+                        None,
+                        NodeShape::Rect,
+                        rel.span,
+                        true,
+                        idx,
+                        &mut node_map,
+                        &mut node_drafts,
+                        &mut implicit_warned,
+                        &mut warnings,
+                    );
+                    let arrow = if rel.bidirectional { "<-->" } else { "-->" };
+                    let label = if rel.label.is_empty() {
+                        None
+                    } else {
+                        Some(rel.label.clone())
+                    };
+                    edge_drafts.push(EdgeDraft {
+                        from,
+                        from_port: None,
+                        to,
+                        to_port: None,
+                        arrow: arrow.to_string(),
+                        label,
+                        span: rel.span,
+                        insertion_idx: idx,
+                    });
+                }
+            }
+            Statement::C4BoundaryStart(boundary) => {
+                let cid = IrClusterId(cluster_drafts.len());
+                cluster_drafts.push(ClusterDraft {
+                    id: cid,
+                    title: Some(boundary.label.clone()),
+                    members: Vec::new(),
+                    span: boundary.span,
+                });
+                cluster_stack.push(cluster_drafts.len() - 1);
+            }
+            Statement::C4BoundaryEnd { .. } => {
+                cluster_stack.pop();
+            }
+            Statement::C4Title { .. } => {}
             Statement::Raw { text, span } => {
                 if ast.diagram_type == DiagramType::Pie {
                     if is_pie_show_data_line(text) {
@@ -5146,6 +5282,39 @@ pub enum LinkKind {
     Link,
 }
 
+/// A C4 diagram element (Person, System, Container, Component, etc.)
+#[derive(Debug, Clone)]
+pub struct C4Element {
+    pub kind: String,
+    pub alias: String,
+    pub label: String,
+    pub technology: Option<String>,
+    pub description: Option<String>,
+    pub external: bool,
+    pub span: Span,
+}
+
+/// A C4 diagram relationship
+#[derive(Debug, Clone)]
+pub struct C4Relation {
+    pub from: String,
+    pub to: String,
+    pub label: String,
+    pub technology: Option<String>,
+    pub direction: Option<String>,
+    pub bidirectional: bool,
+    pub span: Span,
+}
+
+/// A C4 boundary block
+#[derive(Debug, Clone)]
+pub struct C4Boundary {
+    pub kind: String,
+    pub alias: String,
+    pub label: String,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone)]
 pub enum Statement {
     Directive(Directive),
@@ -5241,6 +5410,16 @@ pub enum Statement {
     RequirementDef(RequirementDef),
     RequirementRelation(RequirementRelation),
     RequirementElement(RequirementElement),
+    C4Element(C4Element),
+    C4Relation(C4Relation),
+    C4BoundaryStart(C4Boundary),
+    C4BoundaryEnd {
+        span: Span,
+    },
+    C4Title {
+        title: String,
+        span: Span,
+    },
     Raw {
         text: String,
         span: Span,
@@ -6300,6 +6479,7 @@ pub fn parse_with_diagnostics(input: &str) -> MermaidParse {
     let mut er_entity_block: Option<String> = None;
     let mut req_block: Option<RequirementDef> = None;
     let mut elem_block: Option<RequirementElement> = None;
+    let mut c4_boundary_depth: usize = 0;
 
     for (idx, raw_line) in input.lines().enumerate() {
         let line_no = idx + 1;
@@ -6678,16 +6858,20 @@ pub fn parse_with_diagnostics(input: &str) -> MermaidParse {
             | DiagramType::QuadrantChart
             | DiagramType::BlockBeta
             | DiagramType::PacketBeta
-            | DiagramType::ArchitectureBeta
-            | DiagramType::C4Context
-            | DiagramType::C4Container
-            | DiagramType::C4Component
-            | DiagramType::C4Dynamic
-            | DiagramType::C4Deployment => {
+            | DiagramType::ArchitectureBeta => {
                 statements.push(Statement::Raw {
                     text: normalize_ws(trimmed),
                     span,
                 });
+            }
+            DiagramType::C4Context
+            | DiagramType::C4Container
+            | DiagramType::C4Component
+            | DiagramType::C4Dynamic
+            | DiagramType::C4Deployment => {
+                if let Some(stmt) = parse_c4_line(trimmed, span, &mut c4_boundary_depth) {
+                    statements.push(stmt);
+                }
             }
         }
     }
@@ -7159,6 +7343,11 @@ fn statement_span(statement: &Statement) -> Span {
         Statement::RequirementDef(r) => r.span,
         Statement::RequirementRelation(r) => r.span,
         Statement::RequirementElement(e) => e.span,
+        Statement::C4Element(e) => e.span,
+        Statement::C4Relation(r) => r.span,
+        Statement::C4BoundaryStart(b) => b.span,
+        Statement::C4BoundaryEnd { span } => *span,
+        Statement::C4Title { span, .. } => *span,
         Statement::Raw { span, .. } => *span,
     }
 }
@@ -8349,8 +8538,12 @@ fn journey_score_bar(score: u8) -> String {
     let filled = score.min(5) as usize;
     let empty = 5 - filled;
     let mut bar = String::with_capacity(5);
-    for _ in 0..filled { bar.push('\u{25cf}'); }
-    for _ in 0..empty { bar.push('\u{25cb}'); }
+    for _ in 0..filled {
+        bar.push('\u{25cf}');
+    }
+    for _ in 0..empty {
+        bar.push('\u{25cb}');
+    }
     bar
 }
 
@@ -8410,7 +8603,8 @@ fn parse_sankey_line(trimmed: &str, span: Span) -> Option<Statement> {
         let source = parts[0].trim().trim_matches('"').to_string();
         let target = parts[1].trim().trim_matches('"').to_string();
         if let Ok(value) = parts[2].trim().parse::<f64>()
-            && !source.is_empty() && !target.is_empty()
+            && !source.is_empty()
+            && !target.is_empty()
         {
             return Some(Statement::SankeyLink(SankeyLink {
                 source,
@@ -8430,12 +8624,18 @@ fn split_sankey_csv(s: &str) -> Vec<String> {
     let mut in_quotes = false;
     for ch in s.chars() {
         match ch {
-            '"' if !in_quotes => { in_quotes = true; }
-            '"' if in_quotes => { in_quotes = false; }
+            '"' if !in_quotes => {
+                in_quotes = true;
+            }
+            '"' if in_quotes => {
+                in_quotes = false;
+            }
             ',' if !in_quotes => {
                 fields.push(std::mem::take(&mut current));
             }
-            _ => { current.push(ch); }
+            _ => {
+                current.push(ch);
+            }
         }
     }
     fields.push(current);
@@ -8463,7 +8663,10 @@ fn parse_xychart_line(trimmed: &str, _line: &str, span: Span) -> Option<Statemen
         // Simple text x-axis label
         let label = rest.trim_matches('"').to_string();
         if !label.is_empty() {
-            return Some(Statement::XyChartXAxis { labels: vec![label], span });
+            return Some(Statement::XyChartXAxis {
+                labels: vec![label],
+                span,
+            });
         }
     }
     // y-axis "Label" min --> max
@@ -8487,7 +8690,12 @@ fn parse_xychart_line(trimmed: &str, _line: &str, span: Span) -> Option<Statemen
         } else if !remaining.is_empty() && label.is_empty() {
             label = remaining.trim_matches('"').to_string();
         }
-        return Some(Statement::XyChartYAxis { label, min: min_val, max: max_val, span });
+        return Some(Statement::XyChartYAxis {
+            label,
+            min: min_val,
+            max: max_val,
+            span,
+        });
     }
     // bar [v1, v2, ...]
     if lower.starts_with("bar") {
@@ -8516,14 +8724,18 @@ fn parse_xychart_line(trimmed: &str, _line: &str, span: Span) -> Option<Statemen
 
 fn parse_xychart_data_array(s: &str) -> Option<Vec<f64>> {
     let s = s.trim();
-    if !s.starts_with('[') { return None; }
+    if !s.starts_with('[') {
+        return None;
+    }
     let end = s.find(']')?;
     let inner = &s[1..end];
     let vals: Vec<f64> = inner
         .split(',')
         .filter_map(|v| v.trim().parse::<f64>().ok())
         .collect();
-    if vals.is_empty() { return None; }
+    if vals.is_empty() {
+        return None;
+    }
     Some(vals)
 }
 
@@ -8873,6 +9085,230 @@ fn is_arrow_char(c: char) -> bool {
 
 fn is_er_arrow_char(c: char) -> bool {
     is_arrow_char(c) || matches!(c, '|' | '{' | '}')
+}
+
+/// Parse a single line within a C4 diagram.
+fn parse_c4_line(trimmed: &str, span: Span, boundary_depth: &mut usize) -> Option<Statement> {
+    let lower = trimmed.to_ascii_lowercase();
+
+    if trimmed.trim() == "}" {
+        if *boundary_depth > 0 {
+            *boundary_depth -= 1;
+            return Some(Statement::C4BoundaryEnd { span });
+        }
+        return None;
+    }
+
+    if lower.starts_with("title ") || lower.starts_with("title	") {
+        let title = trimmed[6..].trim().to_string();
+        if !title.is_empty() {
+            return Some(Statement::C4Title { title, span });
+        }
+        return None;
+    }
+
+    if lower.starts_with("updateelementstyle(")
+        || lower.starts_with("updaterelstyle(")
+        || lower.starts_with("updatelayoutconfig(")
+    {
+        return None;
+    }
+
+    let paren_open = trimmed.find('(')?;
+    let func_name = trimmed[..paren_open].trim();
+    if func_name.is_empty() {
+        return None;
+    }
+
+    let rest = &trimmed[paren_open + 1..];
+    let mut depth = 1usize;
+    let mut paren_close = None;
+    for (i, ch) in rest.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    paren_close = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let args_str = match paren_close {
+        Some(pc) => &rest[..pc],
+        None => rest.trim_end_matches(')'),
+    };
+
+    let args = parse_c4_args(args_str);
+    let after_paren = paren_close.map(|pc| rest[pc + 1..].trim()).unwrap_or("");
+    let has_brace = after_paren.ends_with('{') || trimmed.ends_with('{');
+    let func_lower = func_name.to_ascii_lowercase();
+
+    // Boundary types
+    let boundary_kinds = [
+        "boundary",
+        "enterprise_boundary",
+        "system_boundary",
+        "container_boundary",
+    ];
+    for kind in &boundary_kinds {
+        if func_lower == *kind {
+            let alias = args.first().map(|s| s.to_string()).unwrap_or_default();
+            let label = args.get(1).map(|s| s.to_string()).unwrap_or_default();
+            if has_brace {
+                *boundary_depth += 1;
+            }
+            return Some(Statement::C4BoundaryStart(C4Boundary {
+                kind: func_name.to_string(),
+                alias,
+                label,
+                span,
+            }));
+        }
+    }
+
+    // Relationship types
+    let rel_kinds: &[(&str, Option<&str>, bool)] = &[
+        ("rel", None, false),
+        ("birel", None, true),
+        ("rel_u", Some("U"), false),
+        ("rel_up", Some("U"), false),
+        ("rel_d", Some("D"), false),
+        ("rel_down", Some("D"), false),
+        ("rel_l", Some("L"), false),
+        ("rel_left", Some("L"), false),
+        ("rel_r", Some("R"), false),
+        ("rel_right", Some("R"), false),
+        ("rel_back", Some("Back"), false),
+        ("relindex", None, false),
+    ];
+    for (kind, dir, bidir) in rel_kinds {
+        if func_lower == *kind {
+            let offset = if func_lower == "relindex" { 1 } else { 0 };
+            let from = args.get(offset).map(|s| s.to_string()).unwrap_or_default();
+            let to = args
+                .get(offset + 1)
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let label = args
+                .get(offset + 2)
+                .map(|s| s.to_string())
+                .unwrap_or_default();
+            let technology = args.get(offset + 3).map(|s| s.to_string());
+            if !from.is_empty() && !to.is_empty() {
+                return Some(Statement::C4Relation(C4Relation {
+                    from,
+                    to,
+                    label,
+                    technology,
+                    direction: dir.map(|d| d.to_string()),
+                    bidirectional: *bidir,
+                    span,
+                }));
+            }
+            return None;
+        }
+    }
+
+    // Deployment nodes
+    let deploy_kinds = ["deployment_node", "node", "node_l", "node_r"];
+    for kind in &deploy_kinds {
+        if func_lower == *kind {
+            let alias = args.first().map(|s| s.to_string()).unwrap_or_default();
+            let label = args.get(1).map(|s| s.to_string()).unwrap_or_default();
+            let technology = args.get(2).map(|s| s.to_string());
+            let description = args.get(3).map(|s| s.to_string());
+            if has_brace {
+                *boundary_depth += 1;
+                return Some(Statement::C4BoundaryStart(C4Boundary {
+                    kind: func_name.to_string(),
+                    alias,
+                    label,
+                    span,
+                }));
+            }
+            return Some(Statement::C4Element(C4Element {
+                kind: func_name.to_string(),
+                alias,
+                label,
+                technology,
+                description,
+                external: false,
+                span,
+            }));
+        }
+    }
+
+    // Element types
+    let element_kinds = [
+        "person",
+        "person_ext",
+        "system",
+        "system_ext",
+        "system_db",
+        "system_db_ext",
+        "system_queue",
+        "system_queue_ext",
+        "container",
+        "container_ext",
+        "container_db",
+        "container_db_ext",
+        "container_queue",
+        "container_queue_ext",
+        "component",
+        "component_ext",
+        "component_db",
+        "component_db_ext",
+        "component_queue",
+        "component_queue_ext",
+    ];
+    for kind in &element_kinds {
+        if func_lower == *kind {
+            let alias = args.first().map(|s| s.to_string()).unwrap_or_default();
+            let label = args.get(1).map(|s| s.to_string()).unwrap_or_default();
+            let technology = args.get(2).map(|s| s.to_string());
+            let description = args.get(3).map(|s| s.to_string());
+            let external = kind.ends_with("_ext");
+            return Some(Statement::C4Element(C4Element {
+                kind: func_name.to_string(),
+                alias,
+                label,
+                technology,
+                description,
+                external,
+                span,
+            }));
+        }
+    }
+
+    None
+}
+
+/// Parse C4 function-call arguments (comma-separated, respecting quoted strings).
+fn parse_c4_args(input: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for ch in input.chars() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            ',' if !in_quotes => {
+                let trimmed = current.trim().to_string();
+                if !trimmed.is_empty() {
+                    args.push(trimmed);
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    let trimmed = current.trim().to_string();
+    if !trimmed.is_empty() {
+        args.push(trimmed);
+    }
+    args
 }
 
 #[cfg(test)]
@@ -11647,7 +12083,9 @@ B --> C
         );
         let ast = parse(input).expect("parse");
         assert_eq!(ast.diagram_type, DiagramType::Sankey);
-        let links: Vec<_> = ast.statements.iter()
+        let links: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::SankeyLink(_)))
             .collect();
         assert_eq!(links.len(), 2);
@@ -11665,11 +12103,7 @@ B --> C
 
     #[test]
     fn sankey_ir_produces_nodes_and_edges() {
-        let input = concat!(
-            "sankey-beta\n",
-            "A,B,10\n",
-            "B,C,5\n",
-        );
+        let input = concat!("sankey-beta\n", "A,B,10\n", "B,C,5\n",);
         let ast = parse(input).expect("parse");
         let ir = normalize_ast_to_ir(
             &ast,
@@ -11677,7 +12111,10 @@ B --> C
             &MermaidCompatibilityMatrix::default(),
             &MermaidFallbackPolicy::default(),
         );
-        assert!(ir.ir.nodes.len() >= 3, "expected at least 3 nodes (A, B, C)");
+        assert!(
+            ir.ir.nodes.len() >= 3,
+            "expected at least 3 nodes (A, B, C)"
+        );
         assert!(ir.ir.edges.len() >= 2, "expected at least 2 edges");
     }
 
@@ -11693,23 +12130,32 @@ B --> C
         );
         let ast = parse(input).expect("parse");
         assert_eq!(ast.diagram_type, DiagramType::XyChart);
-        let xaxes: Vec<_> = ast.statements.iter()
+        let xaxes: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::XyChartXAxis { .. }))
             .collect();
         assert_eq!(xaxes.len(), 1);
         if let Statement::XyChartXAxis { labels, .. } = &xaxes[0] {
             assert_eq!(labels, &["jan", "feb", "mar"]);
         }
-        let yaxes: Vec<_> = ast.statements.iter()
+        let yaxes: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::XyChartYAxis { .. }))
             .collect();
         assert_eq!(yaxes.len(), 1);
-        if let Statement::XyChartYAxis { label, min, max, .. } = &yaxes[0] {
+        if let Statement::XyChartYAxis {
+            label, min, max, ..
+        } = &yaxes[0]
+        {
             assert_eq!(label, "Revenue");
             assert_eq!(*min, Some(0.0));
             assert_eq!(*max, Some(100.0));
         }
-        let series: Vec<_> = ast.statements.iter()
+        let series: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::XyChartSeries(_)))
             .collect();
         assert_eq!(series.len(), 2);
@@ -11725,11 +12171,7 @@ B --> C
 
     #[test]
     fn xychart_ir_produces_series_nodes() {
-        let input = concat!(
-            "xychart-beta\n",
-            "    x-axis [a, b]\n",
-            "    bar [1, 2]\n",
-        );
+        let input = concat!("xychart-beta\n", "    x-axis [a, b]\n", "    bar [1, 2]\n",);
         let ast = parse(input).expect("parse");
         let ir = normalize_ast_to_ir(
             &ast,
@@ -11738,7 +12180,11 @@ B --> C
             &MermaidFallbackPolicy::default(),
         );
         assert!(ir.ir.nodes.len() >= 2, "expected xaxis + series nodes");
-        let has_bar = ir.ir.nodes.iter().any(|n| n.classes.contains(&"xychart_bar".to_string()));
+        let has_bar = ir
+            .ir
+            .nodes
+            .iter()
+            .any(|n| n.classes.contains(&"xychart_bar".to_string()));
         assert!(has_bar, "expected xychart_bar class on a node");
     }
 
@@ -11792,7 +12238,9 @@ B --> C
         );
         assert!(!ir.ir.nodes.is_empty(), "expected at least one node");
         assert!(
-            ir.ir.nodes[0].classes.contains(&"timeline_period".to_string()),
+            ir.ir.nodes[0]
+                .classes
+                .contains(&"timeline_period".to_string()),
             "expected timeline_period class on node"
         );
     }
@@ -11811,8 +12259,14 @@ B --> C
         let label_id = ir.ir.nodes[0].label.expect("node should have label");
         let label_text = &ir.ir.labels[label_id.0].text;
         assert!(label_text.contains("2020"), "label should include period");
-        assert!(label_text.contains("Alpha"), "label should include first event");
-        assert!(label_text.contains("Beta"), "label should include second event");
+        assert!(
+            label_text.contains("Alpha"),
+            "label should include first event"
+        );
+        assert!(
+            label_text.contains("Beta"),
+            "label should include second event"
+        );
     }
 
     #[test]
@@ -12009,7 +12463,6 @@ B --> C
         );
     }
 
-
     #[test]
     fn journey_score_bar_visualization() {
         let bar5 = journey_score_bar(5);
@@ -12032,12 +12485,21 @@ B --> C
         );
         let ast = parse(input).expect("parse journey");
         let ir = normalize_ast_to_ir(
-            &ast, &MermaidConfig::default(),
+            &ast,
+            &MermaidConfig::default(),
             &MermaidCompatibilityMatrix::default(),
             &MermaidFallbackPolicy::default(),
         );
-        let has_5 = ir.ir.nodes.iter().any(|n| n.classes.iter().any(|c| c == "journey_score_5"));
-        let has_1 = ir.ir.nodes.iter().any(|n| n.classes.iter().any(|c| c == "journey_score_1"));
+        let has_5 = ir
+            .ir
+            .nodes
+            .iter()
+            .any(|n| n.classes.iter().any(|c| c == "journey_score_5"));
+        let has_1 = ir
+            .ir
+            .nodes
+            .iter()
+            .any(|n| n.classes.iter().any(|c| c == "journey_score_1"));
         assert!(has_5, "should have journey_score_5 class");
         assert!(has_1, "should have journey_score_1 class");
     }
@@ -12051,15 +12513,24 @@ B --> C
         );
         let ast = parse(input).expect("parse");
         let ir = normalize_ast_to_ir(
-            &ast, &MermaidConfig::default(),
+            &ast,
+            &MermaidConfig::default(),
             &MermaidCompatibilityMatrix::default(),
             &MermaidFallbackPolicy::default(),
         );
         assert!(!ir.ir.nodes.is_empty());
         let node = &ir.ir.nodes[0];
         let label = ir.ir.labels.get(node.label.unwrap().0).unwrap();
-        assert!(label.text.contains("Alice"), "should contain Alice: {}", label.text);
-        assert!(label.text.contains("Bob"), "should contain Bob: {}", label.text);
+        assert!(
+            label.text.contains("Alice"),
+            "should contain Alice: {}",
+            label.text
+        );
+        assert!(
+            label.text.contains("Bob"),
+            "should contain Bob: {}",
+            label.text
+        );
     }
 
     #[test]
