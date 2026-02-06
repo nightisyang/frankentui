@@ -6,9 +6,10 @@
 //! and action buttons. Demonstrates the full notification queue lifecycle:
 //! push, display, auto-dismiss, manual dismiss, and action invocation.
 
+use std::cell::Cell;
 use std::time::Duration;
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind};
+use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEventKind};
 use ftui_core::geometry::Rect;
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
@@ -36,6 +37,10 @@ pub struct Notifications {
     toast_counter: u64,
     /// Last action ID invoked (displayed in the info panel).
     last_action: Option<String>,
+    /// Cached instructions panel area for mouse hit-testing.
+    last_instructions_area: Cell<Rect>,
+    /// Cached notifications panel area for mouse hit-testing.
+    last_notifications_area: Cell<Rect>,
 }
 
 impl Default for Notifications {
@@ -57,6 +62,8 @@ impl Notifications {
             tick_count: 0,
             toast_counter: 0,
             last_action: None,
+            last_instructions_area: Cell::new(Rect::default()),
+            last_notifications_area: Cell::new(Rect::default()),
         }
     }
 
@@ -113,6 +120,51 @@ impl Notifications {
             .action(ToastAction::new("Acknowledge", "ack"))
             .action(ToastAction::new("Snooze", "snooze"));
         self.queue.push(toast, NotificationPriority::Urgent);
+    }
+
+    /// Handle mouse events: click to trigger/dismiss, scroll to cycle.
+    fn handle_mouse(&mut self, event: &Event) {
+        if let Event::Mouse(mouse) = event {
+            let instructions = self.last_instructions_area.get();
+            let notifications = self.last_notifications_area.get();
+
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if instructions.contains(mouse.x, mouse.y) {
+                        // Click instructions panel: trigger toast based on vertical position
+                        let relative_y = mouse.y.saturating_sub(instructions.y);
+                        let section = (relative_y * 5)
+                            .checked_div(instructions.height)
+                            .unwrap_or(0);
+                        match section {
+                            0 => self.push_success(),
+                            1 => self.push_error(),
+                            2 => self.push_warning(),
+                            3 => self.push_info(),
+                            _ => self.push_urgent(),
+                        }
+                    } else if notifications.contains(mouse.x, mouse.y) {
+                        // Click notification panel: dismiss all
+                        self.queue.dismiss_all();
+                    }
+                }
+                MouseEventKind::ScrollUp => {
+                    if instructions.contains(mouse.x, mouse.y)
+                        || notifications.contains(mouse.x, mouse.y)
+                    {
+                        self.push_info();
+                    }
+                }
+                MouseEventKind::ScrollDown => {
+                    if instructions.contains(mouse.x, mouse.y)
+                        || notifications.contains(mouse.x, mouse.y)
+                    {
+                        self.push_success();
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Render the instructions panel.
@@ -172,6 +224,10 @@ impl Screen for Notifications {
     type Message = Event;
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
+        if matches!(event, Event::Mouse(_)) {
+            self.handle_mouse(event);
+            return Cmd::None;
+        }
         if let Event::Key(KeyEvent {
             code,
             kind: KeyEventKind::Press,
@@ -201,6 +257,8 @@ impl Screen for Notifications {
             .constraints([Constraint::Percentage(40.0), Constraint::Min(1)])
             .split(area);
 
+        self.last_instructions_area.set(chunks[0]);
+        self.last_notifications_area.set(chunks[1]);
         self.render_instructions(frame, chunks[0]);
 
         // Render the notification stack overlay on the right portion
@@ -234,6 +292,14 @@ impl Screen for Notifications {
             HelpEntry {
                 key: "d",
                 action: "Dismiss all",
+            },
+            HelpEntry {
+                key: "Click",
+                action: "Trigger/dismiss toast",
+            },
+            HelpEntry {
+                key: "Scroll",
+                action: "Push info/success toast",
             },
         ]
     }
@@ -459,7 +525,7 @@ mod tests {
         use super::Screen;
         let screen = Notifications::new();
         let bindings = screen.keybindings();
-        assert_eq!(bindings.len(), 6);
+        assert_eq!(bindings.len(), 8);
         assert_eq!(bindings[0].key, "s");
     }
 
@@ -469,5 +535,104 @@ mod tests {
         let screen = Notifications::new();
         assert_eq!(screen.title(), "Notifications");
         assert_eq!(screen.tab_label(), "Notify");
+    }
+
+    #[test]
+    fn mouse_click_instructions_triggers_toast() {
+        use super::Screen;
+        let mut screen = Notifications::new();
+        // Set up cached areas
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 80, 24));
+
+        let instructions = screen.last_instructions_area.get();
+        let event = Event::Mouse(ftui_core::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            x: instructions.x + 1,
+            y: instructions.y + 1,
+            modifiers: ftui_core::event::Modifiers::NONE,
+        });
+        screen.update(&event);
+        assert_eq!(screen.toast_counter, 1, "click should trigger a toast");
+    }
+
+    #[test]
+    fn mouse_click_notifications_dismisses() {
+        use super::Screen;
+        let mut screen = Notifications::new();
+        screen.push_success();
+        screen.push_error();
+        screen.tick(1);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 80, 24));
+
+        let notif_area = screen.last_notifications_area.get();
+        let event = Event::Mouse(ftui_core::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            x: notif_area.x + 1,
+            y: notif_area.y + 1,
+            modifiers: ftui_core::event::Modifiers::NONE,
+        });
+        screen.update(&event);
+        // dismiss_all was called; visible toasts start exit animation
+    }
+
+    #[test]
+    fn mouse_scroll_up_pushes_info() {
+        use super::Screen;
+        let mut screen = Notifications::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 80, 24));
+
+        let instructions = screen.last_instructions_area.get();
+        let event = Event::Mouse(ftui_core::event::MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            x: instructions.x + 1,
+            y: instructions.y + 1,
+            modifiers: ftui_core::event::Modifiers::NONE,
+        });
+        screen.update(&event);
+        assert_eq!(screen.toast_counter, 1, "scroll up should push info toast");
+    }
+
+    #[test]
+    fn mouse_scroll_down_pushes_success() {
+        use super::Screen;
+        let mut screen = Notifications::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 24, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 80, 24));
+
+        let instructions = screen.last_instructions_area.get();
+        let event = Event::Mouse(ftui_core::event::MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            x: instructions.x + 1,
+            y: instructions.y + 1,
+            modifiers: ftui_core::event::Modifiers::NONE,
+        });
+        screen.update(&event);
+        assert_eq!(
+            screen.toast_counter, 1,
+            "scroll down should push success toast"
+        );
+    }
+
+    #[test]
+    fn keybindings_includes_mouse() {
+        use super::Screen;
+        let screen = Notifications::new();
+        let bindings = screen.keybindings();
+        assert!(
+            bindings.iter().any(|h| h.key == "Click"),
+            "missing Click keybinding"
+        );
+        assert!(
+            bindings.iter().any(|h| h.key == "Scroll"),
+            "missing Scroll keybinding"
+        );
     }
 }

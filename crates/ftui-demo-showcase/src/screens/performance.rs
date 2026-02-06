@@ -8,7 +8,9 @@
 //! - Item rendering with selection highlighting
 //! - Scroll position tracking and progress
 
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, Modifiers};
+use ftui_core::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, Modifiers, MouseButton, MouseEventKind,
+};
 use ftui_core::geometry::Rect;
 use ftui_layout::{Constraint, Flex};
 use ftui_render::frame::Frame;
@@ -31,6 +33,8 @@ pub struct Performance {
     scroll_offset: usize,
     viewport_height: Cell<usize>,
     tick_count: u64,
+    /// Cached list panel area for mouse hit-testing.
+    last_list_area: Cell<Rect>,
 }
 
 impl Default for Performance {
@@ -72,6 +76,7 @@ impl Performance {
             scroll_offset: 0,
             viewport_height: Cell::new(20),
             tick_count: 0,
+            last_list_area: Cell::new(Rect::default()),
         }
     }
 
@@ -88,6 +93,36 @@ impl Performance {
         }
         if self.selected >= self.scroll_offset + viewport_height {
             self.scroll_offset = self.selected.saturating_sub(viewport_height - 1);
+        }
+    }
+
+    /// Handle mouse events: click to select, scroll to navigate.
+    fn handle_mouse(&mut self, event: &Event) {
+        if let Event::Mouse(mouse) = event {
+            let list_area = self.last_list_area.get();
+            if !list_area.contains(mouse.x, mouse.y) {
+                return;
+            }
+
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    // Click to select item based on y position in list
+                    let inner_y = mouse.y.saturating_sub(list_area.y + 1); // +1 for border
+                    let target = self.scroll_offset + inner_y as usize;
+                    if target < self.items.len() {
+                        self.selected = target;
+                    }
+                }
+                MouseEventKind::ScrollUp => {
+                    self.selected = self.selected.saturating_sub(3);
+                    self.ensure_visible();
+                }
+                MouseEventKind::ScrollDown => {
+                    self.selected = (self.selected + 3).min(self.items.len().saturating_sub(1));
+                    self.ensure_visible();
+                }
+                _ => {}
+            }
         }
     }
 
@@ -223,6 +258,10 @@ impl Screen for Performance {
     type Message = Event;
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
+        if matches!(event, Event::Mouse(_)) {
+            self.handle_mouse(event);
+            return Cmd::None;
+        }
         if let Event::Key(KeyEvent {
             code,
             modifiers,
@@ -289,6 +328,7 @@ impl Screen for Performance {
             .constraints([Constraint::Min(40), Constraint::Fixed(35)])
             .split(main[0]);
 
+        self.last_list_area.set(cols[0]);
         self.render_list_panel(frame, cols[0]);
         self.render_stats_panel(frame, cols[1]);
 
@@ -316,6 +356,14 @@ impl Screen for Performance {
             HelpEntry {
                 key: "g/G",
                 action: "Start/end",
+            },
+            HelpEntry {
+                key: "Click",
+                action: "Select item",
+            },
+            HelpEntry {
+                key: "Scroll",
+                action: "Navigate list",
             },
         ]
     }
@@ -476,5 +524,68 @@ mod tests {
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(40, 15, &mut pool);
         screen.render_stats_panel(&mut frame, Rect::new(0, 0, 40, 15));
+    }
+
+    #[test]
+    fn mouse_click_selects_item() {
+        use super::Screen;
+        let mut screen = Performance::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(120, 40, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 120, 40));
+
+        let list_area = screen.last_list_area.get();
+        // Click on third row in list (border + 2 rows = y+3)
+        let event = Event::Mouse(ftui_core::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            x: list_area.x + 2,
+            y: list_area.y + 3,
+            modifiers: ftui_core::event::Modifiers::NONE,
+        });
+        screen.update(&event);
+        assert_eq!(screen.selected, 2, "click should select item at row");
+    }
+
+    #[test]
+    fn mouse_scroll_navigates() {
+        use super::Screen;
+        let mut screen = Performance::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(120, 40, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 120, 40));
+
+        let list_area = screen.last_list_area.get();
+        let scroll_down = Event::Mouse(ftui_core::event::MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            x: list_area.x + 2,
+            y: list_area.y + 2,
+            modifiers: ftui_core::event::Modifiers::NONE,
+        });
+        screen.update(&scroll_down);
+        assert_eq!(screen.selected, 3, "scroll down should advance 3 items");
+
+        let scroll_up = Event::Mouse(ftui_core::event::MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            x: list_area.x + 2,
+            y: list_area.y + 2,
+            modifiers: ftui_core::event::Modifiers::NONE,
+        });
+        screen.update(&scroll_up);
+        assert_eq!(screen.selected, 0, "scroll up should go back 3 items");
+    }
+
+    #[test]
+    fn keybindings_includes_mouse() {
+        use super::Screen;
+        let screen = Performance::new();
+        let bindings = screen.keybindings();
+        assert!(
+            bindings.iter().any(|h| h.key == "Click"),
+            "missing Click keybinding"
+        );
+        assert!(
+            bindings.iter().any(|h| h.key == "Scroll"),
+            "missing Scroll keybinding"
+        );
     }
 }
