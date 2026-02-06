@@ -444,6 +444,84 @@ fn generate_parametric_flowchart(params: GeneratorParams) -> (String, Generation
     };
     (out, report)
 }
+
+/// Node-count steps for the performance sweep.
+const SWEEP_NODE_STEPS: &[u16] = &[6, 12, 24, 48, 96, 150, 200];
+/// Tick delay between sweep steps (each tick is ~16ms at 60fps).
+const SWEEP_TICK_DELAY: u64 = 3;
+
+/// A single recorded sweep result.
+#[derive(Debug, Clone)]
+struct SweepResult {
+    nodes: u16,
+    actual_nodes: usize,
+    actual_edges: usize,
+    parse_ms: f32,
+    layout_ms: f32,
+    render_ms: f32,
+    crossings: usize,
+    total_bends: usize,
+}
+
+impl SweepResult {
+    fn total_ms(&self) -> f32 {
+        self.parse_ms + self.layout_ms + self.render_ms
+    }
+
+    fn summary(&self) -> String {
+        format!(
+            "n{}: {}N/{}E {:.1}ms (p{:.1} l{:.1} r{:.1}) x{}b{}",
+            self.nodes,
+            self.actual_nodes,
+            self.actual_edges,
+            self.total_ms(),
+            self.parse_ms,
+            self.layout_ms,
+            self.render_ms,
+            self.crossings,
+            self.total_bends,
+        )
+    }
+}
+
+/// State machine for the auto-run sweep.
+#[derive(Debug, Clone)]
+struct SweepState {
+    /// Whether the sweep is currently running.
+    running: bool,
+    /// Current step index into SWEEP_NODE_STEPS.
+    step: usize,
+    /// Tick counter for delay between steps.
+    ticks_since_step: u64,
+    /// Recorded results from each completed step.
+    results: Vec<SweepResult>,
+    /// Seed used for sweep (fixed for determinism).
+    seed: u64,
+}
+
+impl Default for SweepState {
+    fn default() -> Self {
+        Self {
+            running: false,
+            step: 0,
+            ticks_since_step: 0,
+            results: Vec::new(),
+            seed: 42,
+        }
+    }
+}
+
+impl SweepState {
+    fn is_complete(&self) -> bool {
+        self.step >= SWEEP_NODE_STEPS.len()
+    }
+
+    fn reset(&mut self) {
+        self.step = 0;
+        self.ticks_since_step = 0;
+        self.results.clear();
+    }
+}
 /// Spacing candidates for auto-fit evaluation.
 const AUTO_FIT_CANDIDATES: &[(&str, f64, f64)] = &[
     ("tight", 1.5, 1.5),
@@ -1303,6 +1381,8 @@ pub struct MermaidMegaState {
     status_log: Vec<StatusLogEntry>,
     /// Debug overlay visibility flags.
     debug_overlays: DebugOverlays,
+    /// Auto-run sweep state.
+    sweep: SweepState,
     /// Whether auto-scale zoom is enabled (zoom-to-fit after auto-fit layout).
     auto_scale: bool,
     /// Comparison mode: render a second layout side-by-side.
@@ -1342,6 +1422,7 @@ impl Default for MermaidMegaState {
             render_epoch: 0,
             status_log: Vec::new(),
             debug_overlays: DebugOverlays::default(),
+            sweep: SweepState::default(),
             auto_scale: true,
             comparison_enabled: false,
             comparison_layout_mode: LayoutMode::Dense,
@@ -1592,6 +1673,7 @@ enum MegaAction {
     ToggleComparison,
     CycleComparisonLayout,
     ToggleAutoScale,
+    ToggleSweep,
 }
 
 impl MermaidMegaState {
@@ -2021,6 +2103,33 @@ impl MermaidMegaState {
                 self.comparison_enabled = !self.comparison_enabled;
                 self.bump_render();
             }
+            MegaAction::ToggleSweep => {
+                if self.sweep.running {
+                    self.sweep.running = false;
+                    self.log_action(
+                        "sweep_stop",
+                        format!(
+                            "stopped at step {}/{}",
+                            self.sweep.step,
+                            SWEEP_NODE_STEPS.len()
+                        ),
+                    );
+                } else {
+                    if self.sweep.is_complete() {
+                        self.sweep.reset();
+                    }
+                    self.sweep.running = true;
+                    self.sweep.ticks_since_step = 0;
+                    self.log_action(
+                        "sweep_start",
+                        format!(
+                            "starting sweep: {} steps, seed={}",
+                            SWEEP_NODE_STEPS.len(),
+                            self.sweep.seed
+                        ),
+                    );
+                }
+            }
             MegaAction::ToggleAutoScale => {
                 self.auto_scale = !self.auto_scale;
                 self.log_action(
@@ -2129,6 +2238,7 @@ impl MermaidMegaShowcaseScreen {
             KeyCode::Char('l') => Some(MegaAction::CycleLayoutMode),
             KeyCode::Char('O') => Some(MegaAction::CycleDirection),
             KeyCode::Char('A') => Some(MegaAction::ToggleAutoScale),
+            KeyCode::Char('S') => Some(MegaAction::ToggleSweep),
             KeyCode::Char('r') => Some(MegaAction::ForceRelayout),
             // Theme
             KeyCode::Char('p') => Some(MegaAction::CyclePalette),
@@ -2731,6 +2841,104 @@ impl MermaidMegaShowcaseScreen {
 
     // ── Panel renderers ────────────────────────────────────────────
 
+    /// Execute a single sweep step: generate a diagram at the current node
+    /// count, parse + layout + render, and record the timings.
+    fn run_sweep_step(&mut self) {
+        let step = self.state.sweep.step;
+        if step >= SWEEP_NODE_STEPS.len() {
+            self.state.sweep.running = false;
+            return;
+        }
+        let node_count = SWEEP_NODE_STEPS[step];
+        let params = GeneratorParams {
+            nodes: node_count,
+            seed: self.state.sweep.seed,
+            ..GeneratorParams::default()
+        };
+        let (source, report) = generate_parametric_flowchart(params);
+
+        let config = self.state.to_config();
+        let matrix = MermaidCompatibilityMatrix::default();
+        let policy = MermaidFallbackPolicy::default();
+
+        let parse_start = Instant::now();
+        let parsed = mermaid::parse_with_diagnostics(&source);
+        let ir_parse = mermaid::normalize_ast_to_ir(&parsed.ast, &config, &matrix, &policy);
+        let parse_ms = parse_start.elapsed().as_secs_f32() * 1000.0;
+
+        let ir = ir_parse.ir;
+        let spacing = self.state.layout_spacing();
+        let layout_start = Instant::now();
+        let layout = mermaid_layout::layout_diagram_with_spacing(&ir, &config, &spacing);
+        let layout_ms = layout_start.elapsed().as_secs_f32() * 1000.0;
+
+        let area = Rect::new(0, 0, 120, 40);
+        let mut buffer = Buffer::new(area.width, area.height);
+        let render_start = Instant::now();
+        let _plan =
+            mermaid_render::render_diagram_adaptive(&layout, &ir, &config, area, &mut buffer);
+        let render_ms = render_start.elapsed().as_secs_f32() * 1000.0;
+
+        let result = SweepResult {
+            nodes: node_count,
+            actual_nodes: report.actual_node_count,
+            actual_edges: report.actual_edge_count,
+            parse_ms,
+            layout_ms,
+            render_ms,
+            crossings: layout.stats.crossings,
+            total_bends: layout.stats.total_bends,
+        };
+
+        // Emit JSONL telemetry for this sweep step.
+        if jsonl_enabled() {
+            let seq = MEGA_JSONL_SEQ.fetch_add(1, Ordering::Relaxed);
+            let timestamp = determinism::chrono_like_timestamp();
+            let run_id = determinism::demo_run_id();
+            let seed = determinism::demo_seed(0);
+            let mut json = String::new();
+            json.push('{');
+            json.push_str(&format!(
+                "\"schema_version\":\"{}\",\"event\":\"mega_sweep_step\"",
+                MEGA_TELEMETRY_SCHEMA
+            ));
+            json.push_str(&format!(",\"seq\":{seq}"));
+            json.push_str(&format!(
+                ",\"timestamp\":\"{}\",\"seed\":{seed}",
+                escape_json(&timestamp)
+            ));
+            match run_id.as_deref() {
+                Some(id) => json.push_str(&format!(",\"run_id\":\"{}\"", escape_json(id))),
+                None => json.push_str(",\"run_id\":null"),
+            }
+            json.push_str(&format!(",\"sweep_step\":{step}"));
+            json.push_str(&format!(",\"sweep_nodes\":{node_count}"));
+            json.push_str(&format!(",\"sweep_actual_nodes\":{}", result.actual_nodes));
+            json.push_str(&format!(",\"sweep_actual_edges\":{}", result.actual_edges));
+            json.push_str(&format!(",\"sweep_parse_ms\":{parse_ms:.3}"));
+            json.push_str(&format!(",\"sweep_layout_ms\":{layout_ms:.3}"));
+            json.push_str(&format!(",\"sweep_render_ms\":{render_ms:.3}"));
+            json.push_str(&format!(",\"sweep_total_ms\":{:.3}", result.total_ms()));
+            json.push_str(&format!(",\"sweep_crossings\":{}", result.crossings));
+            json.push_str(&format!(",\"sweep_total_bends\":{}", result.total_bends));
+            json.push('}');
+            let _ = writeln!(std::io::stderr(), "{json}");
+        }
+
+        let summary = result.summary();
+        self.state.sweep.results.push(result);
+        self.state.sweep.step += 1;
+
+        self.state.log_action("sweep_step", summary);
+
+        if self.state.sweep.is_complete() {
+            self.state.sweep.running = false;
+            let count = self.state.sweep.results.len();
+            let total: f32 = self.state.sweep.results.iter().map(|r| r.total_ms()).sum();
+            self.state
+                .log_action("sweep_done", format!("{count} steps in {total:.1}ms total"));
+        }
+    }
     /// Render the controls strip at the top.
     fn render_controls(&self, area: Rect, frame: &mut Frame) {
         if area.is_empty() {
@@ -2947,6 +3155,31 @@ impl MermaidMegaShowcaseScreen {
         if let Some(zoom) = cache.auto_scale_zoom {
             lines.push(format!("AutoZoom: {:.0}%", zoom * 100.0));
         }
+        // Sweep status
+        if !self.state.sweep.results.is_empty() || self.state.sweep.running {
+            lines.push(String::new());
+            let status = if self.state.sweep.running {
+                format!(
+                    "Sweep: {}/{}...",
+                    self.state.sweep.step,
+                    SWEEP_NODE_STEPS.len()
+                )
+            } else if self.state.sweep.is_complete() {
+                format!("Sweep: done ({})", self.state.sweep.results.len())
+            } else {
+                format!(
+                    "Sweep: paused {}/{}",
+                    self.state.sweep.step,
+                    SWEEP_NODE_STEPS.len()
+                )
+            };
+            lines.push(status);
+            // Show last 3 results.
+            let skip = self.state.sweep.results.len().saturating_sub(3);
+            for r in self.state.sweep.results.iter().skip(skip) {
+                lines.push(r.summary());
+            }
+        }
         lines.push(String::new());
         // Running averages
         if cache.parse_stats.count() > 1 {
@@ -3050,6 +3283,7 @@ impl MermaidMegaShowcaseScreen {
                     ("w", "Cycle wrap mode (None/Word/Char/WordChar)"),
                     ("l", "Cycle layout mode (Dense/Normal/Spacious/Auto)"),
                     ("A", "Toggle auto-scale zoom (zoom-to-fit)"),
+                    ("S", "Toggle perf sweep (auto-run node scaling)"),
                     ("O", "Cycle direction (TB/LR/RL/BT/auto)"),
                     ("r", "Force relayout"),
                     ("p / P", "Cycle palette forward / backward"),
@@ -3443,35 +3677,47 @@ impl Screen for MermaidMegaShowcaseScreen {
     }
 
     fn tick(&mut self, _tick_count: u64) {
-        let cache = self.cache.borrow();
-        if cache.layout_budget_exceeded && !cache.budget_warning_logged {
-            let ms = cache.layout_ms.unwrap_or(0.0);
-            let sample = self.state.selected_name();
-            let mode = self.state.layout_mode.as_str();
-            drop(cache);
-            self.state.log_action(
-                "budget",
-                format!("layout {ms:.1}ms > {LAYOUT_BUDGET_MS:.0}ms budget ({sample}, {mode})"),
-            );
-            self.cache.borrow_mut().budget_warning_logged = true;
-        }
-
-        // Log parse/IR errors to status log once (when errors first appear).
-        let cache = self.cache.borrow();
-        let err_count = cache.errors.len();
-        if err_count > 0 {
-            // Check if last status log entry already covers this error set.
-            let already_logged = self.state.status_log.last().is_some_and(|e| {
-                e.action == "errors" && e.detail.contains(&format!("{err_count} error"))
-            });
-            if !already_logged {
-                let sample = self.state.selected_name().to_string();
-                let first_msg = cache.errors[0].message.clone();
+        {
+            let cache = self.cache.borrow();
+            if cache.layout_budget_exceeded && !cache.budget_warning_logged {
+                let ms = cache.layout_ms.unwrap_or(0.0);
+                let sample = self.state.selected_name();
+                let mode = self.state.layout_mode.as_str();
                 drop(cache);
                 self.state.log_action(
-                    "errors",
-                    format!("{err_count} error(s) in {sample}: {first_msg}"),
+                    "budget",
+                    format!("layout {ms:.1}ms > {LAYOUT_BUDGET_MS:.0}ms budget ({sample}, {mode})"),
                 );
+                self.cache.borrow_mut().budget_warning_logged = true;
+            }
+        }
+
+        {
+            // Log parse/IR errors to status log once (when errors first appear).
+            let cache = self.cache.borrow();
+            let err_count = cache.errors.len();
+            if err_count > 0 {
+                let already_logged = self.state.status_log.last().is_some_and(|e| {
+                    e.action == "errors" && e.detail.contains(&format!("{err_count} error"))
+                });
+                if !already_logged {
+                    let sample = self.state.selected_name().to_string();
+                    let first_msg = cache.errors[0].message.clone();
+                    drop(cache);
+                    self.state.log_action(
+                        "errors",
+                        format!("{err_count} error(s) in {sample}: {first_msg}"),
+                    );
+                }
+            }
+        }
+
+        // Auto-run sweep: advance one step per delay interval.
+        if self.state.sweep.running && !self.state.sweep.is_complete() {
+            self.state.sweep.ticks_since_step += 1;
+            if self.state.sweep.ticks_since_step >= SWEEP_TICK_DELAY {
+                self.state.sweep.ticks_since_step = 0;
+                self.run_sweep_step();
             }
         }
     }
@@ -3556,6 +3802,10 @@ impl Screen for MermaidMegaShowcaseScreen {
             HelpEntry {
                 key: "A",
                 action: "Toggle auto-scale",
+            },
+            HelpEntry {
+                key: "S",
+                action: "Toggle perf sweep",
             },
             HelpEntry {
                 key: "r",
@@ -5758,6 +6008,137 @@ mod tests {
         assert!(
             matches!(action, Some(MegaAction::ToggleAutoScale)),
             "A key should map to ToggleAutoScale"
+        );
+    }
+
+    // ── Perf sweep tests (bd-3oaig.13) ──────────────────────────────
+
+    #[test]
+    fn sweep_node_steps_nonempty() {
+        assert!(!SWEEP_NODE_STEPS.is_empty());
+        // Steps should be monotonically increasing.
+        for w in SWEEP_NODE_STEPS.windows(2) {
+            assert!(w[1] > w[0], "sweep steps should be increasing");
+        }
+    }
+
+    #[test]
+    fn sweep_state_default_is_idle() {
+        let s = SweepState::default();
+        assert!(!s.running);
+        assert_eq!(s.step, 0);
+        assert!(s.results.is_empty());
+        assert!(!s.is_complete());
+    }
+
+    #[test]
+    fn sweep_toggle_starts_and_stops() {
+        let mut state = MermaidMegaState::default();
+        assert!(!state.sweep.running);
+        state.apply(MegaAction::ToggleSweep);
+        assert!(state.sweep.running);
+        state.apply(MegaAction::ToggleSweep);
+        assert!(!state.sweep.running);
+    }
+
+    #[test]
+    fn sweep_toggle_resets_when_complete() {
+        let mut state = MermaidMegaState::default();
+        // Simulate completion.
+        state.sweep.step = SWEEP_NODE_STEPS.len();
+        assert!(state.sweep.is_complete());
+        state.apply(MegaAction::ToggleSweep);
+        // Should reset and start.
+        assert!(state.sweep.running);
+        assert_eq!(state.sweep.step, 0);
+    }
+
+    #[test]
+    fn sweep_result_summary_format() {
+        let r = SweepResult {
+            nodes: 24,
+            actual_nodes: 24,
+            actual_edges: 50,
+            parse_ms: 1.0,
+            layout_ms: 2.0,
+            render_ms: 0.5,
+            crossings: 3,
+            total_bends: 7,
+        };
+        let s = r.summary();
+        assert!(s.contains("n24:"), "summary should start with node count");
+        assert!(
+            s.contains("24N"),
+            "summary should contain actual node count"
+        );
+        assert!(
+            s.contains("50E"),
+            "summary should contain actual edge count"
+        );
+        assert!(s.contains("3.5ms"), "summary should contain total ms");
+    }
+
+    #[test]
+    fn sweep_step_records_result() {
+        let mut screen = MermaidMegaShowcaseScreen::new();
+        screen.state.sweep.running = true;
+        assert!(screen.state.sweep.results.is_empty());
+        screen.run_sweep_step();
+        assert_eq!(screen.state.sweep.results.len(), 1);
+        assert_eq!(screen.state.sweep.step, 1);
+        let r = &screen.state.sweep.results[0];
+        assert_eq!(r.nodes, SWEEP_NODE_STEPS[0]);
+        assert!(r.parse_ms >= 0.0);
+        assert!(r.layout_ms >= 0.0);
+        assert!(r.render_ms >= 0.0);
+    }
+
+    #[test]
+    fn sweep_completes_after_all_steps() {
+        let mut screen = MermaidMegaShowcaseScreen::new();
+        screen.state.sweep.running = true;
+        for _ in 0..SWEEP_NODE_STEPS.len() {
+            screen.run_sweep_step();
+        }
+        assert!(screen.state.sweep.is_complete());
+        assert!(
+            !screen.state.sweep.running,
+            "should auto-stop when complete"
+        );
+        assert_eq!(screen.state.sweep.results.len(), SWEEP_NODE_STEPS.len());
+    }
+
+    #[test]
+    fn sweep_deterministic() {
+        let mut s1 = MermaidMegaShowcaseScreen::new();
+        s1.state.sweep.running = true;
+        s1.run_sweep_step();
+        let r1 = &s1.state.sweep.results[0];
+
+        let mut s2 = MermaidMegaShowcaseScreen::new();
+        s2.state.sweep.running = true;
+        s2.run_sweep_step();
+        let r2 = &s2.state.sweep.results[0];
+
+        assert_eq!(r1.nodes, r2.nodes);
+        assert_eq!(r1.actual_nodes, r2.actual_nodes);
+        assert_eq!(r1.actual_edges, r2.actual_edges);
+        assert_eq!(r1.crossings, r2.crossings);
+        assert_eq!(r1.total_bends, r2.total_bends);
+    }
+
+    #[test]
+    fn key_s_maps_to_toggle_sweep() {
+        let screen = MermaidMegaShowcaseScreen::new();
+        let event = ftui_core::event::KeyEvent {
+            code: ftui_core::event::KeyCode::Char('S'),
+            modifiers: ftui_core::event::Modifiers::empty(),
+            kind: ftui_core::event::KeyEventKind::Press,
+        };
+        let action = screen.handle_key(&event);
+        assert!(
+            matches!(action, Some(MegaAction::ToggleSweep)),
+            "S key should map to ToggleSweep"
         );
     }
 
