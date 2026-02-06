@@ -1054,4 +1054,122 @@ mod tests {
         let debug_str = format!("{:?}", batch);
         assert!(debug_str.contains("CommandBatch"));
     }
+
+    #[test]
+    fn test_text_insert_execute_and_undo_with_callbacks() {
+        let buf = Arc::new(Mutex::new(String::from("Hello")));
+        let b1 = buf.clone();
+        let b2 = buf.clone();
+
+        let mut cmd = TextInsertCmd::new(WidgetId::new(1), 5, " World")
+            .with_apply(move |_, pos, text| {
+                let mut b = b1.lock().unwrap();
+                b.insert_str(pos, text);
+                Ok(())
+            })
+            .with_remove(move |_, pos, len| {
+                let mut b = b2.lock().unwrap();
+                b.drain(pos..pos + len);
+                Ok(())
+            });
+
+        cmd.execute().unwrap();
+        assert_eq!(*buf.lock().unwrap(), "Hello World");
+        cmd.undo().unwrap();
+        assert_eq!(*buf.lock().unwrap(), "Hello");
+    }
+
+    #[test]
+    fn test_text_insert_execute_without_callback_errors() {
+        let mut cmd = TextInsertCmd::new(WidgetId::new(1), 0, "test");
+        let err = cmd.execute().unwrap_err();
+        assert!(matches!(err, CommandError::InvalidState(_)));
+    }
+
+    #[test]
+    fn test_text_insert_undo_without_callback_errors() {
+        let mut cmd = TextInsertCmd::new(WidgetId::new(1), 0, "test");
+        let err = cmd.undo().unwrap_err();
+        assert!(matches!(err, CommandError::InvalidState(_)));
+    }
+
+    #[test]
+    fn test_text_insert_target() {
+        let cmd = TextInsertCmd::new(WidgetId::new(42), 0, "x");
+        assert_eq!(cmd.target(), Some(WidgetId::new(42)));
+    }
+
+    #[test]
+    fn test_text_insert_merge_text() {
+        let cmd = TextInsertCmd::new(WidgetId::new(1), 0, "abc");
+        assert_eq!(cmd.merge_text(), Some("abc"));
+    }
+
+    #[test]
+    fn test_text_delete_target() {
+        let cmd = TextDeleteCmd::new(WidgetId::new(7), 0, "x");
+        assert_eq!(cmd.target(), Some(WidgetId::new(7)));
+    }
+
+    #[test]
+    fn test_command_metadata_default() {
+        let meta = CommandMetadata::default();
+        assert_eq!(meta.description, "Unknown");
+        assert_eq!(meta.source, CommandSource::User);
+        assert_eq!(meta.batch_id, None);
+    }
+
+    #[test]
+    fn test_command_source_default_is_user() {
+        assert_eq!(CommandSource::default(), CommandSource::User);
+    }
+
+    #[test]
+    fn test_command_error_state_drift_display() {
+        let err = CommandError::StateDrift {
+            expected: "foo".to_string(),
+            actual: "bar".to_string(),
+        };
+        let s = err.to_string();
+        assert!(s.contains("foo"));
+        assert!(s.contains("bar"));
+    }
+
+    #[test]
+    fn test_command_error_other_display() {
+        let err = CommandError::Other("something broke".to_string());
+        assert!(err.to_string().contains("something broke"));
+    }
+
+    #[test]
+    fn test_command_batch_push_executed_tracks_index() {
+        let buf = Arc::new(Mutex::new(String::new()));
+        let b1 = buf.clone();
+        let b2 = buf.clone();
+
+        // Pre-execute the command manually
+        {
+            let mut b = buf.lock().unwrap();
+            b.push_str("Hi");
+        }
+
+        let cmd = TextInsertCmd::new(WidgetId::new(1), 0, "Hi")
+            .with_apply(move |_, pos, text| {
+                let mut b = b1.lock().unwrap();
+                b.insert_str(pos, text);
+                Ok(())
+            })
+            .with_remove(move |_, pos, len| {
+                let mut b = b2.lock().unwrap();
+                b.drain(pos..pos + len);
+                Ok(())
+            });
+
+        let mut batch = CommandBatch::new("Pre-executed batch");
+        batch.push_executed(Box::new(cmd));
+        assert_eq!(batch.len(), 1);
+        // Undo should work since push_executed advances executed_to
+        batch.undo().unwrap();
+        assert_eq!(*buf.lock().unwrap(), "");
+    }
 }
