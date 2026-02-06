@@ -358,6 +358,32 @@ mod tests {
     }
 
     #[test]
+    fn column_debug_format() {
+        let (a, _) = Record::new();
+        let col = Column::new(a, Constraint::Fixed(5));
+        let dbg = format!("{:?}", col);
+        assert!(dbg.contains("Column"));
+        assert!(dbg.contains("<dyn Widget>"));
+    }
+
+    #[test]
+    fn columns_default_is_empty() {
+        let cols = Columns::default();
+        assert!(cols.columns.is_empty());
+        assert_eq!(cols.gap, 0);
+    }
+
+    #[test]
+    fn column_builder_chain() {
+        let (a, _) = Record::new();
+        let col = Column::new(a, Constraint::Fixed(5))
+            .padding(Sides::all(2))
+            .constraint(Constraint::Ratio(1, 3));
+        assert_eq!(col.constraint, Constraint::Ratio(1, 3));
+        assert_eq!(col.padding, Sides::all(2));
+    }
+
+    #[test]
     fn many_columns_with_gap() {
         let mut rects_all = Vec::new();
         let mut cols = Columns::new().gap(1);

@@ -293,6 +293,26 @@ mod tests {
     }
 
     #[test]
+    fn default_group_is_empty() {
+        let g = Group::default();
+        assert!(g.is_empty());
+        assert_eq!(g.len(), 0);
+    }
+
+    #[test]
+    fn large_group_all_render() {
+        let n = 20;
+        let group = (0..n).fold(Group::new(), |g, _| g.push(Fill('X')));
+        assert_eq!(group.len(), n);
+
+        let area = Rect::new(0, 0, 3, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(3, 1, &mut pool);
+        group.render(area, &mut frame);
+        assert_eq!(buf_to_lines(&frame.buffer), vec!["XXX"]);
+    }
+
+    #[test]
     fn group_with_offset_area() {
         let group = Group::new().push(Fill('X'));
         let area = Rect::new(2, 1, 3, 2);

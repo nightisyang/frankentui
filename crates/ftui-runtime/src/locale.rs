@@ -255,6 +255,39 @@ mod tests {
         assert_eq!(ctx.version(), v0);
     }
 
+    #[test]
+    fn normalize_empty_falls_back_to_en() {
+        let locale = normalize_locale("".to_string());
+        assert_eq!(locale, "en");
+    }
+
+    #[test]
+    fn normalize_whitespace_only_falls_back_to_en() {
+        let locale = normalize_locale("   ".to_string());
+        assert_eq!(locale, "en");
+    }
+
+    #[test]
+    fn subscribe_fires_on_change() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let ctx = LocaleContext::new("en");
+        let fired = Rc::new(Cell::new(false));
+        let fired_clone = Rc::clone(&fired);
+        let _sub = ctx.subscribe(move |_| {
+            fired_clone.set(true);
+        });
+        ctx.set_locale("de");
+        assert!(fired.get());
+    }
+
+    #[test]
+    fn detect_system_locale_empty_lc_all_uses_lang() {
+        let locale = detect_system_locale_from(Some(""), Some("ja_JP.UTF-8"));
+        assert_eq!(locale, "ja-JP");
+    }
+
     proptest! {
         #[test]
         fn normalize_locale_raw_sanitizes_segments(raw in "[A-Za-z0-9_@.\\-]{1,32}") {

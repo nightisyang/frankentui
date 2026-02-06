@@ -372,6 +372,59 @@ mod tests {
     }
 
     #[test]
+    fn vertical_alignment_default_is_top() {
+        assert_eq!(VerticalAlignment::default(), VerticalAlignment::Top);
+    }
+
+    #[test]
+    fn inner_accessors() {
+        let mut align = Align::new(Fill('A'));
+        assert_eq!(align.inner().0, 'A');
+        align.inner_mut().0 = 'B';
+        assert_eq!(align.inner().0, 'B');
+        let inner = align.into_inner();
+        assert_eq!(inner.0, 'B');
+    }
+
+    #[test]
+    fn stateful_widget_render() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        #[derive(Debug, Clone)]
+        struct StatefulFill {
+            ch: char,
+        }
+
+        impl StatefulWidget for StatefulFill {
+            type State = Rc<RefCell<Rect>>;
+
+            fn render(&self, area: Rect, frame: &mut Frame, state: &mut Self::State) {
+                *state.borrow_mut() = area;
+                for y in area.y..area.bottom() {
+                    for x in area.x..area.right() {
+                        frame.buffer.set(x, y, Cell::from_char(self.ch));
+                    }
+                }
+            }
+        }
+
+        let align = Align::new(StatefulFill { ch: 'S' })
+            .horizontal(Alignment::Center)
+            .child_width(2)
+            .child_height(1);
+        let area = Rect::new(0, 0, 6, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(6, 3, &mut pool);
+        let mut state = Rc::new(RefCell::new(Rect::default()));
+        StatefulWidget::render(&align, area, &mut frame, &mut state);
+
+        let rendered_area = *state.borrow();
+        assert_eq!(rendered_area.x, 2);
+        assert_eq!(rendered_area.width, 2);
+    }
+
+    #[test]
     fn is_essential_delegates() {
         struct Essential;
         impl Widget for Essential {
