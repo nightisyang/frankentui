@@ -1004,6 +1004,12 @@ impl Screen for TableThemeGallery {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
+    use std::env;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use ftui_harness::buffer_to_text;
     use ftui_render::grapheme_pool::GraphemePool;
 
     fn key_press(code: KeyCode) -> Event {
@@ -1012,6 +1018,13 @@ mod tests {
             modifiers: Default::default(),
             kind: KeyEventKind::Press,
         })
+    }
+
+    fn render_text(screen: &TableThemeGallery, width: u16, height: u16) -> String {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(width, height, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, width, height));
+        buffer_to_text(&frame.buffer)
     }
 
     #[test]
@@ -1136,5 +1149,125 @@ mod tests {
         assert_eq!(gallery.zebra_strength, ZebraStrength::Strong);
         assert_eq!(gallery.border_style, BorderStyle::High);
         assert!(gallery.highlight_row);
+    }
+
+    #[test]
+    fn gallery_render_deterministic_with_overrides() {
+        let keys = [
+            KeyCode::Char('v'),
+            KeyCode::Char('h'),
+            KeyCode::Char('z'),
+            KeyCode::Char('b'),
+            KeyCode::Char('l'),
+        ];
+
+        let mut gallery = TableThemeGallery::with_log_path(None);
+        for code in keys {
+            gallery.update(&key_press(code));
+        }
+        let first = render_text(&gallery, 120, 40);
+        let second = render_text(&gallery, 120, 40);
+        assert_eq!(
+            first, second,
+            "render must be deterministic across repeated view() calls"
+        );
+
+        let mut fresh = TableThemeGallery::with_log_path(None);
+        for code in keys {
+            fresh.update(&key_press(code));
+        }
+        let third = render_text(&fresh, 120, 40);
+        assert_eq!(
+            first, third,
+            "render must be deterministic across instances"
+        );
+    }
+
+    #[test]
+    fn gallery_logs_required_fields_and_fixed_phase() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = env::temp_dir().join(format!("ftui_table_theme_gallery_{unique}.jsonl"));
+        let path_str = path.to_string_lossy().to_string();
+
+        let mut gallery = TableThemeGallery::with_log_path(Some(path_str));
+        gallery.update(&key_press(KeyCode::Char('m')));
+        gallery.update(&key_press(KeyCode::Char('h')));
+        gallery.update(&key_press(KeyCode::Char('z')));
+        gallery.update(&key_press(KeyCode::Char('b')));
+        gallery.update(&key_press(KeyCode::Char('l')));
+
+        let _ = render_text(&gallery, 120, 40);
+
+        let contents = fs::read_to_string(&path).expect("table theme log should be written");
+        let entries: Vec<serde_json::Value> = contents
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).expect("table theme log should be valid JSON"))
+            .collect();
+        assert!(
+            !entries.is_empty(),
+            "table theme log should contain entries"
+        );
+
+        let mut phase_micros = BTreeSet::new();
+        for entry in &entries {
+            assert_eq!(
+                entry.get("event").and_then(serde_json::Value::as_str),
+                Some("table_theme_gallery")
+            );
+            assert!(
+                entry
+                    .get("preset_id")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some(),
+                "preset_id is required for traceability"
+            );
+            assert!(
+                entry
+                    .get("style_hash")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some(),
+                "style_hash is required for theme regression checks"
+            );
+            assert!(
+                entry
+                    .get("effects_hash")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some(),
+                "effects_hash is required for animated theme debugging"
+            );
+            assert!(
+                entry
+                    .get("column_widths")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some(),
+                "column_widths should be logged for layout debugging"
+            );
+
+            let phase = entry
+                .get("phase")
+                .and_then(serde_json::Value::as_f64)
+                .expect("phase must be logged");
+            phase_micros.insert((phase * 1_000_000.0).round() as i64);
+        }
+
+        assert_eq!(
+            phase_micros.len(),
+            1,
+            "table theme phase should be fixed across logged entries for determinism"
+        );
+        let expected_phase_micros = (PREVIEW_PHASE as f64 * 1_000_000.0).round() as i64;
+        assert_eq!(
+            phase_micros
+                .iter()
+                .next()
+                .copied()
+                .expect("phase should be present"),
+            expected_phase_micros,
+            "table theme phase should remain fixed for snapshot determinism"
+        );
     }
 }
