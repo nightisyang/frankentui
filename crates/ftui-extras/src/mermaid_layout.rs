@@ -2908,10 +2908,7 @@ fn layout_sequence_diagram(
 
     // Route message edges as horizontal lines at increasing Y positions
     let message_gap = spacing.rank_gap.max(2.0);
-    let actor_height = nodes
-        .iter()
-        .map(|n| n.rect.height)
-        .fold(0.0f64, f64::max);
+    let actor_height = nodes.iter().map(|n| n.rect.height).fold(0.0f64, f64::max);
     let start_y = actor_height + spacing.rank_gap;
 
     // Build mapping from ir.nodes index -> participant column index.

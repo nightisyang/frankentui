@@ -5014,20 +5014,18 @@ pub fn normalize_ast_to_ir(
                     if trimmed.starts_with("<<") && trimmed.ends_with(">>") {
                         let ann = trimmed[2..trimmed.len() - 2].trim();
                         if !ann.is_empty() {
-                            node_drafts[node_idx].annotation =
-                                Some(format!("<<{ann}>>"));
+                            node_drafts[node_idx].annotation = Some(format!("<<{ann}>>"));
                         }
                     } else {
                         let trimmed = member.trim();
-                    if trimmed.starts_with("<<") && trimmed.ends_with(">>") {
-                        let ann = trimmed[2..trimmed.len() - 2].trim();
-                        if !ann.is_empty() {
-                            node_drafts[node_idx].annotation =
-                                Some(format!("<<{ann}>>"));
+                        if trimmed.starts_with("<<") && trimmed.ends_with(">>") {
+                            let ann = trimmed[2..trimmed.len() - 2].trim();
+                            if !ann.is_empty() {
+                                node_drafts[node_idx].annotation = Some(format!("<<{ann}>>"));
+                            }
+                        } else {
+                            node_drafts[node_idx].members.push(member.clone());
                         }
-                    } else {
-                        node_drafts[node_idx].members.push(member.clone());
-                    }
                     }
                 }
             }

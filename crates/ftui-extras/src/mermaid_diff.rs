@@ -307,7 +307,6 @@ fn edge_attrs_differ(
     old_label != new_label
 }
 
-
 // ── Diff Rendering ──────────────────────────────────────────────────────
 
 use crate::mermaid::MermaidConfig;
@@ -436,11 +435,7 @@ pub fn render_diff(
         };
 
         // Find the node in new_layout by index
-        if let Some(node_box) = new_layout
-            .nodes
-            .iter()
-            .find(|n| n.node_idx == dn.node_idx)
-        {
+        if let Some(node_box) = new_layout.nodes.iter().find(|n| n.node_idx == dn.node_idx) {
             let cell_rect = vp.to_cell_rect(&node_box.rect);
             recolor_rect_border(cell_rect, color, buf);
 
@@ -468,11 +463,7 @@ pub fn render_diff(
         };
 
         // Find the edge in new_layout by index
-        if let Some(edge_path) = new_layout
-            .edges
-            .iter()
-            .find(|e| e.edge_idx == de.edge_idx)
-        {
+        if let Some(edge_path) = new_layout.edges.iter().find(|e| e.edge_idx == de.edge_idx) {
             for wp in &edge_path.waypoints {
                 let (cx, cy) = vp.to_cell(wp.x, wp.y);
                 if let Some(c) = buf.get(cx, cy) {
@@ -894,9 +885,9 @@ mod tests {
 
     // ── render_diff tests ─────────────────────────────────────────
 
+    use super::{DiffColors, render_diff};
     use crate::mermaid::MermaidConfig;
     use crate::mermaid_layout::layout_diagram as mermaid_layout_diagram;
-    use super::{DiffColors, render_diff};
     use ftui_core::geometry::Rect;
     use ftui_render::buffer::Buffer;
 
@@ -910,7 +901,12 @@ mod tests {
         let diff = diff_diagrams(&ir, &ir);
         let config = MermaidConfig::default();
         let layout = mermaid_layout_diagram(&ir, &config);
-        let area = Rect { x: 0, y: 0, width: 40, height: 20 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+        };
         let mut buf = make_test_buffer(40, 20);
         render_diff(&diff, &layout, &config, area, &mut buf);
         // Should render something (not all empty)
@@ -932,15 +928,17 @@ mod tests {
         let diff = diff_diagrams(&old, &new);
         let config = MermaidConfig::default();
         let layout = mermaid_layout_diagram(&new, &config);
-        let area = Rect { x: 0, y: 0, width: 60, height: 30 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 30,
+        };
         let mut buf = make_test_buffer(60, 30);
         render_diff(&diff, &layout, &config, area, &mut buf);
         // Check that at least one cell has the green added color
-        let has_green = (0..60).any(|x| {
-            (0..30).any(|y| {
-                buf.get(x, y).is_some_and(|c| c.fg == DiffColors::ADDED)
-            })
-        });
+        let has_green = (0..60)
+            .any(|x| (0..30).any(|y| buf.get(x, y).is_some_and(|c| c.fg == DiffColors::ADDED)));
         assert!(has_green, "added node should have green-colored cells");
     }
 
@@ -950,16 +948,17 @@ mod tests {
         let diff = diff_diagrams(&ir, &ir);
         let config = MermaidConfig::default();
         let layout = mermaid_layout_diagram(&ir, &config);
-        let area = Rect { x: 0, y: 0, width: 60, height: 30 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 30,
+        };
         let mut buf = make_test_buffer(60, 30);
         render_diff(&diff, &layout, &config, area, &mut buf);
         // Check that at least one cell has the dim unchanged color
-        let has_dim = (0..60).any(|x| {
-            (0..30).any(|y| {
-                buf.get(x, y)
-                    .is_some_and(|c| c.fg == DiffColors::UNCHANGED)
-            })
-        });
+        let has_dim = (0..60)
+            .any(|x| (0..30).any(|y| buf.get(x, y).is_some_and(|c| c.fg == DiffColors::UNCHANGED)));
         assert!(has_dim, "unchanged nodes should have dimmed cells");
     }
 
@@ -971,15 +970,16 @@ mod tests {
         let diff = diff_diagrams(&old, &new);
         let config = MermaidConfig::default();
         let layout = mermaid_layout_diagram(&new, &config);
-        let area = Rect { x: 0, y: 0, width: 60, height: 30 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 30,
+        };
         let mut buf = make_test_buffer(60, 30);
         render_diff(&diff, &layout, &config, area, &mut buf);
-        let has_yellow = (0..60).any(|x| {
-            (0..30).any(|y| {
-                buf.get(x, y)
-                    .is_some_and(|c| c.fg == DiffColors::CHANGED)
-            })
-        });
+        let has_yellow = (0..60)
+            .any(|x| (0..30).any(|y| buf.get(x, y).is_some_and(|c| c.fg == DiffColors::CHANGED)));
         assert!(has_yellow, "changed node should have yellow cells");
     }
 
@@ -990,16 +990,17 @@ mod tests {
         let diff = diff_diagrams(&old, &new);
         let config = MermaidConfig::default();
         let layout = mermaid_layout_diagram(&new, &config);
-        let area = Rect { x: 0, y: 0, width: 60, height: 30 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 30,
+        };
         let mut buf = make_test_buffer(60, 30);
         render_diff(&diff, &layout, &config, area, &mut buf);
         // Check bottom rows for red removed-legend text
-        let has_red_bottom = (0..60).any(|x| {
-            (28..30).any(|y| {
-                buf.get(x, y)
-                    .is_some_and(|c| c.fg == DiffColors::REMOVED)
-            })
-        });
+        let has_red_bottom = (0..60)
+            .any(|x| (28..30).any(|y| buf.get(x, y).is_some_and(|c| c.fg == DiffColors::REMOVED)));
         assert!(
             has_red_bottom,
             "removed nodes should show red legend at bottom"
@@ -1012,10 +1013,14 @@ mod tests {
         let diff = diff_diagrams(&ir, &ir);
         let config = MermaidConfig::default();
         let layout = mermaid_layout_diagram(&ir, &config);
-        let area = Rect { x: 0, y: 0, width: 0, height: 0 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
         let mut buf = make_test_buffer(1, 1);
         render_diff(&diff, &layout, &config, area, &mut buf);
         // Should not panic
     }
-
 }

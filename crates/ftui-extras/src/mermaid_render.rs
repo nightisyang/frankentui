@@ -1180,7 +1180,13 @@ impl MermaidRenderer {
                 for x in area.x..=max_x {
                     buf.set(x, y, Cell::from_char(h_line).with_fg(border_fg));
                 }
-                buf.print_text_clipped(area.x, y, &text, cell, area.x.saturating_add(section_label_width));
+                buf.print_text_clipped(
+                    area.x,
+                    y,
+                    &text,
+                    cell,
+                    area.x.saturating_add(section_label_width),
+                );
             } else {
                 for x in area.x..=max_x {
                     buf.set(x, y, Cell::from_char(h_line).with_fg(border_fg));
@@ -3664,10 +3670,7 @@ impl MermaidRenderer {
             let ann_text = truncate_label(ann, inner_w);
             let ann_width = display_width(&ann_text).min(inner_w);
             let ann_pad = inner_w.saturating_sub(ann_width) / 2;
-            let ann_x = cell_rect
-                .x
-                .saturating_add(1)
-                .saturating_add(ann_pad as u16);
+            let ann_x = cell_rect.x.saturating_add(1).saturating_add(ann_pad as u16);
             buf.print_text_clipped(ann_x, ann_y, &ann_text, annotation_cell, max_x);
             current_row += 1;
         }
@@ -8540,17 +8543,6 @@ mod tests {
 
     // -- sequence diagram snapshots at multiple sizes --
 
-    
-
-    
-
-    
-
-    
-
-    
-
-
     // -- sequence diagram snapshots at multiple sizes --
 
     #[test]
@@ -8594,7 +8586,9 @@ mod tests {
                     .is_some_and(|ch| ch != ' ')
             })
             .count();
-        assert!(non_empty > 10, "sequence render should produce visible content, got {non_empty}");
+        assert!(
+            non_empty > 10,
+            "sequence render should produce visible content, got {non_empty}"
+        );
     }
-
 }
