@@ -3562,8 +3562,8 @@ impl MermaidRenderer {
             );
         }
 
-        // Rows 3.. = member lines
-        let members_start_y = cell_rect.y.saturating_add(3);
+        // Member lines start right after the separator.
+        let members_start_y = sep_y.saturating_add(1);
         let bottom_y = cell_rect
             .y
             .saturating_add(cell_rect.height)
