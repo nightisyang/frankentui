@@ -301,7 +301,7 @@ impl<T> Virtualized<T> {
     pub fn scroll_to_bottom(&mut self) {
         let visible_count = self.visible_count.get();
         if self.len() > visible_count && visible_count > 0 {
-            self.scroll_offset = self.len() - visible_count;
+            self.scroll_offset = self.len().saturating_sub(visible_count);
         } else {
             self.scroll_offset = 0;
         }
@@ -355,7 +355,7 @@ impl<T> Virtualized<T> {
         if self.len() <= visible_count {
             true
         } else {
-            self.scroll_offset >= self.len() - visible_count
+            self.scroll_offset >= self.len().saturating_sub(visible_count)
         }
     }
 
