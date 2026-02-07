@@ -1003,6 +1003,15 @@ impl MermaidRenderer {
             self.render_packet(layout, ir, area, buf);
             return;
         }
+        if ir.diagram_type == DiagramType::Gantt {
+            let max_label_width = if area.width > 4 {
+                (area.width / 2) as usize
+            } else {
+                0
+            };
+            self.render_gantt(ir, area, max_label_width, buf);
+            return;
+        }
         if layout.nodes.is_empty() || area.is_empty() {
             return;
         }
@@ -1022,10 +1031,6 @@ impl MermaidRenderer {
         }
         if ir.diagram_type == DiagramType::Requirement {
             self.render_requirement_entities(layout, ir, &vp, buf);
-            return;
-        }
-        if ir.diagram_type.is_c4() {
-            self.render_c4_entities(layout, ir, &vp, buf);
             return;
         }
         if ir.diagram_type.is_c4() {
@@ -1225,12 +1230,12 @@ impl MermaidRenderer {
                 if bar_width > 0 && total_tasks > 0 {
                     let frac_start = *task_global_idx as f64 / total_tasks as f64;
                     let frac_end = (*task_global_idx + 1) as f64 / total_tasks as f64;
-                    let bx0 = bar_start_x.saturating_add(
-                        (frac_start * bar_width as f64).min(u16::MAX as f64) as u16,
-                    );
-                    let bx1 = bar_start_x.saturating_add(
-                        (frac_end * bar_width as f64).min(u16::MAX as f64) as u16,
-                    );
+                    let bx0 =
+                        bar_start_x.saturating_add(
+                            (frac_start * bar_width as f64).min(u16::MAX as f64) as u16,
+                        );
+                    let bx1 = bar_start_x
+                        .saturating_add((frac_end * bar_width as f64).min(u16::MAX as f64) as u16);
                     let bar_char = self.glyphs.border.horizontal;
                     let bar_cell = Cell::from_char(bar_char).with_fg(self.colors.node_border);
                     for x in bx0..=bx1.min(max_x) {
@@ -3132,11 +3137,7 @@ impl MermaidRenderer {
         }
 
         for activation in &ir.sequence_activations {
-            let col = match ir_node_to_col
-                .get(activation.node_idx)
-                .copied()
-                .flatten()
-            {
+            let col = match ir_node_to_col.get(activation.node_idx).copied().flatten() {
                 Some(c) => c,
                 None => continue,
             };
@@ -8673,9 +8674,11 @@ mod tests {
                     .is_some_and(|ch| ch != ' ')
             })
             .count();
-        assert!(non_empty > 5, "gantt render should produce visible content, got {non_empty}");
+        assert!(
+            non_empty > 5,
+            "gantt render should produce visible content, got {non_empty}"
+        );
     }
-
 
     // -- comprehensive diagram type snapshot coverage --
 
@@ -8980,9 +8983,7 @@ mod tests {
         assert_buffer_snapshot_text("mermaid_c4_deployment_basic_80x24", &buf);
     }
 
-
     // -- comprehensive diagram type snapshot coverage --
-
 
     // -- 200x60 large viewport snapshot tests --
 
@@ -9083,5 +9084,4 @@ mod tests {
         let (buf, _plan) = e2e_render(source, 200, 60);
         assert_buffer_snapshot_text("mermaid_c4_context_basic_200x60", &buf);
     }
-
 }

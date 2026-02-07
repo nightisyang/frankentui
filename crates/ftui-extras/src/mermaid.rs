@@ -4195,10 +4195,7 @@ pub fn normalize_ast_to_ir(
                     } else {
                         warnings.push(MermaidWarning::new(
                             MermaidWarningCode::InvalidEdge,
-                            format!(
-                                "note references unknown participant '{}'",
-                                name
-                            ),
+                            format!("note references unknown participant '{}'", name),
                             n.span,
                         ));
                     }
@@ -5031,24 +5028,7 @@ pub fn normalize_ast_to_ir(
                             node_drafts[node_idx].annotation = Some(format!("<<{ann}>>"));
                         }
                     } else {
-                        let trimmed = member.trim();
-                        if trimmed.starts_with("<<") && trimmed.ends_with(">>") {
-                            let ann = trimmed[2..trimmed.len() - 2].trim();
-                            if !ann.is_empty() {
-                                node_drafts[node_idx].annotation = Some(format!("<<{ann}>>"));
-                            }
-                        } else {
-                            let trimmed = member.trim();
-                    if trimmed.starts_with("<<") && trimmed.ends_with(">>") {
-                        let ann = trimmed[2..trimmed.len() - 2].trim();
-                        if !ann.is_empty() {
-                            node_drafts[node_idx].annotation =
-                                Some(format!("<<{ann}>>"));
-                        }
-                    } else {
                         node_drafts[node_idx].members.push(member.clone());
-                    }
-                        }
                     }
                 }
             }
@@ -5369,32 +5349,6 @@ pub fn normalize_ast_to_ir(
     // Remap pre-sort node_map indices to post-sort ir.nodes indices for
     // sequence activations and notes. node_map stores insertion-order indices,
     // but ir.nodes uses post-sort indices. Without this remapping, activations
-    // and notes reference wrong nodes when participants aren't alphabetically ordered.
-    {
-        let mut pre_to_post: std::collections::HashMap<usize, usize> =
-            std::collections::HashMap::new();
-        for (id, &pre_idx) in &node_map {
-            if let Some(post_id) = node_id_map.get(id) {
-                pre_to_post.insert(pre_idx, post_id.0);
-            }
-        }
-        for activation in &mut seq_activations {
-            if let Some(&post) = pre_to_post.get(&activation.node_idx) {
-                activation.node_idx = post;
-            }
-        }
-        for note in &mut seq_notes {
-            note.over_nodes = note
-                .over_nodes
-                .iter()
-                .filter_map(|pre| pre_to_post.get(pre).copied())
-                .collect();
-        }
-    }
-
-    // Remap pre-sort node_map indices to post-sort ir.nodes indices for
-    // sequence activations and notes. node_map stores insertion-order indices,
-    // but ir.nodes uses post-sort order. Without this remapping, activations
     // and notes reference wrong nodes when participants aren't alphabetically ordered.
     {
         let mut pre_to_post: std::collections::HashMap<usize, usize> =
@@ -9182,9 +9136,7 @@ fn parse_sequence_control(line: &str, span: Span) -> Option<SequenceControl> {
         // this line was likely misclassified. Return None so the message
         // parser handles it instead.
         if label.contains(':')
-            && (label.contains("->>")
-                || label.contains("-->")
-                || label.contains("->"))
+            && (label.contains("->>") || label.contains("-->") || label.contains("->"))
         {
             return None;
         }
@@ -9198,7 +9150,11 @@ fn parse_gantt(line: &str, span: Span) -> Option<Statement> {
     // Match keywords case-insensitively but extract values from the
     // original `line` to preserve the user's casing.
     if lower.starts_with("title ") || lower.starts_with("title:") {
-        let sep = if lower.starts_with("title:") { "title:".len() } else { "title ".len() };
+        let sep = if lower.starts_with("title:") {
+            "title:".len()
+        } else {
+            "title ".len()
+        };
         let rest = &line[sep..];
         return Some(Statement::GanttTitle {
             title: normalize_ws(rest),

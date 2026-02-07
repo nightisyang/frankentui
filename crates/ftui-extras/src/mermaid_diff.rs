@@ -567,14 +567,18 @@ fn render_removed_legend(diff: &DiagramDiff, area: Rect, rows: u16, buf: &mut Bu
         legend_text
     };
 
-    // Write legend text in red
+    // Write legend text in red, tracking cumulative display width
+    // so wide characters (CJK etc.) advance the cursor correctly.
     let cell = Cell::from_char(' ').with_fg(DiffColors::REMOVED);
-    for (i, ch) in display_text.chars().enumerate() {
-        let x = area.x + i as u16;
+    let mut col = 0u16;
+    for ch in display_text.chars() {
+        let x = area.x + col;
         if x >= area.x + area.width {
             break;
         }
         buf.set(x, legend_y, cell.with_char(ch));
+        let cw = display_width(&ch.to_string());
+        col += cw as u16;
     }
 }
 
