@@ -799,11 +799,11 @@ where
                 if weight == 0 {
                     0
                 } else {
-                    space_to_distribute - allocated
+                    space_to_distribute.saturating_sub(allocated)
                 }
             } else {
                 let s = (space_to_distribute as u64 * weight / total_weight) as u16;
-                min(s, space_to_distribute - allocated)
+                min(s, space_to_distribute.saturating_sub(allocated))
             };
 
             shares[i] = size;
