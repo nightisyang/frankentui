@@ -355,6 +355,7 @@ mod tests {
                 span_all: vec![],
                 implicit: false,
                 members: vec![],
+                annotation: None,
             })
             .collect();
 
