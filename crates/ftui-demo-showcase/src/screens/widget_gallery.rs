@@ -112,7 +112,16 @@ impl Default for WidgetGallery {
 
 impl WidgetGallery {
     pub fn new() -> Self {
-        let file_picker_state = FilePickerState::from_path(".").ok();
+        let file_picker_state = FilePickerState::from_path(".")
+            .map(|mut state| {
+                // Keep the widget-gallery snapshots deterministic even when the crate
+                // directory contains local artifacts (e.g. proptest regressions).
+                state.entries.retain(|entry| {
+                    !matches!(entry.name.as_str(), "proptest-regressions" | "a.out")
+                });
+                state
+            })
+            .ok();
 
         let mut log_viewer = LogViewer::new(128).wrap_mode(LogWrapMode::WordWrap);
         let sample_logs = [

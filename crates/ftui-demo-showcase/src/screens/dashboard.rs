@@ -3183,6 +3183,19 @@ impl DashboardFocus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScrollHintKind {
+    Scrolling,
+    NotScrollable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScrollHint {
+    panel: DashboardFocus,
+    until_tick: u64,
+    kind: ScrollHintKind,
+}
+
 impl ChartMode {
     fn next(self) -> Self {
         match self {
@@ -3237,6 +3250,10 @@ pub struct Dashboard {
 
     // Data sources
     simulated_data: SimulatedData,
+
+    // Activity feed scroll state
+    activity_scroll: usize,
+    scroll_hint: Option<ScrollHint>,
 
     // FPS tracking
     frame_times: VecDeque<u64>,
@@ -3300,6 +3317,8 @@ impl Dashboard {
             tick_count: 30,
             time: 0.0,
             simulated_data,
+            activity_scroll: 0,
+            scroll_hint: None,
             frame_times: VecDeque::with_capacity(60),
             last_frame: None,
             fps: 0.0,
@@ -3391,6 +3410,43 @@ impl Dashboard {
 
     fn focus_from_point(&mut self, x: u16, y: u16) {
         self.focus = self.panel_from_point(x, y);
+    }
+
+    pub fn preferred_link_target(&self) -> Option<ScreenId> {
+        let panel = if self.hover != DashboardFocus::None {
+            self.hover
+        } else {
+            self.focus
+        };
+
+        match panel {
+            DashboardFocus::Plasma | DashboardFocus::TextFx => Some(ScreenId::VisualEffects),
+            DashboardFocus::Charts => Some(ScreenId::DataViz),
+            DashboardFocus::Code => Some(ScreenId::CodeExplorer),
+            DashboardFocus::Info => Some(ScreenId::Performance),
+            DashboardFocus::Activity => Some(ScreenId::ActionTimeline),
+            DashboardFocus::Markdown => Some(ScreenId::MarkdownRichText),
+            DashboardFocus::None => None,
+        }
+    }
+
+    fn set_scroll_hint(&mut self, panel: DashboardFocus, kind: ScrollHintKind) {
+        self.scroll_hint = Some(ScrollHint {
+            panel,
+            until_tick: self.tick_count.saturating_add(12),
+            kind,
+        });
+    }
+
+    fn scroll_hint_text(&self, panel: DashboardFocus) -> Option<&'static str> {
+        let hint = self.scroll_hint?;
+        if hint.panel != panel {
+            return None;
+        }
+        match hint.kind {
+            ScrollHintKind::Scrolling => Some("Wheel: scroll"),
+            ScrollHintKind::NotScrollable => Some("Wheel: no scroll"),
+        }
     }
 
     fn current_code_sample(&self) -> &'static CodeSample {
@@ -3684,7 +3740,10 @@ impl Dashboard {
         Canvas::from_painter(&painter)
             .style(Style::new().fg(theme::fg::PRIMARY))
             .render(inner, frame);
-        self.render_panel_hint(frame, inner, "Click → Visual Effects");
+        let hint = self
+            .scroll_hint_text(DashboardFocus::Plasma)
+            .unwrap_or("Click → Visual Effects");
+        self.render_panel_hint(frame, inner, hint);
     }
 
     /// Render the charts showcase panel.
@@ -3751,7 +3810,10 @@ impl Dashboard {
             ChartMode::Matrix => self.render_matrix_charts(frame, content),
             ChartMode::Composite => self.render_composite_charts(frame, content),
         }
-        self.render_panel_hint(frame, inner, "Click → Data Viz");
+        let hint = self
+            .scroll_hint_text(DashboardFocus::Charts)
+            .unwrap_or("Click → Data Viz");
+        self.render_panel_hint(frame, inner, hint);
     }
 
     fn render_pulse_charts(&self, frame: &mut Frame, area: Rect) {
@@ -4465,7 +4527,10 @@ impl Dashboard {
 
         // Render as paragraph with styled text
         render_text(frame, inner, highlighted);
-        self.render_panel_hint(frame, inner, "Click → Code Explorer");
+        let hint = self
+            .scroll_hint_text(DashboardFocus::Code)
+            .unwrap_or("Click → Code Explorer");
+        self.render_panel_hint(frame, inner, hint);
     }
 
     /// Render system info panel.
@@ -4522,7 +4587,10 @@ impl Dashboard {
             Paragraph::new(info)
                 .style(Style::new().fg(theme::fg::SECONDARY))
                 .render(inner, frame);
-            self.render_panel_hint(frame, inner, "Click → Performance");
+            let hint = self
+                .scroll_hint_text(DashboardFocus::Info)
+                .unwrap_or("Click → Performance");
+            self.render_panel_hint(frame, inner, hint);
             return;
         }
 
@@ -4586,7 +4654,10 @@ impl Dashboard {
             let spark_area = Rect::new(inner.x, cursor_y, inner.width, spark_height);
             self.render_info_sparkline_strip(frame, spark_area);
         }
-        self.render_panel_hint(frame, inner, "Click → Performance");
+        let hint = self
+            .scroll_hint_text(DashboardFocus::Info)
+            .unwrap_or("Click → Performance");
+        self.render_panel_hint(frame, inner, hint);
     }
 
     fn render_info_badges(&self, frame: &mut Frame, area: Rect) {
@@ -5120,7 +5191,10 @@ impl Dashboard {
         Paragraph::new(wrapped)
             .wrap(WrapMode::None)
             .render(inner, frame);
-        self.render_panel_hint(frame, inner, "Click → Markdown");
+        let hint = self
+            .scroll_hint_text(DashboardFocus::Markdown)
+            .unwrap_or("Click → Markdown");
+        self.render_panel_hint(frame, inner, hint);
     }
 
     /// Render text effects showcase using complex GFM samples.
@@ -5224,7 +5298,10 @@ impl Dashboard {
             }
         }
 
-        self.render_panel_hint(frame, rows[2], "e: next set · click → Visual Effects");
+        let hint = self
+            .scroll_hint_text(DashboardFocus::TextFx)
+            .unwrap_or("e: next set · click → Visual Effects");
+        self.render_panel_hint(frame, rows[2], hint);
     }
 
     /// Render activity feed showing recent simulated events.
@@ -5263,11 +5340,14 @@ impl Dashboard {
 
         // Get recent alerts from simulated data
         let max_items = inner.height.saturating_sub(header_rows) as usize;
+        let max_scroll = self.simulated_data.alerts.len().saturating_sub(max_items);
+        let scroll = self.activity_scroll.min(max_scroll);
         let alerts: Vec<_> = self
             .simulated_data
             .alerts
             .iter()
             .rev()
+            .skip(scroll)
             .take(max_items)
             .collect();
 
@@ -5395,7 +5475,10 @@ impl Dashboard {
                 .time(self.time);
             styled.render(inner, frame);
         }
-        self.render_panel_hint(frame, inner, "Click → Action Timeline");
+        let hint = self
+            .scroll_hint_text(DashboardFocus::Activity)
+            .unwrap_or("Click → Action Timeline");
+        self.render_panel_hint(frame, inner, hint);
     }
 
     /// Render navigation footer.
@@ -5740,6 +5823,37 @@ impl Screen for Dashboard {
                     self.focus_from_point(mouse.x, mouse.y);
                     self.hover = self.focus;
                 }
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                    let panel = self.panel_from_point(mouse.x, mouse.y);
+                    self.hover = panel;
+
+                    if panel == DashboardFocus::Activity {
+                        // Approximate the same capacity calculation used in `render_activity_feed`.
+                        let inner_h = self.layout_activity.get().height.saturating_sub(2);
+                        let header_rows = if inner_h >= 4 { 1 } else { 0 };
+                        let max_items = inner_h.saturating_sub(header_rows) as usize;
+                        let max_items = max_items.max(1);
+
+                        let total = self.simulated_data.alerts.len();
+                        let max_scroll = total.saturating_sub(max_items);
+
+                        let before = self.activity_scroll.min(max_scroll);
+                        let after = match mouse.kind {
+                            MouseEventKind::ScrollDown => before.saturating_add(1).min(max_scroll),
+                            MouseEventKind::ScrollUp => before.saturating_sub(1),
+                            _ => before,
+                        };
+
+                        if after != before {
+                            self.activity_scroll = after;
+                            self.set_scroll_hint(panel, ScrollHintKind::Scrolling);
+                        } else {
+                            self.set_scroll_hint(panel, ScrollHintKind::NotScrollable);
+                        }
+                    } else if panel != DashboardFocus::None {
+                        self.set_scroll_hint(panel, ScrollHintKind::NotScrollable);
+                    }
+                }
                 _ => {}
             }
             return Cmd::None;
@@ -5807,6 +5921,11 @@ impl Screen for Dashboard {
 
     fn tick(&mut self, tick_count: u64) {
         self.tick_count = tick_count;
+        if let Some(hint) = self.scroll_hint
+            && hint.until_tick <= tick_count
+        {
+            self.scroll_hint = None;
+        }
         self.time = tick_count as f64 * 0.1; // 100ms per tick
         self.tick_markdown_stream();
         self.simulated_data.tick(tick_count);
@@ -5846,6 +5965,10 @@ impl Screen for Dashboard {
     fn keybindings(&self) -> Vec<HelpEntry> {
         vec![
             HelpEntry {
+                key: "Enter",
+                action: "Open highlighted tile",
+            },
+            HelpEntry {
                 key: "r",
                 action: "Reset animations",
             },
@@ -5868,6 +5991,10 @@ impl Screen for Dashboard {
             HelpEntry {
                 key: "t",
                 action: "Cycle theme",
+            },
+            HelpEntry {
+                key: "Wheel",
+                action: "Scroll activity feed",
             },
             HelpEntry {
                 key: "Mouse",

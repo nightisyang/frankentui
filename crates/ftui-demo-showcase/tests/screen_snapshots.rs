@@ -1093,6 +1093,43 @@ fn app_dashboard_full_120x40() {
 }
 
 #[test]
+fn app_dashboard_hover_dataviz_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut app = AppModel::new();
+    app.terminal_width = 120;
+    app.terminal_height = 40;
+
+    // Render once to populate layout + hit grid for robust point selection.
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    app.view(&mut frame);
+    let grid = frame.hit_grid.as_ref().expect("hit grid should be enabled");
+
+    let target_hit = ftui_render::frame::HitId::new(
+        ftui_demo_showcase::chrome::PANE_HIT_BASE
+            + ftui_demo_showcase::screens::screen_index(ScreenId::DataViz) as u32,
+    );
+
+    let mut hit_xy = None;
+    'outer: for y in 0..40 {
+        for x in 0..120 {
+            if let Some((id, _region, _data)) = grid.hit_test(x, y)
+                && id == target_hit
+            {
+                hit_xy = Some((x, y));
+                break 'outer;
+            }
+        }
+    }
+    let (x, y) = hit_xy.expect("should find a point inside the DataViz dashboard tile");
+
+    // Hover highlight: focus remains on the default tile; hover uses dimmed accent.
+    app.update(AppMsg::from(mouse_move(x, y)));
+
+    snapshot_app(&mut app, 120, 40, "app_dashboard_hover_dataviz_120x40");
+}
+
+#[test]
 fn app_shakespeare_full_120x40() {
     let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
     let mut app = AppModel::new();
@@ -3395,12 +3432,7 @@ fn mega_showcase_sequence_loops_80x24() {
     let mut screen =
         ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
     mega_showcase_goto_sample(&mut screen, 16);
-    mega_showcase_snapshot(
-        &mut screen,
-        80,
-        24,
-        "mega_showcase_sequence_loops_80x24",
-    );
+    mega_showcase_snapshot(&mut screen, 80, 24, "mega_showcase_sequence_loops_80x24");
 }
 
 #[test]
@@ -3409,12 +3441,7 @@ fn mega_showcase_sequence_loops_120x40() {
     let mut screen =
         ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
     mega_showcase_goto_sample(&mut screen, 16);
-    mega_showcase_snapshot(
-        &mut screen,
-        120,
-        40,
-        "mega_showcase_sequence_loops_120x40",
-    );
+    mega_showcase_snapshot(&mut screen, 120, 40, "mega_showcase_sequence_loops_120x40");
 }
 
 #[test]
@@ -3423,12 +3450,7 @@ fn mega_showcase_sequence_parallel_80x24() {
     let mut screen =
         ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
     mega_showcase_goto_sample(&mut screen, 17);
-    mega_showcase_snapshot(
-        &mut screen,
-        80,
-        24,
-        "mega_showcase_sequence_parallel_80x24",
-    );
+    mega_showcase_snapshot(&mut screen, 80, 24, "mega_showcase_sequence_parallel_80x24");
 }
 
 #[test]
@@ -3451,10 +3473,5 @@ fn mega_showcase_sequence_dense_120x40() {
     let mut screen =
         ftui_demo_showcase::screens::mermaid_mega_showcase::MermaidMegaShowcaseScreen::new();
     mega_showcase_goto_sample(&mut screen, 29);
-    mega_showcase_snapshot(
-        &mut screen,
-        120,
-        40,
-        "mega_showcase_sequence_dense_120x40",
-    );
+    mega_showcase_snapshot(&mut screen, 120, 40, "mega_showcase_sequence_dense_120x40");
 }

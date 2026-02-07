@@ -3558,6 +3558,15 @@ impl AppModel {
                         (KeyCode::Char('m'), Modifiers::NONE) if !text_input_active => {
                             return self.handle_msg(AppMsg::ToggleMouseCapture, source);
                         }
+                        // Dashboard: activate currently highlighted tile
+                        (KeyCode::Enter, Modifiers::NONE)
+                            if !text_input_active
+                                && self.display_screen() == ScreenId::Dashboard =>
+                        {
+                            if let Some(target) = self.screens.dashboard.preferred_link_target() {
+                                return self.handle_msg(AppMsg::SwitchScreen(target), source);
+                            }
+                        }
                         // Tab cycling (Tab/BackTab, or Shift+H/Shift+L for Vim users)
                         (KeyCode::Tab, Modifiers::NONE) => {
                             let target = self.display_screen().next();
@@ -5177,6 +5186,47 @@ mod tests {
         });
         app.update(AppMsg::from(event));
         assert_eq!(app.current_screen, ScreenId::Shakespeare);
+    }
+
+    #[test]
+    fn dashboard_enter_opens_highlighted_tile() {
+        let mut app = AppModel::new();
+        app.terminal_width = 120;
+        app.terminal_height = 40;
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(120, 40, &mut pool);
+        app.view(&mut frame);
+
+        let grid = frame.hit_grid.as_ref().expect("hit grid should be enabled");
+        let target_hit = HitId::new(
+            crate::chrome::PANE_HIT_BASE + crate::screens::screen_index(ScreenId::DataViz) as u32,
+        );
+
+        let mut hit_xy = None;
+        'outer: for y in 0..40 {
+            for x in 0..120 {
+                if let Some((id, _region, _data)) = grid.hit_test(x, y)
+                    && id == target_hit
+                {
+                    hit_xy = Some((x, y));
+                    break 'outer;
+                }
+            }
+        }
+        let (x, y) = hit_xy.expect("should find a point inside the DataViz dashboard tile");
+
+        let event = Event::Mouse(MouseEvent::new(MouseEventKind::Moved, x, y));
+        app.update(AppMsg::from(event));
+
+        let event = Event::Key(KeyEvent {
+            code: KeyCode::Enter,
+            modifiers: Modifiers::NONE,
+            kind: KeyEventKind::Press,
+        });
+        app.update(AppMsg::from(event));
+
+        assert_eq!(app.current_screen, ScreenId::DataViz);
     }
 
     #[test]
