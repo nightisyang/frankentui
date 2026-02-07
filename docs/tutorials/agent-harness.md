@@ -53,12 +53,10 @@ impl Model for HelloHarness {
 }
 
 fn main() -> ftui::Result<()> {
-    App::inline(
-        HelloHarness {
-            message: "Hello from ftui. Press q to quit.".to_string(),
-        },
-        1,
-    )
+    App::new(HelloHarness {
+        message: "Hello from ftui. Press q to quit.".to_string(),
+    })
+    .screen_mode(ScreenMode::Inline { ui_height: 1 })
     .run()?;
     Ok(())
 }
@@ -66,7 +64,7 @@ fn main() -> ftui::Result<()> {
 
 Key concepts:
 - `Model` with `update()` and `view()`
-- `App::inline` for scrollback-preserving inline mode
+- `App::new(...).screen_mode(ScreenMode::Inline { .. })` for scrollback-preserving inline mode
 - `Event` messages via `From<Event> for Event` (built in)
 
 Layout cheat sheet (inline mode, UI pinned at bottom):
@@ -346,8 +344,8 @@ fn main() -> std::io::Result<()> {
 ## Part 5: Inline vs Alt-Screen
 
 Current runtime selection is fixed at startup:
-- Inline mode: `App::inline(model, ui_height)` or `.screen_mode(ScreenMode::Inline { .. })`
-- Alt-screen: `App::fullscreen(model)` or `.screen_mode(ScreenMode::AltScreen)`
+- Inline mode: `.screen_mode(ScreenMode::Inline { ui_height: .. })` (or `App::inline(model, ui_height)`)
+- Alt-screen: `.screen_mode(ScreenMode::AltScreen)` (or `App::fullscreen(model)`)
 
 There is no runtime API for switching screen modes mid-session yet. If you need
 full-screen modal behavior today, spawn a separate fullscreen program or exit

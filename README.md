@@ -100,10 +100,10 @@ FTUI_HARNESS_VIEW=visual_effects cargo run -p ftui-demo-showcase
 use ftui_core::event::Event;
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
-use ftui_runtime::{Cmd, Model, Program};
+use ftui_runtime::{App, Cmd, Model, ScreenMode};
 use ftui_widgets::paragraph::Paragraph;
 
-struct App {
+struct TickApp {
     ticks: u64,
 }
 
@@ -114,12 +114,15 @@ enum Msg {
 }
 
 impl From<Event> for Msg {
-    fn from(_: Event) -> Self {
-        Msg::Tick
+    fn from(e: Event) -> Self {
+        match e {
+            Event::Key(k) if k.is_char('q') => Msg::Quit,
+            _ => Msg::Tick,
+        }
     }
 }
 
-impl Model for App {
+impl Model for TickApp {
     type Message = Msg;
 
     fn update(&mut self, msg: Msg) -> Cmd<Msg> {
@@ -133,15 +136,16 @@ impl Model for App {
     }
 
     fn view(&self, frame: &mut Frame) {
-        let text = format!("Ticks: {}", self.ticks);
+        let text = format!("Ticks: {}  (press 'q' to quit)", self.ticks);
         let area = Rect::new(0, 0, frame.width(), 1);
         Paragraph::new(text).render(area, frame);
     }
 }
 
 fn main() -> std::io::Result<()> {
-    let mut program = Program::new(App { ticks: 0 })?;
-    program.run()
+    App::new(TickApp { ticks: 0 })
+        .screen_mode(ScreenMode::Inline { ui_height: 1 })
+        .run()
 }
 ```
 
