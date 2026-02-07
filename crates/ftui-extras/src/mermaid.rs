@@ -3931,8 +3931,9 @@ pub fn normalize_ast_to_ir(
     #[allow(unused_variables)]
     let seq_autonumber = false;
     let mut seq_control_stack: Vec<(SeqControlKind, Option<IrLabelId>, usize)> = Vec::new();
-    let mut seq_activation_starts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        let mut node_map = std::collections::HashMap::new();
+    let mut seq_activation_starts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    let mut node_map = std::collections::HashMap::new();
     let mut node_drafts = Vec::new();
     let mut edge_drafts = Vec::new();
     let mut cluster_drafts: Vec<ClusterDraft> = Vec::new();
@@ -3948,6 +3949,10 @@ pub fn normalize_ast_to_ir(
     let mut pie_entries: Vec<IrPieEntry> = Vec::new();
     let mut pie_title_text: Option<(String, Span)> = None;
     let mut pie_show_data = ast.pie_show_data;
+    let mut gantt_title_text: Option<(String, Span)> = None;
+    let mut gantt_sections_raw: Vec<(String, Span)> = Vec::new();
+    let mut gantt_tasks_raw: Vec<(GanttTask, usize)> = Vec::new();
+    let mut current_gantt_section: usize = 0;
 
     for (idx, statement) in ast.statements.iter().enumerate() {
         match statement {
@@ -4160,7 +4165,11 @@ pub fn normalize_ast_to_ir(
                     continue;
                 }
                 let label_text = p.label.as_deref().or(Some(&p.id));
-                let shape = if p.is_actor { NodeShape::Circle } else { NodeShape::Rect };
+                let shape = if p.is_actor {
+                    NodeShape::Circle
+                } else {
+                    NodeShape::Rect
+                };
                 upsert_node(
                     &id,
                     label_text,
@@ -4176,7 +4185,9 @@ pub fn normalize_ast_to_ir(
                 seq_participants.push(id);
             }
             Statement::SequenceNote(n) => {
-                let over_ids: Vec<usize> = n.over.iter()
+                let over_ids: Vec<usize> = n
+                    .over
+                    .iter()
                     .filter_map(|name| {
                         let id = normalize_id(name);
                         node_map.get(id.as_str()).copied()
@@ -4204,38 +4215,36 @@ pub fn normalize_ast_to_ir(
                     });
                 }
             }
-            Statement::SequenceControl(c) => {
-                match c.kind {
-                    SeqControlKind::End => {
-                        if let Some((kind, label, start_idx)) = seq_control_stack.pop() {
-                            seq_controls.push(IrSeqControlBlock {
-                                kind,
-                                label,
-                                start_edge_idx: start_idx,
-                                end_edge_idx: edge_drafts.len(),
-                                depth: seq_control_stack.len(),
-                            });
-                        }
-                    }
-                    SeqControlKind::Else | SeqControlKind::And => {
-                        if let Some((kind, label, start_idx)) = seq_control_stack.pop() {
-                            seq_controls.push(IrSeqControlBlock {
-                                kind,
-                                label,
-                                start_edge_idx: start_idx,
-                                end_edge_idx: edge_drafts.len(),
-                                depth: seq_control_stack.len(),
-                            });
-                        }
-                        let label_id = c.label.as_deref().map(|l| labels.intern(l, c.span));
-                        seq_control_stack.push((c.kind, label_id, edge_drafts.len()));
-                    }
-                    _ => {
-                        let label_id = c.label.as_deref().map(|l| labels.intern(l, c.span));
-                        seq_control_stack.push((c.kind, label_id, edge_drafts.len()));
+            Statement::SequenceControl(c) => match c.kind {
+                SeqControlKind::End => {
+                    if let Some((kind, label, start_idx)) = seq_control_stack.pop() {
+                        seq_controls.push(IrSeqControlBlock {
+                            kind,
+                            label,
+                            start_edge_idx: start_idx,
+                            end_edge_idx: edge_drafts.len(),
+                            depth: seq_control_stack.len(),
+                        });
                     }
                 }
-            }
+                SeqControlKind::Else | SeqControlKind::And => {
+                    if let Some((kind, label, start_idx)) = seq_control_stack.pop() {
+                        seq_controls.push(IrSeqControlBlock {
+                            kind,
+                            label,
+                            start_edge_idx: start_idx,
+                            end_edge_idx: edge_drafts.len(),
+                            depth: seq_control_stack.len(),
+                        });
+                    }
+                    let label_id = c.label.as_deref().map(|l| labels.intern(l, c.span));
+                    seq_control_stack.push((c.kind, label_id, edge_drafts.len()));
+                }
+                _ => {
+                    let label_id = c.label.as_deref().map(|l| labels.intern(l, c.span));
+                    seq_control_stack.push((c.kind, label_id, edge_drafts.len()));
+                }
+            },
             Statement::MindmapNode(node) => {
                 let base = mindmap_base_depth.get_or_insert(node.depth);
                 let depth = node.depth.saturating_sub(*base);
@@ -4278,6 +4287,41 @@ pub fn normalize_ast_to_ir(
                     });
                 }
                 mindmap_stack.push((depth, id));
+            }
+            Statement::GanttTitle { title, span } => {
+                if gantt_title_text.is_none() {
+                    gantt_title_text = Some((title.clone(), *span));
+                } else {
+                    warnings.push(MermaidWarning::new(
+                        MermaidWarningCode::InvalidValue,
+                        "multiple gantt titles; using first",
+                        *span,
+                    ));
+                }
+            }
+            Statement::GanttSection { name, span } => {
+                if name.trim().is_empty() {
+                    warnings.push(MermaidWarning::new(
+                        MermaidWarningCode::InvalidValue,
+                        "gantt section name is empty",
+                        *span,
+                    ));
+                }
+                gantt_sections_raw.push((name.clone(), *span));
+                current_gantt_section = gantt_sections_raw.len() - 1;
+            }
+            Statement::GanttTask(task) => {
+                if task.title.trim().is_empty() {
+                    warnings.push(MermaidWarning::new(
+                        MermaidWarningCode::InvalidValue,
+                        "gantt task title is empty",
+                        task.span,
+                    ));
+                }
+                if gantt_sections_raw.is_empty() {
+                    gantt_sections_raw.push(("Default".to_string(), task.span));
+                }
+                gantt_tasks_raw.push((task.clone(), current_gantt_section));
             }
             Statement::PieEntry(entry) => {
                 if ast.diagram_type != DiagramType::Pie {
@@ -5075,7 +5119,7 @@ pub fn normalize_ast_to_ir(
         });
     }
 
-        edge_drafts.sort_by_key(|draft| draft.insertion_idx);
+    edge_drafts.sort_by_key(|draft| draft.insertion_idx);
 
     let mut ports = Vec::new();
     let mut port_map = std::collections::HashMap::new();
@@ -5171,6 +5215,24 @@ pub fn normalize_ast_to_ir(
     let pie_title: Option<IrLabelId> =
         pie_title_text.map(|(text, span)| labels.intern(&text, span));
 
+    let gantt_title: Option<IrLabelId> =
+        gantt_title_text.map(|(text, span)| labels.intern(&text, span));
+    let gantt_sections: Vec<IrGanttSection> = gantt_sections_raw
+        .iter()
+        .map(|(name, span)| IrGanttSection {
+            name: labels.intern(name, *span),
+        })
+        .collect();
+    let gantt_tasks: Vec<IrGanttTask> = gantt_tasks_raw
+        .iter()
+        .map(|(task, sec_idx)| IrGanttTask {
+            title: labels.intern(&task.title, task.span),
+            meta: task.meta.clone(),
+            section_idx: *sec_idx,
+            span: task.span,
+        })
+        .collect();
+
     // Intern packet field labels.
     let packet_title: Option<IrLabelId> =
         packet_title_text.map(|(text, span)| labels.intern(&text, span));
@@ -5263,7 +5325,8 @@ pub fn normalize_ast_to_ir(
     warnings.extend(link_resolution.warnings.clone());
     let resolved_links = link_resolution.links.clone();
 
-    let seq_participant_nodes: Vec<IrNode> = seq_participants.iter()
+    let seq_participant_nodes: Vec<IrNode> = seq_participants
+        .iter()
         .filter_map(|id| {
             let idx = node_id_map.get(id)?;
             Some(nodes[idx.0].clone())
@@ -5298,6 +5361,9 @@ pub fn normalize_ast_to_ir(
         sequence_notes: seq_notes,
         sequence_activations: seq_activations,
         sequence_autonumber: seq_autonumber,
+        gantt_title,
+        gantt_sections,
+        gantt_tasks,
     };
 
     let degradation = ir.meta.guard.degradation.clone();
@@ -5738,10 +5804,25 @@ pub struct C4Boundary {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SeqNotePosition { LeftOf, RightOf, Over }
+pub enum SeqNotePosition {
+    LeftOf,
+    RightOf,
+    Over,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SeqControlKind { Loop, Alt, Else, Opt, Par, And, Critical, Break, Rect, End }
+pub enum SeqControlKind {
+    Loop,
+    Alt,
+    Else,
+    Opt,
+    Par,
+    And,
+    Critical,
+    Break,
+    Rect,
+    End,
+}
 
 #[derive(Debug, Clone)]
 pub struct SequenceParticipant {
@@ -6604,6 +6685,21 @@ pub struct IrSeqActivation {
     pub end_edge_idx: usize,
 }
 
+/// Gantt section (named group of tasks).
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrGanttSection {
+    pub name: IrLabelId,
+}
+
+/// Gantt task.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrGanttTask {
+    pub title: IrLabelId,
+    pub meta: String,
+    pub section_idx: usize,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone)]
 pub struct MermaidDiagramIr {
     pub diagram_type: DiagramType,
@@ -6633,6 +6729,9 @@ pub struct MermaidDiagramIr {
     pub sequence_notes: Vec<IrSeqNote>,
     pub sequence_activations: Vec<IrSeqActivation>,
     pub sequence_autonumber: bool,
+    pub gantt_title: Option<IrLabelId>,
+    pub gantt_sections: Vec<IrGanttSection>,
+    pub gantt_tasks: Vec<IrGanttTask>,
 }
 
 #[derive(Debug, Clone)]
@@ -8869,7 +8968,6 @@ fn parse_sequence(line: &str, span: Span) -> Option<SequenceMessage> {
     })
 }
 
-
 fn parse_sequence_participant(line: &str, span: Span) -> Option<SequenceParticipant> {
     let lower = line.to_ascii_lowercase();
     let (is_actor, keyword) = if lower.starts_with("actor ") {
@@ -8881,14 +8979,22 @@ fn parse_sequence_participant(line: &str, span: Span) -> Option<SequenceParticip
     };
     let rest = &line[keyword.len()..];
     let (id, label) = if let Some(idx) = rest.find(" as ") {
-        (rest[..idx].trim().to_string(), Some(rest[idx + 4..].trim().to_string()))
+        (
+            rest[..idx].trim().to_string(),
+            Some(rest[idx + 4..].trim().to_string()),
+        )
     } else {
         (rest.trim().to_string(), None)
     };
     if id.is_empty() {
         return None;
     }
-    Some(SequenceParticipant { id, label, is_actor, span })
+    Some(SequenceParticipant {
+        id,
+        label,
+        is_actor,
+        span,
+    })
 }
 
 fn parse_sequence_note(line: &str, span: Span) -> Option<SequenceNote> {
@@ -8920,7 +9026,12 @@ fn parse_sequence_note(line: &str, span: Span) -> Option<SequenceNote> {
     if over.is_empty() {
         return None;
     }
-    Some(SequenceNote { position, over, text, span })
+    Some(SequenceNote {
+        position,
+        over,
+        text,
+        span,
+    })
 }
 
 fn parse_sequence_activation(line: &str, span: Span) -> Option<SequenceActivation> {
@@ -8936,7 +9047,11 @@ fn parse_sequence_activation(line: &str, span: Span) -> Option<SequenceActivatio
     if participant.is_empty() {
         return None;
     }
-    Some(SequenceActivation { participant, activate, span })
+    Some(SequenceActivation {
+        participant,
+        activate,
+        span,
+    })
 }
 
 fn parse_sequence_control(line: &str, span: Span) -> Option<SequenceControl> {
@@ -8966,7 +9081,11 @@ fn parse_sequence_control(line: &str, span: Span) -> Option<SequenceControl> {
     };
     let rest = &line[keyword_len..];
     let label = rest.trim();
-    let label = if label.is_empty() { None } else { Some(label.to_string()) };
+    let label = if label.is_empty() {
+        None
+    } else {
+        Some(label.to_string())
+    };
     Some(SequenceControl { kind, label, span })
 }
 
@@ -12455,6 +12574,9 @@ mod tests {
             sequence_notes: Vec::new(),
             sequence_activations: Vec::new(),
             sequence_autonumber: false,
+            gantt_title: None,
+            gantt_sections: Vec::new(),
+            gantt_tasks: Vec::new(),
         }
     }
 
@@ -12869,7 +12991,10 @@ mod tests {
         assert!(service_count >= 3, "expected >= 3 services");
         assert_eq!(group_count, 0, "basic fixture should not declare groups");
         assert!(edge_count >= 2, "expected >= 2 edges");
-        assert_eq!(raw_count, 0, "architecture-beta should not fall back to Raw");
+        assert_eq!(
+            raw_count, 0,
+            "architecture-beta should not fall back to Raw"
+        );
 
         let config = MermaidConfig::default();
         let ir_parse = normalize_ast_to_ir(
@@ -13957,7 +14082,9 @@ B --> C
     fn parse_sequence_participant_basic() {
         let input = "sequenceDiagram\n  participant Alice\n  participant Bob\n  Alice->>Bob: Hello";
         let ast = parse(input).expect("parse");
-        let participants: Vec<_> = ast.statements.iter()
+        let participants: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::SequenceParticipant(_)))
             .collect();
         assert_eq!(participants.len(), 2, "expected 2 participants");
@@ -13972,7 +14099,9 @@ B --> C
     fn parse_sequence_actor() {
         let input = "sequenceDiagram\n  actor Alice\n  actor Bob as Robert\n  Alice->>Bob: Hi";
         let ast = parse(input).expect("parse");
-        let participants: Vec<_> = ast.statements.iter()
+        let participants: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::SequenceParticipant(_)))
             .collect();
         assert_eq!(participants.len(), 2);
@@ -13989,9 +14118,12 @@ B --> C
 
     #[test]
     fn parse_sequence_participant_with_alias() {
-        let input = "sequenceDiagram\n  participant A as Alice\n  participant B as Bob\n  A->>B: Hi";
+        let input =
+            "sequenceDiagram\n  participant A as Alice\n  participant B as Bob\n  A->>B: Hi";
         let ast = parse(input).expect("parse");
-        let participants: Vec<_> = ast.statements.iter()
+        let participants: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::SequenceParticipant(_)))
             .collect();
         assert_eq!(participants.len(), 2);
@@ -14005,7 +14137,9 @@ B --> C
     fn parse_sequence_note_over() {
         let input = "sequenceDiagram\n  Alice->>Bob: Hi\n  Note over Alice,Bob: This is a note";
         let ast = parse(input).expect("parse");
-        let notes: Vec<_> = ast.statements.iter()
+        let notes: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::SequenceNote(_)))
             .collect();
         assert_eq!(notes.len(), 1);
@@ -14020,7 +14154,9 @@ B --> C
     fn parse_sequence_note_left_right() {
         let input = "sequenceDiagram\n  Alice->>Bob: Hi\n  Note left of Alice: Left note\n  Note right of Bob: Right note";
         let ast = parse(input).expect("parse");
-        let notes: Vec<_> = ast.statements.iter()
+        let notes: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::SequenceNote(_)))
             .collect();
         assert_eq!(notes.len(), 2);
@@ -14036,7 +14172,9 @@ B --> C
     fn parse_sequence_activation() {
         let input = "sequenceDiagram\n  Alice->>Bob: Hi\n  activate Bob\n  Bob->>Alice: Reply\n  deactivate Bob";
         let ast = parse(input).expect("parse");
-        let activations: Vec<_> = ast.statements.iter()
+        let activations: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::SequenceActivation(_)))
             .collect();
         assert_eq!(activations.len(), 2);
@@ -14052,12 +14190,19 @@ B --> C
 
     #[test]
     fn parse_sequence_control_loop() {
-        let input = "sequenceDiagram\n  Alice->>Bob: Hi\n  loop Every 5s\n    Alice->>Bob: Ping\n  end";
+        let input =
+            "sequenceDiagram\n  Alice->>Bob: Hi\n  loop Every 5s\n    Alice->>Bob: Ping\n  end";
         let ast = parse(input).expect("parse");
-        let controls: Vec<_> = ast.statements.iter()
+        let controls: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::SequenceControl(_)))
             .collect();
-        assert_eq!(controls.len(), 1, "loop keyword should produce 1 SequenceControl");
+        assert_eq!(
+            controls.len(),
+            1,
+            "loop keyword should produce 1 SequenceControl"
+        );
         if let Statement::SequenceControl(c) = &controls[0] {
             assert_eq!(c.kind, SeqControlKind::Loop);
             assert_eq!(c.label.as_deref(), Some("Every 5s"));
@@ -14068,7 +14213,9 @@ B --> C
     fn parse_sequence_control_alt_else() {
         let input = "sequenceDiagram\n  alt Happy\n    Alice->>Bob: Yay\n  else Sad\n    Alice->>Bob: Boo\n  end";
         let ast = parse(input).expect("parse");
-        let controls: Vec<_> = ast.statements.iter()
+        let controls: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::SequenceControl(_)))
             .collect();
         assert_eq!(controls.len(), 2, "alt + else = 2 controls");
@@ -14084,7 +14231,8 @@ B --> C
 
     #[test]
     fn sequence_ir_has_participants() {
-        let input = "sequenceDiagram\n  participant A as Alice\n  participant B as Bob\n  A->>B: Hello";
+        let input =
+            "sequenceDiagram\n  participant A as Alice\n  participant B as Bob\n  A->>B: Hello";
         let ast = parse(input).expect("parse");
         let ir = normalize_ast_to_ir(
             &ast,
@@ -14124,7 +14272,8 @@ B --> C
 
     #[test]
     fn sequence_ir_has_controls() {
-        let input = "sequenceDiagram\n  Alice->>Bob: Hi\n  loop Every 5s\n    Alice->>Bob: Ping\n  end";
+        let input =
+            "sequenceDiagram\n  Alice->>Bob: Hi\n  loop Every 5s\n    Alice->>Bob: Ping\n  end";
         let ast = parse(input).expect("parse");
         let ir = normalize_ast_to_ir(
             &ast,
@@ -14139,21 +14288,41 @@ B --> C
     fn sequence_stress_fixture_parses_all_constructs() {
         let input = include_str!("../tests/fixtures/mermaid/sequence_stress.mmd");
         let ast = parse(input).expect("parse stress fixture");
-        let participants: Vec<_> = ast.statements.iter()
+        let participants: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::SequenceParticipant(_)))
             .collect();
-        let messages: Vec<_> = ast.statements.iter()
+        let messages: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::SequenceMessage(_)))
             .collect();
-        let controls: Vec<_> = ast.statements.iter()
+        let controls: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::SequenceControl(_)))
             .collect();
-        let notes: Vec<_> = ast.statements.iter()
+        let notes: Vec<_> = ast
+            .statements
+            .iter()
             .filter(|s| matches!(s, Statement::SequenceNote(_)))
             .collect();
-        assert!(participants.len() >= 6, "stress has 6 participants, got {}", participants.len());
-        assert!(messages.len() >= 10, "stress has many messages, got {}", messages.len());
-        assert!(controls.len() >= 3, "stress has loop+alt+else+opt, got {}", controls.len());
+        assert!(
+            participants.len() >= 6,
+            "stress has 6 participants, got {}",
+            participants.len()
+        );
+        assert!(
+            messages.len() >= 10,
+            "stress has many messages, got {}",
+            messages.len()
+        );
+        assert!(
+            controls.len() >= 3,
+            "stress has loop+alt+else+opt, got {}",
+            controls.len()
+        );
         assert_eq!(notes.len(), 1, "stress has 1 note");
         let ir = normalize_ast_to_ir(
             &ast,

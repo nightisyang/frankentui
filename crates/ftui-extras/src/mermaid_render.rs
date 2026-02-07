@@ -1054,6 +1054,10 @@ impl MermaidRenderer {
             self.render_packet(layout, ir, plan.diagram_area, buf);
             return;
         }
+        if ir.diagram_type == DiagramType::Gantt {
+            self.render_gantt(ir, plan.diagram_area, plan.max_label_width, buf);
+            return;
+        }
         if layout.nodes.is_empty() || plan.diagram_area.is_empty() {
             return;
         }
@@ -1087,6 +1091,135 @@ impl MermaidRenderer {
         if let Some(legend_area) = plan.legend_area {
             let footnotes = crate::mermaid_layout::build_link_footnotes(&ir.links, &ir.nodes);
             self.render_legend_footnotes(legend_area, &footnotes, buf);
+        }
+    }
+
+    /// Render a gantt diagram as a terminal-native timeline view.
+    ///
+    /// Note: currently a minimal deterministic renderer (section headers + task labels + bars).
+    /// Timeline scaling / date parsing lives in `bd-30t8a` follow-ups.
+    fn render_gantt(
+        &self,
+        ir: &MermaidDiagramIr,
+        area: Rect,
+        max_label_width: usize,
+        buf: &mut Buffer,
+    ) {
+        if area.is_empty() || ir.gantt_tasks.is_empty() {
+            return;
+        }
+
+        let h_line = self.glyphs.border.horizontal;
+        let title_fg = self.colors.node_text;
+        let section_fg = self.colors.cluster_border;
+        let border_fg = self.colors.edge_color;
+
+        let mut y = area.y;
+        let max_x = area.x + area.width.saturating_sub(1);
+
+        // Title
+        if let Some(title_id) = ir.gantt_title
+            && let Some(label) = ir.labels.get(title_id.0)
+        {
+            let title_text = if max_label_width > 0 {
+                truncate_label(&label.text, max_label_width)
+            } else {
+                label.text.clone()
+            };
+            let tw = display_width(&title_text).min(area.width as usize) as u16;
+            let tx = area.x.saturating_add(area.width.saturating_sub(tw) / 2);
+            let cell = Cell::from_char(' ').with_fg(title_fg);
+            buf.print_text_clipped(tx, y, &title_text, cell, max_x);
+            y = y.saturating_add(1);
+            if y < area.y + area.height {
+                for x in area.x..=max_x {
+                    buf.set(x, y, Cell::from_char(h_line).with_fg(border_fg));
+                }
+                y = y.saturating_add(1);
+            }
+        }
+
+        if y >= area.y + area.height {
+            return;
+        }
+
+        let mut section_label_width: u16 = 0;
+        for section in &ir.gantt_sections {
+            if let Some(label) = ir.labels.get(section.name.0) {
+                let w = display_width(&label.text) as u16;
+                if w > section_label_width {
+                    section_label_width = w;
+                }
+            }
+        }
+        section_label_width = section_label_width.min(area.width / 3);
+
+        let total_tasks = ir.gantt_tasks.len();
+        let bar_start_x = area.x + section_label_width + 2;
+        let bar_width = max_x.saturating_sub(bar_start_x);
+
+        for (sec_idx, section) in ir.gantt_sections.iter().enumerate() {
+            if y >= area.y + area.height {
+                break;
+            }
+            if let Some(label) = ir.labels.get(section.name.0) {
+                let text = if max_label_width > 0 {
+                    truncate_label(
+                        &label.text,
+                        max_label_width.min(section_label_width as usize),
+                    )
+                } else {
+                    label.text.clone()
+                };
+                let cell = Cell::from_char(' ').with_fg(section_fg);
+                buf.print_text_clipped(area.x, y, &text, cell, area.x + section_label_width);
+            }
+            for x in area.x..=max_x {
+                buf.set(x, y, Cell::from_char(h_line).with_fg(border_fg));
+            }
+            y = y.saturating_add(1);
+
+            let section_tasks: Vec<_> = ir
+                .gantt_tasks
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.section_idx == sec_idx)
+                .collect();
+            for (task_global_idx, task) in &section_tasks {
+                if y >= area.y + area.height {
+                    break;
+                }
+                if let Some(label) = ir.labels.get(task.title.0) {
+                    let text = if max_label_width > 0 {
+                        truncate_label(
+                            &label.text,
+                            max_label_width.min(section_label_width as usize),
+                        )
+                    } else {
+                        label.text.clone()
+                    };
+                    let cell = Cell::from_char(' ').with_fg(title_fg);
+                    buf.print_text_clipped(
+                        area.x + 1,
+                        y,
+                        &text,
+                        cell,
+                        area.x + section_label_width,
+                    );
+                }
+                if bar_width > 0 && total_tasks > 0 {
+                    let frac_start = *task_global_idx as f64 / total_tasks as f64;
+                    let frac_end = (*task_global_idx + 1) as f64 / total_tasks as f64;
+                    let bx0 = bar_start_x + (frac_start * bar_width as f64) as u16;
+                    let bx1 = bar_start_x + (frac_end * bar_width as f64) as u16;
+                    let bar_char = self.glyphs.border.horizontal;
+                    let bar_cell = Cell::from_char(bar_char).with_fg(self.colors.node_border);
+                    for x in bx0..=bx1.min(max_x) {
+                        buf.set(x, y, bar_cell);
+                    }
+                }
+                y = y.saturating_add(1);
+            }
         }
     }
 
@@ -5139,7 +5272,7 @@ mod tests {
                 span_all: vec![],
                 implicit: false,
                 members: vec![],
-            annotation: None,
+                annotation: None,
             })
             .collect();
 
@@ -5200,11 +5333,14 @@ mod tests {
             packet_fields: Vec::new(),
             packet_title: None,
             packet_bits_per_row: 32,
-        sequence_participants: Vec::new(),
-        sequence_controls: Vec::new(),
-        sequence_notes: Vec::new(),
-        sequence_activations: Vec::new(),
-        sequence_autonumber: false,
+            sequence_participants: Vec::new(),
+            sequence_controls: Vec::new(),
+            sequence_notes: Vec::new(),
+            sequence_activations: Vec::new(),
+            sequence_autonumber: false,
+            gantt_title: None,
+            gantt_sections: Vec::new(),
+            gantt_tasks: Vec::new(),
         }
     }
 
