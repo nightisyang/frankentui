@@ -1105,8 +1105,10 @@ impl MermaidRenderer {
 
     /// Render a gantt diagram as a terminal-native timeline view.
     ///
-    /// Note: currently a minimal deterministic renderer (section headers + task labels + bars).
-    /// Timeline scaling / date parsing lives in `bd-30t8a` follow-ups.
+    /// Deterministic behavior notes:
+    /// - Date parsing supports `YYYY-MM-DD`.
+    /// - Task scheduling honors `after <id>` when resolvable, otherwise falls back to stable
+    ///   in-order section sequencing.
     fn render_gantt(
         &self,
         ir: &MermaidDiagramIr,
@@ -1125,6 +1127,7 @@ impl MermaidRenderer {
 
         let mut y = area.y;
         let max_x = area.x + area.width.saturating_sub(1);
+        let mut axis_line_y: Option<u16> = None;
 
         // Title
         if let Some(title_id) = ir.gantt_title
@@ -1144,6 +1147,7 @@ impl MermaidRenderer {
                 for x in area.x..=max_x {
                     buf.set(x, y, Cell::from_char(h_line).with_fg(border_fg));
                 }
+                axis_line_y = Some(y);
                 y = y.saturating_add(1);
             }
         }
@@ -1161,11 +1165,254 @@ impl MermaidRenderer {
                 }
             }
         }
+        for task in &ir.gantt_tasks {
+            if let Some(label) = ir.labels.get(task.title.0) {
+                let w = display_width(&label.text).min(u16::MAX as usize) as u16;
+                if w > section_label_width {
+                    section_label_width = w;
+                }
+            }
+        }
         section_label_width = section_label_width.min(area.width / 3);
 
-        let total_tasks = ir.gantt_tasks.len();
         let bar_start_x = area.x.saturating_add(section_label_width).saturating_add(2);
         let bar_width = max_x.saturating_sub(bar_start_x);
+        let bar_cols = bar_width.saturating_add(1);
+
+        fn parse_fixed_digits(bytes: &[u8]) -> Option<i32> {
+            let mut n: i32 = 0;
+            for &ch in bytes {
+                if !ch.is_ascii_digit() {
+                    return None;
+                }
+                n = n.saturating_mul(10).saturating_add(i32::from(ch - b'0'));
+            }
+            Some(n)
+        }
+
+        fn parse_yyyy_mm_dd(s: &str) -> Option<i32> {
+            let s = s.trim();
+            let b = s.as_bytes();
+            if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+                return None;
+            }
+            let y = parse_fixed_digits(&b[0..4])?;
+            let m_i = parse_fixed_digits(&b[5..7])?;
+            let d_i = parse_fixed_digits(&b[8..10])?;
+            let m = u8::try_from(m_i).ok()?;
+            let d = u8::try_from(d_i).ok()?;
+            if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+                return None;
+            }
+
+            // Howard Hinnant's algorithm: days since Unix epoch (1970-01-01).
+            // Ref: https://howardhinnant.github.io/date_algorithms.html
+            let m_i = i32::from(m);
+            let d_i = i32::from(d);
+            let y_adj = y - if m_i <= 2 { 1 } else { 0 };
+            let era = if y_adj >= 0 { y_adj } else { y_adj - 399 } / 400;
+            let yoe = y_adj - era * 400; // [0, 399]
+            let mp = m_i + if m_i > 2 { -3 } else { 9 }; // [0, 11]
+            let doy = (153 * mp + 2) / 5 + d_i - 1; // [0, 365]
+            let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+            Some(era * 146_097 + doe - 719_468)
+        }
+
+        fn civil_from_days(days: i32) -> (i32, u8, u8) {
+            // Inverse of `parse_yyyy_mm_dd` day count.
+            // Howard Hinnant's algorithm.
+            let z = days + 719_468;
+            let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+            let doe = z - era * 146_097; // [0, 146096]
+            let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+            let y = yoe + era * 400;
+            let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+            let mp = (5 * doy + 2) / 153; // [0, 11]
+            let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+            let m = mp + if mp < 10 { 3 } else { -9 }; // [1, 12]
+            let y = y + if m <= 2 { 1 } else { 0 };
+            (
+                y,
+                u8::try_from(m).unwrap_or(1),
+                u8::try_from(d).unwrap_or(1),
+            )
+        }
+
+        fn format_axis_date(days: i32, bar_cols: u16) -> String {
+            let (y, m, d) = civil_from_days(days);
+            if bar_cols >= 18 {
+                format!("{y:04}-{m:02}-{d:02}")
+            } else {
+                format!("{m:02}-{d:02}")
+            }
+        }
+
+        fn parse_duration_days(token: &str) -> Option<i32> {
+            let t = token.trim();
+            if t.is_empty() {
+                return None;
+            }
+            let lower = t.to_ascii_lowercase();
+            if let Some(n) = lower.strip_suffix('d') {
+                let days = n.trim().parse::<i32>().ok()?;
+                return Some(days.max(0));
+            }
+            if let Some(n) = lower.strip_suffix('w') {
+                let weeks = n.trim().parse::<i32>().ok()?;
+                return Some((weeks.max(0)).saturating_mul(7));
+            }
+            None
+        }
+
+        let mut ids: Vec<Option<String>> = Vec::with_capacity(ir.gantt_tasks.len());
+        let mut after_ids: Vec<Option<String>> = Vec::with_capacity(ir.gantt_tasks.len());
+        let mut explicit_starts: Vec<Option<i32>> = Vec::with_capacity(ir.gantt_tasks.len());
+        let mut durations: Vec<i32> = Vec::with_capacity(ir.gantt_tasks.len());
+        let mut milestones: Vec<bool> = Vec::with_capacity(ir.gantt_tasks.len());
+        let mut has_any_explicit_date = false;
+
+        for task in &ir.gantt_tasks {
+            let mut id: Option<String> = None;
+            let mut after: Option<String> = None;
+            let mut start_day: Option<i32> = None;
+            let mut duration_days: Option<i32> = None;
+            let mut milestone = false;
+
+            for raw in task.meta.split(',') {
+                let t = raw.trim();
+                if t.is_empty() {
+                    continue;
+                }
+                let lower = t.to_ascii_lowercase();
+                if lower == "milestone" {
+                    milestone = true;
+                    continue;
+                }
+                if let Some(rest) = lower.strip_prefix("after ") {
+                    let dep = rest.trim();
+                    if !dep.is_empty() {
+                        after = Some(dep.to_string());
+                    }
+                    continue;
+                }
+                if start_day.is_none() {
+                    if let Some(day) = parse_yyyy_mm_dd(t) {
+                        start_day = Some(day);
+                        has_any_explicit_date = true;
+                        continue;
+                    }
+                }
+                if duration_days.is_none() {
+                    if let Some(d) = parse_duration_days(t) {
+                        duration_days = Some(d);
+                        continue;
+                    }
+                }
+                if id.is_none() {
+                    id = Some(t.to_string());
+                }
+            }
+
+            let duration = if milestone {
+                duration_days.unwrap_or(0)
+            } else {
+                duration_days.unwrap_or(1).max(0)
+            };
+
+            ids.push(id);
+            after_ids.push(after);
+            explicit_starts.push(start_day);
+            durations.push(duration);
+            milestones.push(milestone || duration == 0);
+        }
+
+        let base_start_day = explicit_starts
+            .iter()
+            .filter_map(|d| *d)
+            .min()
+            .unwrap_or(0);
+
+        let mut id_to_task_idx: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for (idx, id) in ids.iter().enumerate() {
+            if let Some(id) = id {
+                // First wins for determinism.
+                id_to_task_idx.entry(id.clone()).or_insert(idx);
+            }
+        }
+
+        let section_count = ir.gantt_sections.len().max(1);
+        let mut start_days: Vec<i32> = vec![base_start_day; ir.gantt_tasks.len()];
+        let mut end_excl_days: Vec<i32> = vec![base_start_day; ir.gantt_tasks.len()];
+        for _ in 0..=ir.gantt_tasks.len() {
+            let mut changed = false;
+            let mut section_end: Vec<i32> = vec![base_start_day; section_count];
+
+            for (idx, task) in ir.gantt_tasks.iter().enumerate() {
+                let sec = task.section_idx.min(section_count.saturating_sub(1));
+                let start = if let Some(explicit) = explicit_starts[idx] {
+                    explicit
+                } else if let Some(dep) = &after_ids[idx] {
+                    id_to_task_idx
+                        .get(dep)
+                        .and_then(|&didx| end_excl_days.get(didx).copied())
+                        .unwrap_or(section_end[sec])
+                } else {
+                    section_end[sec]
+                };
+                let end_excl = start.saturating_add(durations[idx]);
+
+                if start_days[idx] != start {
+                    start_days[idx] = start;
+                    changed = true;
+                }
+                if end_excl_days[idx] != end_excl {
+                    end_excl_days[idx] = end_excl;
+                    changed = true;
+                }
+                section_end[sec] = end_excl;
+            }
+
+            if !changed {
+                break;
+            }
+        }
+
+        let min_start_day = start_days.iter().copied().min().unwrap_or(base_start_day);
+        let mut max_last_day = min_start_day;
+        for (start, dur) in start_days.iter().copied().zip(durations.iter().copied()) {
+            let last = if dur > 0 {
+                start.saturating_add(dur.saturating_sub(1))
+            } else {
+                start
+            };
+            max_last_day = max_last_day.max(last);
+        }
+        let span_days = i64::from((max_last_day - min_start_day).max(1));
+
+        // Axis endpoints: overlay start/end dates onto the title separator line when present.
+        if let Some(axis_y) = axis_line_y
+            && has_any_explicit_date
+            && bar_cols >= 5
+        {
+            let start_label = format_axis_date(min_start_day, bar_cols);
+            let end_label = format_axis_date(max_last_day, bar_cols);
+            let axis_cell = Cell::from_char(' ').with_fg(border_fg);
+
+            if bar_start_x <= max_x {
+                buf.print_text_clipped(bar_start_x, axis_y, &start_label, axis_cell, max_x);
+            }
+
+            let end_len: u16 = u16::try_from(display_width(&end_label)).unwrap_or(u16::MAX);
+            let start_len: u16 = u16::try_from(display_width(&start_label)).unwrap_or(u16::MAX);
+            if end_len > 0 {
+                let end_x = max_x.saturating_sub(end_len).saturating_add(1);
+                let start_end = bar_start_x.saturating_add(start_len);
+                if end_x > start_end.saturating_add(1) && end_x >= bar_start_x {
+                    buf.print_text_clipped(end_x, axis_y, &end_label, axis_cell, max_x);
+                }
+            }
+        }
 
         for (sec_idx, section) in ir.gantt_sections.iter().enumerate() {
             if y >= area.y + area.height {
@@ -1227,19 +1474,40 @@ impl MermaidRenderer {
                         area.x.saturating_add(section_label_width),
                     );
                 }
-                if bar_width > 0 && total_tasks > 0 {
-                    let frac_start = *task_global_idx as f64 / total_tasks as f64;
-                    let frac_end = (*task_global_idx + 1) as f64 / total_tasks as f64;
-                    let bx0 =
-                        bar_start_x.saturating_add(
-                            (frac_start * bar_width as f64).min(u16::MAX as f64) as u16,
-                        );
-                    let bx1 = bar_start_x
-                        .saturating_add((frac_end * bar_width as f64).min(u16::MAX as f64) as u16);
-                    let bar_char = self.glyphs.border.horizontal;
-                    let bar_cell = Cell::from_char(bar_char).with_fg(self.colors.node_border);
-                    for x in bx0..=bx1.min(max_x) {
-                        buf.set(x, y, bar_cell);
+                if bar_cols > 0 {
+                    let start = start_days[*task_global_idx];
+                    let dur = durations[*task_global_idx];
+                    let last = if dur > 0 {
+                        start.saturating_add(dur.saturating_sub(1))
+                    } else {
+                        start
+                    };
+                    let start_idx = i64::from(start.saturating_sub(min_start_day));
+                    let last_idx = i64::from(last.saturating_sub(min_start_day));
+                    let bw = i64::from(bar_width);
+
+                    let off0 = (start_idx.saturating_mul(bw)) / span_days;
+                    let off1 = (last_idx.saturating_mul(bw)) / span_days;
+                    let off0: u16 = u16::try_from(off0.clamp(0, i64::from(u16::MAX)))
+                        .unwrap_or(u16::MAX);
+                    let off1: u16 = u16::try_from(off1.clamp(0, i64::from(u16::MAX)))
+                        .unwrap_or(u16::MAX);
+                    let bx0 = bar_start_x.saturating_add(off0);
+                    let bx1 = bar_start_x.saturating_add(off1).max(bx0);
+
+                    if milestones[*task_global_idx] {
+                        let ch = match self.glyph_mode {
+                            MermaidGlyphMode::Unicode => '◆',
+                            MermaidGlyphMode::Ascii => 'X',
+                        };
+                        let cell = Cell::from_char(ch).with_fg(self.colors.node_border);
+                        buf.set(bx0, y, cell);
+                    } else {
+                        let bar_char = self.glyphs.border.horizontal;
+                        let bar_cell = Cell::from_char(bar_char).with_fg(self.colors.node_border);
+                        for x in bx0..=bx1.min(max_x) {
+                            buf.set(x, y, bar_cell);
+                        }
                     }
                 }
                 y = y.saturating_add(1);
