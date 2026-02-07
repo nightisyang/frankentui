@@ -793,10 +793,10 @@ impl LogViewer {
         match self.wrap_mode {
             LogWrapMode::NoWrap => {
                 if y < max_y {
-                    if hl_ranges.is_some_and(|r| !r.is_empty()) {
+                    if let Some(ranges) = hl_ranges.filter(|r| !r.is_empty()) {
                         self.draw_highlighted_line(
                             &content,
-                            hl_ranges.unwrap(),
+                            ranges,
                             x,
                             y,
                             x.saturating_add(width),
@@ -820,10 +820,10 @@ impl LogViewer {
             LogWrapMode::CharWrap | LogWrapMode::WordWrap => {
                 if content_width <= width as usize {
                     if y < max_y {
-                        if hl_ranges.is_some_and(|r| !r.is_empty()) {
+                        if let Some(ranges) = hl_ranges.filter(|r| !r.is_empty()) {
                             self.draw_highlighted_line(
                                 &content,
-                                hl_ranges.unwrap(),
+                                ranges,
                                 x,
                                 y,
                                 x.saturating_add(width),
