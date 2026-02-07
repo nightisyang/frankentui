@@ -359,10 +359,12 @@ impl<'a> StatefulWidget for List<'a> {
         let list_height = list_area.height as usize;
 
         // Ensure selection is within bounds
-        if let Some(selected) = state.selected
-            && selected >= self.items.len()
-        {
-            state.selected = Some(self.items.len() - 1);
+        if let Some(selected) = state.selected {
+            if self.items.is_empty() {
+                state.selected = None;
+            } else if selected >= self.items.len() {
+                state.selected = Some(self.items.len() - 1);
+            }
         }
         if let Some(hovered) = state.hovered
             && hovered >= self.items.len()
