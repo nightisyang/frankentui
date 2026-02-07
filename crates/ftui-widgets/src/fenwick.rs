@@ -90,23 +90,29 @@ impl FenwickTree {
     /// # Panics
     /// Panics if `i >= n`.
     pub fn update(&mut self, i: usize, delta: i32) {
-        assert!(i < self.n, "index {i} out of bounds (n={})", self.n);
-        let mut idx = i + 1; // convert to 1-indexed
-        while idx <= self.n {
-            if delta >= 0 {
-                self.tree[idx] = self.tree[idx].wrapping_add(delta as u32);
-            } else {
-                self.tree[idx] = self.tree[idx].wrapping_sub((-delta) as u32);
-            }
-            idx += lowbit(idx);
-        }
+        // Cast to u32 directly: two's complement makes wrapping_add correct
+        // for both positive and negative deltas (e.g. -5i32 as u32 = u32::MAX-4,
+        // and wrapping_add with that is equivalent to wrapping_sub(5)).
+        // This also avoids a panic on `-i32::MIN` which the old negation had.
+        self.update_u32(i, delta as u32);
     }
 
     /// Set element at position `i` to `value` (0-indexed). O(log n).
     pub fn set(&mut self, i: usize, value: u32) {
         let current = self.get(i);
-        let delta = value as i64 - current as i64;
-        self.update(i, delta as i32);
+        // Use wrapping_sub in u32 space to avoid i64→i32 truncation
+        // for large deltas that don't fit in i32 range.
+        self.update_u32(i, value.wrapping_sub(current));
+    }
+
+    /// Internal: add a u32 delta to position `i` using wrapping arithmetic.
+    fn update_u32(&mut self, i: usize, delta: u32) {
+        assert!(i < self.n, "index {i} out of bounds (n={})", self.n);
+        let mut idx = i + 1; // convert to 1-indexed
+        while idx <= self.n {
+            self.tree[idx] = self.tree[idx].wrapping_add(delta);
+            idx += lowbit(idx);
+        }
     }
 
     /// Get the value at position `i` (0-indexed). O(log n).
@@ -449,6 +455,27 @@ mod tests {
             naive_prefix = naive_prefix.wrapping_add(*value);
             assert_eq!(ft.prefix(i), naive_prefix, "prefix mismatch at index {i}");
         }
+    }
+
+    // ─── Edge cases ───────────────────────────────────────────────
+
+    #[test]
+    fn update_i32_min_does_not_panic() {
+        // i32::MIN previously caused a panic via `-i32::MIN` overflow.
+        let mut ft = FenwickTree::from_values(&[0, 0, 0]);
+        ft.update(0, i32::MIN); // should not panic
+        // wrapping semantics: 0u32.wrapping_add(i32::MIN as u32) = 2147483648
+        assert_eq!(ft.get(0), i32::MIN as u32);
+    }
+
+    #[test]
+    fn set_large_u32_value() {
+        // set() previously truncated delta via i64→i32 cast for large values.
+        let mut ft = FenwickTree::from_values(&[0, 100, 200]);
+        ft.set(0, u32::MAX);
+        assert_eq!(ft.get(0), u32::MAX);
+        assert_eq!(ft.get(1), 100);
+        assert_eq!(ft.get(2), 200);
     }
 
     // ─── Performance test ─────────────────────────────────────────

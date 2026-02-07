@@ -2203,7 +2203,19 @@ impl<M: Model, W: Write + Send> Program<M, W> {
         let mut remaining = Vec::with_capacity(self.task_handles.len());
         for handle in self.task_handles.drain(..) {
             if handle.is_finished() {
-                let _ = handle.join();
+                if let Err(payload) = handle.join() {
+                    let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                        (*s).to_owned()
+                    } else if let Some(s) = payload.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic payload".to_owned()
+                    };
+                    #[cfg(feature = "tracing")]
+                    tracing::error!("spawned task panicked: {msg}");
+                    #[cfg(not(feature = "tracing"))]
+                    eprintln!("ftui: spawned task panicked: {msg}");
+                }
             } else {
                 remaining.push(handle);
             }
