@@ -18,6 +18,25 @@ path to a working inline (scrollback-preserving) UI.
 - As of today, only `ftui-core`, `ftui-layout`, and `ftui-i18n` are published on crates.io.
   The rest of the stack (render/runtime/widgets/extras) should be consumed via workspace paths.
 
+## Crate Map (Core vs Optional)
+
+Core stack (what most applications use):
+
+- `ftui` (facade): recommended entry point; re-exports core APIs.
+- `ftui-core`: terminal lifecycle, capabilities, and input events.
+- `ftui-render`: buffer/frame, diff computation, and ANSI presenter.
+- `ftui-runtime`: Elm-style program loop, subscriptions, and terminal writer.
+- `ftui-widgets`: core widget library.
+- `ftui-layout`, `ftui-style`, `ftui-text`, `ftui-i18n`: supporting crates.
+
+Optional / higher-churn:
+
+- `ftui-extras`: feature-gated add-ons (markdown, syntax highlighting, mermaid, text effects).
+- `ftui-harness`: snapshot + PTY helpers and runnable examples (used heavily in this guide).
+- `ftui-pty`: PTY utilities for tests.
+- `ftui-demo-showcase`: reference app + visual snapshots.
+- `ftui-simd`: internal perf experiments.
+
 ## Prereqs
 
 - Rust nightly (required by `rust-toolchain.toml`)
@@ -182,17 +201,17 @@ rustup toolchain install nightly
 Only one component should own terminal output. If you need to emit logs,
 prefer `Cmd::log` so the runtime can keep inline mode correct.
 
-See `docs/one-writer-rule.md`.
+See [one-writer-rule.md](one-writer-rule.md).
 
 ## Examples Index
 
 All of these are runnable and kept aligned with the repo's current APIs:
 
-- `crates/ftui-harness/examples/minimal.rs` (hello world)
-- `crates/ftui-harness/examples/streaming.rs` (streaming output + inline UI)
-- `crates/ftui-harness/examples/counter.rs` (state updates)
-- `crates/ftui-harness/examples/layout.rs` (layout composition)
-- `crates/ftui-harness/examples/modal.rs` (modal patterns)
+- [`crates/ftui-harness/examples/minimal.rs`](../crates/ftui-harness/examples/minimal.rs) (hello world)
+- [`crates/ftui-harness/examples/streaming.rs`](../crates/ftui-harness/examples/streaming.rs) (streaming output + inline UI)
+- [`crates/ftui-harness/examples/counter.rs`](../crates/ftui-harness/examples/counter.rs) (state updates)
+- [`crates/ftui-harness/examples/layout.rs`](../crates/ftui-harness/examples/layout.rs) (layout composition)
+- [`crates/ftui-harness/examples/modal.rs`](../crates/ftui-harness/examples/modal.rs) (modal patterns)
 
 Tutorial:
-- `docs/tutorials/agent-harness.md`
+- [`docs/tutorials/agent-harness.md`](tutorials/agent-harness.md)
