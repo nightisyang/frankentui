@@ -451,6 +451,35 @@ fn pty_mermaid_harness_metrics_jsonl_present() -> Result<(), String> {
         render_lines.len()
     );
 
+    // Ensure gantt is present and renders without fallback/unsupported.
+    let mut found_gantt_ok = false;
+    for line in &render_lines {
+        let json = extract_json_object(line).ok_or_else(|| {
+            format!("failed to locate JSON object in mermaid_render line: {line}")
+        })?;
+        let value: Value = serde_json::from_str(json)
+            .map_err(|err| format!("failed to parse mermaid_render JSONL object: {err}: {json}"))?;
+        if value.get("diagram_type").and_then(Value::as_str) != Some("gantt") {
+            continue;
+        }
+        if value.get("error_count").and_then(Value::as_u64) != Some(0) {
+            continue;
+        }
+        if value.get("fallback_reason").is_some() {
+            continue;
+        }
+        if value.get("fallback_tier").is_some() {
+            continue;
+        }
+        found_gantt_ok = true;
+        break;
+    }
+    assert!(
+        found_gantt_ok,
+        "expected at least one gantt mermaid_render event with error_count=0 and no fallback; saw {} mermaid_render lines",
+        render_lines.len()
+    );
+
     Ok(())
 }
 
