@@ -8979,4 +8979,105 @@ mod tests {
 
     // -- comprehensive diagram type snapshot coverage --
 
+
+    // -- 200x60 large viewport snapshot tests --
+
+    #[test]
+    fn snapshot_flowchart_small_200x60() {
+        let source = include_str!("../tests/fixtures/mermaid/graph_small.mmd");
+        let (buf, _plan) = e2e_render(source, 200, 60);
+        assert_buffer_snapshot_text("mermaid_flowchart_small_200x60", &buf);
+    }
+
+    #[test]
+    fn snapshot_sequence_basic_200x60() {
+        let source = include_str!("../tests/fixtures/mermaid/sequence_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 200, 60);
+        assert_buffer_snapshot_text("mermaid_sequence_basic_200x60", &buf);
+    }
+
+    #[test]
+    fn snapshot_class_basic_200x60() {
+        let source = include_str!("../tests/fixtures/mermaid/class_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 200, 60);
+        assert_buffer_snapshot_text("mermaid_class_basic_200x60", &buf);
+    }
+
+    #[test]
+    fn snapshot_state_basic_200x60() {
+        let source = include_str!("../tests/fixtures/mermaid/state_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 200, 60);
+        assert_buffer_snapshot_text("mermaid_state_basic_200x60", &buf);
+    }
+
+    #[test]
+    fn snapshot_er_basic_200x60() {
+        let source = include_str!("../tests/fixtures/mermaid/er_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 200, 60);
+        assert_buffer_snapshot_text("mermaid_er_basic_200x60", &buf);
+    }
+
+    #[test]
+    fn snapshot_gantt_basic_200x60() {
+        let source = include_str!("../tests/fixtures/mermaid/gantt_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 200, 60);
+        assert_buffer_snapshot_text("mermaid_gantt_basic_200x60", &buf);
+    }
+
+    #[test]
+    fn snapshot_pie_basic_200x60() {
+        let source = include_str!("../tests/fixtures/mermaid/pie_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 200, 60);
+        assert_buffer_snapshot_text("mermaid_pie_basic_200x60", &buf);
+    }
+
+    #[test]
+    fn snapshot_gitgraph_basic_200x60() {
+        let source = include_str!("../tests/fixtures/mermaid/gitgraph_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 200, 60);
+        assert_buffer_snapshot_text("mermaid_gitgraph_basic_200x60", &buf);
+    }
+
+    #[test]
+    fn snapshot_journey_basic_200x60() {
+        let source = include_str!("../tests/fixtures/mermaid/journey_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 200, 60);
+        assert_buffer_snapshot_text("mermaid_journey_basic_200x60", &buf);
+    }
+
+    #[test]
+    fn snapshot_mindmap_basic_200x60() {
+        let source = include_str!("../tests/fixtures/mermaid/mindmap_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 200, 60);
+        assert_buffer_snapshot_text("mermaid_mindmap_basic_200x60", &buf);
+    }
+
+    #[test]
+    fn snapshot_requirement_basic_200x60() {
+        let source = include_str!("../tests/fixtures/mermaid/requirement_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 200, 60);
+        assert_buffer_snapshot_text("mermaid_requirement_basic_200x60", &buf);
+    }
+
+    #[test]
+    fn snapshot_timeline_basic_200x60() {
+        let source = include_str!("../tests/fixtures/mermaid/timeline_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 200, 60);
+        assert_buffer_snapshot_text("mermaid_timeline_basic_200x60", &buf);
+    }
+
+    #[test]
+    fn snapshot_sankey_basic_200x60() {
+        let source = include_str!("../tests/fixtures/mermaid/sankey_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 200, 60);
+        assert_buffer_snapshot_text("mermaid_sankey_basic_200x60", &buf);
+    }
+
+    #[test]
+    fn snapshot_c4_context_basic_200x60() {
+        let source = include_str!("../tests/fixtures/mermaid/c4_context_basic.mmd");
+        let (buf, _plan) = e2e_render(source, 200, 60);
+        assert_buffer_snapshot_text("mermaid_c4_context_basic_200x60", &buf);
+    }
+
 }
