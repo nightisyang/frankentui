@@ -2,20 +2,20 @@ Mermaid Showcase | Journey Basic (21/24) | Layout: Auto | Score: -7.6 | Viewport
 ╭───────────Samples───────────╮╭──────────────────────────Viewport──────────────────────────╮╭────────Controls────────╮ 
 │  Flow Basic [flow, S, branch││                                                            ││Layout: Auto (l)        │ 
 │  Flow Subgraphs [flow, M, su││                 ┌─────────────────────────┐                ││Tier: auto (t)          │ 
-│  Flow Dense [flow, L, dense,││                 │ Discover                │                ││Glyphs: unicode (g)     │ 
-│  Flow Long Labels [flow, M, ││                 │                         │                ││Render: braille (b)     │ 
-│  Flow Unicode [flow, S, unic││                 │                         │                ││Wrap: wordchar (w)      │ 
-│  Flow Styles [flow, M, class││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Styles: on (s)          │ 
+│  Flow Dense [flow, L, dense,││                 │ Discover                │                ││Guard: Default (x)      │ 
+│  Flow Long Labels [flow, M, ││                 │                         │                ││Glyphs: unicode (g)     │ 
+│  Flow Unicode [flow, S, unic││                 │                         │                ││Render: braille (b)     │ 
+│  Flow Styles [flow, M, class││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Wrap: wordchar (w)      │ 
 │  Sequence Mini [sequence, S,││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿ Landing
-●●●●● User  ⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Zoom: 100% (+/-)        │ 
-│  Sequence Checkout [sequence││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Fit: f                  │ 
-│  Sequence Dense [sequence, L││                 │                         │                ││Metrics: on (m)         │ 
-│  Class Basic [class, S, inhe││                 │                         │                ││                        │ 
-│  Class Members [class, M, fi││                 │                         │                ││                        │ 
-│  State Basic [state, S, star││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││                        │ 
+●●●●● User  ⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Styles: on (s)          │ 
+│  Sequence Checkout [sequence││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Links: off (u)          │ 
+│  Sequence Dense [sequence, L││                 │                         │                ││Init: off (I)           │ 
+│  Class Basic [class, S, inhe││                 │                         │                ││Errors: panel (e)       │ 
+│  Class Members [class, M, fi││                 │                         │                ││Viewport: auto (v)      │ 
+│  State Basic [state, S, star││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Zoom: 100% (+/-)        │ 
 │  State Composite [state, M, ││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿  Signup
-●●●●○ User  ⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││                        │ 
-│  ER Basic [er, M, cardinalit││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││                        │ 
+●●●●○ User  ⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Fit: f                  │ 
+│  ER Basic [er, M, cardinalit││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Metrics: on (m)         │ 
 │  Gantt Basic [gantt, M, sect││                 │                         │                ││                        │ 
 │  Mindmap Seed [mindmap, S, t││                 └─────────────────────────┘                ││                        │ 
 │  Mindmap Deep [mindmap, L, d││                                                            ││                        │ 
@@ -23,22 +23,22 @@ Mermaid Showcase | Journey Basic (21/24) | Layout: Auto | Score: -7.6 | Viewport
 │  Pie Many [pie, M, many-slic││                                                            ││                        │ 
 │  Gitgraph Basic [gitgraph, M││                                                            │╰────────────────────────╯ 
 │> Journey Basic [journey, M, ││                 ┌─────────────────────────┐                │╭────────Metrics─────────╮ 
-│  Requirement Basic [requirem││                 │ Activate                │                ││Parse: 0.00 ms          │ 
-│  Block Beta Basic [block-bet││                 │                         │                ││Layout: 0.00 ms         │ 
-│  Block Beta Nested [block-be││                 │                         │                ││Render: 0.00 ms         │ 
-│                             ││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Viewport: auto          │ 
+│  Requirement Basic [requirem││                 │ Activate                │                ││Cache: hit 0  miss 1  la│ 
+│  Block Beta Basic [block-bet││                 │                         │                ││Warnings: 1             │ 
+│  Block Beta Nested [block-be││                 │                         │                ││Parse: 0.00 ms          │ 
+│                             ││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Layout: 0.00 ms         │ 
 │                             ││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿ Tutorial
-●●●○○ User ⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Zoom: 100%              │ 
-│                             ││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Iters: 0                │ 
+●●●○○ User ⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Render: 0.00 ms         │ 
+│                             ││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Viewport: auto          │ 
+│                             ││                 │                         │                ││Zoom: 100%              │ 
+│                             ││                 │                         │                ││Iters: 0                │ 
 │                             ││                 │                         │                ││Score: -7.60            │ 
-│                             ││                 │                         │                ││Cross: 0                │ 
-│                             ││                 │                         │                ││Bends: 0                │ 
-│                             ││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Sym: 1.00               │ 
+│                             ││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Cross: 0                │ 
 │                             ││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿First task
-●●●●● User⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Comp: 0.30              │ 
-│                             ││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Edge var: 0.00          │ 
-│                             ││                 │                         │                ││Label col: 0            │ 
-│                             ││                 └─────────────────────────┘                ││                        │ 
-│                             ││                                                            ││                        │ 
+●●●●● User⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Bends: 0                │ 
+│                             ││       ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│⣿⣿⣿⣿⣿⣿⣿⣿⣿       ││Sym: 1.00               │ 
+│                             ││                 │                         │                ││Comp: 0.30              │ 
+│                             ││                 └─────────────────────────┘                ││Edge var: 0.00          │ 
+│                             ││                                                            ││Label col: 0            │ 
 ╰─────────────────────────────╯╰────────────────────────────────────────────────────────────╯╰────────────────────────╯ 
-j/k sample  l layout  r relayout  b render  +/- zoom  []/{} size  o reset  m metrics  t tier | parse 0ms | layout 0ms | 
+j/k sample  Enter render  l layout  t tier  u links  I init  e errors  x guard  v view  +/- zoom  m metrics  ? help | pa

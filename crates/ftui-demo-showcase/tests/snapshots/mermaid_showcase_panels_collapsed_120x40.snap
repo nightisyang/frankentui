@@ -37,4 +37,4 @@ Mermaid Showcase | Flow Basic (1/24) | Layout: Auto | Score: 0.8 | Viewport: aut
 │                             ││                                                            ││                        │ 
 │                             ││                                                            ││                        │ 
 ╰─────────────────────────────╯╰────────────────────────────────────────────────────────────╯╰────────────────────────╯ 
-j/k sample  l layout  r relayout  b render  +/- zoom  []/{} size  o reset  m metrics  t tier | metrics hidden (m)       
+j/k sample  Enter render  l layout  t tier  u links  I init  e errors  x guard  v view  +/- zoom  m metrics  ? help | me

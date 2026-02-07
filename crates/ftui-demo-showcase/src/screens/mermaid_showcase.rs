@@ -2,7 +2,10 @@
 
 //! Mermaid showcase screen — state + command handling scaffold.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
@@ -12,8 +15,8 @@ use ftui_core::geometry::Rect;
 use ftui_extras::mermaid;
 use ftui_extras::mermaid::{
     DiagramPalettePreset, MermaidCompatibilityMatrix, MermaidConfig, MermaidDiagramIr,
-    MermaidError, MermaidFallbackPolicy, MermaidGlyphMode, MermaidRenderMode, MermaidTier,
-    MermaidWrapMode, ShowcaseMode,
+    MermaidError, MermaidErrorMode, MermaidFallbackPolicy, MermaidGlyphMode, MermaidLinkMode,
+    MermaidRenderMode, MermaidTier, MermaidWrapMode, ShowcaseMode,
 };
 use ftui_extras::mermaid_layout;
 use ftui_extras::mermaid_render;
@@ -46,8 +49,19 @@ const VIEWPORT_OVERRIDE_MIN_ROWS: u16 = 1;
 const VIEWPORT_OVERRIDE_STEP_COLS: i16 = 4;
 const VIEWPORT_OVERRIDE_STEP_ROWS: i16 = 2;
 
+const INIT_DIRECTIVE_DEMO: &str = r##"%%{init: {"theme":"base","themeVariables":{"primaryColor":"#ffcc00","primaryTextColor":"#111111","primaryBorderColor":"#ff9900"}}}%%"##;
+
+const LINK_DEMO_FLOW_BASIC: &str = r#"click C "https://example.com/ok" "OK"
+click D "https://example.com/fix" "Fix""#;
+
 const MERMAID_JSONL_EVENT: &str = "mermaid_render";
 static MERMAID_JSONL_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn hash64_str(value: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
 
 // ── Performance thresholds (good / ok / bad) ────────────────────────
 /// Parse time thresholds in milliseconds.
@@ -189,6 +203,28 @@ impl LayoutMode {
             Self::Auto => "Auto",
             Self::Dense => "Dense",
             Self::Spacious => "Spacious",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuardProfile {
+    Default,
+    Tight,
+}
+
+impl GuardProfile {
+    const fn next(self) -> Self {
+        match self {
+            Self::Default => Self::Tight,
+            Self::Tight => Self::Default,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Tight => "Tight",
         }
     }
 }
@@ -418,17 +454,17 @@ impl SampleRegistry {
 // | Node shapes: >]      | (none explicitly)                 | TODO: asymmetric shape sample |
 // | Edge labels          | Flow Basic, Flow Long Labels,     | —                             |
 // |                      | Flow Subgraphs                    |                               |
-// | Dotted edges -.->    | Sequence Checkout                 | TODO: flow sample with dotted |
-// | Thick edges ==>      | (none explicitly)                 | TODO: thick edge sample       |
-// | Bidir edges <-->     | (none explicitly)                 | TODO: bidirectional sample    |
-// | Endpoint markers o/x | (none explicitly)                 | TODO: marker endpoint sample  |
+// | Dotted edges -.->    | Flow Dense                        | —                             |
+// | Thick edges ==>      | Flow Dense                        | —                             |
+// | Bidir edges <-->     | Flow Dense                        | —                             |
+// | Endpoint markers o/x | Flow Dense                        | —                             |
 // | Subgraphs            | Flow Subgraphs                    | —                             |
 // | Nested subgraphs     | Flow Subgraphs                    | —                             |
 // | classDef             | Flow Styles                       | —                             |
 // | style directive      | Flow Styles                       | —                             |
-// | linkStyle            | (none explicitly)                 | TODO: linkStyle sample        |
-// | init directives      | (off by default)                  | TODO: init directive sample   |
-// | click/link           | (off by default)                  | TODO: link sample             |
+// | linkStyle            | Flow Basic (links toggle)         | —                             |
+// | init directives      | Flow Basic (init toggle)          | —                             |
+// | click/link           | Flow Basic (links toggle)         | —                             |
 // | Unicode labels       | Flow Unicode                      | —                             |
 // | Long/wrap labels     | Flow Long Labels                  | —                             |
 // | ER cardinality       | ER Basic                          | —                             |
@@ -447,8 +483,8 @@ impl SampleRegistry {
 // |-----------|--------------------------|-------------------------------------|
 // | LR        | Flow Basic               | —                                   |
 // | TB        | Flow Subgraphs, most     | —                                   |
-// | RL        | (none explicitly)        | TODO: RL direction sample           |
-// | BT        | (none explicitly)        | TODO: BT direction sample           |
+// | RL        | Flow Dense               | —                                   |
+// | BT        | Flow Subgraphs           | —                                   |
 //
 // ## Rendering Features
 //
@@ -494,10 +530,19 @@ const KNOWN_FEATURE_TAGS: &[&str] = &[
     "subgraph",
     "classDef",
     "style",
+    "linkStyle",
+    "init-directives",
+    "click-link",
     "unicode-labels",
     "long-labels",
     "many-nodes",
     "many-edges",
+    "dotted-edges",
+    "thick-edges",
+    "bidir-edges",
+    "endpoint-markers",
+    "direction-rl",
+    "direction-bt",
     // Sequence features
     "messages",
     "responses",
@@ -560,31 +605,6 @@ const FEATURE_GAPS: &[(&str, &str)] = &[
         "node-asymmetric",
         "Asymmetric node shape >] — no sample exercises this",
     ),
-    (
-        "dotted-edges",
-        "Dotted edges -.-> in flowcharts — only used in sequence",
-    ),
-    ("thick-edges", "Thick edges ==> — no sample exercises this"),
-    (
-        "bidir-edges",
-        "Bidirectional edges <--> — no sample exercises this",
-    ),
-    (
-        "endpoint-markers",
-        "Endpoint markers o--o, x--x — no sample exercises this",
-    ),
-    (
-        "linkStyle",
-        "linkStyle directive — no sample exercises this",
-    ),
-    (
-        "direction-rl",
-        "Right-to-left layout — no sample exercises this",
-    ),
-    (
-        "direction-bt",
-        "Bottom-to-top layout — no sample exercises this",
-    ),
 ];
 
 const DEFAULT_SAMPLES: &[MermaidSample] = &[
@@ -594,7 +614,13 @@ const DEFAULT_SAMPLES: &[MermaidSample] = &[
         family: SampleFamily::Flow,
         complexity: SampleComplexity::S,
         tags: &["branch", "decision"],
-        features: &["edge-labels", "basic-nodes"],
+        features: &[
+            "edge-labels",
+            "basic-nodes",
+            "linkStyle",
+            "init-directives",
+            "click-link",
+        ],
         edge_cases: &[],
         default_size: SampleSizeHint {
             width: 40,
@@ -612,14 +638,14 @@ B -->|No| D[Fix]"#,
         family: SampleFamily::Flow,
         complexity: SampleComplexity::M,
         tags: &["subgraph", "clusters"],
-        features: &["subgraph", "edge-labels"],
+        features: &["subgraph", "edge-labels", "direction-bt"],
         edge_cases: &["nested-grouping"],
         default_size: SampleSizeHint {
             width: 60,
             height: 20,
         },
-        notes: "Tests cluster rendering and cross-cluster edges",
-        source: r#"graph TB
+        notes: "Tests cluster rendering and cross-cluster edges in BT layout",
+        source: r#"graph BT
   subgraph Cluster_A
     A1[Ingress] --> A2[Parse]
   end
@@ -635,25 +661,34 @@ B -->|No| D[Fix]"#,
         family: SampleFamily::Flow,
         complexity: SampleComplexity::L,
         tags: &["dense", "dag"],
-        features: &["many-nodes", "many-edges"],
+        features: &[
+            "many-nodes",
+            "many-edges",
+            "dotted-edges",
+            "thick-edges",
+            "bidir-edges",
+            "endpoint-markers",
+            "direction-rl",
+        ],
         edge_cases: &["edge-crossing"],
         default_size: SampleSizeHint {
             width: 80,
             height: 30,
         },
-        notes: "Stress test for edge crossing minimization",
-        source: r#"graph LR
-  A-->B
-  A-->C
-  B-->D
-  C-->D
-  D-->E
-  E-->F
-  F-->G
-  C-->H
-  H-->I
-  I-->J
-  J-->K"#,
+        notes: "Stress test for edge crossing minimization and edge-style variants",
+        source: r#"graph RL
+  A[Start] -.-> B[Queue]
+  B ==> C[Compute]
+  C <--> D[Cache]
+  D --> E[Fanout]
+  E --> F[Sink]
+  F --> G[Audit]
+  C --> H[Branch]
+  H --> I[Merge]
+  I --> J[Commit]
+  J --> K[Done]
+  K o--o L[Open]
+  L x--x M[Closed]"#,
     },
     MermaidSample {
         id: "flow-long-labels",
@@ -1125,6 +1160,8 @@ struct MermaidMetricsSnapshot {
     label_collisions: Option<u32>,
     fallback_tier: Option<MermaidTier>,
     fallback_reason: Option<&'static str>,
+    /// Number of warnings encountered (unsupported features, guards, etc).
+    warning_count: Option<u32>,
     /// Number of parse/IR errors encountered.
     error_count: Option<u32>,
 }
@@ -1221,6 +1258,10 @@ struct MermaidShowcaseState {
     render_mode: MermaidRenderMode,
     wrap_mode: MermaidWrapMode,
     styles_enabled: bool,
+    link_mode: MermaidLinkMode,
+    init_directives_enabled: bool,
+    error_mode: MermaidErrorMode,
+    guard_profile: GuardProfile,
     metrics_visible: bool,
     controls_visible: bool,
     viewport_zoom: f32,
@@ -1265,6 +1306,8 @@ struct MermaidRenderCache {
     buffer: Buffer,
     metrics: MermaidMetricsSnapshot,
     errors: Vec<MermaidError>,
+    /// Effective Mermaid source used for the cached analysis (includes injected init/link directives).
+    source: Option<String>,
     cache_hits: u64,
     cache_misses: u64,
     last_cache_hit: bool,
@@ -1287,6 +1330,7 @@ impl MermaidRenderCache {
             buffer: Buffer::new(1, 1),
             metrics: MermaidMetricsSnapshot::default(),
             errors: Vec::new(),
+            source: None,
             cache_hits: 0,
             cache_misses: 0,
             last_cache_hit: false,
@@ -1307,6 +1351,10 @@ impl MermaidShowcaseState {
             render_mode: MermaidRenderMode::Braille,
             wrap_mode: MermaidWrapMode::WordChar,
             styles_enabled: true,
+            link_mode: MermaidLinkMode::Off,
+            init_directives_enabled: false,
+            error_mode: MermaidErrorMode::Panel,
+            guard_profile: GuardProfile::Default,
             metrics_visible: true,
             controls_visible: true,
             viewport_zoom: 1.0,
@@ -1343,6 +1391,69 @@ impl MermaidShowcaseState {
         self.samples.get(self.selected_index).copied()
     }
 
+    fn build_config(&self) -> MermaidConfig {
+        let mut config = MermaidConfig {
+            glyph_mode: self.glyph_mode,
+            tier_override: self.tier,
+            render_mode: self.render_mode,
+            wrap_mode: self.wrap_mode,
+            enable_styles: self.styles_enabled,
+            enable_init_directives: self.init_directives_enabled,
+            enable_links: self.link_mode != MermaidLinkMode::Off,
+            link_mode: self.link_mode,
+            error_mode: self.error_mode,
+            palette: self.palette,
+            ..MermaidConfig::default()
+        };
+
+        match self.guard_profile {
+            GuardProfile::Default => {}
+            GuardProfile::Tight => {
+                config.max_nodes = 40;
+                config.max_edges = 80;
+                config.max_label_chars = 32;
+                config.max_label_lines = 2;
+            }
+        }
+
+        match self.layout_mode {
+            LayoutMode::Auto => {}
+            LayoutMode::Dense => {
+                config.layout_iteration_budget = 400;
+                config.route_budget = 8_000;
+            }
+            LayoutMode::Spacious => {
+                config.layout_iteration_budget = 140;
+                config.route_budget = 3_000;
+            }
+        }
+
+        config
+    }
+
+    fn effective_source(&self, sample: MermaidSample) -> Cow<'static, str> {
+        let inject_init = self.init_directives_enabled;
+        let inject_links = self.link_mode != MermaidLinkMode::Off && sample.id == "flow-basic";
+
+        if !inject_init && !inject_links {
+            return Cow::Borrowed(sample.source);
+        }
+
+        let mut out = String::new();
+        if inject_init {
+            out.push_str(INIT_DIRECTIVE_DEMO);
+            out.push('\n');
+        }
+        out.push_str(sample.source);
+        if inject_links {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(LINK_DEMO_FLOW_BASIC);
+        }
+        Cow::Owned(out)
+    }
+
     fn normalize(&mut self) {
         self.viewport_zoom = self.viewport_zoom.clamp(ZOOM_MIN, ZOOM_MAX);
         self.clamp_viewport_override();
@@ -1367,6 +1478,7 @@ impl MermaidShowcaseState {
                             && !l.starts_with("subgraph")
                             && !l.starts_with("end")
                             && !l.starts_with("%%")
+                            && !l.starts_with("click")
                             && !l.starts_with("classDef")
                             && !l.starts_with("style")
                             && !l.starts_with("linkStyle")
@@ -1385,33 +1497,21 @@ impl MermaidShowcaseState {
                 return;
             }
         };
-        let source = sample.source;
-
-        let config = MermaidConfig {
-            glyph_mode: self.glyph_mode,
-            render_mode: self.render_mode,
-            tier_override: self.tier,
-            wrap_mode: self.wrap_mode,
-            enable_styles: self.styles_enabled,
-            ..MermaidConfig::default()
-        };
+        let source = self.effective_source(sample);
+        let config = self.build_config();
         let matrix = MermaidCompatibilityMatrix::default();
         let policy = MermaidFallbackPolicy::default();
 
-        let t0 = std::time::Instant::now();
-        let ast = match ftui_extras::mermaid::parse(source) {
-            Ok(ast) => ast,
-            Err(_) => {
-                self.metrics = MermaidMetricsSnapshot::default();
-                return;
-            }
-        };
-        let diagram_type = ast.diagram_type;
-        let parse_elapsed = t0.elapsed();
+        let parse_start = Instant::now();
+        let parsed = mermaid::parse_with_diagnostics(source.as_ref());
+        let parse_elapsed = parse_start.elapsed();
+        let diagram_type = parsed.ast.diagram_type;
 
-        let ir_parse = ftui_extras::mermaid::normalize_ast_to_ir(&ast, &config, &matrix, &policy);
+        let ir_parse = mermaid::normalize_ast_to_ir(&parsed.ast, &config, &matrix, &policy);
+        let warning_count = ir_parse.warnings.len() as u32;
+        let error_count = parsed.errors.len().saturating_add(ir_parse.errors.len()) as u32;
 
-        let t1 = std::time::Instant::now();
+        let layout_start = Instant::now();
         let spacing = match self.layout_mode {
             LayoutMode::Dense => mermaid_layout::LayoutSpacing {
                 rank_gap: 2.0,
@@ -1426,7 +1526,7 @@ impl MermaidShowcaseState {
             LayoutMode::Auto => mermaid_layout::LayoutSpacing::default(),
         };
         let layout = mermaid_layout::layout_diagram_with_spacing(&ir_parse.ir, &config, &spacing);
-        let layout_elapsed = t1.elapsed();
+        let layout_elapsed = layout_start.elapsed();
 
         let mut snap = MermaidMetricsSnapshot::from_layout(&layout);
         snap.parse_ms = Some(parse_elapsed.as_secs_f32() * 1000.0);
@@ -1434,7 +1534,8 @@ impl MermaidShowcaseState {
         if let Some(ref plan) = layout.degradation {
             snap.set_fallback(self.tier, plan);
         }
-        snap.error_count = Some(ir_parse.errors.len() as u32);
+        snap.warning_count = Some(warning_count);
+        snap.error_count = Some(error_count);
         self.metrics = snap;
         self.emit_metrics_jsonl(sample, diagram_type);
     }
@@ -1496,7 +1597,24 @@ impl MermaidShowcaseState {
         ));
         json.push_str(&format!(",\"tier\":\"{}\"", self.tier));
         json.push_str(&format!(",\"glyph_mode\":\"{}\"", self.glyph_mode));
+        json.push_str(&format!(",\"render_mode\":\"{}\"", self.render_mode));
         json.push_str(&format!(",\"wrap_mode\":\"{}\"", self.wrap_mode));
+        json.push_str(&format!(",\"styles_enabled\":{}", self.styles_enabled));
+        json.push_str(&format!(
+            ",\"enable_init_directives\":{}",
+            self.init_directives_enabled
+        ));
+        json.push_str(&format!(
+            ",\"enable_links\":{}",
+            self.link_mode != MermaidLinkMode::Off
+        ));
+        json.push_str(&format!(",\"link_mode\":\"{}\"", self.link_mode));
+        json.push_str(&format!(",\"error_mode\":\"{}\"", self.error_mode));
+        json.push_str(&format!(
+            ",\"guard_profile\":\"{}\"",
+            self.guard_profile.as_str()
+        ));
+        json.push_str(&format!(",\"palette\":\"{}\"", self.palette));
         json.push_str(&format!(",\"render_epoch\":{}", self.render_epoch));
         push_opt_f32(&mut json, "parse_ms", self.metrics.parse_ms);
         push_opt_f32(&mut json, "layout_ms", self.metrics.layout_ms);
@@ -1521,6 +1639,7 @@ impl MermaidShowcaseState {
             self.metrics.edge_length_variance,
         );
         push_opt_u32(&mut json, "label_collisions", self.metrics.label_collisions);
+        push_opt_u32(&mut json, "warning_count", self.metrics.warning_count);
         push_opt_u32(&mut json, "error_count", self.metrics.error_count);
         if let Some(tier) = self.metrics.fallback_tier {
             json.push_str(&format!(",\"fallback_tier\":\"{tier}\""));
@@ -1702,6 +1821,63 @@ impl MermaidShowcaseState {
                 self.bump_layout();
                 self.bump_render();
                 self.log_action("wrap", self.wrap_mode.to_string());
+            }
+            MermaidShowcaseAction::CycleLinkMode => {
+                let was_enabled = self.link_mode != MermaidLinkMode::Off;
+                self.link_mode = match self.link_mode {
+                    MermaidLinkMode::Off => MermaidLinkMode::Inline,
+                    MermaidLinkMode::Inline => MermaidLinkMode::Footnote,
+                    MermaidLinkMode::Footnote => MermaidLinkMode::Off,
+                };
+                let enabled = self.link_mode != MermaidLinkMode::Off;
+                if was_enabled != enabled {
+                    self.bump_analysis();
+                }
+                self.bump_render();
+                self.log_action("links", self.link_mode.to_string());
+            }
+            MermaidShowcaseAction::ToggleInitDirectives => {
+                self.init_directives_enabled = !self.init_directives_enabled;
+                self.bump_analysis();
+                self.bump_render();
+                self.log_action(
+                    "init",
+                    if self.init_directives_enabled {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                    .to_string(),
+                );
+            }
+            MermaidShowcaseAction::CycleErrorMode => {
+                self.error_mode = match self.error_mode {
+                    MermaidErrorMode::Panel => MermaidErrorMode::Raw,
+                    MermaidErrorMode::Raw => MermaidErrorMode::Both,
+                    MermaidErrorMode::Both => MermaidErrorMode::Panel,
+                };
+                self.bump_render();
+                self.log_action("errors", self.error_mode.to_string());
+            }
+            MermaidShowcaseAction::ToggleGuardProfile => {
+                self.guard_profile = self.guard_profile.next();
+                self.bump_all();
+                self.log_action("guard", self.guard_profile.as_str().to_string());
+            }
+            MermaidShowcaseAction::CycleViewportPreset => {
+                self.viewport_size_override = match self.viewport_size_override {
+                    None => Some((80, 24)),
+                    Some((80, 24)) => Some((120, 40)),
+                    Some((120, 40)) => Some((200, 60)),
+                    Some((200, 60)) => None,
+                    Some(_) => Some((80, 24)),
+                };
+                self.bump_render();
+                let detail = match self.viewport_size_override {
+                    Some((cols, rows)) => format!("preset {cols}x{rows}"),
+                    None => "preset auto".to_string(),
+                };
+                self.log_action("viewport", detail);
             }
             MermaidShowcaseAction::IncreaseViewportWidth => {
                 self.adjust_viewport_override(VIEWPORT_OVERRIDE_STEP_COLS, 0);
@@ -1916,6 +2092,11 @@ enum MermaidShowcaseAction {
     CycleRenderMode,
     ToggleStyles,
     CycleWrapMode,
+    CycleLinkMode,
+    ToggleInitDirectives,
+    CycleErrorMode,
+    ToggleGuardProfile,
+    CycleViewportPreset,
     IncreaseViewportWidth,
     DecreaseViewportWidth,
     IncreaseViewportHeight,
@@ -1959,6 +2140,30 @@ pub struct MermaidShowcaseScreen {
     layout_right: StdCell<Rect>,
 }
 
+#[derive(Debug, Clone)]
+pub struct MermaidHarnessFrameTelemetry {
+    pub sample_id: String,
+    pub sample_family: String,
+    pub diagram_type: String,
+    pub tier: String,
+    pub glyph_mode: String,
+    pub cache_hit: bool,
+    pub checksum: u64,
+    pub render_time_ms: Option<f32>,
+    pub warnings: u32,
+    pub guard_triggers: bool,
+    pub config_hash: u64,
+    pub init_config_hash: u64,
+    pub capability_profile: String,
+    pub link_count: u64,
+    pub link_mode: String,
+    pub legend_height: u16,
+    pub parse_ms: Option<f32>,
+    pub layout_ms: Option<f32>,
+    pub route_ms: Option<f32>,
+    pub render_ms: Option<f32>,
+}
+
 impl Default for MermaidShowcaseScreen {
     fn default() -> Self {
         Self::new()
@@ -1981,6 +2186,85 @@ impl MermaidShowcaseScreen {
         self.state.samples.len()
     }
 
+    /// Telemetry snapshot used by the Mermaid PTY harness JSONL stream.
+    pub fn harness_frame_telemetry(&self, checksum: u64) -> MermaidHarnessFrameTelemetry {
+        let selected = self.state.selected_sample();
+        let sample_id = selected.map_or_else(String::new, |s| s.id.to_string());
+        let sample_family = selected.map_or_else(String::new, |s| s.family.as_str().to_string());
+
+        let cache = self.cache.borrow();
+        let diagram_type = cache
+            .ir
+            .as_ref()
+            .map(|ir| ir.diagram_type.as_str().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let link_count = cache.ir.as_ref().map_or(0_u64, |ir| ir.links.len() as u64);
+        let guard_triggers = cache.ir.as_ref().is_some_and(|ir| {
+            let guard = &ir.meta.guard;
+            guard.limits_exceeded
+                || guard.budget_exceeded
+                || guard.node_limit_exceeded
+                || guard.edge_limit_exceeded
+                || guard.label_limit_exceeded
+                || guard.route_budget_exceeded
+                || guard.layout_budget_exceeded
+                || guard.label_chars_over > 0
+                || guard.label_lines_over > 0
+        });
+        let cache_hit = cache.last_cache_hit;
+        let metrics = self.state.metrics;
+        drop(cache);
+
+        let config_hash = hash64_str(&format!("{:?}", self.build_config()));
+        let init_config_hash = selected.map_or(0, |sample| {
+            let source = self.state.effective_source(sample);
+            hash64_str(source.as_ref())
+        });
+        let capability_profile = format!(
+            "glyph:{};render:{};wrap:{};links:{};styles:{};init:{}",
+            self.state.glyph_mode,
+            self.state.render_mode,
+            self.state.wrap_mode,
+            self.state.link_mode,
+            self.state.styles_enabled,
+            self.state.init_directives_enabled,
+        );
+        let legend_height = match self.state.link_mode {
+            MermaidLinkMode::Off => 0,
+            MermaidLinkMode::Inline => u16::from(link_count > 0),
+            MermaidLinkMode::Footnote => {
+                if link_count == 0 {
+                    0
+                } else {
+                    (link_count as u16).min(10).saturating_add(1)
+                }
+            }
+        };
+
+        MermaidHarnessFrameTelemetry {
+            sample_id,
+            sample_family,
+            diagram_type,
+            tier: self.state.tier.to_string(),
+            glyph_mode: self.state.glyph_mode.to_string(),
+            cache_hit,
+            checksum,
+            render_time_ms: metrics.render_ms,
+            warnings: metrics.warning_count.unwrap_or(0),
+            guard_triggers,
+            config_hash,
+            init_config_hash,
+            capability_profile,
+            link_count,
+            link_mode: self.state.link_mode.to_string(),
+            legend_height,
+            parse_ms: metrics.parse_ms,
+            layout_ms: metrics.layout_ms,
+            route_ms: None,
+            render_ms: metrics.render_ms,
+        }
+    }
+
     /// Zero out timing-dependent metrics so that snapshots are deterministic.
     ///
     /// Call this before `view()` in snapshot tests to avoid flaky timing diffs.
@@ -1991,29 +2275,58 @@ impl MermaidShowcaseScreen {
         self.state.metrics.render_ms = Some(0.0);
     }
 
-    fn build_config(&self) -> MermaidConfig {
-        let mut config = MermaidConfig {
-            glyph_mode: self.state.glyph_mode,
-            tier_override: self.state.tier,
-            render_mode: self.state.render_mode,
-            wrap_mode: self.state.wrap_mode,
-            enable_styles: self.state.styles_enabled,
-            ..MermaidConfig::default()
+    /// Select a sample by stable id (used by snapshot/E2E harnesses).
+    ///
+    /// This avoids brittle index-based navigation when new samples are inserted.
+    #[doc(hidden)]
+    pub fn select_sample_by_id_for_test(&mut self, id: &str) -> bool {
+        let Some(pos) = self.state.samples.iter().position(|s| s.id == id) else {
+            return false;
         };
 
-        match self.state.layout_mode {
-            LayoutMode::Auto => {}
-            LayoutMode::Dense => {
-                config.layout_iteration_budget = 400;
-                config.route_budget = 8_000;
-            }
-            LayoutMode::Spacious => {
-                config.layout_iteration_budget = 140;
-                config.route_budget = 3_000;
-            }
-        }
+        self.state.selected_index = pos;
+        self.state.selected_node_idx = None;
+        self.state.mode = ShowcaseMode::Normal;
+        self.state.search_query.clear();
+        self.state.search_matches.clear();
+        self.state.search_match_idx = 0;
+        self.state.bump_all();
+        self.state.log_action("sample", format!("id:{id}"));
+        self.state.normalize();
+        true
+    }
 
-        config
+    /// Override the currently selected sample (used by deterministic snapshot tests).
+    #[doc(hidden)]
+    pub fn override_selected_sample_for_test(
+        &mut self,
+        id: &'static str,
+        name: &'static str,
+        source: &'static str,
+    ) {
+        if self.state.samples.is_empty() {
+            return;
+        }
+        let idx = self
+            .state
+            .selected_index
+            .min(self.state.samples.len().saturating_sub(1));
+        let sample = &mut self.state.samples[idx];
+        sample.id = id;
+        sample.name = name;
+        sample.source = source;
+
+        self.state.selected_node_idx = None;
+        self.state.mode = ShowcaseMode::Normal;
+        self.state.search_query.clear();
+        self.state.search_matches.clear();
+        self.state.search_match_idx = 0;
+        self.state.bump_all();
+        self.state.normalize();
+    }
+
+    fn build_config(&self) -> MermaidConfig {
+        self.state.build_config()
     }
 
     fn layout_spacing(&self) -> mermaid_layout::LayoutSpacing {
@@ -2100,6 +2413,7 @@ impl MermaidShowcaseScreen {
             cache.layout = None;
             cache.metrics = MermaidMetricsSnapshot::default();
             cache.errors.clear();
+            cache.source = None;
             return;
         }
 
@@ -2110,17 +2424,23 @@ impl MermaidShowcaseScreen {
         let mut metrics = cache.metrics;
 
         if analysis_needed {
+            let source = self.state.effective_source(sample);
             let parse_start = Instant::now();
-            let parsed = mermaid::parse_with_diagnostics(sample.source);
+            let parsed = mermaid::parse_with_diagnostics(source.as_ref());
             metrics.parse_ms = Some(parse_start.elapsed().as_secs_f32() * 1000.0);
 
             let ir_parse = mermaid::normalize_ast_to_ir(&parsed.ast, &config, &matrix, &policy);
+            metrics.warning_count = Some(ir_parse.warnings.len() as u32);
             let mut errors = Vec::new();
             errors.extend(parsed.errors);
             errors.extend(ir_parse.errors);
             metrics.error_count = Some(errors.len() as u32);
             cache.errors = errors;
             cache.ir = Some(ir_parse.ir);
+            cache.source = match source {
+                Cow::Borrowed(_) => None,
+                Cow::Owned(text) => Some(text),
+            };
             cache.analysis_epoch = self.state.analysis_epoch;
             layout_needed = true;
             render_needed = true;
@@ -2132,9 +2452,11 @@ impl MermaidShowcaseScreen {
             let layout_start = Instant::now();
             let layout = mermaid_layout::layout_diagram_with_spacing(ir, &config, &spacing);
             let parse_ms = metrics.parse_ms;
+            let warning_count = metrics.warning_count;
             let error_count = metrics.error_count;
             let mut snap = MermaidMetricsSnapshot::from_layout(&layout);
             snap.parse_ms = parse_ms;
+            snap.warning_count = warning_count;
             snap.error_count = error_count;
             snap.layout_ms = Some(layout_start.elapsed().as_secs_f32() * 1000.0);
             if let Some(ref plan) = layout.degradation {
@@ -2202,10 +2524,11 @@ impl MermaidShowcaseScreen {
             cache.selected_node_idx = self.state.selected_node_idx;
 
             if !cache.errors.is_empty() {
+                let source_for_errors = cache.source.as_deref().unwrap_or(sample.source);
                 if has_content {
                     mermaid_render::render_mermaid_error_overlay(
                         &cache.errors,
-                        sample.source,
+                        source_for_errors,
                         &config,
                         area,
                         &mut buffer,
@@ -2213,7 +2536,7 @@ impl MermaidShowcaseScreen {
                 } else {
                     mermaid_render::render_mermaid_error_panel(
                         &cache.errors,
-                        sample.source,
+                        source_for_errors,
                         &config,
                         area,
                         &mut buffer,
@@ -2778,6 +3101,11 @@ impl MermaidShowcaseScreen {
                 KeyCode::Char('b') => Some(MermaidShowcaseAction::CycleRenderMode),
                 KeyCode::Char('s') => Some(MermaidShowcaseAction::ToggleStyles),
                 KeyCode::Char('w') => Some(MermaidShowcaseAction::CycleWrapMode),
+                KeyCode::Char('u') => Some(MermaidShowcaseAction::CycleLinkMode),
+                KeyCode::Char('I') => Some(MermaidShowcaseAction::ToggleInitDirectives),
+                KeyCode::Char('e') => Some(MermaidShowcaseAction::CycleErrorMode),
+                KeyCode::Char('x') => Some(MermaidShowcaseAction::ToggleGuardProfile),
+                KeyCode::Char('v') => Some(MermaidShowcaseAction::CycleViewportPreset),
                 KeyCode::Char(']') => Some(MermaidShowcaseAction::IncreaseViewportWidth),
                 KeyCode::Char('[') => Some(MermaidShowcaseAction::DecreaseViewportWidth),
                 KeyCode::Char('}') => Some(MermaidShowcaseAction::IncreaseViewportHeight),
@@ -2866,9 +3194,9 @@ impl MermaidShowcaseScreen {
         }
 
         let hint = if area.width >= 120 {
-            "j/k sample  l layout  r relayout  b render  +/- zoom  []/{} size  o reset  m metrics  t tier"
+            "j/k sample  Enter render  l layout  t tier  u links  I init  e errors  x guard  v view  +/- zoom  m metrics  ? help"
         } else if area.width >= 80 {
-            "j/k sample  Enter render  l layout  +/- zoom  m metrics  ? help"
+            "j/k sample  Enter render  l layout  u links  m metrics  ? help"
         } else {
             "j/k sample  Enter render  ? help"
         };
@@ -3009,6 +3337,7 @@ impl MermaidShowcaseScreen {
         let lines = [
             format!("Layout: {} (l)", self.state.layout_mode.as_str()),
             format!("Tier: {} (t)", self.state.tier),
+            format!("Guard: {} (x)", self.state.guard_profile.as_str()),
             format!("Glyphs: {} (g)", self.state.glyph_mode),
             format!("Render: {} (b)", self.state.render_mode),
             format!("Wrap: {} (w)", self.state.wrap_mode),
@@ -3019,6 +3348,23 @@ impl MermaidShowcaseScreen {
                 } else {
                     "off"
                 }
+            ),
+            format!("Links: {} (u)", self.state.link_mode),
+            format!(
+                "Init: {} (I)",
+                if self.state.init_directives_enabled {
+                    "on"
+                } else {
+                    "off"
+                }
+            ),
+            format!("Errors: {} (e)", self.state.error_mode),
+            format!(
+                "Viewport: {} (v)",
+                self.state.viewport_size_override.map_or_else(
+                    || "auto".to_string(),
+                    |(cols, rows)| format!("{cols}x{rows}")
+                )
             ),
             format!("Zoom: {:.0}% (+/-)", self.state.viewport_zoom * 100.0),
             "Fit: f".to_string(),
@@ -3060,6 +3406,58 @@ impl MermaidShowcaseScreen {
         let mut lines: Vec<Line> = Vec::new();
         if self.state.metrics_visible {
             let muted = Style::new().fg(theme::fg::MUTED);
+            let cache = self.cache.borrow();
+
+            // Render cache status.
+            let last_label = if cache.last_cache_hit { "hit" } else { "miss" };
+            let last_color = if cache.last_cache_hit {
+                theme::accent::SUCCESS
+            } else {
+                theme::accent::WARNING
+            };
+            lines.push(Line::from_spans(vec![
+                Span::styled("Cache: ", muted),
+                Span::styled(
+                    format!("hit {}  miss {}", cache.cache_hits, cache.cache_misses),
+                    muted,
+                ),
+                Span::styled(format!("  last {last_label}"), Style::new().fg(last_color)),
+            ]));
+
+            // Warning count.
+            let warn_val = metrics.warning_count.unwrap_or(0);
+            let warn_style = if warn_val > 0 {
+                Style::new().fg(theme::accent::WARNING)
+            } else {
+                muted
+            };
+            lines.push(Line::from_spans(vec![
+                Span::styled("Warnings: ", muted),
+                Span::styled(format!("{warn_val}"), warn_style),
+            ]));
+
+            // Link count (when enabled or present).
+            if let Some(ir) = cache.ir.as_ref() {
+                let total_links = ir.links.len();
+                if total_links > 0 || self.state.link_mode != MermaidLinkMode::Off {
+                    let allowed_links = ir
+                        .links
+                        .iter()
+                        .filter(|l| l.sanitize_outcome == mermaid::LinkSanitizeOutcome::Allowed)
+                        .count();
+                    let link_style = if allowed_links == total_links && total_links > 0 {
+                        Style::new().fg(theme::accent::SUCCESS)
+                    } else if total_links > 0 {
+                        Style::new().fg(theme::accent::WARNING)
+                    } else {
+                        muted
+                    };
+                    lines.push(Line::from_spans(vec![
+                        Span::styled("Links: ", muted),
+                        Span::styled(format!("{allowed_links}/{total_links}"), link_style),
+                    ]));
+                }
+            }
 
             // Parse timing.
             let parse_val = metrics.parse_ms.unwrap_or(0.0);
@@ -3176,6 +3574,129 @@ impl MermaidShowcaseScreen {
                 muted,
             )]));
 
+            // Guard preview (complexity vs configured limits/budgets).
+            if let Some(ir) = cache.ir.as_ref() {
+                let guard = &ir.meta.guard;
+                let config = self.build_config();
+
+                lines.push(Line::from(Span::styled(
+                    "Guard",
+                    Style::new().fg(theme::accent::INFO),
+                )));
+
+                let node_style = if guard.node_limit_exceeded {
+                    Style::new().fg(theme::accent::ERROR)
+                } else {
+                    muted
+                };
+                lines.push(Line::from_spans(vec![
+                    Span::styled("Nodes: ", muted),
+                    Span::styled(
+                        format!("{}/{}", guard.complexity.nodes, config.max_nodes),
+                        node_style,
+                    ),
+                ]));
+
+                let edge_style = if guard.edge_limit_exceeded {
+                    Style::new().fg(theme::accent::ERROR)
+                } else {
+                    muted
+                };
+                lines.push(Line::from_spans(vec![
+                    Span::styled("Edges: ", muted),
+                    Span::styled(
+                        format!("{}/{}", guard.complexity.edges, config.max_edges),
+                        edge_style,
+                    ),
+                ]));
+
+                if guard.label_limit_exceeded
+                    || guard.label_chars_over > 0
+                    || guard.label_lines_over > 0
+                {
+                    let label_style = if guard.label_limit_exceeded {
+                        Style::new().fg(theme::accent::ERROR)
+                    } else {
+                        Style::new().fg(theme::accent::WARNING)
+                    };
+                    lines.push(Line::from_spans(vec![
+                        Span::styled("Labels: ", muted),
+                        Span::styled(
+                            format!(
+                                "over chars {}  lines {}",
+                                guard.label_chars_over, guard.label_lines_over
+                            ),
+                            label_style,
+                        ),
+                    ]));
+                }
+
+                let route_style = if guard.route_budget_exceeded {
+                    Style::new().fg(theme::accent::ERROR)
+                } else {
+                    muted
+                };
+                lines.push(Line::from_spans(vec![
+                    Span::styled("Route ops: ", muted),
+                    Span::styled(
+                        format!("{}/{}", guard.route_ops_estimate, config.route_budget),
+                        route_style,
+                    ),
+                ]));
+
+                let layout_budget_style = if guard.layout_budget_exceeded {
+                    Style::new().fg(theme::accent::ERROR)
+                } else {
+                    muted
+                };
+                lines.push(Line::from_spans(vec![
+                    Span::styled("Layout iters: ", muted),
+                    Span::styled(
+                        format!(
+                            "{}/{}",
+                            guard.layout_iterations_estimate, config.layout_iteration_budget
+                        ),
+                        layout_budget_style,
+                    ),
+                ]));
+
+                let mut degrade_flags: Vec<&str> = Vec::new();
+                if guard.degradation.hide_labels {
+                    degrade_flags.push("hide_labels");
+                }
+                if guard.degradation.collapse_clusters {
+                    degrade_flags.push("collapse_clusters");
+                }
+                if guard.degradation.simplify_routing {
+                    degrade_flags.push("simplify_routing");
+                }
+                if guard.degradation.reduce_decoration {
+                    degrade_flags.push("reduce_decoration");
+                }
+                let flags_str = if degrade_flags.is_empty() {
+                    "none".to_string()
+                } else {
+                    degrade_flags.join(",")
+                };
+                let fidelity_style = if guard.limits_exceeded || guard.budget_exceeded {
+                    Style::new().fg(theme::accent::WARNING)
+                } else {
+                    muted
+                };
+                lines.push(Line::from_spans(vec![
+                    Span::styled("Degrade: ", muted),
+                    Span::styled(guard.degradation.target_fidelity.as_str(), fidelity_style),
+                    Span::styled(format!(" ({flags_str})"), muted),
+                ]));
+
+                if let Some(mode) = guard.degradation.force_glyph_mode {
+                    lines.push(Line::from_spans(vec![
+                        Span::styled("Force glyph: ", muted),
+                        Span::styled(mode.to_string(), Style::new().fg(theme::accent::WARNING)),
+                    ]));
+                }
+            }
+
             // Fallback info (warning color).
             if let Some(tier) = metrics.fallback_tier {
                 lines.push(Line::from_spans(vec![
@@ -3199,7 +3720,7 @@ impl MermaidShowcaseScreen {
                     Span::styled(format!("{ec}"), Style::new().fg(theme::accent::ERROR)),
                 ]));
                 // Show first error message if available.
-                let errors = &self.cache.borrow().errors;
+                let errors = &cache.errors;
                 if let Some(first) = errors.first() {
                     let msg = if first.message.len() > 40 {
                         format!("{}...", &first.message[..37])
@@ -3273,7 +3794,24 @@ impl MermaidShowcaseScreen {
         let compact = area.width < 80 || area.height < 20;
         let compact_sections: &[(&str, &[(&str, &str)])] = &[
             ("Nav", &[("j/k", "Sample"), ("Enter", "Re-render")]),
-            ("View", &[("l", "Layout"), ("+/-", "Zoom"), ("?", "Help")]),
+            (
+                "Cfg",
+                &[
+                    ("u", "Links"),
+                    ("I", "Init"),
+                    ("e", "Errors"),
+                    ("x", "Guard"),
+                ],
+            ),
+            (
+                "View",
+                &[
+                    ("l", "Layout"),
+                    ("v", "Viewport"),
+                    ("+/-", "Zoom"),
+                    ("?", "Help"),
+                ],
+            ),
             ("Panels", &[("m", "Metrics"), ("Esc", "Collapse")]),
         ];
         let full_sections: &[(&str, &[(&str, &str)])] = &[
@@ -3295,9 +3833,13 @@ impl MermaidShowcaseScreen {
                     ("l", "Cycle layout mode"),
                     ("r", "Force re-layout"),
                     ("t", "Cycle tier"),
+                    ("x", "Toggle guard profile"),
                     ("g", "Toggle glyph mode"),
                     ("b", "Cycle render mode"),
                     ("s", "Toggle styles"),
+                    ("u", "Cycle link mode"),
+                    ("I", "Toggle init directives"),
+                    ("e", "Cycle error mode"),
                     ("w", "Cycle wrap mode"),
                     ("p / P", "Cycle palette"),
                 ],
@@ -3308,6 +3850,7 @@ impl MermaidShowcaseScreen {
                     ("+ / -", "Zoom in / out"),
                     ("0", "Reset zoom"),
                     ("f", "Fit to viewport"),
+                    ("v", "Cycle viewport preset"),
                     ("] / [", "Viewport width +/-"),
                     ("} / {", "Viewport height +/-"),
                     ("o", "Reset viewport override"),
@@ -3719,6 +4262,10 @@ impl Screen for MermaidShowcaseScreen {
                 action: "Cycle tier",
             },
             HelpEntry {
+                key: "x",
+                action: "Toggle guard profile",
+            },
+            HelpEntry {
                 key: "g",
                 action: "Toggle glyph mode",
             },
@@ -3731,12 +4278,36 @@ impl Screen for MermaidShowcaseScreen {
                 action: "Toggle styles",
             },
             HelpEntry {
+                key: "u",
+                action: "Cycle link mode",
+            },
+            HelpEntry {
+                key: "I",
+                action: "Toggle init directives",
+            },
+            HelpEntry {
+                key: "e",
+                action: "Cycle error mode",
+            },
+            HelpEntry {
                 key: "w",
                 action: "Cycle wrap mode",
             },
             HelpEntry {
+                key: "p / P",
+                action: "Cycle palette",
+            },
+            HelpEntry {
+                key: "v",
+                action: "Cycle viewport preset",
+            },
+            HelpEntry {
                 key: "i",
                 action: "Toggle status log",
+            },
+            HelpEntry {
+                key: "?",
+                action: "Toggle help",
             },
             HelpEntry {
                 key: "Esc",
@@ -4321,6 +4892,53 @@ mod tests {
     }
 
     #[test]
+    fn key_u_maps_to_cycle_link_mode() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('u')));
+        assert!(matches!(action, Some(MermaidShowcaseAction::CycleLinkMode)));
+    }
+
+    #[test]
+    fn key_shift_i_maps_to_toggle_init_directives() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('I')));
+        assert!(matches!(
+            action,
+            Some(MermaidShowcaseAction::ToggleInitDirectives)
+        ));
+    }
+
+    #[test]
+    fn key_e_maps_to_cycle_error_mode() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('e')));
+        assert!(matches!(
+            action,
+            Some(MermaidShowcaseAction::CycleErrorMode)
+        ));
+    }
+
+    #[test]
+    fn key_x_maps_to_toggle_guard_profile() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('x')));
+        assert!(matches!(
+            action,
+            Some(MermaidShowcaseAction::ToggleGuardProfile)
+        ));
+    }
+
+    #[test]
+    fn key_v_maps_to_cycle_viewport_preset() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('v')));
+        assert!(matches!(
+            action,
+            Some(MermaidShowcaseAction::CycleViewportPreset)
+        ));
+    }
+
+    #[test]
     fn key_right_bracket_maps_to_width_increase() {
         let screen = new_screen();
         let action = screen.handle_key(&press(KeyCode::Char(']')));
@@ -4383,7 +5001,7 @@ mod tests {
     #[test]
     fn unknown_key_returns_none() {
         let screen = new_screen();
-        let action = screen.handle_key(&press(KeyCode::Char('x')));
+        let action = screen.handle_key(&press(KeyCode::Char('y')));
         assert!(action.is_none());
     }
 
@@ -4985,6 +5603,66 @@ mod tests {
         for s in &edge_label {
             assert!(s.features.contains(&"edge-labels"));
         }
+    }
+
+    #[test]
+    fn registry_by_feature_links_and_init() {
+        let links = SampleRegistry::by_feature("click-link");
+        assert!(
+            links.iter().any(|s| s.id == "flow-basic"),
+            "Expected flow-basic to exercise click-link via links toggle"
+        );
+
+        let init = SampleRegistry::by_feature("init-directives");
+        assert!(
+            init.iter().any(|s| s.id == "flow-basic"),
+            "Expected flow-basic to exercise init-directives via init toggle"
+        );
+
+        let link_style = SampleRegistry::by_feature("linkStyle");
+        assert!(
+            link_style.iter().any(|s| s.id == "flow-basic"),
+            "Expected flow-basic to exercise linkStyle via links toggle"
+        );
+    }
+
+    #[test]
+    fn registry_by_feature_edge_styles_and_directions() {
+        let dotted = SampleRegistry::by_feature("dotted-edges");
+        assert!(
+            dotted.iter().any(|s| s.id == "flow-dense"),
+            "Expected flow-dense to exercise dotted-edges"
+        );
+
+        let thick = SampleRegistry::by_feature("thick-edges");
+        assert!(
+            thick.iter().any(|s| s.id == "flow-dense"),
+            "Expected flow-dense to exercise thick-edges"
+        );
+
+        let bidir = SampleRegistry::by_feature("bidir-edges");
+        assert!(
+            bidir.iter().any(|s| s.id == "flow-dense"),
+            "Expected flow-dense to exercise bidirectional edges"
+        );
+
+        let markers = SampleRegistry::by_feature("endpoint-markers");
+        assert!(
+            markers.iter().any(|s| s.id == "flow-dense"),
+            "Expected flow-dense to exercise endpoint markers"
+        );
+
+        let rl = SampleRegistry::by_feature("direction-rl");
+        assert!(
+            rl.iter().any(|s| s.id == "flow-dense"),
+            "Expected flow-dense to exercise RL direction"
+        );
+
+        let bt = SampleRegistry::by_feature("direction-bt");
+        assert!(
+            bt.iter().any(|s| s.id == "flow-subgraphs"),
+            "Expected flow-subgraphs to exercise BT direction"
+        );
     }
 
     #[test]
