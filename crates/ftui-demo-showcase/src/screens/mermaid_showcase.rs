@@ -2,6 +2,7 @@
 
 //! Mermaid showcase screen — state + command handling scaffold.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,8 +13,8 @@ use ftui_core::geometry::Rect;
 use ftui_extras::mermaid;
 use ftui_extras::mermaid::{
     DiagramPalettePreset, MermaidCompatibilityMatrix, MermaidConfig, MermaidDiagramIr,
-    MermaidError, MermaidFallbackPolicy, MermaidGlyphMode, MermaidRenderMode, MermaidTier,
-    MermaidWrapMode, ShowcaseMode,
+    MermaidError, MermaidErrorMode, MermaidFallbackPolicy, MermaidGlyphMode, MermaidLinkMode,
+    MermaidRenderMode, MermaidTier, MermaidWrapMode, ShowcaseMode,
 };
 use ftui_extras::mermaid_layout;
 use ftui_extras::mermaid_render;
@@ -45,6 +46,11 @@ const VIEWPORT_OVERRIDE_MIN_COLS: u16 = 1;
 const VIEWPORT_OVERRIDE_MIN_ROWS: u16 = 1;
 const VIEWPORT_OVERRIDE_STEP_COLS: i16 = 4;
 const VIEWPORT_OVERRIDE_STEP_ROWS: i16 = 2;
+
+const INIT_DIRECTIVE_DEMO: &str = r##"%%{init: {"theme":"base","themeVariables":{"primaryColor":"#ffcc00","primaryTextColor":"#111111","primaryBorderColor":"#ff9900"}}}%%"##;
+
+const LINK_DEMO_FLOW_BASIC: &str = r#"click C "https://example.com/ok" "OK"
+click D "https://example.com/fix" "Fix""#;
 
 const MERMAID_JSONL_EVENT: &str = "mermaid_render";
 static MERMAID_JSONL_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -189,6 +195,28 @@ impl LayoutMode {
             Self::Auto => "Auto",
             Self::Dense => "Dense",
             Self::Spacious => "Spacious",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuardProfile {
+    Default,
+    Tight,
+}
+
+impl GuardProfile {
+    const fn next(self) -> Self {
+        match self {
+            Self::Default => Self::Tight,
+            Self::Tight => Self::Default,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "Default",
+            Self::Tight => "Tight",
         }
     }
 }
@@ -1125,6 +1153,8 @@ struct MermaidMetricsSnapshot {
     label_collisions: Option<u32>,
     fallback_tier: Option<MermaidTier>,
     fallback_reason: Option<&'static str>,
+    /// Number of warnings encountered (unsupported features, guards, etc).
+    warning_count: Option<u32>,
     /// Number of parse/IR errors encountered.
     error_count: Option<u32>,
 }
@@ -1221,6 +1251,10 @@ struct MermaidShowcaseState {
     render_mode: MermaidRenderMode,
     wrap_mode: MermaidWrapMode,
     styles_enabled: bool,
+    link_mode: MermaidLinkMode,
+    init_directives_enabled: bool,
+    error_mode: MermaidErrorMode,
+    guard_profile: GuardProfile,
     metrics_visible: bool,
     controls_visible: bool,
     viewport_zoom: f32,
@@ -1265,6 +1299,8 @@ struct MermaidRenderCache {
     buffer: Buffer,
     metrics: MermaidMetricsSnapshot,
     errors: Vec<MermaidError>,
+    /// Effective Mermaid source used for the cached analysis (includes injected init/link directives).
+    source: Option<String>,
     cache_hits: u64,
     cache_misses: u64,
     last_cache_hit: bool,
@@ -1287,6 +1323,7 @@ impl MermaidRenderCache {
             buffer: Buffer::new(1, 1),
             metrics: MermaidMetricsSnapshot::default(),
             errors: Vec::new(),
+            source: None,
             cache_hits: 0,
             cache_misses: 0,
             last_cache_hit: false,
@@ -1307,6 +1344,10 @@ impl MermaidShowcaseState {
             render_mode: MermaidRenderMode::Braille,
             wrap_mode: MermaidWrapMode::WordChar,
             styles_enabled: true,
+            link_mode: MermaidLinkMode::Off,
+            init_directives_enabled: false,
+            error_mode: MermaidErrorMode::Panel,
+            guard_profile: GuardProfile::Default,
             metrics_visible: true,
             controls_visible: true,
             viewport_zoom: 1.0,
@@ -1343,6 +1384,69 @@ impl MermaidShowcaseState {
         self.samples.get(self.selected_index).copied()
     }
 
+    fn build_config(&self) -> MermaidConfig {
+        let mut config = MermaidConfig {
+            glyph_mode: self.glyph_mode,
+            tier_override: self.tier,
+            render_mode: self.render_mode,
+            wrap_mode: self.wrap_mode,
+            enable_styles: self.styles_enabled,
+            enable_init_directives: self.init_directives_enabled,
+            enable_links: self.link_mode != MermaidLinkMode::Off,
+            link_mode: self.link_mode,
+            error_mode: self.error_mode,
+            palette: self.palette,
+            ..MermaidConfig::default()
+        };
+
+        match self.guard_profile {
+            GuardProfile::Default => {}
+            GuardProfile::Tight => {
+                config.max_nodes = 40;
+                config.max_edges = 80;
+                config.max_label_chars = 32;
+                config.max_label_lines = 2;
+            }
+        }
+
+        match self.layout_mode {
+            LayoutMode::Auto => {}
+            LayoutMode::Dense => {
+                config.layout_iteration_budget = 400;
+                config.route_budget = 8_000;
+            }
+            LayoutMode::Spacious => {
+                config.layout_iteration_budget = 140;
+                config.route_budget = 3_000;
+            }
+        }
+
+        config
+    }
+
+    fn effective_source(&self, sample: MermaidSample) -> Cow<'static, str> {
+        let inject_init = self.init_directives_enabled;
+        let inject_links = self.link_mode != MermaidLinkMode::Off && sample.id == "flow-basic";
+
+        if !inject_init && !inject_links {
+            return Cow::Borrowed(sample.source);
+        }
+
+        let mut out = String::new();
+        if inject_init {
+            out.push_str(INIT_DIRECTIVE_DEMO);
+            out.push('\n');
+        }
+        out.push_str(sample.source);
+        if inject_links {
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(LINK_DEMO_FLOW_BASIC);
+        }
+        Cow::Owned(out)
+    }
+
     fn normalize(&mut self) {
         self.viewport_zoom = self.viewport_zoom.clamp(ZOOM_MIN, ZOOM_MAX);
         self.clamp_viewport_override();
@@ -1367,6 +1471,7 @@ impl MermaidShowcaseState {
                             && !l.starts_with("subgraph")
                             && !l.starts_with("end")
                             && !l.starts_with("%%")
+                            && !l.starts_with("click")
                             && !l.starts_with("classDef")
                             && !l.starts_with("style")
                             && !l.starts_with("linkStyle")
@@ -1385,33 +1490,21 @@ impl MermaidShowcaseState {
                 return;
             }
         };
-        let source = sample.source;
-
-        let config = MermaidConfig {
-            glyph_mode: self.glyph_mode,
-            render_mode: self.render_mode,
-            tier_override: self.tier,
-            wrap_mode: self.wrap_mode,
-            enable_styles: self.styles_enabled,
-            ..MermaidConfig::default()
-        };
+        let source = self.effective_source(sample);
+        let config = self.build_config();
         let matrix = MermaidCompatibilityMatrix::default();
         let policy = MermaidFallbackPolicy::default();
 
-        let t0 = std::time::Instant::now();
-        let ast = match ftui_extras::mermaid::parse(source) {
-            Ok(ast) => ast,
-            Err(_) => {
-                self.metrics = MermaidMetricsSnapshot::default();
-                return;
-            }
-        };
-        let diagram_type = ast.diagram_type;
-        let parse_elapsed = t0.elapsed();
+        let parse_start = Instant::now();
+        let parsed = mermaid::parse_with_diagnostics(source.as_ref());
+        let parse_elapsed = parse_start.elapsed();
+        let diagram_type = parsed.ast.diagram_type;
 
-        let ir_parse = ftui_extras::mermaid::normalize_ast_to_ir(&ast, &config, &matrix, &policy);
+        let ir_parse = mermaid::normalize_ast_to_ir(&parsed.ast, &config, &matrix, &policy);
+        let warning_count = ir_parse.warnings.len() as u32;
+        let error_count = parsed.errors.len().saturating_add(ir_parse.errors.len()) as u32;
 
-        let t1 = std::time::Instant::now();
+        let layout_start = Instant::now();
         let spacing = match self.layout_mode {
             LayoutMode::Dense => mermaid_layout::LayoutSpacing {
                 rank_gap: 2.0,
@@ -1426,7 +1519,7 @@ impl MermaidShowcaseState {
             LayoutMode::Auto => mermaid_layout::LayoutSpacing::default(),
         };
         let layout = mermaid_layout::layout_diagram_with_spacing(&ir_parse.ir, &config, &spacing);
-        let layout_elapsed = t1.elapsed();
+        let layout_elapsed = layout_start.elapsed();
 
         let mut snap = MermaidMetricsSnapshot::from_layout(&layout);
         snap.parse_ms = Some(parse_elapsed.as_secs_f32() * 1000.0);
@@ -1434,7 +1527,8 @@ impl MermaidShowcaseState {
         if let Some(ref plan) = layout.degradation {
             snap.set_fallback(self.tier, plan);
         }
-        snap.error_count = Some(ir_parse.errors.len() as u32);
+        snap.warning_count = Some(warning_count);
+        snap.error_count = Some(error_count);
         self.metrics = snap;
         self.emit_metrics_jsonl(sample, diagram_type);
     }
@@ -1496,7 +1590,24 @@ impl MermaidShowcaseState {
         ));
         json.push_str(&format!(",\"tier\":\"{}\"", self.tier));
         json.push_str(&format!(",\"glyph_mode\":\"{}\"", self.glyph_mode));
+        json.push_str(&format!(",\"render_mode\":\"{}\"", self.render_mode));
         json.push_str(&format!(",\"wrap_mode\":\"{}\"", self.wrap_mode));
+        json.push_str(&format!(",\"styles_enabled\":{}", self.styles_enabled));
+        json.push_str(&format!(
+            ",\"enable_init_directives\":{}",
+            self.init_directives_enabled
+        ));
+        json.push_str(&format!(
+            ",\"enable_links\":{}",
+            self.link_mode != MermaidLinkMode::Off
+        ));
+        json.push_str(&format!(",\"link_mode\":\"{}\"", self.link_mode));
+        json.push_str(&format!(",\"error_mode\":\"{}\"", self.error_mode));
+        json.push_str(&format!(
+            ",\"guard_profile\":\"{}\"",
+            self.guard_profile.as_str()
+        ));
+        json.push_str(&format!(",\"palette\":\"{}\"", self.palette));
         json.push_str(&format!(",\"render_epoch\":{}", self.render_epoch));
         push_opt_f32(&mut json, "parse_ms", self.metrics.parse_ms);
         push_opt_f32(&mut json, "layout_ms", self.metrics.layout_ms);
@@ -1521,6 +1632,7 @@ impl MermaidShowcaseState {
             self.metrics.edge_length_variance,
         );
         push_opt_u32(&mut json, "label_collisions", self.metrics.label_collisions);
+        push_opt_u32(&mut json, "warning_count", self.metrics.warning_count);
         push_opt_u32(&mut json, "error_count", self.metrics.error_count);
         if let Some(tier) = self.metrics.fallback_tier {
             json.push_str(&format!(",\"fallback_tier\":\"{tier}\""));
@@ -1702,6 +1814,63 @@ impl MermaidShowcaseState {
                 self.bump_layout();
                 self.bump_render();
                 self.log_action("wrap", self.wrap_mode.to_string());
+            }
+            MermaidShowcaseAction::CycleLinkMode => {
+                let was_enabled = self.link_mode != MermaidLinkMode::Off;
+                self.link_mode = match self.link_mode {
+                    MermaidLinkMode::Off => MermaidLinkMode::Inline,
+                    MermaidLinkMode::Inline => MermaidLinkMode::Footnote,
+                    MermaidLinkMode::Footnote => MermaidLinkMode::Off,
+                };
+                let enabled = self.link_mode != MermaidLinkMode::Off;
+                if was_enabled != enabled {
+                    self.bump_analysis();
+                }
+                self.bump_render();
+                self.log_action("links", self.link_mode.to_string());
+            }
+            MermaidShowcaseAction::ToggleInitDirectives => {
+                self.init_directives_enabled = !self.init_directives_enabled;
+                self.bump_analysis();
+                self.bump_render();
+                self.log_action(
+                    "init",
+                    if self.init_directives_enabled {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                    .to_string(),
+                );
+            }
+            MermaidShowcaseAction::CycleErrorMode => {
+                self.error_mode = match self.error_mode {
+                    MermaidErrorMode::Panel => MermaidErrorMode::Raw,
+                    MermaidErrorMode::Raw => MermaidErrorMode::Both,
+                    MermaidErrorMode::Both => MermaidErrorMode::Panel,
+                };
+                self.bump_render();
+                self.log_action("errors", self.error_mode.to_string());
+            }
+            MermaidShowcaseAction::ToggleGuardProfile => {
+                self.guard_profile = self.guard_profile.next();
+                self.bump_all();
+                self.log_action("guard", self.guard_profile.as_str().to_string());
+            }
+            MermaidShowcaseAction::CycleViewportPreset => {
+                self.viewport_size_override = match self.viewport_size_override {
+                    None => Some((80, 24)),
+                    Some((80, 24)) => Some((120, 40)),
+                    Some((120, 40)) => Some((200, 60)),
+                    Some((200, 60)) => None,
+                    Some(_) => Some((80, 24)),
+                };
+                self.bump_render();
+                let detail = match self.viewport_size_override {
+                    Some((cols, rows)) => format!("preset {cols}x{rows}"),
+                    None => "preset auto".to_string(),
+                };
+                self.log_action("viewport", detail);
             }
             MermaidShowcaseAction::IncreaseViewportWidth => {
                 self.adjust_viewport_override(VIEWPORT_OVERRIDE_STEP_COLS, 0);
@@ -1916,6 +2085,11 @@ enum MermaidShowcaseAction {
     CycleRenderMode,
     ToggleStyles,
     CycleWrapMode,
+    CycleLinkMode,
+    ToggleInitDirectives,
+    CycleErrorMode,
+    ToggleGuardProfile,
+    CycleViewportPreset,
     IncreaseViewportWidth,
     DecreaseViewportWidth,
     IncreaseViewportHeight,
@@ -1992,28 +2166,7 @@ impl MermaidShowcaseScreen {
     }
 
     fn build_config(&self) -> MermaidConfig {
-        let mut config = MermaidConfig {
-            glyph_mode: self.state.glyph_mode,
-            tier_override: self.state.tier,
-            render_mode: self.state.render_mode,
-            wrap_mode: self.state.wrap_mode,
-            enable_styles: self.state.styles_enabled,
-            ..MermaidConfig::default()
-        };
-
-        match self.state.layout_mode {
-            LayoutMode::Auto => {}
-            LayoutMode::Dense => {
-                config.layout_iteration_budget = 400;
-                config.route_budget = 8_000;
-            }
-            LayoutMode::Spacious => {
-                config.layout_iteration_budget = 140;
-                config.route_budget = 3_000;
-            }
-        }
-
-        config
+        self.state.build_config()
     }
 
     fn layout_spacing(&self) -> mermaid_layout::LayoutSpacing {
@@ -2100,6 +2253,7 @@ impl MermaidShowcaseScreen {
             cache.layout = None;
             cache.metrics = MermaidMetricsSnapshot::default();
             cache.errors.clear();
+            cache.source = None;
             return;
         }
 
@@ -2110,17 +2264,23 @@ impl MermaidShowcaseScreen {
         let mut metrics = cache.metrics;
 
         if analysis_needed {
+            let source = self.state.effective_source(sample);
             let parse_start = Instant::now();
-            let parsed = mermaid::parse_with_diagnostics(sample.source);
+            let parsed = mermaid::parse_with_diagnostics(source.as_ref());
             metrics.parse_ms = Some(parse_start.elapsed().as_secs_f32() * 1000.0);
 
             let ir_parse = mermaid::normalize_ast_to_ir(&parsed.ast, &config, &matrix, &policy);
+            metrics.warning_count = Some(ir_parse.warnings.len() as u32);
             let mut errors = Vec::new();
             errors.extend(parsed.errors);
             errors.extend(ir_parse.errors);
             metrics.error_count = Some(errors.len() as u32);
             cache.errors = errors;
             cache.ir = Some(ir_parse.ir);
+            cache.source = match source {
+                Cow::Borrowed(_) => None,
+                Cow::Owned(text) => Some(text),
+            };
             cache.analysis_epoch = self.state.analysis_epoch;
             layout_needed = true;
             render_needed = true;
@@ -2132,9 +2292,11 @@ impl MermaidShowcaseScreen {
             let layout_start = Instant::now();
             let layout = mermaid_layout::layout_diagram_with_spacing(ir, &config, &spacing);
             let parse_ms = metrics.parse_ms;
+            let warning_count = metrics.warning_count;
             let error_count = metrics.error_count;
             let mut snap = MermaidMetricsSnapshot::from_layout(&layout);
             snap.parse_ms = parse_ms;
+            snap.warning_count = warning_count;
             snap.error_count = error_count;
             snap.layout_ms = Some(layout_start.elapsed().as_secs_f32() * 1000.0);
             if let Some(ref plan) = layout.degradation {
@@ -2202,10 +2364,11 @@ impl MermaidShowcaseScreen {
             cache.selected_node_idx = self.state.selected_node_idx;
 
             if !cache.errors.is_empty() {
+                let source_for_errors = cache.source.as_deref().unwrap_or(sample.source);
                 if has_content {
                     mermaid_render::render_mermaid_error_overlay(
                         &cache.errors,
-                        sample.source,
+                        source_for_errors,
                         &config,
                         area,
                         &mut buffer,
@@ -2213,7 +2376,7 @@ impl MermaidShowcaseScreen {
                 } else {
                     mermaid_render::render_mermaid_error_panel(
                         &cache.errors,
-                        sample.source,
+                        source_for_errors,
                         &config,
                         area,
                         &mut buffer,
@@ -2778,6 +2941,11 @@ impl MermaidShowcaseScreen {
                 KeyCode::Char('b') => Some(MermaidShowcaseAction::CycleRenderMode),
                 KeyCode::Char('s') => Some(MermaidShowcaseAction::ToggleStyles),
                 KeyCode::Char('w') => Some(MermaidShowcaseAction::CycleWrapMode),
+                KeyCode::Char('u') => Some(MermaidShowcaseAction::CycleLinkMode),
+                KeyCode::Char('I') => Some(MermaidShowcaseAction::ToggleInitDirectives),
+                KeyCode::Char('e') => Some(MermaidShowcaseAction::CycleErrorMode),
+                KeyCode::Char('x') => Some(MermaidShowcaseAction::ToggleGuardProfile),
+                KeyCode::Char('v') => Some(MermaidShowcaseAction::CycleViewportPreset),
                 KeyCode::Char(']') => Some(MermaidShowcaseAction::IncreaseViewportWidth),
                 KeyCode::Char('[') => Some(MermaidShowcaseAction::DecreaseViewportWidth),
                 KeyCode::Char('}') => Some(MermaidShowcaseAction::IncreaseViewportHeight),
@@ -2866,9 +3034,9 @@ impl MermaidShowcaseScreen {
         }
 
         let hint = if area.width >= 120 {
-            "j/k sample  l layout  r relayout  b render  +/- zoom  []/{} size  o reset  m metrics  t tier"
+            "j/k sample  Enter render  l layout  t tier  u links  I init  e errors  x guard  v view  +/- zoom  m metrics  ? help"
         } else if area.width >= 80 {
-            "j/k sample  Enter render  l layout  +/- zoom  m metrics  ? help"
+            "j/k sample  Enter render  l layout  u links  m metrics  ? help"
         } else {
             "j/k sample  Enter render  ? help"
         };
@@ -3009,6 +3177,7 @@ impl MermaidShowcaseScreen {
         let lines = [
             format!("Layout: {} (l)", self.state.layout_mode.as_str()),
             format!("Tier: {} (t)", self.state.tier),
+            format!("Guard: {} (x)", self.state.guard_profile.as_str()),
             format!("Glyphs: {} (g)", self.state.glyph_mode),
             format!("Render: {} (b)", self.state.render_mode),
             format!("Wrap: {} (w)", self.state.wrap_mode),
@@ -3019,6 +3188,23 @@ impl MermaidShowcaseScreen {
                 } else {
                     "off"
                 }
+            ),
+            format!("Links: {} (u)", self.state.link_mode),
+            format!(
+                "Init: {} (I)",
+                if self.state.init_directives_enabled {
+                    "on"
+                } else {
+                    "off"
+                }
+            ),
+            format!("Errors: {} (e)", self.state.error_mode),
+            format!(
+                "Viewport: {} (v)",
+                self.state.viewport_size_override.map_or_else(
+                    || "auto".to_string(),
+                    |(cols, rows)| format!("{cols}x{rows}")
+                )
             ),
             format!("Zoom: {:.0}% (+/-)", self.state.viewport_zoom * 100.0),
             "Fit: f".to_string(),
@@ -3060,6 +3246,58 @@ impl MermaidShowcaseScreen {
         let mut lines: Vec<Line> = Vec::new();
         if self.state.metrics_visible {
             let muted = Style::new().fg(theme::fg::MUTED);
+            let cache = self.cache.borrow();
+
+            // Render cache status.
+            let last_label = if cache.last_cache_hit { "hit" } else { "miss" };
+            let last_color = if cache.last_cache_hit {
+                theme::accent::SUCCESS
+            } else {
+                theme::accent::WARNING
+            };
+            lines.push(Line::from_spans(vec![
+                Span::styled("Cache: ", muted),
+                Span::styled(
+                    format!("hit {}  miss {}", cache.cache_hits, cache.cache_misses),
+                    muted,
+                ),
+                Span::styled(format!("  last {last_label}"), Style::new().fg(last_color)),
+            ]));
+
+            // Warning count.
+            let warn_val = metrics.warning_count.unwrap_or(0);
+            let warn_style = if warn_val > 0 {
+                Style::new().fg(theme::accent::WARNING)
+            } else {
+                muted
+            };
+            lines.push(Line::from_spans(vec![
+                Span::styled("Warnings: ", muted),
+                Span::styled(format!("{warn_val}"), warn_style),
+            ]));
+
+            // Link count (when enabled or present).
+            if let Some(ir) = cache.ir.as_ref() {
+                let total_links = ir.links.len();
+                if total_links > 0 || self.state.link_mode != MermaidLinkMode::Off {
+                    let allowed_links = ir
+                        .links
+                        .iter()
+                        .filter(|l| l.sanitize_outcome == mermaid::LinkSanitizeOutcome::Allowed)
+                        .count();
+                    let link_style = if allowed_links == total_links && total_links > 0 {
+                        Style::new().fg(theme::accent::SUCCESS)
+                    } else if total_links > 0 {
+                        Style::new().fg(theme::accent::WARNING)
+                    } else {
+                        muted
+                    };
+                    lines.push(Line::from_spans(vec![
+                        Span::styled("Links: ", muted),
+                        Span::styled(format!("{allowed_links}/{total_links}"), link_style),
+                    ]));
+                }
+            }
 
             // Parse timing.
             let parse_val = metrics.parse_ms.unwrap_or(0.0);
@@ -3176,6 +3414,129 @@ impl MermaidShowcaseScreen {
                 muted,
             )]));
 
+            // Guard preview (complexity vs configured limits/budgets).
+            if let Some(ir) = cache.ir.as_ref() {
+                let guard = &ir.meta.guard;
+                let config = self.build_config();
+
+                lines.push(Line::from(Span::styled(
+                    "Guard",
+                    Style::new().fg(theme::accent::INFO),
+                )));
+
+                let node_style = if guard.node_limit_exceeded {
+                    Style::new().fg(theme::accent::ERROR)
+                } else {
+                    muted
+                };
+                lines.push(Line::from_spans(vec![
+                    Span::styled("Nodes: ", muted),
+                    Span::styled(
+                        format!("{}/{}", guard.complexity.nodes, config.max_nodes),
+                        node_style,
+                    ),
+                ]));
+
+                let edge_style = if guard.edge_limit_exceeded {
+                    Style::new().fg(theme::accent::ERROR)
+                } else {
+                    muted
+                };
+                lines.push(Line::from_spans(vec![
+                    Span::styled("Edges: ", muted),
+                    Span::styled(
+                        format!("{}/{}", guard.complexity.edges, config.max_edges),
+                        edge_style,
+                    ),
+                ]));
+
+                if guard.label_limit_exceeded
+                    || guard.label_chars_over > 0
+                    || guard.label_lines_over > 0
+                {
+                    let label_style = if guard.label_limit_exceeded {
+                        Style::new().fg(theme::accent::ERROR)
+                    } else {
+                        Style::new().fg(theme::accent::WARNING)
+                    };
+                    lines.push(Line::from_spans(vec![
+                        Span::styled("Labels: ", muted),
+                        Span::styled(
+                            format!(
+                                "over chars {}  lines {}",
+                                guard.label_chars_over, guard.label_lines_over
+                            ),
+                            label_style,
+                        ),
+                    ]));
+                }
+
+                let route_style = if guard.route_budget_exceeded {
+                    Style::new().fg(theme::accent::ERROR)
+                } else {
+                    muted
+                };
+                lines.push(Line::from_spans(vec![
+                    Span::styled("Route ops: ", muted),
+                    Span::styled(
+                        format!("{}/{}", guard.route_ops_estimate, config.route_budget),
+                        route_style,
+                    ),
+                ]));
+
+                let layout_budget_style = if guard.layout_budget_exceeded {
+                    Style::new().fg(theme::accent::ERROR)
+                } else {
+                    muted
+                };
+                lines.push(Line::from_spans(vec![
+                    Span::styled("Layout iters: ", muted),
+                    Span::styled(
+                        format!(
+                            "{}/{}",
+                            guard.layout_iterations_estimate, config.layout_iteration_budget
+                        ),
+                        layout_budget_style,
+                    ),
+                ]));
+
+                let mut degrade_flags: Vec<&str> = Vec::new();
+                if guard.degradation.hide_labels {
+                    degrade_flags.push("hide_labels");
+                }
+                if guard.degradation.collapse_clusters {
+                    degrade_flags.push("collapse_clusters");
+                }
+                if guard.degradation.simplify_routing {
+                    degrade_flags.push("simplify_routing");
+                }
+                if guard.degradation.reduce_decoration {
+                    degrade_flags.push("reduce_decoration");
+                }
+                let flags_str = if degrade_flags.is_empty() {
+                    "none".to_string()
+                } else {
+                    degrade_flags.join(",")
+                };
+                let fidelity_style = if guard.limits_exceeded || guard.budget_exceeded {
+                    Style::new().fg(theme::accent::WARNING)
+                } else {
+                    muted
+                };
+                lines.push(Line::from_spans(vec![
+                    Span::styled("Degrade: ", muted),
+                    Span::styled(guard.degradation.target_fidelity.as_str(), fidelity_style),
+                    Span::styled(format!(" ({flags_str})"), muted),
+                ]));
+
+                if let Some(mode) = guard.degradation.force_glyph_mode {
+                    lines.push(Line::from_spans(vec![
+                        Span::styled("Force glyph: ", muted),
+                        Span::styled(mode.to_string(), Style::new().fg(theme::accent::WARNING)),
+                    ]));
+                }
+            }
+
             // Fallback info (warning color).
             if let Some(tier) = metrics.fallback_tier {
                 lines.push(Line::from_spans(vec![
@@ -3199,7 +3560,7 @@ impl MermaidShowcaseScreen {
                     Span::styled(format!("{ec}"), Style::new().fg(theme::accent::ERROR)),
                 ]));
                 // Show first error message if available.
-                let errors = &self.cache.borrow().errors;
+                let errors = &cache.errors;
                 if let Some(first) = errors.first() {
                     let msg = if first.message.len() > 40 {
                         format!("{}...", &first.message[..37])
@@ -3273,7 +3634,24 @@ impl MermaidShowcaseScreen {
         let compact = area.width < 80 || area.height < 20;
         let compact_sections: &[(&str, &[(&str, &str)])] = &[
             ("Nav", &[("j/k", "Sample"), ("Enter", "Re-render")]),
-            ("View", &[("l", "Layout"), ("+/-", "Zoom"), ("?", "Help")]),
+            (
+                "Cfg",
+                &[
+                    ("u", "Links"),
+                    ("I", "Init"),
+                    ("e", "Errors"),
+                    ("x", "Guard"),
+                ],
+            ),
+            (
+                "View",
+                &[
+                    ("l", "Layout"),
+                    ("v", "Viewport"),
+                    ("+/-", "Zoom"),
+                    ("?", "Help"),
+                ],
+            ),
             ("Panels", &[("m", "Metrics"), ("Esc", "Collapse")]),
         ];
         let full_sections: &[(&str, &[(&str, &str)])] = &[
@@ -3295,9 +3673,13 @@ impl MermaidShowcaseScreen {
                     ("l", "Cycle layout mode"),
                     ("r", "Force re-layout"),
                     ("t", "Cycle tier"),
+                    ("x", "Toggle guard profile"),
                     ("g", "Toggle glyph mode"),
                     ("b", "Cycle render mode"),
                     ("s", "Toggle styles"),
+                    ("u", "Cycle link mode"),
+                    ("I", "Toggle init directives"),
+                    ("e", "Cycle error mode"),
                     ("w", "Cycle wrap mode"),
                     ("p / P", "Cycle palette"),
                 ],
@@ -3308,6 +3690,7 @@ impl MermaidShowcaseScreen {
                     ("+ / -", "Zoom in / out"),
                     ("0", "Reset zoom"),
                     ("f", "Fit to viewport"),
+                    ("v", "Cycle viewport preset"),
                     ("] / [", "Viewport width +/-"),
                     ("} / {", "Viewport height +/-"),
                     ("o", "Reset viewport override"),
@@ -3719,6 +4102,10 @@ impl Screen for MermaidShowcaseScreen {
                 action: "Cycle tier",
             },
             HelpEntry {
+                key: "x",
+                action: "Toggle guard profile",
+            },
+            HelpEntry {
                 key: "g",
                 action: "Toggle glyph mode",
             },
@@ -3731,12 +4118,36 @@ impl Screen for MermaidShowcaseScreen {
                 action: "Toggle styles",
             },
             HelpEntry {
+                key: "u",
+                action: "Cycle link mode",
+            },
+            HelpEntry {
+                key: "I",
+                action: "Toggle init directives",
+            },
+            HelpEntry {
+                key: "e",
+                action: "Cycle error mode",
+            },
+            HelpEntry {
                 key: "w",
                 action: "Cycle wrap mode",
             },
             HelpEntry {
+                key: "p / P",
+                action: "Cycle palette",
+            },
+            HelpEntry {
+                key: "v",
+                action: "Cycle viewport preset",
+            },
+            HelpEntry {
                 key: "i",
                 action: "Toggle status log",
+            },
+            HelpEntry {
+                key: "?",
+                action: "Toggle help",
             },
             HelpEntry {
                 key: "Esc",
@@ -4321,6 +4732,53 @@ mod tests {
     }
 
     #[test]
+    fn key_u_maps_to_cycle_link_mode() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('u')));
+        assert!(matches!(action, Some(MermaidShowcaseAction::CycleLinkMode)));
+    }
+
+    #[test]
+    fn key_shift_i_maps_to_toggle_init_directives() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('I')));
+        assert!(matches!(
+            action,
+            Some(MermaidShowcaseAction::ToggleInitDirectives)
+        ));
+    }
+
+    #[test]
+    fn key_e_maps_to_cycle_error_mode() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('e')));
+        assert!(matches!(
+            action,
+            Some(MermaidShowcaseAction::CycleErrorMode)
+        ));
+    }
+
+    #[test]
+    fn key_x_maps_to_toggle_guard_profile() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('x')));
+        assert!(matches!(
+            action,
+            Some(MermaidShowcaseAction::ToggleGuardProfile)
+        ));
+    }
+
+    #[test]
+    fn key_v_maps_to_cycle_viewport_preset() {
+        let screen = new_screen();
+        let action = screen.handle_key(&press(KeyCode::Char('v')));
+        assert!(matches!(
+            action,
+            Some(MermaidShowcaseAction::CycleViewportPreset)
+        ));
+    }
+
+    #[test]
     fn key_right_bracket_maps_to_width_increase() {
         let screen = new_screen();
         let action = screen.handle_key(&press(KeyCode::Char(']')));
@@ -4383,7 +4841,7 @@ mod tests {
     #[test]
     fn unknown_key_returns_none() {
         let screen = new_screen();
-        let action = screen.handle_key(&press(KeyCode::Char('x')));
+        let action = screen.handle_key(&press(KeyCode::Char('y')));
         assert!(action.is_none());
     }
 

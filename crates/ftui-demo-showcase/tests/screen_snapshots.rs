@@ -2835,6 +2835,34 @@ fn mermaid_showcase_flow_basic_120x40() {
 }
 
 #[test]
+fn mermaid_showcase_flow_basic_links_footnote_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen = ftui_demo_showcase::screens::mermaid_showcase::MermaidShowcaseScreen::new();
+    // Off -> Inline -> Footnote, should render a link legend.
+    screen.update(&press(KeyCode::Char('u')));
+    screen.update(&press(KeyCode::Char('u')));
+    mermaid_showcase_snapshot(
+        &mut screen,
+        120,
+        40,
+        "mermaid_showcase_flow_basic_links_footnote_120x40",
+    );
+}
+
+#[test]
+fn mermaid_showcase_flow_basic_init_directives_120x40() {
+    let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
+    let mut screen = ftui_demo_showcase::screens::mermaid_showcase::MermaidShowcaseScreen::new();
+    screen.update(&press(KeyCode::Char('I')));
+    mermaid_showcase_snapshot(
+        &mut screen,
+        120,
+        40,
+        "mermaid_showcase_flow_basic_init_directives_120x40",
+    );
+}
+
+#[test]
 fn mermaid_showcase_flow_basic_200x60() {
     let _guard = ScopedThemeLock::new(ThemeId::CyberpunkAurora);
     let mut screen = ftui_demo_showcase::screens::mermaid_showcase::MermaidShowcaseScreen::new();
