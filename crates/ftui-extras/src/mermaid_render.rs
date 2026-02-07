@@ -8976,4 +8976,7 @@ mod tests {
         assert_buffer_snapshot_text("mermaid_c4_deployment_basic_80x24", &buf);
     }
 
+
+    // -- comprehensive diagram type snapshot coverage --
+
 }
