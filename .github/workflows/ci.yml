@@ -719,6 +719,7 @@ jobs:
           E2E_JSONL_VALIDATE_MODE: strict
         run: |
           set -euo pipefail
+          export E2E_LOG_DIR="/tmp/ftui_e2e_trace_gates_pr_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
           ./scripts/e2e_test.sh --trace-only --no-large --no-span --no-tile --no-selector
 
       - name: Replay gates (expanded main/nightly profile)
@@ -728,6 +729,7 @@ jobs:
           E2E_JSONL_VALIDATE_MODE: strict
         run: |
           set -euo pipefail
+          export E2E_LOG_DIR="/tmp/ftui_e2e_trace_gates_full_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
           ./scripts/e2e_test.sh --trace-only
 
       - name: Remote replay gate (when available)
@@ -746,31 +748,14 @@ jobs:
             echo "No remote replay scripts are present yet; skipping remote gate."
           fi
 
-      - name: Validate golden-trace JSONL logs
-        if: always()
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          files=(/tmp/ftui_e2e_*/e2e.jsonl /tmp/ftui_schedule_trace_e2e/*.jsonl)
-          if (( ${#files[@]} == 0 )); then
-            echo "No golden-trace JSONL logs found."
-            exit 1
-          fi
-          for file in "${files[@]}"; do
-            echo "Validating $file"
-            python3 tests/e2e/lib/validate_jsonl.py "$file" \
-              --schema tests/e2e/lib/e2e_jsonl_schema.json \
-              --registry tests/e2e/lib/e2e_hash_registry.json \
-              --strict
-          done
-
       - name: Upload golden-trace logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: golden-trace-logs
           path: |
-            /tmp/ftui_e2e_*/
+            /tmp/ftui_e2e_trace_gates_pr_*/
+            /tmp/ftui_e2e_trace_gates_full_*/
             /tmp/ftui_schedule_trace_e2e/
           retention-days: 7
           if-no-files-found: ignore
