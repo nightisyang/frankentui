@@ -36,4 +36,4 @@ pub use grid::Grid;
 pub use modes::{AnsiModes, DecModes, Modes};
 pub use parser::{Action, Parser};
 pub use patch::Patch;
-pub use scrollback::Scrollback;
+pub use scrollback::{Scrollback, ScrollbackLine};

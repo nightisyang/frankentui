@@ -5,6 +5,7 @@
 //! that the VT parser dispatches (print, erase, scroll, resize).
 
 use crate::cell::{Cell, Color};
+use crate::scrollback::Scrollback;
 
 /// 2D terminal cell grid.
 ///
@@ -317,6 +318,70 @@ impl Grid {
         }
     }
 
+    /// Scroll up, pushing the evicted top rows into a scrollback buffer.
+    ///
+    /// This is the normal "content scrolls up" operation triggered by a newline
+    /// at the bottom of the scroll region. The topmost `count` rows within
+    /// `[top, bottom)` are pushed to `scrollback` before being discarded.
+    pub fn scroll_up_into(
+        &mut self,
+        top: u16,
+        bottom: u16,
+        count: u16,
+        scrollback: &mut Scrollback,
+    ) {
+        let top = top.min(self.rows);
+        let bottom = bottom.min(self.rows);
+        if top >= bottom || count == 0 {
+            return;
+        }
+        let count = count.min(bottom - top);
+
+        // Push evicted rows to scrollback.
+        for r in top..top + count {
+            if let Some(row) = self.row_cells(r) {
+                scrollback.push_row(row, false);
+            }
+        }
+
+        // Now do the normal scroll-up.
+        self.scroll_up(top, bottom, count);
+    }
+
+    /// Scroll down, pulling lines from scrollback into the vacated rows at top.
+    ///
+    /// This is the reverse of `scroll_up_into`: content shifts down and
+    /// scrollback lines are restored at the top of the scroll region.
+    pub fn scroll_down_from(
+        &mut self,
+        top: u16,
+        bottom: u16,
+        count: u16,
+        scrollback: &mut Scrollback,
+    ) {
+        let top = top.min(self.rows);
+        let bottom = bottom.min(self.rows);
+        if top >= bottom || count == 0 {
+            return;
+        }
+        let count = count.min(bottom - top);
+
+        // Normal scroll-down first (creates blank rows at top).
+        self.scroll_down(top, bottom, count);
+
+        // Fill the vacated top rows from scrollback (newest first).
+        for r in (top..top + count).rev() {
+            if let Some(line) = scrollback.pop_newest() {
+                let row_start = self.index(r, 0);
+                let cols = self.cols as usize;
+                let copy_len = line.cells.len().min(cols);
+                self.cells[row_start..row_start + copy_len]
+                    .copy_from_slice(&line.cells[..copy_len]);
+                // If the scrollback line is shorter than cols, the rest stays blank.
+            }
+        }
+    }
+
     /// IL: Insert `count` blank lines at `row` within the scroll region
     /// `[top, bottom)`. Lines that fall past `bottom` are discarded.
     pub fn insert_lines(&mut self, row: u16, count: u16, top: u16, bottom: u16) {
@@ -393,6 +458,128 @@ impl Grid {
         self.cells = new_cells;
         self.cols = new_cols;
         self.rows = new_rows;
+    }
+
+    /// Resize with scrollback integration.
+    ///
+    /// # Reflow policy: truncate/extend (no soft-wrap reflow)
+    ///
+    /// - **Width decrease**: cells past the new width are discarded.
+    /// - **Width increase**: new columns are filled with blanks.
+    /// - **Height decrease**: excess rows at the top are pushed to scrollback,
+    ///   keeping the cursor anchored at its current absolute position.
+    /// - **Height increase**: rows are pulled back from scrollback to fill the
+    ///   new space at the top.
+    ///
+    /// Returns the new cursor row after adjustment.
+    pub fn resize_with_scrollback(
+        &mut self,
+        new_cols: u16,
+        new_rows: u16,
+        cursor_row: u16,
+        scrollback: &mut Scrollback,
+    ) -> u16 {
+        if new_cols == self.cols && new_rows == self.rows {
+            return cursor_row;
+        }
+
+        let old_rows = self.rows;
+        let mut new_cursor_row = cursor_row;
+
+        // ── Handle height decrease: push excess top rows to scrollback ──
+        if new_rows < old_rows {
+            // We want to keep the content around the cursor visible.
+            // Push rows from the top that won't fit.
+            let excess = old_rows - new_rows;
+            // The cursor should remain in the viewport. Calculate how many
+            // rows above the cursor we can afford to keep.
+            let rows_above_cursor = cursor_row;
+            let rows_to_push = excess.min(rows_above_cursor);
+
+            for r in 0..rows_to_push {
+                if let Some(row) = self.row_cells(r) {
+                    scrollback.push_row(row, false);
+                }
+            }
+
+            if rows_to_push > 0 {
+                // Shift remaining content up.
+                let cols = self.cols as usize;
+                let src = rows_to_push as usize * cols;
+                let len = (old_rows - rows_to_push) as usize * cols;
+                self.cells.copy_within(src..src + len, 0);
+                new_cursor_row = cursor_row - rows_to_push;
+            }
+        }
+
+        // ── Handle height increase: pull rows from scrollback ──
+        let mut pulled_from_scrollback: u16 = 0;
+        if new_rows > old_rows {
+            let extra = new_rows - old_rows;
+            // Pull up to `extra` lines from scrollback.
+            let available = scrollback.len().min(extra as usize) as u16;
+            pulled_from_scrollback = available;
+        }
+
+        // ── Build new cell buffer ──
+        let new_total = new_cols as usize * new_rows as usize;
+        let mut new_cells = vec![Cell::default(); new_total];
+
+        // If we pulled lines from scrollback, place them at the top.
+        let mut dest_row: u16 = 0;
+        if pulled_from_scrollback > 0 {
+            // Collect lines from scrollback (newest = bottom of the pulled region).
+            let mut pulled_lines = Vec::with_capacity(pulled_from_scrollback as usize);
+            for _ in 0..pulled_from_scrollback {
+                if let Some(line) = scrollback.pop_newest() {
+                    pulled_lines.push(line);
+                }
+            }
+            // Reverse so oldest is at top.
+            pulled_lines.reverse();
+
+            for line in &pulled_lines {
+                let new_start = dest_row as usize * new_cols as usize;
+                let copy_len = line.cells.len().min(new_cols as usize);
+                new_cells[new_start..new_start + copy_len].copy_from_slice(&line.cells[..copy_len]);
+                dest_row += 1;
+            }
+            new_cursor_row = cursor_row + pulled_from_scrollback;
+        }
+
+        // Copy existing rows (after any top-push) into the new buffer.
+        let copy_cols = self.cols.min(new_cols) as usize;
+        let src_row_start = if new_rows < old_rows {
+            // We already shifted content up, so start from row 0 of the
+            // (now-compacted) old buffer.
+            0u16
+        } else {
+            0u16
+        };
+        let src_rows_available = if new_rows < old_rows {
+            (old_rows - (cursor_row.saturating_sub(new_cursor_row))).min(new_rows)
+        } else {
+            old_rows
+        };
+        let dest_rows_remaining = new_rows - dest_row;
+        let copy_rows = src_rows_available.min(dest_rows_remaining);
+
+        for r in 0..copy_rows {
+            let old_start = (src_row_start + r) as usize * self.cols as usize;
+            let new_start = (dest_row + r) as usize * new_cols as usize;
+            if old_start + copy_cols <= self.cells.len() && new_start + copy_cols <= new_cells.len()
+            {
+                new_cells[new_start..new_start + copy_cols]
+                    .copy_from_slice(&self.cells[old_start..old_start + copy_cols]);
+            }
+        }
+
+        self.cells = new_cells;
+        self.cols = new_cols;
+        self.rows = new_rows;
+
+        // Clamp cursor row to new bounds.
+        new_cursor_row.min(new_rows.saturating_sub(1))
     }
 
     /// Convert (row, col) to flat index.
@@ -794,5 +981,236 @@ mod tests {
         // Insert at row 0, but region is [1, 3) — row 0 is outside.
         g.insert_lines(0, 1, 1, 3);
         assert_eq!(g.cell(0, 0).unwrap().content(), 'A');
+    }
+
+    // ── Scrollback integration ───────────────────────────────────────
+
+    fn row_text(g: &Grid, row: u16) -> String {
+        g.row_cells(row)
+            .unwrap()
+            .iter()
+            .map(|c| c.content())
+            .collect()
+    }
+
+    fn fill_grid_letters(g: &mut Grid) {
+        for r in 0..g.rows() {
+            let ch = (b'A' + r as u8) as char;
+            for c in 0..g.cols() {
+                g.cell_mut(r, c).unwrap().set_content(ch, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn scroll_up_into_pushes_to_scrollback() {
+        let mut g = Grid::new(3, 4);
+        fill_grid_letters(&mut g);
+        let mut sb = Scrollback::new(100);
+        g.scroll_up_into(0, 4, 2, &mut sb);
+        // Rows A and B should be in scrollback.
+        assert_eq!(sb.len(), 2);
+        assert_eq!(
+            sb.get(0)
+                .unwrap()
+                .cells
+                .iter()
+                .map(|c| c.content())
+                .collect::<String>(),
+            "AAA"
+        );
+        assert_eq!(
+            sb.get(1)
+                .unwrap()
+                .cells
+                .iter()
+                .map(|c| c.content())
+                .collect::<String>(),
+            "BBB"
+        );
+        // Grid should now have C, D, blank, blank.
+        assert_eq!(row_text(&g, 0), "CCC");
+        assert_eq!(row_text(&g, 1), "DDD");
+        assert_eq!(row_text(&g, 2), "   ");
+        assert_eq!(row_text(&g, 3), "   ");
+    }
+
+    #[test]
+    fn scroll_down_from_pulls_from_scrollback() {
+        let mut g = Grid::new(3, 4);
+        fill_grid_letters(&mut g);
+        let mut sb = Scrollback::new(100);
+        // Put some lines in scrollback.
+        sb.push_row(&[Cell::new('X'), Cell::new('X'), Cell::new('X')], false);
+        sb.push_row(&[Cell::new('Y'), Cell::new('Y'), Cell::new('Y')], false);
+
+        g.scroll_down_from(0, 4, 2, &mut sb);
+        // Y then X should be at top (newest popped first, placed bottom-up).
+        assert_eq!(row_text(&g, 0), "XXX");
+        assert_eq!(row_text(&g, 1), "YYY");
+        // Original A and B shifted down.
+        assert_eq!(row_text(&g, 2), "AAA");
+        assert_eq!(row_text(&g, 3), "BBB");
+        // Scrollback should be empty now.
+        assert!(sb.is_empty());
+    }
+
+    #[test]
+    fn scroll_up_into_with_scroll_region() {
+        let mut g = Grid::new(3, 4);
+        fill_grid_letters(&mut g);
+        let mut sb = Scrollback::new(100);
+        // Only scroll within region [1, 3).
+        g.scroll_up_into(1, 3, 1, &mut sb);
+        assert_eq!(sb.len(), 1);
+        assert_eq!(
+            sb.get(0)
+                .unwrap()
+                .cells
+                .iter()
+                .map(|c| c.content())
+                .collect::<String>(),
+            "BBB"
+        );
+        // Row 0 and 3 untouched, row 1 now has C content, row 2 blank.
+        assert_eq!(row_text(&g, 0), "AAA");
+        assert_eq!(row_text(&g, 1), "CCC");
+        assert_eq!(row_text(&g, 2), "   ");
+        assert_eq!(row_text(&g, 3), "DDD");
+    }
+
+    #[test]
+    fn scroll_up_into_zero_count_is_noop() {
+        let mut g = Grid::new(3, 2);
+        fill_grid_letters(&mut g);
+        let mut sb = Scrollback::new(100);
+        g.scroll_up_into(0, 2, 0, &mut sb);
+        assert!(sb.is_empty());
+        assert_eq!(row_text(&g, 0), "AAA");
+    }
+
+    #[test]
+    fn scroll_down_from_more_than_scrollback() {
+        let mut g = Grid::new(3, 4);
+        fill_grid_letters(&mut g);
+        let mut sb = Scrollback::new(100);
+        sb.push_row(&[Cell::new('Z'), Cell::new('Z'), Cell::new('Z')], false);
+
+        // Request 3 rows from scrollback but only 1 is available.
+        g.scroll_down_from(0, 4, 3, &mut sb);
+        // scroll_down shifts A,B,C,D down by 3: only A survives at row 3.
+        // Then fill from scrollback in reverse order (row 2, 1, 0):
+        // Z goes to row 2, rows 0-1 remain blank (no more scrollback).
+        assert_eq!(row_text(&g, 0), "   ");
+        assert_eq!(row_text(&g, 1), "   ");
+        assert_eq!(row_text(&g, 2), "ZZZ");
+        assert_eq!(row_text(&g, 3), "AAA");
+    }
+
+    // ── Resize with scrollback ───────────────────────────────────────
+
+    #[test]
+    fn resize_with_scrollback_height_decrease_pushes_top() {
+        let mut g = Grid::new(3, 4);
+        fill_grid_letters(&mut g);
+        let mut sb = Scrollback::new(100);
+        // Cursor at row 2, shrink from 4 to 2 rows.
+        let new_row = g.resize_with_scrollback(3, 2, 2, &mut sb);
+        assert_eq!(g.rows(), 2);
+        // 2 excess rows; cursor was at row 2, so rows 0-1 (A, B) go to scrollback.
+        assert_eq!(sb.len(), 2);
+        assert_eq!(row_text(&g, 0), "CCC");
+        assert_eq!(row_text(&g, 1), "DDD");
+        assert_eq!(new_row, 0); // cursor shifted from row 2 down to row 0
+    }
+
+    #[test]
+    fn resize_with_scrollback_height_increase_pulls_back() {
+        let mut g = Grid::new(3, 2);
+        fill_grid_letters(&mut g); // A, B
+        let mut sb = Scrollback::new(100);
+        sb.push_row(&[Cell::new('X'), Cell::new('X'), Cell::new('X')], false);
+        sb.push_row(&[Cell::new('Y'), Cell::new('Y'), Cell::new('Y')], false);
+
+        // Cursor at row 1, grow from 2 to 4 rows.
+        let new_row = g.resize_with_scrollback(3, 4, 1, &mut sb);
+        assert_eq!(g.rows(), 4);
+        // Should have pulled 2 lines from scrollback to fill top.
+        assert_eq!(row_text(&g, 0), "XXX");
+        assert_eq!(row_text(&g, 1), "YYY");
+        assert_eq!(row_text(&g, 2), "AAA");
+        assert_eq!(row_text(&g, 3), "BBB");
+        assert_eq!(new_row, 3); // cursor shifted from 1 to 3
+        assert!(sb.is_empty());
+    }
+
+    #[test]
+    fn resize_with_scrollback_width_change() {
+        let mut g = Grid::new(5, 2);
+        for c in 0..5u16 {
+            g.cell_mut(0, c)
+                .unwrap()
+                .set_content((b'A' + c as u8) as char, 1);
+        }
+        let mut sb = Scrollback::new(100);
+        let new_row = g.resize_with_scrollback(3, 2, 0, &mut sb);
+        assert_eq!(g.cols(), 3);
+        // Only first 3 columns preserved.
+        assert_eq!(row_text(&g, 0), "ABC");
+        assert_eq!(new_row, 0);
+    }
+
+    #[test]
+    fn resize_with_scrollback_same_size_is_noop() {
+        let mut g = Grid::new(3, 3);
+        fill_grid_letters(&mut g);
+        let mut sb = Scrollback::new(100);
+        let new_row = g.resize_with_scrollback(3, 3, 1, &mut sb);
+        assert_eq!(new_row, 1);
+        assert!(sb.is_empty());
+        assert_eq!(row_text(&g, 0), "AAA");
+    }
+
+    #[test]
+    fn resize_with_scrollback_cursor_at_top() {
+        let mut g = Grid::new(3, 4);
+        fill_grid_letters(&mut g);
+        let mut sb = Scrollback::new(100);
+        // Cursor at row 0, shrink to 2 rows.
+        // Cannot push any rows above cursor (rows_above_cursor = 0).
+        let new_row = g.resize_with_scrollback(3, 2, 0, &mut sb);
+        assert_eq!(g.rows(), 2);
+        assert!(sb.is_empty()); // nothing pushed since cursor is at top
+        assert_eq!(row_text(&g, 0), "AAA");
+        assert_eq!(row_text(&g, 1), "BBB");
+        assert_eq!(new_row, 0);
+    }
+
+    #[test]
+    fn resize_storm_deterministic() {
+        // Rapidly resize up and down, verify invariants.
+        let mut g = Grid::new(10, 5);
+        let mut sb = Scrollback::new(1000);
+        for c in 0..10u16 {
+            g.cell_mut(0, c)
+                .unwrap()
+                .set_content((b'0' + (c % 10) as u8) as char, 1);
+        }
+        let mut cursor_row: u16 = 2;
+
+        // Grow.
+        cursor_row = g.resize_with_scrollback(10, 8, cursor_row, &mut sb);
+        assert_eq!(g.rows(), 8);
+
+        // Shrink.
+        cursor_row = g.resize_with_scrollback(10, 3, cursor_row, &mut sb);
+        assert_eq!(g.rows(), 3);
+
+        // Grow back.
+        cursor_row = g.resize_with_scrollback(10, 8, cursor_row, &mut sb);
+        assert_eq!(g.rows(), 8);
+
+        // Cursor should always be in bounds.
+        assert!(cursor_row < g.rows());
     }
 }
