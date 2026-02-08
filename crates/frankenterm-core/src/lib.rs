@@ -35,5 +35,5 @@ pub use cursor::{Cursor, SavedCursor};
 pub use grid::Grid;
 pub use modes::{AnsiModes, DecModes, Modes};
 pub use parser::{Action, Parser};
-pub use patch::Patch;
+pub use patch::{CellUpdate, ChangeRun, DirtySpan, DirtyTracker, GridDiff, Patch};
 pub use scrollback::{Scrollback, ScrollbackLine};
