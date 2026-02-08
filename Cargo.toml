@@ -16,6 +16,7 @@ members = [
   "crates/ftui-pty",
   "crates/ftui-simd",
   "crates/ftui-demo-showcase",
+  "crates/frankenterm-core",
 ]
 
 [profile.release]
