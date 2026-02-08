@@ -26,6 +26,12 @@ pub struct FrankenTermWeb {
     encoded_inputs: Vec<String>,
 }
 
+impl Default for FrankenTermWeb {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[wasm_bindgen]
 impl FrankenTermWeb {
     #[wasm_bindgen(constructor)]
@@ -105,9 +111,7 @@ impl FrankenTermWeb {
     /// Request a frame render. In the full implementation this will schedule a
     /// WebGPU pass and present atomically.
     pub fn render(&mut self) {
-        if !self.initialized {
-            return;
-        }
+        // Stub: real rendering will be implemented after WebGPU init work lands.
     }
 
     /// Explicit teardown for JS callers. Clears internal references so the
@@ -145,7 +149,7 @@ fn parse_key_event(event: &JsValue) -> Result<InputEvent, JsValue> {
     let phase = parse_key_phase(event)?;
     let dom_key = get_string(event, "key")?;
     let dom_code = get_string(event, "code")?;
-    let repeat = get_bool(event, "repeat").unwrap_or(false);
+    let repeat = get_bool(event, "repeat")?.unwrap_or(false);
     let mods = parse_mods(event)?;
     let code = normalize_dom_key_code(&dom_key, &dom_code, mods);
 
@@ -266,21 +270,20 @@ fn parse_composition_phase(event: &JsValue) -> Result<CompositionPhase, JsValue>
 
 fn parse_mods(event: &JsValue) -> Result<Modifiers, JsValue> {
     // Preferred compact encoding: `mods: number` bitset.
-    if let Ok(v) = Reflect::get(event, &JsValue::from_str("mods")) {
-        if v.is_f64() {
-            let n = v.as_f64().unwrap_or(0.0);
-            let bits_i64 = number_to_i64_exact(n, "mods")?;
-            let bits = u8::try_from(bits_i64)
-                .map_err(|_| JsValue::from_str("mods out of range (expected 0..=255)"))?;
-            return Ok(Modifiers::from_bits_truncate_u8(bits));
-        }
+    if let Ok(v) = Reflect::get(event, &JsValue::from_str("mods"))
+        && let Some(n) = v.as_f64()
+    {
+        let bits_i64 = number_to_i64_exact(n, "mods")?;
+        let bits = u8::try_from(bits_i64)
+            .map_err(|_| JsValue::from_str("mods out of range (expected 0..=255)"))?;
+        return Ok(Modifiers::from_bits_truncate_u8(bits));
     }
 
     // Alternate encoding: `mods: { shift, ctrl, alt, super/meta }`.
-    if let Ok(v) = Reflect::get(event, &JsValue::from_str("mods")) {
-        if v.is_object() {
-            return Ok(mods_from_flags(&v)?);
-        }
+    if let Ok(v) = Reflect::get(event, &JsValue::from_str("mods"))
+        && v.is_object()
+    {
+        return mods_from_flags(&v);
     }
 
     // Fallback: top-level boolean flags (supports DOM-like names too).
@@ -355,20 +358,6 @@ fn get_u32(obj: &JsValue, key: &str) -> Result<u32, JsValue> {
     };
     let n_i64 = number_to_i64_exact(n, key)?;
     u32::try_from(n_i64).map_err(|_| JsValue::from_str(&format!("field {key} out of range")))
-}
-
-fn get_u8(obj: &JsValue, key: &str) -> Result<u8, JsValue> {
-    let v = Reflect::get(obj, &JsValue::from_str(key))?;
-    if v.is_null() || v.is_undefined() {
-        return Err(JsValue::from_str(&format!(
-            "missing required number field: {key}"
-        )));
-    }
-    let Some(n) = v.as_f64() else {
-        return Err(JsValue::from_str(&format!("field {key} must be a number")));
-    };
-    let n_i64 = number_to_i64_exact(n, key)?;
-    u8::try_from(n_i64).map_err(|_| JsValue::from_str(&format!("field {key} out of range")))
 }
 
 fn get_u8_opt(obj: &JsValue, key: &str) -> Result<Option<u8>, JsValue> {

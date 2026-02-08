@@ -295,10 +295,10 @@ pub fn normalize_dom_key_code(dom_key: &str, dom_code: &str, mods: Modifiers) ->
 
     // Prefer the logical `key` for printable characters (already includes shift).
     let mut chars = dom_key.chars();
-    if let Some(first) = chars.next() {
-        if chars.next().is_none() {
-            return KeyCode::Char(first);
-        }
+    if let Some(first) = chars.next()
+        && chars.next().is_none()
+    {
+        return KeyCode::Char(first);
     }
 
     match dom_key {
@@ -336,9 +336,7 @@ pub fn normalize_dom_key_code(dom_key: &str, dom_code: &str, mods: Modifiers) ->
 }
 
 fn parse_function_key(s: &str) -> Option<u8> {
-    let Some(rest) = s.strip_prefix('F') else {
-        return None;
-    };
+    let rest = s.strip_prefix('F')?;
     rest.parse::<u8>().ok().filter(|n| (1..=24).contains(n))
 }
 
@@ -439,9 +437,11 @@ impl From<&InputEvent> for InputEventJson {
         match value {
             InputEvent::Key(key) => {
                 let (code, raw_key, raw_code) = match &key.code {
-                    KeyCode::Unidentified { key, code } => {
-                        ("Unidentified".to_string(), Some(key.to_string()), Some(code.to_string()))
-                    }
+                    KeyCode::Unidentified { key, code } => (
+                        "Unidentified".to_string(),
+                        Some(key.to_string()),
+                        Some(code.to_string()),
+                    ),
                     other => (other.to_code_string(), None, None),
                 };
                 Self::Key {
@@ -493,11 +493,7 @@ impl From<InputEventJson> for InputEvent {
                 raw_code,
             } => Self::Key(KeyInput {
                 phase,
-                code: KeyCode::from_code_string(
-                    &code,
-                    raw_key.as_deref(),
-                    raw_code.as_deref(),
-                ),
+                code: KeyCode::from_code_string(&code, raw_key.as_deref(), raw_code.as_deref()),
                 mods: Modifiers::from_bits_truncate_u8(mods),
                 repeat,
             }),
@@ -547,18 +543,21 @@ mod tests {
     #[test]
     fn map_dom_key_specials() {
         let mods = Modifiers::empty();
-        assert_eq!(normalize_dom_key_code("Enter", "Enter", mods), KeyCode::Enter);
-        assert_eq!(normalize_dom_key_code("ArrowLeft", "ArrowLeft", mods), KeyCode::Left);
+        assert_eq!(
+            normalize_dom_key_code("Enter", "Enter", mods),
+            KeyCode::Enter
+        );
+        assert_eq!(
+            normalize_dom_key_code("ArrowLeft", "ArrowLeft", mods),
+            KeyCode::Left
+        );
         assert_eq!(normalize_dom_key_code("F12", "F12", mods), KeyCode::F(12));
     }
 
     #[test]
     fn shift_tab_is_backtab() {
         let mods = Modifiers::SHIFT;
-        assert_eq!(
-            normalize_dom_key_code("Tab", "Tab", mods),
-            KeyCode::BackTab
-        );
+        assert_eq!(normalize_dom_key_code("Tab", "Tab", mods), KeyCode::BackTab);
     }
 
     #[test]
