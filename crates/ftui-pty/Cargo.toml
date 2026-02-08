@@ -10,6 +10,6 @@ documentation = "https://docs.rs/ftui-pty"
 readme = "../../README.md"
 
 [dependencies]
-ftui-core = { path = "../ftui-core", version = "0.1.1" }
+ftui-core = { path = "../ftui-core", version = "0.1.1", features = ["crossterm"] }
 portable-pty = "0.9.0"
 time = { version = "0.3.44", features = ["formatting"] }

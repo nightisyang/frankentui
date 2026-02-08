@@ -82,10 +82,12 @@ pub use locale::{
 };
 pub use log_sink::LogSink;
 pub use program::{
-    App, AppBuilder, BatchController, Cmd, CrosstermEventSource, EffectQueueConfig, FrameTiming,
-    FrameTimingConfig, FrameTimingSink, InlineAutoRemeasureConfig, Model, PersistenceConfig,
+    App, AppBuilder, BatchController, Cmd, EffectQueueConfig, FrameTiming, FrameTimingConfig,
+    FrameTimingSink, HeadlessEventSource, InlineAutoRemeasureConfig, Model, PersistenceConfig,
     Program, ProgramConfig, ResizeBehavior, TaskSpec, WidgetRefreshConfig,
 };
+#[cfg(feature = "crossterm-compat")]
+pub use program::CrosstermEventSource;
 pub use render_trace::{
     RenderTraceConfig, RenderTraceContext, RenderTraceFrame, RenderTraceRecorder,
 };

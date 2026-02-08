@@ -180,12 +180,20 @@ where
     #[cfg(feature = "native-backend")]
     {
         let mut program = Program::with_native_backend(model, config)?;
-        program.run()
+        return program.run();
     }
-    #[cfg(not(feature = "native-backend"))]
+    #[cfg(all(not(feature = "native-backend"), feature = "crossterm-compat"))]
     {
         let mut program = Program::with_config(model, config)?;
-        program.run()
+        return program.run();
+    }
+    #[cfg(not(any(feature = "native-backend", feature = "crossterm-compat")))]
+    {
+        let _ = (model, config);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "enable either `native-backend` or `crossterm-compat` feature",
+        ))
     }
 }
 

@@ -95,7 +95,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 // --- Prelude --------------------------------------------------------------
 
 pub mod prelude {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "crossterm"))]
     pub use crate::TerminalSession;
     pub use crate::{
         Buffer, Error, Event, Frame, KeyCode, KeyEvent, Modifiers, Result, Style, TablePresetId,

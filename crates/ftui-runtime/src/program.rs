@@ -71,6 +71,7 @@ use crate::{BucketKey, ConformalConfig, ConformalPrediction, ConformalPredictor}
 use ftui_backend::{BackendEventSource, BackendFeatures};
 use ftui_core::event::Event;
 use ftui_core::terminal_capabilities::TerminalCapabilities;
+#[cfg(feature = "crossterm-compat")]
 use ftui_core::terminal_session::{SessionOptions, TerminalSession};
 use ftui_render::budget::{BudgetDecision, DegradationLevel, FrameBudgetConfig, RenderBudget};
 use ftui_render::buffer::Buffer;
@@ -1538,6 +1539,7 @@ impl WidgetRefreshPlan {
 // CrosstermEventSource: BackendEventSource adapter for TerminalSession
 // =============================================================================
 
+#[cfg(feature = "crossterm-compat")]
 /// Adapter that wraps [`TerminalSession`] to implement [`BackendEventSource`].
 ///
 /// This provides the bridge between the legacy crossterm-based terminal session
@@ -1548,6 +1550,7 @@ pub struct CrosstermEventSource {
     features: BackendFeatures,
 }
 
+#[cfg(feature = "crossterm-compat")]
 impl CrosstermEventSource {
     /// Create a new crossterm event source from a terminal session.
     pub fn new(session: TerminalSession, initial_features: BackendFeatures) -> Self {
@@ -1558,6 +1561,7 @@ impl CrosstermEventSource {
     }
 }
 
+#[cfg(feature = "crossterm-compat")]
 impl BackendEventSource for CrosstermEventSource {
     type Error = io::Error;
 
@@ -1586,15 +1590,58 @@ impl BackendEventSource for CrosstermEventSource {
 }
 
 // =============================================================================
+// HeadlessEventSource: no-op event source for headless/test programs
+// =============================================================================
+
+/// A no-op event source for headless and test programs.
+///
+/// Returns a fixed terminal size, accepts feature changes silently, and never
+/// produces events. This allows the test helper to construct a `Program`
+/// without depending on crossterm or a real terminal.
+pub struct HeadlessEventSource {
+    width: u16,
+    height: u16,
+    features: BackendFeatures,
+}
+
+impl HeadlessEventSource {
+    /// Create a headless event source with the given terminal size.
+    pub fn new(width: u16, height: u16, features: BackendFeatures) -> Self {
+        Self {
+            width,
+            height,
+            features,
+        }
+    }
+}
+
+impl BackendEventSource for HeadlessEventSource {
+    type Error = io::Error;
+
+    fn size(&self) -> Result<(u16, u16), io::Error> {
+        Ok((self.width, self.height))
+    }
+
+    fn set_features(&mut self, features: BackendFeatures) -> Result<(), io::Error> {
+        self.features = features;
+        Ok(())
+    }
+
+    fn poll_event(&mut self, _timeout: Duration) -> Result<bool, io::Error> {
+        Ok(false)
+    }
+
+    fn read_event(&mut self) -> Result<Option<Event>, io::Error> {
+        Ok(None)
+    }
+}
+
+// =============================================================================
 // Program
 // =============================================================================
 
 /// The program runtime that manages the update/view loop.
-pub struct Program<
-    M: Model,
-    E: BackendEventSource<Error = io::Error> = CrosstermEventSource,
-    W: Write + Send = Stdout,
-> {
+pub struct Program<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send = Stdout> {
     /// The application model.
     model: M,
     /// Terminal output coordinator.
@@ -1673,6 +1720,7 @@ pub struct Program<
     inline_auto_remeasure: Option<InlineAutoRemeasureState>,
 }
 
+#[cfg(feature = "crossterm-compat")]
 impl<M: Model> Program<M, CrosstermEventSource, Stdout> {
     /// Create a new program with default configuration.
     pub fn new(model: M) -> io::Result<Self>
@@ -3218,12 +3266,23 @@ impl<M: Model> AppBuilder<M> {
         self
     }
 
-    /// Run the application.
+    /// Run the application using the legacy Crossterm backend.
+    #[cfg(feature = "crossterm-compat")]
     pub fn run(self) -> io::Result<()>
     where
         M::Message: Send + 'static,
     {
         let mut program = Program::with_config(self.model, self.config)?;
+        program.run()
+    }
+
+    /// Run the application using the native TTY backend.
+    #[cfg(feature = "native-backend")]
+    pub fn run_native(self) -> io::Result<()>
+    where
+        M::Message: Send + 'static,
+    {
+        let mut program = Program::with_native_backend(self.model, self.config)?;
         program.run()
     }
 }
@@ -3418,7 +3477,6 @@ impl Default for BatchController {
 mod tests {
     use super::*;
     use ftui_core::terminal_capabilities::TerminalCapabilities;
-    use ftui_core::terminal_session::{SessionOptions, TerminalSession};
     use ftui_render::buffer::Buffer;
     use ftui_render::cell::Cell;
     use ftui_render::diff_strategy::DiffStrategy;
@@ -5217,7 +5275,7 @@ mod tests {
     fn headless_program_with_config<M: Model>(
         model: M,
         config: ProgramConfig,
-    ) -> Program<M, CrosstermEventSource, Vec<u8>>
+    ) -> Program<M, HeadlessEventSource, Vec<u8>>
     where
         M::Message: Send + 'static,
     {
@@ -5243,15 +5301,7 @@ mod tests {
             focus_events: config.focus_reporting,
             kitty_keyboard: config.kitty_keyboard,
         };
-        let session = TerminalSession::new_for_tests(SessionOptions {
-            alternate_screen: matches!(config.screen_mode, ScreenMode::AltScreen),
-            mouse_capture: initial_features.mouse_capture,
-            bracketed_paste: initial_features.bracketed_paste,
-            focus_events: initial_features.focus_events,
-            kitty_keyboard: initial_features.kitty_keyboard,
-        })
-        .expect("headless test session");
-        let events = CrosstermEventSource::new(session, initial_features);
+        let events = HeadlessEventSource::new(width, height, initial_features);
 
         let budget = RenderBudget::from_config(&config.budget);
         let conformal_predictor = config.conformal_config.clone().map(ConformalPredictor::new);
