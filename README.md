@@ -913,6 +913,7 @@ BLESS=1 cargo test -p ftui-harness
 - `docs/adr/README.md`
 - `docs/concepts/screen-modes.md`
 - `docs/spec/state-machines.md`
+- `docs/spec/frankenterm-correctness.md`
 - `docs/telemetry.md`
 - `docs/spec/telemetry.md`
 - `docs/spec/telemetry-events.md`
