@@ -502,23 +502,62 @@ TLS 1.3 and SHOULD disable weak cipher suites.
 
 ### 4.1 Window-Based Flow Control
 
-The protocol uses a credit-based flow control scheme inspired by HTTP/2:
+The protocol uses a credit-based flow control scheme inspired by HTTP/2, with
+explicit queueing constraints:
 
 - **Output window**: server may send at most `output_window` bytes of `Output`
-  messages before the client sends a `FlowControl` message replenishing the
-  window.
+  messages before the client replenishes credits.
 - **Input window**: client may send at most `input_window` bytes of `Input`
-  messages before the server replenishes.
+  messages before the server replenishes credits.
+- **Queue stability target**: each queue should operate with utilization
+  `rho = lambda / mu < 1` under normal load.
 
-Initial windows are set in `HandshakeAck.flow_control`. Either side replenishes
-by sending `FlowControl` with the number of bytes consumed.
+Default initial windows (from `HandshakeAck.flow_control`):
+- `output_window = 65536` bytes
+- `input_window = 8192` bytes
 
-**Stall detection**: if a sender has exhausted its window and receives no
-replenishment for 30 seconds, it SHOULD send a `Keepalive` and log a stall
-warning. After 60 seconds of stall, the sender MAY close the connection with
-`SessionEnd(reason: "timeout")`.
+Replenishment rule:
+- Send `FlowControl` when consumed bytes reach 50% of the current window or
+  10 ms since last replenish, whichever happens first.
 
-### 4.2 Coalescing Policies
+Stall detection:
+- If a sender exhausts its window and sees no replenish for 30 seconds, it
+  SHOULD send `Keepalive` and emit a stall ledger event.
+- After 60 seconds stalled, the sender MAY close with
+  `SessionEnd(reason: "timeout")`.
+
+### 4.2 Queueing Model and Asymmetric Objective
+
+Backpressure decisions are made against an explicit queueing model:
+
+- `Q_in`: server input queue (client input waiting for PTY write).
+- `Q_out`: server output queue (PTY bytes waiting for WebSocket send).
+- `Q_render`: client render queue (parsed output waiting to present).
+
+Observed rates over a sliding deterministic window:
+- `lambda_in`: bytes/sec arriving into `Q_in`
+- `lambda_out`: bytes/sec arriving into `Q_out`
+- `mu_in`: service rate for PTY writes
+- `mu_out`: service rate for websocket output
+
+Expected one-step loss for action `a`:
+
+`E[L(a)] = w_oom * P(oom | a) + w_lat * P(p95_key_latency > budget | a) + w_thr * throughput_loss(a)`
+
+Default weights (asymmetric by design):
+- `w_oom = 1_000_000` (catastrophic)
+- `w_lat = 10_000` (high)
+- `w_thr = 100` (moderate)
+
+Decision rule:
+- Choose `a* = argmin_a E[L(a)]`.
+- Tie-break deterministically in this order:
+  `coalesce_non_interactive` → `throttle_output` → `drop_non_interactive` → `terminate_session`.
+
+This policy intentionally prefers throughput sacrifice before memory risk or
+interactive-latency collapse.
+
+### 4.3 Coalescing Policies
 
 To prevent flooding, the server and client MUST coalesce bursty events:
 
@@ -531,22 +570,83 @@ To prevent flooding, the server and client MUST coalesce bursty events:
 Coalescing parameters are negotiated in the handshake and MAY be updated via
 `FlowControl` messages.
 
-### 4.3 Fairness
+### 4.4 Fairness
 
 Interactive input MUST NOT be starved by output. The server MUST:
 
 1. Process `Input` messages with higher priority than generating `Output`.
-2. Limit output batch size to at most 64 KiB per event loop iteration.
+2. Limit output batch size to at most 32 KiB per event loop iteration while
+   `Q_in` is non-empty (64 KiB max when `Q_in` is empty).
 3. Interleave input processing with output sending (no "drain output then
    read input" pattern).
 
-### 4.4 Bounded Queues
+Scheduler policy (deterministic weighted round):
+- Serve up to `N_in = 32` interactive events (or `B_in = 4 KiB`) first.
+- Then serve output up to `B_out` bytes (bounded by rule 2 above).
+- Repeat.
 
-| Queue              | Max Size | Eviction Policy                         |
-|--------------------|----------|-----------------------------------------|
-| Server output      | 256 KiB  | Drop oldest bytes; send `FlowControl`   |
-| Server input       | 16 KiB   | Drop newest; send `Error` (non-fatal)   |
-| Client render      | 2 frames | Drop oldest frame; render latest         |
+Fairness monitor:
+- Compute Jain fairness index over serviced bytes in the recent window:
+  `F = (x_in + x_out)^2 / (2 * (x_in^2 + x_out^2))`.
+- If `F < 0.80` or `p95` keystroke latency exceeds budget, force
+  `B_out = 8 KiB` until recovery.
+
+### 4.5 Bounded Queues and Overload Actions
+
+| Queue              | Soft/Hard Cap | Overload Policy |
+|--------------------|---------------|-----------------|
+| Server output      | 192/256 KiB   | Stop PTY reads at hard cap; resume below soft cap. |
+| Server input       | 12/16 KiB     | Drop only non-interactive newest events (mouse move/drag). |
+| Client render      | 1/2 frames    | Keep latest frame, drop oldest pending frame. |
+
+Non-negotiable overload rules:
+- Keyboard events (`KeyDown`, `KeyUp`, `Paste`, `FocusIn`, `FocusOut`) MUST NOT
+  be dropped.
+- If `Q_out` remains at hard cap for >5 seconds, terminate session with
+  `Error(code: "rate_limited", fatal: true)` and `SessionEnd(reason: "timeout")`
+  rather than allowing unbounded memory growth.
+- Every drop/coalesce/throttle decision MUST emit an evidence-ledger record.
+
+### 4.6 Evidence Ledger (Explainability)
+
+Every backpressure decision MUST emit JSONL event `flow_control_decision`:
+
+```json
+{
+  "event": "flow_control_decision",
+  "ts": "2026-02-08T19:00:11.125Z",
+  "session_id": "...",
+  "queue_depth_bytes": { "in": 4096, "out": 233472 },
+  "rates_bps": { "lambda_in": 18000, "lambda_out": 850000, "mu_in": 24000, "mu_out": 320000 },
+  "latency_ms": { "key_p50": 9, "key_p95": 41 },
+  "loss_estimates": {
+    "coalesce_non_interactive": 220.0,
+    "throttle_output": 180.0,
+    "drop_non_interactive": 260.0,
+    "terminate_session": 10000.0
+  },
+  "chosen_action": "throttle_output",
+  "reason_code": "protect_key_latency_budget",
+  "dropped_counts": { "mouse_move": 18, "resize": 2 },
+  "coalesced_counts": { "mouse_move": 74, "resize": 9 }
+}
+```
+
+This ledger is the audit trail proving why each decision occurred.
+
+### 4.7 Stress Harness Targets (Acceptance Gate)
+
+Policy validation scenario (minimum):
+- 60-second output flood (`>= 10 MiB/s` PTY output) plus sustained interactive
+  input (`>= 200 key events/s`).
+- Deterministic seed and fixed clock for replayability.
+
+Pass criteria:
+- Queue hard caps are never exceeded.
+- Process RSS remains bounded (no monotonic unbounded growth).
+- `p95` keystroke latency remains stable (target `<= 50 ms`; hard fail `> 100 ms`).
+- Each drop/coalesce/throttle action has a corresponding
+  `flow_control_decision` ledger record with non-empty `loss_estimates`.
 
 ## 5. Session Lifecycle
 
@@ -687,6 +787,28 @@ Every session emits a JSONL log file with the following record types:
 }
 ```
 
+**Flow control decision ledger**:
+```json
+{
+  "event": "flow_control_decision",
+  "ts": "...",
+  "session_id": "...",
+  "queue_depth_bytes": { "in": 4096, "out": 233472 },
+  "rates_bps": { "lambda_in": 18000, "lambda_out": 850000, "mu_in": 24000, "mu_out": 320000 },
+  "latency_ms": { "key_p50": 9, "key_p95": 41 },
+  "loss_estimates": {
+    "coalesce_non_interactive": 220.0,
+    "throttle_output": 180.0,
+    "drop_non_interactive": 260.0,
+    "terminate_session": 10000.0
+  },
+  "chosen_action": "throttle_output",
+  "reason_code": "protect_key_latency_budget",
+  "dropped_counts": { "mouse_move": 18, "resize": 2 },
+  "coalesced_counts": { "mouse_move": 74, "resize": 9 }
+}
+```
+
 **Session end**:
 ```json
 {
@@ -778,6 +900,8 @@ These layouts are the canonical binary schema for v1.
    payloads.
 6. **Reconnection**: graceful reconnect with output replay.
 7. **Deterministic replay**: trace-mode sessions produce reproducible checksums.
+8. **Backpressure stress**: output floods + interactive input; verify bounded
+   queues, stable keystroke p95, and complete decision ledgers.
 
 ### 9.2 Golden Transcripts
 
