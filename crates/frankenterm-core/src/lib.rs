@@ -30,10 +30,10 @@ pub mod parser;
 pub mod patch;
 pub mod scrollback;
 
-pub use cell::{Cell, SgrAttrs};
-pub use cursor::Cursor;
+pub use cell::{Cell, CellFlags, Color, HyperlinkId, SgrAttrs, SgrFlags};
+pub use cursor::{Cursor, SavedCursor};
 pub use grid::Grid;
-pub use modes::Modes;
+pub use modes::{AnsiModes, DecModes, Modes};
 pub use parser::{Action, Parser};
 pub use patch::Patch;
 pub use scrollback::Scrollback;
