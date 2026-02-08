@@ -1,0 +1,309 @@
+use frankenterm_core::{Action, Cursor, Grid, Parser, Scrollback};
+use ftui_pty::virtual_terminal::VirtualTerminal;
+
+const KNOWN_MISMATCHES_FIXTURE: &str =
+    include_str!("../../../tests/fixtures/vt-conformance/differential/known_mismatches.tsv");
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TerminalSnapshot {
+    screen_text: String,
+    cursor_row: u16,
+    cursor_col: u16,
+}
+
+#[derive(Debug)]
+struct CoreTerminalHarness {
+    parser: Parser,
+    grid: Grid,
+    cursor: Cursor,
+    scrollback: Scrollback,
+    cols: u16,
+    rows: u16,
+}
+
+impl CoreTerminalHarness {
+    fn new(cols: u16, rows: u16) -> Self {
+        assert!(cols > 0, "cols must be > 0");
+        assert!(rows > 0, "rows must be > 0");
+        Self {
+            parser: Parser::new(),
+            grid: Grid::new(cols, rows),
+            cursor: Cursor::new(cols, rows),
+            scrollback: Scrollback::new(512),
+            cols,
+            rows,
+        }
+    }
+
+    fn feed_bytes(&mut self, bytes: &[u8]) {
+        for action in self.parser.feed(bytes) {
+            self.apply_action(action);
+        }
+    }
+
+    fn apply_action(&mut self, action: Action) {
+        match action {
+            Action::Print(ch) => self.apply_print(ch),
+            Action::Newline => self.apply_newline(),
+            Action::CarriageReturn => self.cursor.carriage_return(),
+            Action::Tab => {
+                self.cursor.col = self.cursor.next_tab_stop(self.cols);
+                self.cursor.pending_wrap = false;
+            }
+            Action::Backspace => self.cursor.move_left(1),
+            Action::Bell => {}
+            Action::Escape(_) => {
+                // Differential baseline intentionally limits comparison to
+                // currently interpreted non-escape actions in frankenterm-core.
+            }
+        }
+    }
+
+    fn apply_print(&mut self, ch: char) {
+        if self.cursor.pending_wrap {
+            self.wrap_to_next_line();
+        }
+        if let Some(cell) = self.grid.cell_mut(self.cursor.row, self.cursor.col) {
+            cell.set_content(ch, 1);
+            cell.attrs = self.cursor.attrs;
+        }
+        if self.cursor.col + 1 >= self.cols {
+            self.cursor.pending_wrap = true;
+        } else {
+            self.cursor.col += 1;
+            self.cursor.pending_wrap = false;
+        }
+    }
+
+    fn apply_newline(&mut self) {
+        if self.cursor.row + 1 >= self.cursor.scroll_bottom() {
+            self.grid.scroll_up_into(
+                self.cursor.scroll_top(),
+                self.cursor.scroll_bottom(),
+                1,
+                &mut self.scrollback,
+            );
+        } else if self.cursor.row + 1 < self.rows {
+            self.cursor.row += 1;
+        }
+        self.cursor.pending_wrap = false;
+    }
+
+    fn wrap_to_next_line(&mut self) {
+        self.cursor.col = 0;
+        if self.cursor.row + 1 >= self.cursor.scroll_bottom() {
+            self.grid.scroll_up_into(
+                self.cursor.scroll_top(),
+                self.cursor.scroll_bottom(),
+                1,
+                &mut self.scrollback,
+            );
+        } else if self.cursor.row + 1 < self.rows {
+            self.cursor.row += 1;
+        }
+        self.cursor.pending_wrap = false;
+    }
+
+    fn snapshot(&self) -> TerminalSnapshot {
+        TerminalSnapshot {
+            screen_text: self.screen_text(),
+            cursor_row: self.cursor.row,
+            cursor_col: self.cursor.col,
+        }
+    }
+
+    fn screen_text(&self) -> String {
+        (0..self.rows)
+            .map(|row| {
+                let mut line = String::with_capacity(self.cols as usize);
+                for col in 0..self.cols {
+                    let ch = self
+                        .grid
+                        .cell(row, col)
+                        .map_or(' ', frankenterm_core::Cell::content);
+                    line.push(ch);
+                }
+                line.trim_end().to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+#[derive(Debug)]
+struct SupportedFixture {
+    id: &'static str,
+    cols: u16,
+    rows: u16,
+    bytes: &'static [u8],
+}
+
+#[derive(Debug)]
+struct KnownMismatchFixture {
+    id: String,
+    cols: u16,
+    rows: u16,
+    bytes: Vec<u8>,
+    root_cause: String,
+}
+
+fn run_core_snapshot(input: &[u8], cols: u16, rows: u16) -> TerminalSnapshot {
+    let mut harness = CoreTerminalHarness::new(cols, rows);
+    harness.feed_bytes(input);
+    harness.snapshot()
+}
+
+fn run_reference_snapshot(input: &[u8], cols: u16, rows: u16) -> TerminalSnapshot {
+    let mut vt = VirtualTerminal::new(cols, rows);
+    vt.feed(input);
+    let (cursor_col, cursor_row) = vt.cursor();
+    TerminalSnapshot {
+        screen_text: vt.screen_text(),
+        cursor_row,
+        cursor_col,
+    }
+}
+
+fn supported_fixtures() -> Vec<SupportedFixture> {
+    vec![
+        SupportedFixture {
+            id: "plain_ascii",
+            cols: 20,
+            rows: 4,
+            bytes: b"hello",
+        },
+        SupportedFixture {
+            id: "newline_preserves_column",
+            cols: 20,
+            rows: 4,
+            bytes: b"hi\nthere",
+        },
+        SupportedFixture {
+            id: "carriage_return_overwrite",
+            cols: 20,
+            rows: 4,
+            bytes: b"ABCDE\rZ",
+        },
+        SupportedFixture {
+            id: "tab_to_default_stop",
+            cols: 20,
+            rows: 4,
+            bytes: b"A\tB",
+        },
+        SupportedFixture {
+            id: "backspace_overwrite",
+            cols: 20,
+            rows: 4,
+            bytes: b"abc\x08d",
+        },
+    ]
+}
+
+fn parse_known_mismatch_fixtures() -> Vec<KnownMismatchFixture> {
+    let mut fixtures = Vec::new();
+    for line in KNOWN_MISMATCHES_FIXTURE.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let parsed = parse_known_mismatch_line(trimmed);
+        assert!(
+            parsed.is_ok(),
+            "invalid known-mismatch fixture line: {trimmed}"
+        );
+        if let Ok(fixture) = parsed {
+            fixtures.push(fixture);
+        }
+    }
+    fixtures
+}
+
+fn parse_known_mismatch_line(line: &str) -> Result<KnownMismatchFixture, String> {
+    let mut parts = line.splitn(5, '|');
+    let id = parts.next().ok_or("fixture id missing")?.trim().to_string();
+    let cols = parts
+        .next()
+        .ok_or("fixture cols missing")?
+        .trim()
+        .parse::<u16>()
+        .map_err(|error| format!("fixture cols must be a u16: {error}"))?;
+    let rows = parts
+        .next()
+        .ok_or("fixture rows missing")?
+        .trim()
+        .parse::<u16>()
+        .map_err(|error| format!("fixture rows must be a u16: {error}"))?;
+    let input_hex = parts.next().ok_or("fixture input hex missing")?.trim();
+    let root_cause = parts
+        .next()
+        .ok_or("fixture root cause missing")?
+        .trim()
+        .to_string();
+    Ok(KnownMismatchFixture {
+        id,
+        cols,
+        rows,
+        bytes: decode_hex(input_hex)?,
+        root_cause,
+    })
+}
+
+fn decode_hex(hex: &str) -> Result<Vec<u8>, String> {
+    if !hex.len().is_multiple_of(2) {
+        return Err(format!("hex payload must have even length: {hex}"));
+    }
+    let bytes = hex.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        let hi = decode_nibble(pair[0])?;
+        let lo = decode_nibble(pair[1])?;
+        out.push((hi << 4) | lo);
+    }
+    Ok(out)
+}
+
+fn decode_nibble(byte: u8) -> Result<u8, String> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(format!("invalid hex nibble: {byte}")),
+    }
+}
+
+#[test]
+fn differential_supported_subset_matches_virtual_terminal_reference() {
+    for fixture in supported_fixtures() {
+        let core = run_core_snapshot(fixture.bytes, fixture.cols, fixture.rows);
+        let reference = run_reference_snapshot(fixture.bytes, fixture.cols, fixture.rows);
+        assert_eq!(
+            core, reference,
+            "fixture {} diverged unexpectedly",
+            fixture.id
+        );
+    }
+}
+
+#[test]
+fn differential_known_mismatches_are_tracked_with_root_cause_notes() {
+    let fixtures = parse_known_mismatch_fixtures();
+    assert!(
+        !fixtures.is_empty(),
+        "known mismatch fixtures should not be empty"
+    );
+
+    for fixture in fixtures {
+        let core = run_core_snapshot(&fixture.bytes, fixture.cols, fixture.rows);
+        let reference = run_reference_snapshot(&fixture.bytes, fixture.cols, fixture.rows);
+        assert_ne!(
+            core, reference,
+            "known mismatch fixture {} unexpectedly matched; review and move it to supported fixtures",
+            fixture.id
+        );
+        assert!(
+            !fixture.root_cause.is_empty(),
+            "known mismatch fixture {} must carry a root-cause note",
+            fixture.id
+        );
+    }
+}

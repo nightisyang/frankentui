@@ -207,19 +207,18 @@ impl Cursor {
 
     /// Adjust cursor state after a grid resize.
     pub fn resize(&mut self, new_cols: u16, new_rows: u16) {
+        let old_cols = self.tab_stops.len();
         self.scroll_top = 0;
         self.scroll_bottom = new_rows;
         self.clamp(new_rows, new_cols);
-        // Resize tab stops, preserving existing stops.
+        // Resize tab stops, preserving existing stops in the original range.
         self.tab_stops.resize(new_cols as usize, false);
-        // Set tab stops on new columns at the default interval.
+        // Set default tab stops only on newly added columns.
         for i in (0..new_cols).step_by(DEFAULT_TAB_INTERVAL as usize) {
-            if i as usize >= self.tab_stops.len() {
-                break;
+            let idx = i as usize;
+            if idx >= old_cols {
+                self.tab_stops[idx] = true;
             }
-            // Only set if not already set to avoid overwriting cleared stops.
-            // Actually, we should set default stops for newly added columns only.
-            // For simplicity, we just ensure the vec has the right length.
         }
     }
 }
@@ -506,5 +505,40 @@ mod tests {
         c.clear_all_tab_stops();
         c.col = 5;
         assert_eq!(c.next_tab_stop(10), 9);
+    }
+
+    #[test]
+    fn resize_wider_sets_tab_stops_on_new_columns() {
+        let mut c = Cursor::new(80, 24);
+        // Clear a user-set tab stop to verify it's preserved after resize.
+        c.tab_stops[8] = false;
+
+        c.resize(120, 24);
+
+        // Original stops preserved: col 0 still set, col 8 still cleared.
+        assert!(c.tab_stops[0], "original tab stop at 0 must be preserved");
+        assert!(
+            !c.tab_stops[8],
+            "user-cleared tab stop at 8 must remain cleared"
+        );
+        // New columns get default tab stops at 8-column intervals.
+        assert!(c.tab_stops[80], "new column 80 must get a default tab stop");
+        assert!(c.tab_stops[88], "new column 88 must get a default tab stop");
+        assert!(c.tab_stops[96], "new column 96 must get a default tab stop");
+        assert!(!c.tab_stops[81], "new column 81 must not have a tab stop");
+    }
+
+    #[test]
+    fn resize_narrower_preserves_existing_tab_stops() {
+        let mut c = Cursor::new(80, 24);
+        c.resize(40, 24);
+
+        // Tab stops within the new width are preserved.
+        assert!(c.tab_stops[0]);
+        assert!(c.tab_stops[8]);
+        assert!(c.tab_stops[16]);
+        assert!(c.tab_stops[24]);
+        assert!(c.tab_stops[32]);
+        assert_eq!(c.tab_stops.len(), 40);
     }
 }
