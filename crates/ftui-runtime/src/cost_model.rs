@@ -1019,10 +1019,14 @@ mod tests {
 
     #[test]
     fn cache_high_alpha_needs_less_budget() {
-        let mut params_low = CacheCostParams::default();
-        params_low.zipf_alpha = 1.2;
-        let mut params_high = CacheCostParams::default();
-        params_high.zipf_alpha = 2.0;
+        let params_low = CacheCostParams {
+            zipf_alpha: 1.2,
+            ..Default::default()
+        };
+        let params_high = CacheCostParams {
+            zipf_alpha: 2.0,
+            ..Default::default()
+        };
 
         let b_low = params_low.optimal_budget();
         let b_high = params_high.optimal_budget();
