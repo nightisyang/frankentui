@@ -8,6 +8,10 @@
 //! - Explicit eviction policy (LRU) under a fixed byte budget.
 //!
 //! The WebGPU upload path will be layered on top (queueing dirty rects, etc.).
+//!
+//! Cache policy objective (bd-lff4p.5.6):
+//! `loss = miss_rate + 0.25*eviction_rate + 0.5*pressure_ratio`.
+//! Lower is better; this is logged via [`GlyphAtlasCache::objective`].
 
 use std::collections::HashMap;
 use std::fmt;
@@ -100,6 +104,14 @@ pub struct GlyphCacheStats {
     pub bytes_uploaded: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CacheObjective {
+    pub miss_rate: f64,
+    pub eviction_rate: f64,
+    pub pressure_ratio: f64,
+    pub loss: f64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GlyphCacheError {
     /// Glyph (with padding) does not fit in the configured atlas dimensions.
@@ -121,6 +133,10 @@ impl fmt::Display for GlyphCacheError {
 }
 
 impl std::error::Error for GlyphCacheError {}
+
+const CACHE_LOSS_MISS_WEIGHT: f64 = 1.0;
+const CACHE_LOSS_EVICTION_WEIGHT: f64 = 0.25;
+const CACHE_LOSS_PRESSURE_WEIGHT: f64 = 0.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct LruLinks {
@@ -289,6 +305,39 @@ impl GlyphAtlasCache {
         self.stats
     }
 
+    /// Return the objective components used for cache-policy tuning.
+    ///
+    /// Objective:
+    /// `loss = miss_rate + 0.25*eviction_rate + 0.5*pressure_ratio`.
+    #[must_use]
+    pub fn objective(&self) -> CacheObjective {
+        let lookups = self.stats.hits.saturating_add(self.stats.misses);
+        let miss_rate = if lookups == 0 {
+            0.0
+        } else {
+            self.stats.misses as f64 / lookups as f64
+        };
+        let eviction_rate = if self.stats.misses == 0 {
+            0.0
+        } else {
+            self.stats.evictions as f64 / self.stats.misses as f64
+        };
+        let pressure_ratio = if self.max_cached_bytes == 0 {
+            1.0
+        } else {
+            self.cached_bytes.min(self.max_cached_bytes) as f64 / self.max_cached_bytes as f64
+        };
+        let loss = (CACHE_LOSS_MISS_WEIGHT * miss_rate)
+            + (CACHE_LOSS_EVICTION_WEIGHT * eviction_rate)
+            + (CACHE_LOSS_PRESSURE_WEIGHT * pressure_ratio);
+        CacheObjective {
+            miss_rate,
+            eviction_rate,
+            pressure_ratio,
+            loss,
+        }
+    }
+
     #[must_use]
     pub fn atlas_dims(&self) -> (u16, u16) {
         self.atlas.dims()
@@ -419,6 +468,7 @@ impl GlyphAtlasCache {
             return;
         }
 
+        // Minimize pressure term in the cache objective by restoring budget headroom.
         while self.cached_bytes.saturating_add(incoming_slot_bytes) > self.max_cached_bytes {
             if self.lru_tail.is_none() {
                 break;
@@ -647,5 +697,35 @@ mod tests {
         // Best-fit should pick the freed slot (same slot origin).
         assert_eq!(p3.slot.x, p1.slot.x);
         assert_eq!(p3.slot.y, p1.slot.y);
+    }
+
+    #[test]
+    fn objective_is_zero_for_empty_cache() {
+        let cache = GlyphAtlasCache::new(32, 32, 32 * 32);
+        let objective = cache.objective();
+        assert_eq!(objective.miss_rate, 0.0);
+        assert_eq!(objective.eviction_rate, 0.0);
+        assert_eq!(objective.pressure_ratio, 0.0);
+        assert_eq!(objective.loss, 0.0);
+    }
+
+    #[test]
+    fn objective_tracks_pressure_and_evictions() {
+        let mut cache = GlyphAtlasCache::new(64, 64, 8 * 8);
+        let k1 = GlyphKey::from_char('a', 16);
+        let k2 = GlyphKey::from_char('b', 16);
+
+        let _ = cache
+            .get_or_insert_with(k1, |_| raster_solid(6, 6, GlyphMetrics::default()))
+            .expect("k1");
+        let _ = cache
+            .get_or_insert_with(k2, |_| raster_solid(6, 6, GlyphMetrics::default()))
+            .expect("k2");
+
+        let objective = cache.objective();
+        assert!(objective.miss_rate > 0.0);
+        assert!(objective.eviction_rate > 0.0);
+        assert!(objective.pressure_ratio > 0.0);
+        assert!(objective.loss > 0.0);
     }
 }
