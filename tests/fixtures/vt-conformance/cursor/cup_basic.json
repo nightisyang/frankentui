@@ -1,0 +1,15 @@
+{
+  "name": "cup_basic",
+  "description": "CUP (CSI row;col H) positions cursor using 1-indexed coordinates",
+  "initial_size": [80, 24],
+  "input_bytes_hex": "1b5b353b313048411b5b313b3148421b5b32343b383048431b5b313b314844",
+  "comment": "CUP(5,10)A CUP(1,1)B CUP(24,80)C CUP(1,1)D → B at (0,0) overwritten by D",
+  "expected": {
+    "cursor": { "row": 0, "col": 1 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "D" },
+      { "row": 4, "col": 9, "char": "A" },
+      { "row": 23, "col": 79, "char": "C" }
+    ]
+  }
+}

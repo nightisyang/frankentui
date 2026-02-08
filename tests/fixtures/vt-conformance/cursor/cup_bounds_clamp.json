@@ -1,0 +1,14 @@
+{
+  "name": "cup_bounds_clamp",
+  "description": "CUP with out-of-bounds coordinates is clamped to grid dimensions",
+  "initial_size": [80, 24],
+  "input_bytes_hex": "1b5b3939393b39393948411b5b303b304842",
+  "comment": "CUP(999,999)A → clamped to (23,79). CUP(0,0)B → treated as (1,1) → (0,0)",
+  "expected": {
+    "cursor": { "row": 0, "col": 1 },
+    "cells": [
+      { "row": 23, "col": 79, "char": "A" },
+      { "row": 0, "col": 0, "char": "B" }
+    ]
+  }
+}

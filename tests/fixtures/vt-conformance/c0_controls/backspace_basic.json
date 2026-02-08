@@ -1,0 +1,15 @@
+{
+  "name": "backspace_basic",
+  "description": "BS (0x08) moves cursor left one column; stops at column 0",
+  "initial_size": [80, 24],
+  "input_bytes_hex": "414243080844",
+  "comment": "A B C BS BS D → cursor was at col 3, BS to col 1, print D overwrites B",
+  "expected": {
+    "cursor": { "row": 0, "col": 2 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "A" },
+      { "row": 0, "col": 1, "char": "D" },
+      { "row": 0, "col": 2, "char": "C" }
+    ]
+  }
+}
