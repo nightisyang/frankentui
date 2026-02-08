@@ -1259,6 +1259,126 @@ mod tests {
         let _c = presenter.capabilities();
     }
 
+    // ── TtyPresenter rendering tests ─────────────────────────────────
+
+    #[test]
+    fn headless_presenter_present_ui_is_noop() {
+        let caps = TerminalCapabilities::detect();
+        let mut presenter = TtyPresenter::new(caps);
+        let buf = Buffer::new(10, 5);
+        let diff = BufferDiff::full(10, 5);
+        // All variants should return Ok without panicking.
+        presenter.present_ui(&buf, Some(&diff), false).unwrap();
+        presenter.present_ui(&buf, None, false).unwrap();
+        presenter.present_ui(&buf, Some(&diff), true).unwrap();
+    }
+
+    #[test]
+    fn live_presenter_emits_ansi() {
+        use ftui_render::cell::{Cell, CellAttrs, CellContent, PackedRgba, StyleFlags};
+
+        let caps = TerminalCapabilities::detect();
+        let output = Vec::<u8>::new();
+        let mut presenter = TtyPresenter::with_writer(output, caps);
+
+        let mut buf = Buffer::new(10, 2);
+        // Place a bold red 'X' at (0, 0).
+        let cell = Cell {
+            content: CellContent::from_char('X'),
+            fg: PackedRgba::RED,
+            bg: PackedRgba::BLACK,
+            attrs: CellAttrs::new(StyleFlags::BOLD, 0),
+        };
+        buf.set(0, 0, cell);
+
+        let diff = BufferDiff::full(10, 2);
+        presenter.present_ui(&buf, Some(&diff), false).unwrap();
+
+        // Extract the written bytes from the inner Presenter's writer.
+        // The Presenter wraps writer in BufWriter<CountingWriter<W>>,
+        // so we just check the output isn't empty and contains CSI (ESC[).
+        let inner = presenter.inner.unwrap();
+        let bytes = inner.into_inner().unwrap();
+        assert!(!bytes.is_empty(), "live presenter should emit output");
+        assert!(
+            bytes.windows(2).any(|w| w == b"\x1b["),
+            "output should contain CSI escape sequences"
+        );
+    }
+
+    #[test]
+    fn full_repaint_when_diff_is_none() {
+        use ftui_render::cell::{Cell, CellContent};
+
+        let caps = TerminalCapabilities::detect();
+        let output = Vec::<u8>::new();
+        let mut presenter = TtyPresenter::with_writer(output, caps);
+
+        let mut buf = Buffer::new(5, 1);
+        for x in 0..5 {
+            buf.set(x, 0, Cell::from_char(b"ABCDE"[x as usize] as char));
+        }
+
+        // Pass diff=None — should trigger full repaint.
+        presenter.present_ui(&buf, None, false).unwrap();
+
+        let bytes = presenter.inner.unwrap().into_inner().unwrap();
+        // All 5 characters should appear in the output.
+        let output_str = String::from_utf8_lossy(&bytes);
+        for ch in ['A', 'B', 'C', 'D', 'E'] {
+            assert!(
+                output_str.contains(ch),
+                "full repaint should emit '{ch}', got: {output_str}"
+            );
+        }
+    }
+
+    #[test]
+    fn diff_based_partial_update() {
+        use ftui_render::cell::Cell;
+
+        let caps = TerminalCapabilities::detect();
+        let output = Vec::<u8>::new();
+        let mut presenter = TtyPresenter::with_writer(output, caps);
+
+        let mut buf = Buffer::new(5, 1);
+        for x in 0..5 {
+            buf.set(x, 0, Cell::from_char(b"ABCDE"[x as usize] as char));
+        }
+
+        // Create a diff that only marks column 2 as changed.
+        let mut diff = BufferDiff::default();
+        diff.mark(2, 0);
+
+        presenter.present_ui(&buf, Some(&diff), false).unwrap();
+
+        let bytes = presenter.inner.unwrap().into_inner().unwrap();
+        let output_str = String::from_utf8_lossy(&bytes);
+        // The changed cell 'C' should appear; 'A' should not (it wasn't in the diff).
+        assert!(
+            output_str.contains('C'),
+            "diff-based update should emit changed cell 'C'"
+        );
+        assert!(
+            !output_str.contains('A'),
+            "diff-based update should not emit unchanged cell 'A'"
+        );
+    }
+
+    #[test]
+    fn write_log_headless_does_not_panic() {
+        let caps = TerminalCapabilities::detect();
+        let mut presenter = TtyPresenter::new(caps);
+        presenter.write_log("headless log test").unwrap();
+    }
+
+    #[test]
+    fn write_log_live_does_not_panic() {
+        let caps = TerminalCapabilities::detect();
+        let mut presenter = TtyPresenter::with_writer(Vec::<u8>::new(), caps);
+        presenter.write_log("live log test").unwrap();
+    }
+
     #[test]
     fn backend_headless_construction() {
         let backend = TtyBackend::new(120, 40);

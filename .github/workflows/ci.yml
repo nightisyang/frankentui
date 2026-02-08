@@ -672,6 +672,110 @@ jobs:
           if-no-files-found: ignore
 
   # ==========================================================================
+  # Golden Trace Replay Gates (core + web + remote where feasible)
+  # ==========================================================================
+  golden-trace-gates:
+    name: Golden Trace Gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-golden-trace-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Core replay gate (schedule trace checksums)
+        run: ./tests/e2e/scripts/test_schedule_trace.sh
+
+      - name: Web replay gate (actionable frame/event diffs)
+        run: |
+          set -euo pipefail
+          cargo test -p ftui-web session_record::tests::gate_trace_passes_on_correct_replay -- --nocapture
+          cargo test -p ftui-web session_record::tests::gate_trace_fails_with_actionable_diff -- --nocapture
+          cargo test -p ftui-web session_record::tests::gate_trace_diff_has_event_context -- --nocapture
+
+      - name: Replay gates (time-bounded PR profile)
+        if: github.event_name == 'pull_request'
+        env:
+          E2E_JSONL_VALIDATE: "1"
+          E2E_JSONL_VALIDATE_MODE: strict
+        run: |
+          set -euo pipefail
+          ./scripts/e2e_test.sh --trace-only --no-large --no-span --no-tile --no-selector
+
+      - name: Replay gates (expanded main/nightly profile)
+        if: github.event_name != 'pull_request'
+        env:
+          E2E_JSONL_VALIDATE: "1"
+          E2E_JSONL_VALIDATE_MODE: strict
+        run: |
+          set -euo pipefail
+          ./scripts/e2e_test.sh --trace-only
+
+      - name: Remote replay gate (when available)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          remote_scripts=(tests/e2e/scripts/test_remote*.sh)
+          if [[ -x "./scripts/remote_terminal_e2e.sh" ]]; then
+            ./scripts/remote_terminal_e2e.sh
+          elif (( ${#remote_scripts[@]} > 0 )); then
+            for script in "${remote_scripts[@]}"; do
+              echo "Running $script"
+              "$script"
+            done
+          else
+            echo "No remote replay scripts are present yet; skipping remote gate."
+          fi
+
+      - name: Validate golden-trace JSONL logs
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(/tmp/ftui_e2e_*/e2e.jsonl /tmp/ftui_schedule_trace_e2e/*.jsonl)
+          if (( ${#files[@]} == 0 )); then
+            echo "No golden-trace JSONL logs found."
+            exit 1
+          fi
+          for file in "${files[@]}"; do
+            echo "Validating $file"
+            python3 tests/e2e/lib/validate_jsonl.py "$file" \
+              --schema tests/e2e/lib/e2e_jsonl_schema.json \
+              --registry tests/e2e/lib/e2e_hash_registry.json \
+              --strict
+          done
+
+      - name: Upload golden-trace logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-trace-logs
+          path: |
+            /tmp/ftui_e2e_*/
+            /tmp/ftui_schedule_trace_e2e/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ==========================================================================
   # Fuzz Build Check
   # ==========================================================================
   fuzz:
