@@ -13,6 +13,7 @@ readme = "../../README.md"
 ftui-backend = { path = "../ftui-backend", version = "0.1.0" }
 ftui-core = { path = "../ftui-core", version = "0.1.1" }
 ftui-render = { path = "../ftui-render", version = "0.1.1" }
+ftui-runtime = { path = "../ftui-runtime", version = "0.1.1", default-features = false }
 
 [dev-dependencies]
 # Used only for small deterministic unit tests.

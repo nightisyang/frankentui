@@ -56,6 +56,7 @@ pub mod terminal_writer;
 pub mod undo;
 pub mod validation_pipeline;
 pub mod voi_sampling;
+pub mod wasm_runner;
 
 pub mod reactive;
 pub mod schedule_trace;
@@ -158,6 +159,7 @@ pub use ftui_render::diff_strategy::{
     DiffStrategy, DiffStrategyConfig, DiffStrategySelector, StrategyEvidence,
 };
 pub use terminal_writer::RuntimeDiffConfig;
+pub use wasm_runner::{RenderedFrame, StepResult, WasmRunner};
 
 #[cfg(feature = "telemetry")]
 pub use telemetry::{
