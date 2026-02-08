@@ -1308,7 +1308,7 @@ mod tests {
 
     #[test]
     fn full_repaint_when_diff_is_none() {
-        use ftui_render::cell::{Cell, CellContent};
+        use ftui_render::cell::Cell;
 
         let caps = TerminalCapabilities::detect();
         let output = Vec::<u8>::new();
@@ -1341,23 +1341,21 @@ mod tests {
         let output = Vec::<u8>::new();
         let mut presenter = TtyPresenter::with_writer(output, caps);
 
-        let mut buf = Buffer::new(5, 1);
+        let mut old = Buffer::new(5, 1);
         for x in 0..5 {
-            buf.set(x, 0, Cell::from_char(b"ABCDE"[x as usize] as char));
+            old.set(x, 0, Cell::from_char(b"ABCDE"[x as usize] as char));
         }
-
-        // Create a diff that only marks column 2 as changed.
-        let mut diff = BufferDiff::default();
-        diff.mark(2, 0);
-
-        presenter.present_ui(&buf, Some(&diff), false).unwrap();
+        let mut new = old.clone();
+        new.set(2, 0, Cell::from_char('Z'));
+        let diff = BufferDiff::compute(&old, &new);
+        presenter.present_ui(&new, Some(&diff), false).unwrap();
 
         let bytes = presenter.inner.unwrap().into_inner().unwrap();
         let output_str = String::from_utf8_lossy(&bytes);
-        // The changed cell 'C' should appear; 'A' should not (it wasn't in the diff).
+        // The changed cell should appear; unchanged leading cell should not.
         assert!(
-            output_str.contains('C'),
-            "diff-based update should emit changed cell 'C'"
+            output_str.contains('Z'),
+            "diff-based update should emit changed cell 'Z'"
         );
         assert!(
             !output_str.contains('A'),
