@@ -1,0 +1,4 @@
+# id|cols|rows|input_hex|root_cause
+csi_cup_reposition|10|3|48656c6c6f1b5b323b334858|Parser currently emits CSI as raw Escape action and the differential harness intentionally does not apply cursor-positioning semantics yet.
+csi_erase_line_right|10|3|41424344451b5b32441b5b304b|Parser currently emits CSI erase controls as raw Escape action and the differential harness intentionally does not mutate the grid for EL semantics yet.
+csi_erase_display|10|3|41421b5b324a5a|Parser currently emits CSI erase-display controls as raw Escape action and the differential harness intentionally does not apply ED semantics yet.

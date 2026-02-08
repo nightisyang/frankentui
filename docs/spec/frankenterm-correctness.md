@@ -174,6 +174,21 @@ For parser/engine correctness, differential testing is the fastest way to find e
   - compare only the subset we claim to support (see bd-lff4p.1.1 support matrix)
   - treat out-of-scope features as "ignored", not "failed"
 
+### 5.1 Baseline Differential Harness (Current)
+
+Current in-tree baseline:
+- `crates/frankenterm-core/tests/differential_terminal.rs`
+- Reference model: `ftui_pty::virtual_terminal::VirtualTerminal`
+- Compared state: visible grid text + cursor position
+
+Scope of the baseline harness:
+- Verifies currently supported parser behavior (printable ASCII + C0 controls currently interpreted in parser tests).
+- Tracks currently unsupported escape semantics as explicit known-mismatch fixtures with root-cause notes:
+  - `tests/fixtures/vt-conformance/differential/known_mismatches.tsv`
+
+Rule:
+- When a known mismatch is fixed in `frankenterm-core`, move that case out of known-mismatch fixtures and into supported differential fixtures.
+
 ## 6) E2E + Logging Requirements (Native + Web)
 
 The shared logging contract is JSONL:
