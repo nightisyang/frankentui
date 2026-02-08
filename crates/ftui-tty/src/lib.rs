@@ -613,11 +613,14 @@ impl<W: Write + Send> BackendPresenter for TtyPresenter<W> {
         let Some(ref mut presenter) = self.inner else {
             return Ok(());
         };
-        if full_repaint_hint || diff.is_none() {
+        if full_repaint_hint {
             let full = BufferDiff::full(buf.width(), buf.height());
             presenter.present(buf, &full)?;
+        } else if let Some(diff) = diff {
+            presenter.present(buf, diff)?;
         } else {
-            presenter.present(buf, diff.unwrap())?;
+            let full = BufferDiff::full(buf.width(), buf.height());
+            presenter.present(buf, &full)?;
         }
         Ok(())
     }
@@ -724,7 +727,7 @@ impl TtyBackend {
         Ok(Self {
             clock: TtyClock::new(),
             events,
-            presenter: TtyPresenter::new(TerminalCapabilities::detect()),
+            presenter: TtyPresenter::live(TerminalCapabilities::detect()),
             alt_screen_active,
             raw_mode: Some(raw_mode),
         })
