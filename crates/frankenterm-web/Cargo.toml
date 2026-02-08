@@ -17,6 +17,9 @@ default = []
 
 [dependencies]
 frankenterm-core = { path = "../frankenterm-core", version = "0.1.0" }
+bitflags = "2.10.0"
+serde = { version = "1.0.227", features = ["derive"] }
+serde_json = "1.0.145"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3.85"
@@ -24,3 +27,5 @@ wasm-bindgen = "0.2.108"
 wasm-bindgen-futures = "0.4.58"
 web-sys = { version = "0.3.85", features = ["HtmlCanvasElement"] }
 
+[dev-dependencies]
+proptest = "1.7.0"
