@@ -7,10 +7,10 @@
 //! This skeleton covers:
 //! - WebGPU device initialization + surface configuration
 //! - Resize handling (surface reconfiguration + instance buffer growth)
-//! - Per-cell background color rendering via instanced quads
+//! - Per-cell background + lightweight foreground style rendering
 //! - Dirty-span patch updates via `queue.write_buffer` slices
 //!
-//! Text rendering (glyph atlas sampling) is deferred to bd-lff4p.2.4.
+//! Glyph-atlas sampling is still pending on bd-lff4p.2.4 integration.
 
 use std::fmt;
 
@@ -36,8 +36,9 @@ pub struct CellData {
     pub fg_rgba: u32,
     /// Glyph identifier (index into atlas metadata; 0 = empty/space).
     pub glyph_id: u32,
-    /// Packed attributes: bold(0), italic(1), underline(2), reverse(3),
-    /// dim(4), strikethrough(5), blink(6). Bits 8..31 reserved.
+    /// Packed attributes (StyleFlags bits):
+    /// bold(0), dim(1), italic(2), underline(3), blink(4), reverse(5),
+    /// strikethrough(6), hidden(7). Bits 8..31 reserved.
     pub attrs: u32,
 }
 
@@ -152,7 +153,28 @@ struct CellData {
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
-    @location(0) color: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) @interpolate(flat) bg_rgba: u32,
+    @location(2) @interpolate(flat) fg_rgba: u32,
+    @location(3) @interpolate(flat) attrs: u32,
+    @location(4) @interpolate(flat) glyph_id: u32,
+}
+
+const ATTR_BOLD: u32 = 1u << 0u;
+const ATTR_DIM: u32 = 1u << 1u;
+const ATTR_ITALIC: u32 = 1u << 2u;
+const ATTR_UNDERLINE: u32 = 1u << 3u;
+const ATTR_BLINK: u32 = 1u << 4u;
+const ATTR_REVERSE: u32 = 1u << 5u;
+const ATTR_STRIKETHROUGH: u32 = 1u << 6u;
+const ATTR_HIDDEN: u32 = 1u << 7u;
+
+fn unpack_rgba(packed: u32) -> vec4<f32> {
+    let r = f32((packed >> 24u) & 0xFFu) / 255.0;
+    let g = f32((packed >> 16u) & 0xFFu) / 255.0;
+    let b = f32((packed >> 8u) & 0xFFu) / 255.0;
+    let a = f32(packed & 0xFFu) / 255.0;
+    return vec4<f32>(r, g, b, a);
 }
 
 @vertex
@@ -182,21 +204,63 @@ fn vs_main(
     let clip_y = 1.0 - (px_y / uniforms.viewport.y) * 2.0;
 
     let cell = cells[instance_index];
-    let bg = cell.bg_rgba;
-    let r = f32((bg >> 24u) & 0xFFu) / 255.0;
-    let g = f32((bg >> 16u) & 0xFFu) / 255.0;
-    let b = f32((bg >> 8u) & 0xFFu) / 255.0;
-    let a = f32(bg & 0xFFu) / 255.0;
 
     var out: VertexOutput;
     out.position = vec4<f32>(clip_x, clip_y, 0.0, 1.0);
-    out.color = vec4<f32>(r, g, b, a);
+    out.uv = q;
+    out.bg_rgba = cell.bg_rgba;
+    out.fg_rgba = cell.fg_rgba;
+    out.attrs = cell.attrs;
+    out.glyph_id = cell.glyph_id;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return in.color;
+    var bg = unpack_rgba(in.bg_rgba);
+    var fg = unpack_rgba(in.fg_rgba);
+
+    if ((in.attrs & ATTR_REVERSE) != 0u) {
+        let tmp = bg;
+        bg = fg;
+        fg = tmp;
+    }
+
+    if ((in.attrs & ATTR_DIM) != 0u) {
+        fg = vec4<f32>(fg.rgb * 0.6, fg.a);
+    }
+    if ((in.attrs & ATTR_BOLD) != 0u) {
+        fg = vec4<f32>(min(fg.rgb * 1.2, vec3<f32>(1.0, 1.0, 1.0)), fg.a);
+    }
+    if ((in.attrs & ATTR_BLINK) != 0u) {
+        fg = vec4<f32>(fg.rgb, fg.a * 0.85);
+    }
+    if ((in.attrs & ATTR_HIDDEN) != 0u) {
+        fg = vec4<f32>(fg.rgb, 0.0);
+    }
+
+    var uv = in.uv;
+    if ((in.attrs & ATTR_ITALIC) != 0u) {
+        uv.x = clamp(uv.x + (0.5 - uv.y) * 0.18, 0.0, 1.0);
+    }
+
+    let stroke = select(0.20, 0.14, (in.attrs & ATTR_BOLD) != 0u);
+    let has_glyph = in.glyph_id != 0u;
+    let glyph_fill =
+        has_glyph
+        && uv.x >= stroke
+        && uv.x <= (1.0 - stroke)
+        && uv.y >= stroke
+        && uv.y <= (1.0 - stroke);
+    let underline = (in.attrs & ATTR_UNDERLINE) != 0u && in.uv.y >= 0.90;
+    let strike = (in.attrs & ATTR_STRIKETHROUGH) != 0u
+        && abs(in.uv.y - 0.55) <= 0.03;
+    let draw_fg = glyph_fill || underline || strike;
+
+    if (draw_fg) {
+        return bg * (1.0 - fg.a) + fg * fg.a;
+    }
+    return bg;
 }
 "#;
 
@@ -231,6 +295,10 @@ mod gpu {
         dpr: f32,
         /// Shadow copy of cell data for resize-time buffer rebuilds.
         cells_cpu: Vec<CellData>,
+        /// Scratch buffer reused for patch uploads to avoid per-patch allocs.
+        patch_upload_scratch: Vec<u8>,
+        /// Dirty cells uploaded since the previous render call.
+        last_dirty_cells: u32,
     }
 
     impl WebGpuRenderer {
@@ -257,18 +325,15 @@ mod gpu {
                     force_fallback_adapter: false,
                 })
                 .await
-                .ok_or(RendererError::NoAdapter)?;
+                .map_err(|_| RendererError::NoAdapter)?;
 
             let (device, queue) = adapter
-                .request_device(
-                    &wgpu::DeviceDescriptor {
-                        label: Some("frankenterm"),
-                        required_features: wgpu::Features::empty(),
-                        required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
-                        ..Default::default()
-                    },
-                    None,
-                )
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: Some("frankenterm"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                    ..Default::default()
+                })
                 .await
                 .map_err(|e| RendererError::DeviceError(e.to_string()))?;
 
@@ -336,7 +401,7 @@ mod gpu {
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("cell_pl"),
                 bind_group_layouts: &[&bind_group_layout],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
 
             let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -364,7 +429,7 @@ mod gpu {
                 },
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
 
@@ -375,11 +440,13 @@ mod gpu {
 
             let cell_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("cells"),
-                size: cell_bytes.len() as u64,
+                size: (cell_bytes.len().max(CELL_DATA_BYTES)) as u64,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            queue.write_buffer(&cell_buffer, 0, &cell_bytes);
+            if !cell_bytes.is_empty() {
+                queue.write_buffer(&cell_buffer, 0, &cell_bytes);
+            }
 
             let uniform_bytes = uniforms_bytes(
                 pixel_width as f32,
@@ -428,6 +495,8 @@ mod gpu {
                 cell_height: config.cell_height,
                 dpr,
                 cells_cpu,
+                patch_upload_scratch: Vec::new(),
+                last_dirty_cells: 0,
             })
         }
 
@@ -453,11 +522,13 @@ mod gpu {
 
             self.cell_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("cells"),
-                size: cell_bytes.len() as u64,
+                size: (cell_bytes.len().max(CELL_DATA_BYTES)) as u64,
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            self.queue.write_buffer(&self.cell_buffer, 0, &cell_bytes);
+            if !cell_bytes.is_empty() {
+                self.queue.write_buffer(&self.cell_buffer, 0, &cell_bytes);
+            }
 
             // Update uniforms.
             let ub = uniforms_bytes(
@@ -500,6 +571,9 @@ mod gpu {
                 }
 
                 let count = (end - start) as usize;
+                if count == 0 {
+                    continue;
+                }
                 let cells = &patch.cells[..count];
 
                 // Update CPU shadow.
@@ -509,16 +583,23 @@ mod gpu {
 
                 // Upload only the dirty range to the GPU.
                 let byte_offset = (start as u64) * (CELL_DATA_BYTES as u64);
-                let bytes = cells_to_bytes(cells);
+                self.patch_upload_scratch.clear();
+                self.patch_upload_scratch
+                    .reserve(cells.len() * CELL_DATA_BYTES);
+                for cell in cells {
+                    self.patch_upload_scratch
+                        .extend_from_slice(&cell.to_bytes());
+                }
                 self.queue
-                    .write_buffer(&self.cell_buffer, byte_offset, &bytes);
+                    .write_buffer(&self.cell_buffer, byte_offset, &self.patch_upload_scratch);
                 dirty += count as u32;
             }
+            self.last_dirty_cells = dirty;
             dirty
         }
 
         /// Encode and submit one render frame.
-        pub fn render_frame(&self) -> Result<FrameStats, RendererError> {
+        pub fn render_frame(&mut self) -> Result<FrameStats, RendererError> {
             let output = self
                 .surface
                 .get_current_texture()
@@ -541,6 +622,7 @@ mod gpu {
                     label: Some("cell_pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &view,
+                        depth_slice: None,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -550,6 +632,7 @@ mod gpu {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
 
                 pass.set_pipeline(&self.pipeline);
@@ -561,9 +644,12 @@ mod gpu {
             self.queue.submit(std::iter::once(encoder.finish()));
             output.present();
 
+            let dirty_cells = self.last_dirty_cells;
+            self.last_dirty_cells = 0;
+
             Ok(FrameStats {
                 instance_count,
-                dirty_cells: 0,
+                dirty_cells,
             })
         }
 

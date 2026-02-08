@@ -197,7 +197,7 @@ impl FrankenTermWeb {
 
     /// Request a frame render. Encodes and submits a WebGPU draw pass.
     pub fn render(&mut self) -> Result<(), JsValue> {
-        let Some(renderer) = self.renderer.as_ref() else {
+        let Some(renderer) = self.renderer.as_mut() else {
             return Ok(());
         };
         renderer

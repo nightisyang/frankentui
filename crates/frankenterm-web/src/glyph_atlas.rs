@@ -355,6 +355,16 @@ impl GlyphAtlasCache {
     /// Hot path: no allocations when present.
     pub fn get(&mut self, key: GlyphKey) -> Option<GlyphPlacement> {
         let idx = *self.map.get(&key)?;
+        if self
+            .entries
+            .get(idx)
+            .and_then(|entry| entry.as_ref())
+            .is_none()
+        {
+            // Defensive repair for stale map entries. Treat as miss.
+            self.map.remove(&key);
+            return None;
+        }
         self.touch(idx);
         self.stats.hits += 1;
         self.entries[idx].as_ref().map(|e| e.placement)
