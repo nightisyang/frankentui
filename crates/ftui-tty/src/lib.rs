@@ -1,25 +1,115 @@
 #![forbid(unsafe_code)]
-#![doc = "Native Unix terminal backend for FrankenTUI."]
-#![doc = ""]
-#![doc = "This crate implements the `ftui-backend` traits for native Unix/macOS terminals."]
-#![doc = "It replaces Crossterm as the terminal I/O layer (Unix-first; Windows deferred)."]
-#![doc = ""]
-#![doc = "## Crate Status"]
-#![doc = ""]
-#![doc = "Skeleton — trait implementations compile but are not yet functional."]
-#![doc = "Concrete I/O is added by downstream beads:"]
-#![doc = "- bd-lff4p.4.2: raw mode + feature toggles"]
-#![doc = "- bd-lff4p.4.3: Unix input reader"]
-#![doc = "- bd-lff4p.4.4: resize detection (SIGWINCH)"]
+//! Native Unix terminal backend for FrankenTUI.
+//!
+//! This crate implements the `ftui-backend` traits for native Unix/macOS terminals.
+//! It replaces Crossterm as the terminal I/O layer (Unix-first; Windows deferred).
+//!
+//! ## Escape Sequence Reference
+//!
+//! | Feature           | Enable                    | Disable                   |
+//! |-------------------|---------------------------|---------------------------|
+//! | Alternate screen  | `CSI ? 1049 h`            | `CSI ? 1049 l`            |
+//! | Mouse (SGR)       | `CSI ? 1000;1002;1006 h`  | `CSI ? 1000;1002;1006 l`  |
+//! | Bracketed paste   | `CSI ? 2004 h`            | `CSI ? 2004 l`            |
+//! | Focus events      | `CSI ? 1004 h`            | `CSI ? 1004 l`            |
+//! | Kitty keyboard    | `CSI > 15 u`              | `CSI < u`                 |
+//! | Cursor show/hide  | `CSI ? 25 h`              | `CSI ? 25 l`              |
+//! | Sync output       | `CSI ? 2026 h`            | `CSI ? 2026 l`            |
 
 use core::time::Duration;
-use std::io;
+use std::io::{self, Write};
 
 use ftui_backend::{Backend, BackendClock, BackendEventSource, BackendFeatures, BackendPresenter};
 use ftui_core::event::Event;
 use ftui_core::terminal_capabilities::TerminalCapabilities;
 use ftui_render::buffer::Buffer;
 use ftui_render::diff::BufferDiff;
+
+// ── Escape Sequences ─────────────────────────────────────────────────────
+
+const ALT_SCREEN_ENTER: &[u8] = b"\x1b[?1049h";
+const ALT_SCREEN_LEAVE: &[u8] = b"\x1b[?1049l";
+
+const MOUSE_ENABLE: &[u8] = b"\x1b[?1000;1002;1006h";
+const MOUSE_DISABLE: &[u8] = b"\x1b[?1000;1002;1006l";
+
+const BRACKETED_PASTE_ENABLE: &[u8] = b"\x1b[?2004h";
+const BRACKETED_PASTE_DISABLE: &[u8] = b"\x1b[?2004l";
+
+const FOCUS_ENABLE: &[u8] = b"\x1b[?1004h";
+const FOCUS_DISABLE: &[u8] = b"\x1b[?1004l";
+
+const KITTY_KEYBOARD_ENABLE: &[u8] = b"\x1b[>15u";
+const KITTY_KEYBOARD_DISABLE: &[u8] = b"\x1b[<u";
+
+const CURSOR_SHOW: &[u8] = b"\x1b[?25h";
+#[allow(dead_code)]
+const CURSOR_HIDE: &[u8] = b"\x1b[?25l";
+
+const SYNC_END: &[u8] = b"\x1b[?2026l";
+
+const CLEAR_SCREEN: &[u8] = b"\x1b[2J";
+const CURSOR_HOME: &[u8] = b"\x1b[H";
+
+// ── Raw Mode Guard ───────────────────────────────────────────────────────
+
+/// RAII guard that saves the original termios and restores it on drop.
+///
+/// This is the foundation for panic-safe terminal cleanup: even if the
+/// application panics, the Drop impl runs (unless `panic = "abort"`) and
+/// the terminal returns to its original state.
+///
+/// The guard opens `/dev/tty` to get an owned fd that is valid for the
+/// lifetime of the guard, avoiding unsafe `BorrowedFd` construction.
+#[cfg(unix)]
+pub struct RawModeGuard {
+    original_termios: nix::sys::termios::Termios,
+    tty: std::fs::File,
+}
+
+#[cfg(unix)]
+impl RawModeGuard {
+    /// Enter raw mode on the controlling terminal, returning a guard that
+    /// restores the original termios on drop.
+    pub fn enter() -> io::Result<Self> {
+        let tty = std::fs::File::open("/dev/tty")?;
+
+        let original_termios = nix::sys::termios::tcgetattr(&tty).map_err(io::Error::other)?;
+
+        let mut raw = original_termios.clone();
+        nix::sys::termios::cfmakeraw(&mut raw);
+        nix::sys::termios::tcsetattr(&tty, nix::sys::termios::SetArg::TCSAFLUSH, &raw)
+            .map_err(io::Error::other)?;
+
+        Ok(Self {
+            original_termios,
+            tty,
+        })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        // Best-effort restore — ignore errors during cleanup.
+        let _ = nix::sys::termios::tcsetattr(
+            &self.tty,
+            nix::sys::termios::SetArg::TCSAFLUSH,
+            &self.original_termios,
+        );
+    }
+}
+
+// ── Session Options ──────────────────────────────────────────────────────
+
+/// Configuration for opening a terminal session.
+#[derive(Debug, Clone, Default)]
+pub struct TtySessionOptions {
+    /// Enter the alternate screen buffer on open.
+    pub alternate_screen: bool,
+    /// Initial feature toggles to enable.
+    pub features: BackendFeatures,
+}
 
 // ── Clock ────────────────────────────────────────────────────────────────
 
@@ -53,21 +143,89 @@ impl BackendClock for TtyClock {
 
 /// Native Unix event source (raw terminal bytes → `Event`).
 ///
-/// Currently a skeleton. Real I/O is added by bd-lff4p.4.3.
+/// Manages terminal feature toggles by emitting the appropriate escape
+/// sequences. Real event I/O is added by bd-lff4p.4.3.
 pub struct TtyEventSource {
     features: BackendFeatures,
     width: u16,
     height: u16,
+    /// When true, escape sequences are actually written to stdout.
+    /// False in test/headless mode.
+    live: bool,
 }
 
 impl TtyEventSource {
+    /// Create an event source in headless mode (no escape sequence output).
     #[must_use]
     pub fn new(width: u16, height: u16) -> Self {
         Self {
             features: BackendFeatures::default(),
             width,
             height,
+            live: false,
         }
+    }
+
+    /// Create an event source in live mode (writes escape sequences to stdout).
+    #[must_use]
+    fn live(width: u16, height: u16) -> Self {
+        Self {
+            features: BackendFeatures::default(),
+            width,
+            height,
+            live: true,
+        }
+    }
+
+    /// Current feature state.
+    #[must_use]
+    pub fn features(&self) -> BackendFeatures {
+        self.features
+    }
+
+    /// Write the escape sequences needed to transition from current to new features.
+    fn write_feature_delta(
+        current: &BackendFeatures,
+        new: &BackendFeatures,
+        writer: &mut impl Write,
+    ) -> io::Result<()> {
+        if new.mouse_capture != current.mouse_capture {
+            writer.write_all(if new.mouse_capture {
+                MOUSE_ENABLE
+            } else {
+                MOUSE_DISABLE
+            })?;
+        }
+        if new.bracketed_paste != current.bracketed_paste {
+            writer.write_all(if new.bracketed_paste {
+                BRACKETED_PASTE_ENABLE
+            } else {
+                BRACKETED_PASTE_DISABLE
+            })?;
+        }
+        if new.focus_events != current.focus_events {
+            writer.write_all(if new.focus_events {
+                FOCUS_ENABLE
+            } else {
+                FOCUS_DISABLE
+            })?;
+        }
+        if new.kitty_keyboard != current.kitty_keyboard {
+            writer.write_all(if new.kitty_keyboard {
+                KITTY_KEYBOARD_ENABLE
+            } else {
+                KITTY_KEYBOARD_DISABLE
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Disable all active features, writing escape sequences to `writer`.
+    fn disable_all(&mut self, writer: &mut impl Write) -> io::Result<()> {
+        let off = BackendFeatures::default();
+        Self::write_feature_delta(&self.features, &off, writer)?;
+        self.features = off;
+        Ok(())
     }
 }
 
@@ -79,8 +237,12 @@ impl BackendEventSource for TtyEventSource {
     }
 
     fn set_features(&mut self, features: BackendFeatures) -> Result<(), Self::Error> {
+        if self.live {
+            let mut stdout = io::stdout();
+            Self::write_feature_delta(&self.features, &features, &mut stdout)?;
+            stdout.flush()?;
+        }
         self.features = features;
-        // TODO(bd-lff4p.4.2): emit escape sequences for feature toggles
         Ok(())
     }
 
@@ -140,30 +302,134 @@ impl BackendPresenter for TtyPresenter {
 ///
 /// Combines `TtyClock`, `TtyEventSource`, and `TtyPresenter` into a single
 /// `Backend` implementation that the ftui runtime can drive.
+///
+/// When created with [`TtyBackend::open`], the backend enters raw mode and
+/// manages the terminal lifecycle via RAII. On drop (including panics),
+/// all features are disabled, the cursor is shown, the alt screen is exited,
+/// and raw mode is restored — in that order.
+///
+/// When created with [`TtyBackend::new`] (headless), no terminal I/O occurs.
 pub struct TtyBackend {
+    // Fields are ordered for correct drop sequence:
+    // 1. clock (no cleanup needed)
+    // 2. events (feature state tracking)
+    // 3. presenter (no cleanup needed)
+    // 4. alt_screen_active (tracked for cleanup)
+    // 5. raw_mode — MUST be last: termios is restored after escape sequences
     clock: TtyClock,
     events: TtyEventSource,
     presenter: TtyPresenter,
+    alt_screen_active: bool,
+    #[cfg(unix)]
+    raw_mode: Option<RawModeGuard>,
 }
 
 impl TtyBackend {
-    /// Create a new TTY backend with detected terminal capabilities.
+    /// Create a headless backend (no terminal I/O). Useful for testing.
     #[must_use]
     pub fn new(width: u16, height: u16) -> Self {
         Self {
             clock: TtyClock::new(),
             events: TtyEventSource::new(width, height),
             presenter: TtyPresenter::new(TerminalCapabilities::detect()),
+            alt_screen_active: false,
+            #[cfg(unix)]
+            raw_mode: None,
         }
     }
 
-    /// Create a new TTY backend with explicit capabilities (useful for testing).
+    /// Create a headless backend with explicit capabilities.
     #[must_use]
     pub fn with_capabilities(width: u16, height: u16, capabilities: TerminalCapabilities) -> Self {
         Self {
             clock: TtyClock::new(),
             events: TtyEventSource::new(width, height),
             presenter: TtyPresenter::new(capabilities),
+            alt_screen_active: false,
+            #[cfg(unix)]
+            raw_mode: None,
+        }
+    }
+
+    /// Open a live terminal session: enter raw mode, enable requested features.
+    ///
+    /// The terminal is fully restored on drop (even during panics, unless
+    /// `panic = "abort"`).
+    #[cfg(unix)]
+    pub fn open(width: u16, height: u16, options: TtySessionOptions) -> io::Result<Self> {
+        // Enter raw mode first — if this fails, nothing to clean up.
+        let raw_mode = RawModeGuard::enter()?;
+
+        let mut stdout = io::stdout();
+        let mut alt_screen_active = false;
+
+        // Enter alt screen if requested.
+        if options.alternate_screen {
+            stdout.write_all(ALT_SCREEN_ENTER)?;
+            stdout.write_all(CLEAR_SCREEN)?;
+            stdout.write_all(CURSOR_HOME)?;
+            alt_screen_active = true;
+        }
+
+        // Enable initial features.
+        let mut events = TtyEventSource::live(width, height);
+        TtyEventSource::write_feature_delta(
+            &BackendFeatures::default(),
+            &options.features,
+            &mut stdout,
+        )?;
+        events.features = options.features;
+        stdout.flush()?;
+
+        Ok(Self {
+            clock: TtyClock::new(),
+            events,
+            presenter: TtyPresenter::new(TerminalCapabilities::detect()),
+            alt_screen_active,
+            raw_mode: Some(raw_mode),
+        })
+    }
+
+    /// Whether this backend has an active terminal session (raw mode).
+    #[must_use]
+    pub fn is_live(&self) -> bool {
+        #[cfg(unix)]
+        {
+            self.raw_mode.is_some()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+}
+
+impl Drop for TtyBackend {
+    fn drop(&mut self) {
+        // Only run cleanup if we have an active session.
+        #[cfg(unix)]
+        if self.raw_mode.is_some() {
+            let mut stdout = io::stdout();
+
+            // End any in-progress synchronized output.
+            let _ = stdout.write_all(SYNC_END);
+
+            // Disable features in reverse order of typical enable.
+            let _ = self.events.disable_all(&mut stdout);
+
+            // Always show cursor.
+            let _ = stdout.write_all(CURSOR_SHOW);
+
+            // Leave alt screen.
+            if self.alt_screen_active {
+                let _ = stdout.write_all(ALT_SCREEN_LEAVE);
+                self.alt_screen_active = false;
+            }
+
+            // Flush everything before RawModeGuard restores termios.
+            let _ = stdout.flush();
+
+            // RawModeGuard::drop() runs after this, restoring original termios.
         }
     }
 }
@@ -187,6 +453,40 @@ impl Backend for TtyBackend {
     }
 }
 
+// ── Utility: write cleanup sequence to a byte buffer (for testing) ───────
+
+/// Write the full cleanup sequence for the given feature state to `writer`.
+///
+/// This is useful for verifying cleanup in PTY tests without needing
+/// a real terminal session.
+pub fn write_cleanup_sequence(
+    features: &BackendFeatures,
+    alt_screen: bool,
+    writer: &mut impl Write,
+) -> io::Result<()> {
+    writer.write_all(SYNC_END)?;
+    // Disable features in reverse order.
+    if features.kitty_keyboard {
+        writer.write_all(KITTY_KEYBOARD_DISABLE)?;
+    }
+    if features.focus_events {
+        writer.write_all(FOCUS_DISABLE)?;
+    }
+    if features.bracketed_paste {
+        writer.write_all(BRACKETED_PASTE_DISABLE)?;
+    }
+    if features.mouse_capture {
+        writer.write_all(MOUSE_DISABLE)?;
+    }
+    writer.write_all(CURSOR_SHOW)?;
+    if alt_screen {
+        writer.write_all(ALT_SCREEN_LEAVE)?;
+    }
+    Ok(())
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,7 +495,6 @@ mod tests {
     fn clock_is_monotonic() {
         let clock = TtyClock::new();
         let t1 = clock.now_mono();
-        // Spin briefly to ensure measurable elapsed time.
         std::hint::black_box(0..1000).for_each(|_| {});
         let t2 = clock.now_mono();
         assert!(t2 >= t1, "clock must be monotonic");
@@ -210,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn event_source_set_features() {
+    fn event_source_set_features_headless() {
         let mut src = TtyEventSource::new(80, 24);
         let features = BackendFeatures {
             mouse_capture: true,
@@ -219,7 +518,7 @@ mod tests {
             kitty_keyboard: false,
         };
         src.set_features(features).unwrap();
-        assert_eq!(src.features, features);
+        assert_eq!(src.features(), features);
     }
 
     #[test]
@@ -238,13 +537,13 @@ mod tests {
     fn presenter_capabilities() {
         let caps = TerminalCapabilities::detect();
         let presenter = TtyPresenter::new(caps);
-        // Just verify it doesn't panic.
         let _c = presenter.capabilities();
     }
 
     #[test]
-    fn backend_construction() {
+    fn backend_headless_construction() {
         let backend = TtyBackend::new(120, 40);
+        assert!(!backend.is_live());
         let (w, h) = backend.events.size().unwrap();
         assert_eq!(w, 120);
         assert_eq!(h, 40);
@@ -257,5 +556,153 @@ mod tests {
         let (w, h) = backend.events().size().unwrap();
         assert_eq!((w, h), (80, 24));
         let _c = backend.presenter().capabilities();
+    }
+
+    #[test]
+    fn feature_delta_writes_enable_sequences() {
+        let current = BackendFeatures::default();
+        let new = BackendFeatures {
+            mouse_capture: true,
+            bracketed_paste: true,
+            focus_events: true,
+            kitty_keyboard: true,
+        };
+        let mut buf = Vec::new();
+        TtyEventSource::write_feature_delta(&current, &new, &mut buf).unwrap();
+        assert!(
+            buf.windows(MOUSE_ENABLE.len()).any(|w| w == MOUSE_ENABLE),
+            "expected mouse enable sequence"
+        );
+        assert!(
+            buf.windows(BRACKETED_PASTE_ENABLE.len())
+                .any(|w| w == BRACKETED_PASTE_ENABLE),
+            "expected bracketed paste enable"
+        );
+        assert!(
+            buf.windows(FOCUS_ENABLE.len()).any(|w| w == FOCUS_ENABLE),
+            "expected focus enable"
+        );
+        assert!(
+            buf.windows(KITTY_KEYBOARD_ENABLE.len())
+                .any(|w| w == KITTY_KEYBOARD_ENABLE),
+            "expected kitty keyboard enable"
+        );
+    }
+
+    #[test]
+    fn feature_delta_writes_disable_sequences() {
+        let current = BackendFeatures {
+            mouse_capture: true,
+            bracketed_paste: true,
+            focus_events: true,
+            kitty_keyboard: true,
+        };
+        let new = BackendFeatures::default();
+        let mut buf = Vec::new();
+        TtyEventSource::write_feature_delta(&current, &new, &mut buf).unwrap();
+        assert!(buf.windows(MOUSE_DISABLE.len()).any(|w| w == MOUSE_DISABLE));
+        assert!(
+            buf.windows(BRACKETED_PASTE_DISABLE.len())
+                .any(|w| w == BRACKETED_PASTE_DISABLE)
+        );
+        assert!(buf.windows(FOCUS_DISABLE.len()).any(|w| w == FOCUS_DISABLE));
+        assert!(
+            buf.windows(KITTY_KEYBOARD_DISABLE.len())
+                .any(|w| w == KITTY_KEYBOARD_DISABLE)
+        );
+    }
+
+    #[test]
+    fn feature_delta_noop_when_unchanged() {
+        let features = BackendFeatures {
+            mouse_capture: true,
+            bracketed_paste: false,
+            focus_events: true,
+            kitty_keyboard: false,
+        };
+        let mut buf = Vec::new();
+        TtyEventSource::write_feature_delta(&features, &features, &mut buf).unwrap();
+        assert!(buf.is_empty(), "no output expected when features unchanged");
+    }
+
+    #[test]
+    fn cleanup_sequence_contains_all_disable() {
+        let features = BackendFeatures {
+            mouse_capture: true,
+            bracketed_paste: true,
+            focus_events: true,
+            kitty_keyboard: true,
+        };
+        let mut buf = Vec::new();
+        write_cleanup_sequence(&features, true, &mut buf).unwrap();
+
+        // Verify all expected sequences are present.
+        assert!(buf.windows(SYNC_END.len()).any(|w| w == SYNC_END));
+        assert!(buf.windows(MOUSE_DISABLE.len()).any(|w| w == MOUSE_DISABLE));
+        assert!(
+            buf.windows(BRACKETED_PASTE_DISABLE.len())
+                .any(|w| w == BRACKETED_PASTE_DISABLE)
+        );
+        assert!(buf.windows(FOCUS_DISABLE.len()).any(|w| w == FOCUS_DISABLE));
+        assert!(
+            buf.windows(KITTY_KEYBOARD_DISABLE.len())
+                .any(|w| w == KITTY_KEYBOARD_DISABLE)
+        );
+        assert!(buf.windows(CURSOR_SHOW.len()).any(|w| w == CURSOR_SHOW));
+        assert!(
+            buf.windows(ALT_SCREEN_LEAVE.len())
+                .any(|w| w == ALT_SCREEN_LEAVE)
+        );
+    }
+
+    #[test]
+    fn cleanup_sequence_ordering() {
+        let features = BackendFeatures {
+            mouse_capture: true,
+            bracketed_paste: true,
+            focus_events: true,
+            kitty_keyboard: true,
+        };
+        let mut buf = Vec::new();
+        write_cleanup_sequence(&features, true, &mut buf).unwrap();
+
+        // Verify ordering: sync_end first, cursor_show before alt_screen_leave.
+        let sync_pos = buf
+            .windows(SYNC_END.len())
+            .position(|w| w == SYNC_END)
+            .expect("sync_end present");
+        let cursor_pos = buf
+            .windows(CURSOR_SHOW.len())
+            .position(|w| w == CURSOR_SHOW)
+            .expect("cursor_show present");
+        let alt_pos = buf
+            .windows(ALT_SCREEN_LEAVE.len())
+            .position(|w| w == ALT_SCREEN_LEAVE)
+            .expect("alt_screen_leave present");
+
+        assert!(
+            sync_pos < cursor_pos,
+            "sync_end must come before cursor_show"
+        );
+        assert!(
+            cursor_pos < alt_pos,
+            "cursor_show must come before alt_screen_leave"
+        );
+    }
+
+    #[test]
+    fn disable_all_resets_feature_state() {
+        let mut src = TtyEventSource::new(80, 24);
+        src.features = BackendFeatures {
+            mouse_capture: true,
+            bracketed_paste: true,
+            focus_events: true,
+            kitty_keyboard: true,
+        };
+        let mut buf = Vec::new();
+        src.disable_all(&mut buf).unwrap();
+        assert_eq!(src.features(), BackendFeatures::default());
+        // Verify disable sequences were written.
+        assert!(!buf.is_empty());
     }
 }
