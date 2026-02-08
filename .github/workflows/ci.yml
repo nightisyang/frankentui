@@ -534,11 +534,13 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-e2e-pty-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Run PTY E2E tests
+      - name: Run native PTY E2E suite (run_all.sh)
         env:
           E2E_JSONL_VALIDATE: "1"
           E2E_JSONL_VALIDATE_MODE: strict
-        run: ./scripts/e2e_test.sh
+        run: |
+          set -euo pipefail
+          ./tests/e2e/scripts/run_all.sh
 
       - name: Validate PTY E2E JSONL logs
         if: always()
@@ -558,6 +560,82 @@ jobs:
               --strict
           done
 
+      - name: Build PTY failure repro bundle
+        if: always()
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          bundle_root="/tmp/ftui_e2e_failure_bundle_${{ matrix.os }}"
+          mkdir -p "$bundle_root"
+
+          summary_files=(/tmp/ftui_e2e_*/results/summary.json)
+          if (( ${#summary_files[@]} == 0 )); then
+            echo "No PTY E2E summary files were generated." > "$bundle_root/README.txt"
+            exit 0
+          fi
+
+          {
+            echo "# PTY E2E Minimal Repros"
+            echo
+            echo "Generated: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            echo
+            echo "Each failed test maps to its minimal repro script in \`tests/e2e/scripts/\`."
+            echo
+          } > "$bundle_root/minimal_repros.md"
+
+          for summary in "${summary_files[@]}"; do
+            run_dir="$(dirname "$(dirname "$summary")")"
+            run_name="$(basename "$run_dir")"
+            cp "$summary" "$bundle_root/${run_name}_summary.json"
+
+            failed_count="$(jq -r '.failed // 0' "$summary" 2>/dev/null || echo 0)"
+            if [[ "$failed_count" == "0" ]]; then
+              continue
+            fi
+
+            jq -r '.tests[] | select(.status=="failed") | .name' "$summary" > "$bundle_root/${run_name}_failed_tests.txt"
+
+            while IFS= read -r test_name; do
+              [[ -n "$test_name" ]] || continue
+
+              suite_name="${test_name%%_*}"
+              script_path="tests/e2e/scripts/test_${suite_name}.sh"
+              case_script="tests/e2e/scripts/test_${test_name}.sh"
+              if [[ ! -f "$script_path" && -f "$case_script" ]]; then
+                script_path="$case_script"
+              fi
+              if [[ ! -f "$script_path" ]]; then
+                candidate="$(rg --files tests/e2e/scripts | rg "/test_(${suite_name}|${test_name})\\.sh$" | head -n1 || true)"
+                if [[ -n "$candidate" ]]; then
+                  script_path="$candidate"
+                else
+                  script_path="(script not found)"
+                fi
+              fi
+
+              echo "- \`${test_name}\`: \`${script_path}\`" >> "$bundle_root/minimal_repros.md"
+
+              log_file="$run_dir/e2e.log"
+              excerpt_file="$bundle_root/${run_name}_${test_name}_excerpt.log"
+              if [[ -f "$log_file" ]]; then
+                awk -v needle="$test_name" '
+                  index($0, needle) {
+                    start = NR - 20;
+                    if (start < 1) start = 1;
+                    end = NR + 40;
+                  }
+                  NR >= start && NR <= end { print }
+                ' "$log_file" > "$excerpt_file" || true
+              fi
+
+              pty_file="$run_dir/${test_name}.pty"
+              if [[ -f "$pty_file" ]]; then
+                xxd -l 512 "$pty_file" > "$bundle_root/${run_name}_${test_name}_pty_head.hex" || true
+              fi
+            done < "$bundle_root/${run_name}_failed_tests.txt"
+          done
+
       - name: Upload E2E logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -565,6 +643,24 @@ jobs:
           name: e2e-pty-logs-${{ matrix.os }}
           path: /tmp/ftui_e2e_*/
           retention-days: 7
+
+      - name: Upload PTY E2E JSONL logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-pty-jsonl-${{ matrix.os }}
+          path: /tmp/ftui_e2e_*/**/*.jsonl
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload PTY failure repro bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-pty-failure-bundle-${{ matrix.os }}
+          path: /tmp/ftui_e2e_failure_bundle_${{ matrix.os }}/
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Upload test summary
         if: always()
