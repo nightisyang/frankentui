@@ -276,6 +276,15 @@ jsonl_validate_line() {
         env)
             jq -e 'has("seed") and has("deterministic") and has("term") and has("colorterm") and has("no_color")' >/dev/null <<<"$line"
             ;;
+        browser_env)
+            jq -e 'has("seed") and has("browser") and has("user_agent") and has("dpr")' >/dev/null <<<"$line"
+            ;;
+        gpu_adapter)
+            jq -e 'has("seed") and has("api") and has("adapter_name")' >/dev/null <<<"$line"
+            ;;
+        ws_metrics)
+            jq -e 'has("seed") and has("label") and has("ws_url") and has("bytes_tx") and has("bytes_rx") and has("messages_tx") and has("messages_rx")' >/dev/null <<<"$line"
+            ;;
         run_start)
             jq -e 'has("seed") and has("command") and has("log_dir") and has("results_dir")' >/dev/null <<<"$line"
             ;;
@@ -288,11 +297,20 @@ jsonl_validate_line() {
         step_end)
             jq -e 'has("step") and has("status") and has("duration_ms") and has("mode") and has("cols") and has("rows") and has("seed")' >/dev/null <<<"$line"
             ;;
+        input)
+            jq -e 'has("seed") and has("input_type") and has("encoding") and has("input_hash")' >/dev/null <<<"$line"
+            ;;
+        frame)
+            jq -e 'has("seed") and has("frame_idx") and has("hash_algo") and has("frame_hash")' >/dev/null <<<"$line"
+            ;;
         pty_capture)
             jq -e 'has("seed") and has("output_sha256") and has("output_bytes") and has("cols") and has("rows") and has("exit_code")' >/dev/null <<<"$line"
             ;;
         assert)
             jq -e 'has("seed") and has("assertion") and has("status")' >/dev/null <<<"$line"
+            ;;
+        error)
+            jq -e 'has("seed") and has("message")' >/dev/null <<<"$line"
             ;;
         *)
             return 0
@@ -828,6 +846,405 @@ jsonl_assert() {
         local seed_json="null"
         if [[ -n "${E2E_SEED:-}" ]]; then seed_json="${E2E_SEED}"; fi
         jsonl_emit "{\"schema_version\":\"${E2E_JSONL_SCHEMA_VERSION}\",\"type\":\"assert\",\"timestamp\":\"$(json_escape "$ts")\",\"run_id\":\"$(json_escape "$E2E_RUN_ID")\",\"seed\":${seed_json},\"assertion\":\"$(json_escape "$name")\",\"status\":\"$(json_escape "$assert_status")\",\"details\":\"$(json_escape "$details")\"}"
+    fi
+}
+
+jsonl_input() {
+    local input_type="$1"
+    local encoding="$2"
+    local input_hash="$3"
+    local bytes_b64="${4:-}"
+    local details="${5:-}"
+    jsonl_init
+
+    local ts
+    ts="$(e2e_timestamp)"
+    local mode="${E2E_CONTEXT_MODE:-}"
+    local cols="${E2E_CONTEXT_COLS:-}"
+    local rows="${E2E_CONTEXT_ROWS:-}"
+    local seed="${E2E_CONTEXT_SEED:-}"
+    local hash_key=""
+    if [[ -n "$mode" && -n "$cols" && -n "$rows" ]]; then
+        hash_key="$(e2e_hash_key "$mode" "$cols" "$rows" "$seed")"
+    fi
+
+    local cols_json="null"
+    local rows_json="null"
+    local seed_json="null"
+    if [[ -n "$cols" ]]; then cols_json="$cols"; fi
+    if [[ -n "$rows" ]]; then rows_json="$rows"; fi
+    if [[ -n "$seed" ]]; then seed_json="$seed"; fi
+
+    if command -v jq >/dev/null 2>&1; then
+        jsonl_emit "$(jq -nc \
+            --arg schema_version "$E2E_JSONL_SCHEMA_VERSION" \
+            --arg type "input" \
+            --arg timestamp "$ts" \
+            --arg run_id "$E2E_RUN_ID" \
+            --arg input_type "$input_type" \
+            --arg encoding "$encoding" \
+            --arg bytes_b64 "$bytes_b64" \
+            --arg input_hash "$input_hash" \
+            --arg details "$details" \
+            --arg mode "$mode" \
+            --arg hash_key "$hash_key" \
+            --argjson cols "$cols_json" \
+            --argjson rows "$rows_json" \
+            --argjson seed "$seed_json" \
+            '{schema_version:$schema_version,type:$type,timestamp:$timestamp,run_id:$run_id,seed:$seed,input_type:$input_type,encoding:$encoding,bytes_b64:$bytes_b64,input_hash:$input_hash,details:$details,mode:$mode,hash_key:$hash_key,cols:$cols,rows:$rows}')"
+    else
+        jsonl_emit "{\"schema_version\":\"${E2E_JSONL_SCHEMA_VERSION}\",\"type\":\"input\",\"timestamp\":\"$(json_escape "$ts")\",\"run_id\":\"$(json_escape "$E2E_RUN_ID")\",\"seed\":${seed_json},\"input_type\":\"$(json_escape "$input_type")\",\"encoding\":\"$(json_escape "$encoding")\",\"bytes_b64\":\"$(json_escape "$bytes_b64")\",\"input_hash\":\"$(json_escape "$input_hash")\",\"details\":\"$(json_escape "$details")\",\"mode\":\"$(json_escape "$mode")\",\"hash_key\":\"$(json_escape "$hash_key")\",\"cols\":${cols_json},\"rows\":${rows_json}}"
+    fi
+}
+
+jsonl_frame() {
+    local frame_idx="$1"
+    local hash_algo="$2"
+    local frame_hash="$3"
+    local patch_hash="${4:-}"
+    local patch_bytes="${5:-}"
+    local patch_cells="${6:-}"
+    local patch_runs="${7:-}"
+    local render_ms="${8:-}"
+    local present_ms="${9:-}"
+    local present_bytes="${10:-}"
+    local checksum_chain="${11:-}"
+    local ts_ms="${12:-}"
+    jsonl_init
+
+    local ts
+    ts="$(e2e_timestamp)"
+    local mode="${E2E_CONTEXT_MODE:-}"
+    local cols="${E2E_CONTEXT_COLS:-}"
+    local rows="${E2E_CONTEXT_ROWS:-}"
+    local seed="${E2E_CONTEXT_SEED:-}"
+    local hash_key=""
+    if [[ -n "$mode" && -n "$cols" && -n "$rows" ]]; then
+        hash_key="$(e2e_hash_key "$mode" "$cols" "$rows" "$seed")"
+    fi
+
+    local cols_json="null"
+    local rows_json="null"
+    local seed_json="null"
+    if [[ -n "$cols" ]]; then cols_json="$cols"; fi
+    if [[ -n "$rows" ]]; then rows_json="$rows"; fi
+    if [[ -n "$seed" ]]; then seed_json="$seed"; fi
+
+    local patch_bytes_json="null"
+    local patch_cells_json="null"
+    local patch_runs_json="null"
+    local render_ms_json="null"
+    local present_ms_json="null"
+    local present_bytes_json="null"
+    local ts_ms_json="null"
+    if [[ -n "$patch_bytes" ]]; then patch_bytes_json="$patch_bytes"; fi
+    if [[ -n "$patch_cells" ]]; then patch_cells_json="$patch_cells"; fi
+    if [[ -n "$patch_runs" ]]; then patch_runs_json="$patch_runs"; fi
+    if [[ -n "$render_ms" ]]; then render_ms_json="$render_ms"; fi
+    if [[ -n "$present_ms" ]]; then present_ms_json="$present_ms"; fi
+    if [[ -n "$present_bytes" ]]; then present_bytes_json="$present_bytes"; fi
+    if [[ -n "$ts_ms" ]]; then ts_ms_json="$ts_ms"; fi
+
+    if command -v jq >/dev/null 2>&1; then
+        jsonl_emit "$(jq -nc \
+            --arg schema_version "$E2E_JSONL_SCHEMA_VERSION" \
+            --arg type "frame" \
+            --arg timestamp "$ts" \
+            --arg run_id "$E2E_RUN_ID" \
+            --arg hash_algo "$hash_algo" \
+            --arg frame_hash "$frame_hash" \
+            --arg patch_hash "$patch_hash" \
+            --arg checksum_chain "$checksum_chain" \
+            --arg mode "$mode" \
+            --arg hash_key "$hash_key" \
+            --argjson frame_idx "$frame_idx" \
+            --argjson ts_ms "$ts_ms_json" \
+            --argjson cols "$cols_json" \
+            --argjson rows "$rows_json" \
+            --argjson patch_bytes "$patch_bytes_json" \
+            --argjson patch_cells "$patch_cells_json" \
+            --argjson patch_runs "$patch_runs_json" \
+            --argjson render_ms "$render_ms_json" \
+            --argjson present_ms "$present_ms_json" \
+            --argjson present_bytes "$present_bytes_json" \
+            --argjson seed "$seed_json" \
+            '{schema_version:$schema_version,type:$type,timestamp:$timestamp,run_id:$run_id,seed:$seed,frame_idx:$frame_idx,hash_algo:$hash_algo,frame_hash:$frame_hash,mode:$mode,hash_key:$hash_key,cols:$cols,rows:$rows} 
+             + (if $ts_ms != null then {ts_ms:$ts_ms} else {} end)
+             + (if $patch_hash != "" then {patch_hash:$patch_hash} else {} end)
+             + (if $patch_bytes != null then {patch_bytes:$patch_bytes} else {} end)
+             + (if $patch_cells != null then {patch_cells:$patch_cells} else {} end)
+             + (if $patch_runs != null then {patch_runs:$patch_runs} else {} end)
+             + (if $render_ms != null then {render_ms:$render_ms} else {} end)
+             + (if $present_ms != null then {present_ms:$present_ms} else {} end)
+             + (if $present_bytes != null then {present_bytes:$present_bytes} else {} end)
+             + (if $checksum_chain != "" then {checksum_chain:$checksum_chain} else {} end)')"
+    else
+        # Fallback: omit optional numeric fields if jq is unavailable.
+        jsonl_emit "{\"schema_version\":\"${E2E_JSONL_SCHEMA_VERSION}\",\"type\":\"frame\",\"timestamp\":\"$(json_escape "$ts")\",\"run_id\":\"$(json_escape "$E2E_RUN_ID")\",\"seed\":${seed_json},\"frame_idx\":${frame_idx},\"hash_algo\":\"$(json_escape "$hash_algo")\",\"frame_hash\":\"$(json_escape "$frame_hash")\",\"mode\":\"$(json_escape "$mode")\",\"hash_key\":\"$(json_escape "$hash_key")\",\"cols\":${cols_json},\"rows\":${rows_json}}"
+    fi
+}
+
+jsonl_error() {
+    local message="$1"
+    local exit_code="${2:-}"
+    local stack="${3:-}"
+    local details="${4:-}"
+    local case_name="${5:-}"
+    local step="${6:-}"
+    jsonl_init
+
+    local ts
+    ts="$(e2e_timestamp)"
+    local mode="${E2E_CONTEXT_MODE:-}"
+    local cols="${E2E_CONTEXT_COLS:-}"
+    local rows="${E2E_CONTEXT_ROWS:-}"
+    local seed="${E2E_CONTEXT_SEED:-}"
+    local hash_key=""
+    if [[ -n "$mode" && -n "$cols" && -n "$rows" ]]; then
+        hash_key="$(e2e_hash_key "$mode" "$cols" "$rows" "$seed")"
+    fi
+
+    local cols_json="null"
+    local rows_json="null"
+    local seed_json="null"
+    local exit_code_json="null"
+    if [[ -n "$cols" ]]; then cols_json="$cols"; fi
+    if [[ -n "$rows" ]]; then rows_json="$rows"; fi
+    if [[ -n "$seed" ]]; then seed_json="$seed"; fi
+    if [[ -n "$exit_code" ]]; then exit_code_json="$exit_code"; fi
+
+    if command -v jq >/dev/null 2>&1; then
+        jsonl_emit "$(jq -nc \
+            --arg schema_version "$E2E_JSONL_SCHEMA_VERSION" \
+            --arg type "error" \
+            --arg timestamp "$ts" \
+            --arg run_id "$E2E_RUN_ID" \
+            --arg message "$message" \
+            --arg stack "$stack" \
+            --arg details "$details" \
+            --arg case "$case_name" \
+            --arg step "$step" \
+            --arg mode "$mode" \
+            --arg hash_key "$hash_key" \
+            --argjson cols "$cols_json" \
+            --argjson rows "$rows_json" \
+            --argjson exit_code "$exit_code_json" \
+            --argjson seed "$seed_json" \
+            '{schema_version:$schema_version,type:$type,timestamp:$timestamp,run_id:$run_id,seed:$seed,message:$message,exit_code:$exit_code,stack:$stack,details:$details,case:$case,step:$step,mode:$mode,hash_key:$hash_key,cols:$cols,rows:$rows}')"
+    else
+        jsonl_emit "{\"schema_version\":\"${E2E_JSONL_SCHEMA_VERSION}\",\"type\":\"error\",\"timestamp\":\"$(json_escape "$ts")\",\"run_id\":\"$(json_escape "$E2E_RUN_ID")\",\"seed\":${seed_json},\"message\":\"$(json_escape "$message")\",\"exit_code\":${exit_code_json},\"stack\":\"$(json_escape "$stack")\",\"details\":\"$(json_escape "$details")\",\"case\":\"$(json_escape "$case_name")\",\"step\":\"$(json_escape "$step")\",\"mode\":\"$(json_escape "$mode")\",\"hash_key\":\"$(json_escape "$hash_key")\",\"cols\":${cols_json},\"rows\":${rows_json}}"
+    fi
+}
+
+jsonl_browser_env() {
+    local browser="${1:-${E2E_BROWSER:-}}"
+    local user_agent="${2:-${E2E_BROWSER_USER_AGENT:-}}"
+    local dpr="${3:-${E2E_BROWSER_DPR:-}}"
+
+    if [[ -z "$browser" || -z "$user_agent" || -z "$dpr" ]]; then
+        echo "jsonl_browser_env: missing required fields (browser/user_agent/dpr)" >&2
+        return 1
+    fi
+
+    local browser_version="${E2E_BROWSER_VERSION:-}"
+    local platform="${E2E_BROWSER_PLATFORM:-}"
+    local locale="${E2E_BROWSER_LOCALE:-}"
+    local timezone="${E2E_BROWSER_TIMEZONE:-}"
+    local headless="${E2E_BROWSER_HEADLESS:-}"
+    local zoom="${E2E_BROWSER_ZOOM:-}"
+    local viewport_css_px_json="${E2E_VIEWPORT_CSS_PX_JSON:-}"
+    local viewport_px_json="${E2E_VIEWPORT_PX_JSON:-}"
+    local canvas_css_px_json="${E2E_CANVAS_CSS_PX_JSON:-}"
+    local canvas_px_json="${E2E_CANVAS_PX_JSON:-}"
+
+    jsonl_init
+    local ts
+    ts="$(e2e_timestamp)"
+    local seed_json="null"
+    if [[ -n "${E2E_SEED:-}" ]]; then seed_json="${E2E_SEED}"; fi
+
+    local dpr_json="$dpr"
+    local headless_json="null"
+    local zoom_json="null"
+    local viewport_css_px_arg="null"
+    local viewport_px_arg="null"
+    local canvas_css_px_arg="null"
+    local canvas_px_arg="null"
+    if [[ -n "$headless" ]]; then headless_json="$headless"; fi
+    if [[ -n "$zoom" ]]; then zoom_json="$zoom"; fi
+    if [[ -n "$viewport_css_px_json" ]]; then viewport_css_px_arg="$viewport_css_px_json"; fi
+    if [[ -n "$viewport_px_json" ]]; then viewport_px_arg="$viewport_px_json"; fi
+    if [[ -n "$canvas_css_px_json" ]]; then canvas_css_px_arg="$canvas_css_px_json"; fi
+    if [[ -n "$canvas_px_json" ]]; then canvas_px_arg="$canvas_px_json"; fi
+
+    if command -v jq >/dev/null 2>&1; then
+        jsonl_emit "$(jq -nc \
+            --arg schema_version "$E2E_JSONL_SCHEMA_VERSION" \
+            --arg type "browser_env" \
+            --arg timestamp "$ts" \
+            --arg run_id "$E2E_RUN_ID" \
+            --arg browser "$browser" \
+            --arg browser_version "$browser_version" \
+            --arg user_agent "$user_agent" \
+            --arg platform "$platform" \
+            --arg locale "$locale" \
+            --arg timezone "$timezone" \
+            --argjson dpr "$dpr_json" \
+            --argjson headless "$headless_json" \
+            --argjson zoom "$zoom_json" \
+            --argjson viewport_css_px "$viewport_css_px_arg" \
+            --argjson viewport_px "$viewport_px_arg" \
+            --argjson canvas_css_px "$canvas_css_px_arg" \
+            --argjson canvas_px "$canvas_px_arg" \
+            --argjson seed "$seed_json" \
+            '{schema_version:$schema_version,type:$type,timestamp:$timestamp,run_id:$run_id,seed:$seed,browser:$browser,user_agent:$user_agent,dpr:$dpr}
+             + (if $browser_version != \"\" then {browser_version:$browser_version} else {} end)
+             + (if $platform != \"\" then {platform:$platform} else {} end)
+             + (if $locale != \"\" then {locale:$locale} else {} end)
+             + (if $timezone != \"\" then {timezone:$timezone} else {} end)
+             + (if $headless != null then {headless:$headless} else {} end)
+             + (if $zoom != null then {zoom:$zoom} else {} end)
+             + (if $viewport_css_px != null then {viewport_css_px:$viewport_css_px} else {} end)
+             + (if $viewport_px != null then {viewport_px:$viewport_px} else {} end)
+             + (if $canvas_css_px != null then {canvas_css_px:$canvas_css_px} else {} end)
+             + (if $canvas_px != null then {canvas_px:$canvas_px} else {} end)')"
+    else
+        jsonl_emit "{\"schema_version\":\"${E2E_JSONL_SCHEMA_VERSION}\",\"type\":\"browser_env\",\"timestamp\":\"$(json_escape "$ts")\",\"run_id\":\"$(json_escape "$E2E_RUN_ID")\",\"seed\":${seed_json},\"browser\":\"$(json_escape "$browser")\",\"user_agent\":\"$(json_escape "$user_agent")\",\"dpr\":${dpr_json}}"
+    fi
+}
+
+jsonl_gpu_adapter() {
+    local api="${1:-${E2E_GPU_API:-}}"
+    local adapter_name="${2:-${E2E_GPU_ADAPTER_NAME:-}}"
+
+    if [[ -z "$api" || -z "$adapter_name" ]]; then
+        echo "jsonl_gpu_adapter: missing required fields (api/adapter_name)" >&2
+        return 1
+    fi
+
+    local backend="${E2E_GPU_BACKEND:-}"
+    local vendor="${E2E_GPU_VENDOR:-}"
+    local architecture="${E2E_GPU_ARCHITECTURE:-}"
+    local device="${E2E_GPU_DEVICE:-}"
+    local description="${E2E_GPU_DESCRIPTION:-}"
+    local limits_json="${E2E_GPU_LIMITS_JSON:-}"
+    local features_json="${E2E_GPU_FEATURES_JSON:-}"
+    local is_fallback="${E2E_GPU_IS_FALLBACK_ADAPTER:-}"
+
+    jsonl_init
+    local ts
+    ts="$(e2e_timestamp)"
+    local seed_json="null"
+    if [[ -n "${E2E_SEED:-}" ]]; then seed_json="${E2E_SEED}"; fi
+
+    local limits_arg="null"
+    local features_arg="null"
+    local is_fallback_json="null"
+    if [[ -n "$limits_json" ]]; then limits_arg="$limits_json"; fi
+    if [[ -n "$features_json" ]]; then features_arg="$features_json"; fi
+    if [[ -n "$is_fallback" ]]; then is_fallback_json="$is_fallback"; fi
+
+    if command -v jq >/dev/null 2>&1; then
+        jsonl_emit "$(jq -nc \
+            --arg schema_version "$E2E_JSONL_SCHEMA_VERSION" \
+            --arg type "gpu_adapter" \
+            --arg timestamp "$ts" \
+            --arg run_id "$E2E_RUN_ID" \
+            --arg api "$api" \
+            --arg adapter_name "$adapter_name" \
+            --arg backend "$backend" \
+            --arg vendor "$vendor" \
+            --arg architecture "$architecture" \
+            --arg device "$device" \
+            --arg description "$description" \
+            --argjson limits "$limits_arg" \
+            --argjson features "$features_arg" \
+            --argjson is_fallback_adapter "$is_fallback_json" \
+            --argjson seed "$seed_json" \
+            '{schema_version:$schema_version,type:$type,timestamp:$timestamp,run_id:$run_id,seed:$seed,api:$api,adapter_name:$adapter_name}
+             + (if $backend != \"\" then {backend:$backend} else {} end)
+             + (if $vendor != \"\" then {vendor:$vendor} else {} end)
+             + (if $architecture != \"\" then {architecture:$architecture} else {} end)
+             + (if $device != \"\" then {device:$device} else {} end)
+             + (if $description != \"\" then {description:$description} else {} end)
+             + (if $limits != null then {limits:$limits} else {} end)
+             + (if $features != null then {features:$features} else {} end)
+             + (if $is_fallback_adapter != null then {is_fallback_adapter:$is_fallback_adapter} else {} end)')"
+    else
+        jsonl_emit "{\"schema_version\":\"${E2E_JSONL_SCHEMA_VERSION}\",\"type\":\"gpu_adapter\",\"timestamp\":\"$(json_escape "$ts")\",\"run_id\":\"$(json_escape "$E2E_RUN_ID")\",\"seed\":${seed_json},\"api\":\"$(json_escape "$api")\",\"adapter_name\":\"$(json_escape "$adapter_name")\"}"
+    fi
+}
+
+jsonl_ws_metrics() {
+    local label="${1:-${E2E_WS_LABEL:-}}"
+    local ws_url="${2:-${E2E_WS_URL:-}}"
+    local bytes_tx="${3:-${E2E_WS_BYTES_TX:-}}"
+    local bytes_rx="${4:-${E2E_WS_BYTES_RX:-}}"
+    local messages_tx="${5:-${E2E_WS_MESSAGES_TX:-}}"
+    local messages_rx="${6:-${E2E_WS_MESSAGES_RX:-}}"
+
+    if [[ -z "$label" || -z "$ws_url" || -z "$bytes_tx" || -z "$bytes_rx" || -z "$messages_tx" || -z "$messages_rx" ]]; then
+        echo "jsonl_ws_metrics: missing required fields (label/ws_url/bytes_tx/bytes_rx/messages_tx/messages_rx)" >&2
+        return 1
+    fi
+
+    local connect_ms="${E2E_WS_CONNECT_MS:-}"
+    local reconnects="${E2E_WS_RECONNECTS:-}"
+    local close_code="${E2E_WS_CLOSE_CODE:-}"
+    local close_reason="${E2E_WS_CLOSE_REASON:-}"
+    local dropped_messages="${E2E_WS_DROPPED_MESSAGES:-}"
+    local rtt_hist_json="${E2E_WS_RTT_HISTOGRAM_MS_JSON:-}"
+    local latency_hist_json="${E2E_WS_LATENCY_HISTOGRAM_MS_JSON:-}"
+
+    jsonl_init
+    local ts
+    ts="$(e2e_timestamp)"
+    local seed_json="null"
+    if [[ -n "${E2E_SEED:-}" ]]; then seed_json="${E2E_SEED}"; fi
+
+    local connect_ms_json="null"
+    local reconnects_json="null"
+    local close_code_json="null"
+    local dropped_messages_json="null"
+    local rtt_hist_arg="null"
+    local latency_hist_arg="null"
+    if [[ -n "$connect_ms" ]]; then connect_ms_json="$connect_ms"; fi
+    if [[ -n "$reconnects" ]]; then reconnects_json="$reconnects"; fi
+    if [[ -n "$close_code" ]]; then close_code_json="$close_code"; fi
+    if [[ -n "$dropped_messages" ]]; then dropped_messages_json="$dropped_messages"; fi
+    if [[ -n "$rtt_hist_json" ]]; then rtt_hist_arg="$rtt_hist_json"; fi
+    if [[ -n "$latency_hist_json" ]]; then latency_hist_arg="$latency_hist_json"; fi
+
+    if command -v jq >/dev/null 2>&1; then
+        jsonl_emit "$(jq -nc \
+            --arg schema_version "$E2E_JSONL_SCHEMA_VERSION" \
+            --arg type "ws_metrics" \
+            --arg timestamp "$ts" \
+            --arg run_id "$E2E_RUN_ID" \
+            --arg label "$label" \
+            --arg ws_url "$ws_url" \
+            --arg close_reason "$close_reason" \
+            --argjson bytes_tx "$bytes_tx" \
+            --argjson bytes_rx "$bytes_rx" \
+            --argjson messages_tx "$messages_tx" \
+            --argjson messages_rx "$messages_rx" \
+            --argjson connect_ms "$connect_ms_json" \
+            --argjson reconnects "$reconnects_json" \
+            --argjson close_code "$close_code_json" \
+            --argjson dropped_messages "$dropped_messages_json" \
+            --argjson rtt_histogram_ms "$rtt_hist_arg" \
+            --argjson latency_histogram_ms "$latency_hist_arg" \
+            --argjson seed "$seed_json" \
+            '{schema_version:$schema_version,type:$type,timestamp:$timestamp,run_id:$run_id,seed:$seed,label:$label,ws_url:$ws_url,bytes_tx:$bytes_tx,bytes_rx:$bytes_rx,messages_tx:$messages_tx,messages_rx:$messages_rx}
+             + (if $connect_ms != null then {connect_ms:$connect_ms} else {} end)
+             + (if $reconnects != null then {reconnects:$reconnects} else {} end)
+             + (if $close_code != null then {close_code:$close_code} else {} end)
+             + (if $close_reason != \"\" then {close_reason:$close_reason} else {} end)
+             + (if $dropped_messages != null then {dropped_messages:$dropped_messages} else {} end)
+             + (if $rtt_histogram_ms != null then {rtt_histogram_ms:$rtt_histogram_ms} else {} end)
+             + (if $latency_histogram_ms != null then {latency_histogram_ms:$latency_histogram_ms} else {} end)')"
+    else
+        jsonl_emit "{\"schema_version\":\"${E2E_JSONL_SCHEMA_VERSION}\",\"type\":\"ws_metrics\",\"timestamp\":\"$(json_escape "$ts")\",\"run_id\":\"$(json_escape "$E2E_RUN_ID")\",\"seed\":${seed_json},\"label\":\"$(json_escape "$label")\",\"ws_url\":\"$(json_escape "$ws_url")\",\"bytes_tx\":${bytes_tx},\"bytes_rx\":${bytes_rx},\"messages_tx\":${messages_tx},\"messages_rx\":${messages_rx}}"
     fi
 }
 
