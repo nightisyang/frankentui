@@ -70,6 +70,7 @@ use crate::voi_sampling::{VoiConfig, VoiSampler};
 use crate::{BucketKey, ConformalConfig, ConformalPrediction, ConformalPredictor};
 use ftui_backend::{BackendEventSource, BackendFeatures};
 use ftui_core::event::Event;
+#[cfg(feature = "crossterm-compat")]
 use ftui_core::terminal_capabilities::TerminalCapabilities;
 #[cfg(feature = "crossterm-compat")]
 use ftui_core::terminal_session::{SessionOptions, TerminalSession};
