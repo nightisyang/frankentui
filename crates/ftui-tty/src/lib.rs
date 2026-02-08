@@ -58,6 +58,8 @@ const SYNC_END: &[u8] = b"\x1b[?2026l";
 
 const CLEAR_SCREEN: &[u8] = b"\x1b[2J";
 const CURSOR_HOME: &[u8] = b"\x1b[H";
+const READ_BUFFER_BYTES: usize = 8192;
+const MAX_DRAIN_BYTES_PER_POLL: usize = READ_BUFFER_BYTES;
 
 // ── Raw Mode Guard ───────────────────────────────────────────────────────
 
@@ -218,6 +220,8 @@ pub struct TtyEventSource {
     event_queue: VecDeque<Event>,
     /// Tty file handle for reading input (None in headless mode).
     tty_reader: Option<std::fs::File>,
+    /// True when tty_reader is configured as nonblocking and may be drained in a loop.
+    reader_nonblocking: bool,
 }
 
 impl TtyEventSource {
@@ -236,6 +240,7 @@ impl TtyEventSource {
             parser: InputParser::new(),
             event_queue: VecDeque::new(),
             tty_reader: None,
+            reader_nonblocking: false,
         }
     }
 
@@ -243,6 +248,7 @@ impl TtyEventSource {
     /// escape sequences to stdout).
     fn live(width: u16, height: u16) -> io::Result<Self> {
         let tty_reader = std::fs::File::open("/dev/tty")?;
+        let reader_nonblocking = Self::try_enable_nonblocking(&tty_reader);
         let mut w = width;
         let mut h = height;
         #[cfg(unix)]
@@ -275,6 +281,7 @@ impl TtyEventSource {
             parser: InputParser::new(),
             event_queue: VecDeque::new(),
             tty_reader: Some(tty_reader),
+            reader_nonblocking,
         })
     }
 
@@ -284,6 +291,7 @@ impl TtyEventSource {
     /// behavior). This is primarily useful for testing with pipes.
     #[cfg(test)]
     fn from_reader(width: u16, height: u16, reader: std::fs::File) -> Self {
+        let reader_nonblocking = Self::try_enable_nonblocking(&reader);
         Self {
             features: BackendFeatures::default(),
             width,
@@ -296,7 +304,26 @@ impl TtyEventSource {
             parser: InputParser::new(),
             event_queue: VecDeque::new(),
             tty_reader: Some(reader),
+            reader_nonblocking,
         }
+    }
+
+    #[cfg(unix)]
+    fn try_enable_nonblocking(reader: &std::fs::File) -> bool {
+        use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+
+        let Ok(flags) = fcntl_getfl(reader) else {
+            return false;
+        };
+        if flags.contains(OFlags::NONBLOCK) {
+            return true;
+        }
+        fcntl_setfl(reader, flags | OFlags::NONBLOCK).is_ok()
+    }
+
+    #[cfg(not(unix))]
+    fn try_enable_nonblocking(_reader: &std::fs::File) -> bool {
+        false
     }
 
     /// Current feature state.
@@ -359,16 +386,27 @@ impl TtyEventSource {
         let Some(ref mut tty) = self.tty_reader else {
             return Ok(());
         };
-        let mut buf = [0u8; 1024];
-        match tty.read(&mut buf) {
-            Ok(0) => Ok(()),
-            Ok(n) => {
-                let events = self.parser.parse(&buf[..n]);
-                self.event_queue.extend(events);
-                Ok(())
+        let mut buf = [0u8; READ_BUFFER_BYTES];
+        let mut drained_bytes = 0usize;
+        loop {
+            match tty.read(&mut buf) {
+                Ok(0) => return Ok(()),
+                Ok(n) => {
+                    let queue = &mut self.event_queue;
+                    self.parser
+                        .parse_with(&buf[..n], |event| queue.push_back(event));
+                    drained_bytes = drained_bytes.saturating_add(n);
+                    if !self.reader_nonblocking {
+                        return Ok(());
+                    }
+                    if drained_bytes >= MAX_DRAIN_BYTES_PER_POLL {
+                        return Ok(());
+                    }
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
             }
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(()),
-            Err(e) => Err(e),
         }
     }
 
@@ -1136,6 +1174,42 @@ mod tests {
                 modifiers: Modifiers::NONE,
                 kind: KeyEventKind::Press,
             })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pipe_large_ascii_burst_roundtrips() {
+        use ftui_core::event::{KeyCode, KeyEvent};
+
+        let (reader, mut writer) = pipe_pair();
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+        let payload = vec![b'a'; 4 * 1024 * 1024];
+        writer.write_all(&payload).unwrap();
+
+        assert!(src.poll_event(Duration::from_millis(100)).unwrap());
+
+        let mut count = 0usize;
+        loop {
+            while let Some(event) = src.read_event().unwrap() {
+                match event {
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Char('a'),
+                        ..
+                    }) => count += 1,
+                    other => panic!("unexpected event in ascii burst test: {other:?}"),
+                }
+            }
+
+            if !src.poll_event(Duration::from_millis(0)).unwrap() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            count,
+            payload.len(),
+            "all bytes should decode to key events"
         );
     }
 
