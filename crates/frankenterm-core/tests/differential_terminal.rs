@@ -52,9 +52,34 @@ impl CoreTerminalHarness {
             }
             Action::Backspace => self.cursor.move_left(1),
             Action::Bell => {}
+            Action::CursorPosition { row, col } => {
+                self.cursor.move_to(row, col, self.rows, self.cols);
+            }
+            Action::EraseInDisplay(mode) => {
+                let bg = self.cursor.attrs.bg;
+                match mode {
+                    0 => self.grid.erase_below(self.cursor.row, self.cursor.col, bg),
+                    1 => self.grid.erase_above(self.cursor.row, self.cursor.col, bg),
+                    2 => self.grid.erase_all(bg),
+                    _ => {}
+                }
+            }
+            Action::EraseInLine(mode) => {
+                let bg = self.cursor.attrs.bg;
+                match mode {
+                    0 => self
+                        .grid
+                        .erase_line_right(self.cursor.row, self.cursor.col, bg),
+                    1 => self
+                        .grid
+                        .erase_line_left(self.cursor.row, self.cursor.col, bg),
+                    2 => self.grid.erase_line(self.cursor.row, bg),
+                    _ => {}
+                }
+            }
             Action::Escape(_) => {
-                // Differential baseline intentionally limits comparison to
-                // currently interpreted non-escape actions in frankenterm-core.
+                // Remaining escape actions are intentionally left unsupported in the
+                // baseline harness and tracked via known-mismatch fixtures.
             }
         }
     }
@@ -195,6 +220,24 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             cols: 20,
             rows: 4,
             bytes: b"abc\x08d",
+        },
+        SupportedFixture {
+            id: "csi_cup_reposition",
+            cols: 10,
+            rows: 3,
+            bytes: b"Hello\x1b[2;3HX",
+        },
+        SupportedFixture {
+            id: "csi_erase_line_right",
+            cols: 10,
+            rows: 3,
+            bytes: b"ABCDE\x1b[1;4H\x1b[0K",
+        },
+        SupportedFixture {
+            id: "csi_erase_display",
+            cols: 10,
+            rows: 3,
+            bytes: b"AB\x1b[2JZ",
         },
     ]
 }

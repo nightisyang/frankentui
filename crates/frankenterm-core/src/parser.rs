@@ -8,7 +8,8 @@
 //!
 //! - printable ASCII -> `Action::Print`
 //! - a small set of C0 controls -> dedicated actions
-//! - capture of raw escape sequences as `Action::Escape` for later decoding
+//! - decode of selected CSI controls (CUP/ED/EL)
+//! - capture of unsupported escape sequences as `Action::Escape` for later decoding
 
 /// Parser output actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +26,12 @@ pub enum Action {
     Backspace,
     /// Bell (`\x07`).
     Bell,
+    /// CUP/HVP: move cursor to absolute 0-indexed row/col.
+    CursorPosition { row: u16, col: u16 },
+    /// ED mode (`CSI Ps J`): 0, 1, or 2.
+    EraseInDisplay(u8),
+    /// EL mode (`CSI Ps K`): 0, 1, or 2.
+    EraseInLine(u8),
     /// A raw escape/CSI/OSC sequence captured verbatim (starts with ESC).
     Escape(Vec<u8>),
 }
@@ -127,7 +134,8 @@ impl Parser {
         // Final byte for CSI is in the 0x40..=0x7E range (ECMA-48).
         if (0x40..=0x7E).contains(&b) {
             self.state = State::Ground;
-            return Some(Action::Escape(self.take_buf()));
+            let seq = self.take_buf();
+            return Some(Self::decode_csi(&seq).unwrap_or(Action::Escape(seq)));
         }
         None
     }
@@ -166,6 +174,62 @@ impl Parser {
         core::mem::swap(&mut out, &mut self.buf);
         out
     }
+
+    fn decode_csi(seq: &[u8]) -> Option<Action> {
+        if seq.len() < 3 || seq[0] != 0x1b || seq[1] != b'[' {
+            return None;
+        }
+        let final_byte = *seq.last()?;
+        let params = Self::parse_csi_params(&seq[2..seq.len().saturating_sub(1)])?;
+
+        match final_byte {
+            b'H' | b'f' => {
+                // CUP/HVP use 1-indexed coordinates; 0 is treated as 1.
+                let row = params
+                    .first()
+                    .copied()
+                    .unwrap_or(1)
+                    .max(1)
+                    .saturating_sub(1);
+                let col = params.get(1).copied().unwrap_or(1).max(1).saturating_sub(1);
+                Some(Action::CursorPosition { row, col })
+            }
+            b'J' => {
+                let mode = params.first().copied().unwrap_or(0);
+                if mode <= 2 {
+                    Some(Action::EraseInDisplay(mode as u8))
+                } else {
+                    None
+                }
+            }
+            b'K' => {
+                let mode = params.first().copied().unwrap_or(0);
+                if mode <= 2 {
+                    Some(Action::EraseInLine(mode as u8))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_csi_params(params: &[u8]) -> Option<Vec<u16>> {
+        if params.is_empty() {
+            return Some(Vec::new());
+        }
+        let s = core::str::from_utf8(params).ok()?;
+        let mut out = Vec::new();
+        for part in s.split(';') {
+            if part.is_empty() {
+                out.push(0);
+                continue;
+            }
+            let value = part.parse::<u32>().ok()?;
+            out.push(value.min(u16::MAX as u32) as u16);
+        }
+        Some(out)
+    }
 }
 
 #[cfg(test)]
@@ -198,6 +262,31 @@ mod tests {
             &actions[0],
             Action::Escape(seq) if seq.as_slice() == b"\x1b[31m"
         ));
+    }
+
+    #[test]
+    fn csi_cup_is_decoded_to_cursor_position() {
+        let mut p = Parser::new();
+        let actions = p.feed(b"\x1b[5;10H");
+        assert_eq!(
+            actions,
+            vec![Action::CursorPosition { row: 4, col: 9 }],
+            "CUP should decode as 0-indexed cursor position"
+        );
+
+        let actions = p.feed(b"\x1b[0;0H");
+        assert_eq!(
+            actions,
+            vec![Action::CursorPosition { row: 0, col: 0 }],
+            "CUP zero params should default to 1;1"
+        );
+    }
+
+    #[test]
+    fn csi_ed_and_el_are_decoded() {
+        let mut p = Parser::new();
+        assert_eq!(p.feed(b"\x1b[2J"), vec![Action::EraseInDisplay(2)]);
+        assert_eq!(p.feed(b"\x1b[K"), vec![Action::EraseInLine(0)]);
     }
 
     #[test]
