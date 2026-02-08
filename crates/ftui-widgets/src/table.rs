@@ -565,7 +565,36 @@ impl<'a> StatefulWidget for Table<'a> {
         if self.rows.is_empty() {
             state.offset = 0;
         } else {
-            state.offset = state.offset.min(self.rows.len().saturating_sub(1));
+            let row_count = self.rows.len();
+            state.offset = state.offset.min(row_count.saturating_sub(1));
+
+            // If we're scrolled near the end and the viewport grows, keep the bottom
+            // visible and pull the offset back to fill the viewport with as much
+            // context as fits (avoids rendering a mostly-empty table).
+            //
+            // We treat the last row's bottom_margin as "optional" (it may be clipped
+            // by the scissor), matching the selection-visibility logic below.
+            let available_height = rows_height;
+            let mut accumulated = 0u16;
+            let mut bottom_offset = row_count.saturating_sub(1);
+            for i in (0..row_count).rev() {
+                let row = &self.rows[i];
+                let total_row_height = if i == row_count - 1 {
+                    row.height
+                } else {
+                    row.height.saturating_add(row.bottom_margin)
+                };
+
+                if total_row_height > available_height.saturating_sub(accumulated) {
+                    // If even the last row doesn't fit, we still show it.
+                    break;
+                }
+
+                accumulated = accumulated.saturating_add(total_row_height);
+                bottom_offset = i;
+            }
+
+            state.offset = state.offset.min(bottom_offset);
         }
 
         if let Some(selected) = state.selected {
@@ -1063,6 +1092,19 @@ mod tests {
         buf.get(x, y).map(|c| c.fg)
     }
 
+    fn row_text(buf: &Buffer, y: u16) -> String {
+        let width = buf.width();
+        let mut actual = String::new();
+        for x in 0..width {
+            let ch = buf
+                .get(x, y)
+                .and_then(|cell| cell.content.as_char())
+                .unwrap_or(' ');
+            actual.push(ch);
+        }
+        actual.trim().to_string()
+    }
+
     // --- Row builder tests ---
 
     #[test]
@@ -1284,6 +1326,57 @@ mod tests {
 
         // Offset should have been adjusted down to selected
         assert_eq!(state.offset, 2);
+    }
+
+    #[test]
+    fn table_clamps_offset_to_fill_viewport_on_resize() {
+        let rows: Vec<Row> = (0..10).map(|i| Row::new([format!("Row {i}")])).collect();
+        let table = Table::new(rows, [Constraint::Min(10)]);
+
+        let mut pool = GraphemePool::new();
+        let mut state = TableState {
+            offset: 7,
+            ..Default::default()
+        };
+
+        // Small viewport: show 7, 8, 9.
+        let area_small = Rect::new(0, 0, 10, 3);
+        let mut frame_small = Frame::new(10, 3, &mut pool);
+        StatefulWidget::render(&table, area_small, &mut frame_small, &mut state);
+        assert_eq!(state.offset, 7);
+        assert_eq!(row_text(&frame_small.buffer, 0), "Row 7");
+        assert_eq!(row_text(&frame_small.buffer, 2), "Row 9");
+
+        // Larger viewport: offset should pull back to fill (5..9).
+        let area_large = Rect::new(0, 0, 10, 5);
+        let mut frame_large = Frame::new(10, 5, &mut pool);
+        StatefulWidget::render(&table, area_large, &mut frame_large, &mut state);
+        assert_eq!(state.offset, 5);
+        assert_eq!(row_text(&frame_large.buffer, 0), "Row 5");
+        assert_eq!(row_text(&frame_large.buffer, 4), "Row 9");
+    }
+
+    #[test]
+    fn table_clamps_offset_to_fill_viewport_with_variable_row_heights() {
+        // Rows 0..8: height 1
+        // Row 9: height 5
+        // View height 10 should show rows 4..9 (with row 9 taking 5 lines).
+        let mut rows: Vec<Row> = (0..9).map(|i| Row::new([format!("Row {i}")])).collect();
+        rows.push(Row::new(["Row 9"]).height(5));
+        let table = Table::new(rows, [Constraint::Min(10)]);
+
+        let mut pool = GraphemePool::new();
+        let mut state = TableState {
+            offset: 9,
+            ..Default::default()
+        };
+
+        let area = Rect::new(0, 0, 10, 10);
+        let mut frame = Frame::new(10, 10, &mut pool);
+        StatefulWidget::render(&table, area, &mut frame, &mut state);
+
+        assert_eq!(state.offset, 4);
+        assert_eq!(row_text(&frame.buffer, 0), "Row 4");
     }
 
     #[test]

@@ -13,3 +13,11 @@ crates/ftui-demo-showcase/src/cli.rs
 crates/ftui-demo-showcase/src/main.rs
 crates/ftui-demo-showcase/src/screens/data_viz.rs
 crates/ftui-demo-showcase/src/screens/visual_effects.rs
+
+# Root-level repro files are not part of any crate; ignore UBS noise.
+repro_input_bugs.rs
+repro_list_panic.rs
+repro_ratio.rs
+repro_ratio_overflow.rs
+repro_rope.rs
+repro_timetravel_bug.rs

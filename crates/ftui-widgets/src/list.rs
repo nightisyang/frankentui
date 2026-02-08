@@ -353,10 +353,12 @@ impl<'a> StatefulWidget for List<'a> {
             return;
         }
 
-        // Clamp offset to valid range
-        state.offset = state.offset.min(self.items.len().saturating_sub(1));
-
         let list_height = list_area.height as usize;
+
+        // Clamp offset so we don't render past the end, and so the viewport stays filled
+        // when height increases while scrolled near the bottom.
+        let max_offset = self.items.len().saturating_sub(list_height.max(1));
+        state.offset = state.offset.min(max_offset);
 
         // Ensure selection is within bounds
         if let Some(selected) = state.selected {
@@ -615,6 +617,20 @@ mod tests {
     use super::*;
     use ftui_render::grapheme_pool::GraphemePool;
 
+    fn row_text(frame: &Frame, y: u16) -> String {
+        let width = frame.buffer.width();
+        let mut actual = String::new();
+        for x in 0..width {
+            let ch = frame
+                .buffer
+                .get(x, y)
+                .and_then(|cell| cell.content.as_char())
+                .unwrap_or(' ');
+            actual.push(ch);
+        }
+        actual.trim().to_string()
+    }
+
     #[test]
     fn render_empty_list() {
         let list = List::new(Vec::<ListItem>::new());
@@ -776,6 +792,36 @@ mod tests {
         state.select(Some(0));
         StatefulWidget::render(&list, area, &mut frame, &mut state);
         assert_eq!(state.offset, 0);
+    }
+
+    #[test]
+    fn list_clamps_offset_to_fill_viewport_on_resize() {
+        let items: Vec<ListItem> = (0..10)
+            .map(|i| ListItem::new(format!("Item {i}")))
+            .collect();
+        let list = List::new(items);
+
+        let mut pool = GraphemePool::new();
+        let mut state = ListState {
+            offset: 7,
+            ..Default::default()
+        };
+
+        // Small viewport: show 7, 8, 9.
+        let area_small = Rect::new(0, 0, 10, 3);
+        let mut frame_small = Frame::new(10, 3, &mut pool);
+        StatefulWidget::render(&list, area_small, &mut frame_small, &mut state);
+        assert_eq!(state.offset, 7);
+        assert_eq!(row_text(&frame_small, 0), "Item 7");
+        assert_eq!(row_text(&frame_small, 2), "Item 9");
+
+        // Larger viewport: offset should pull back to fill the viewport (5..9).
+        let area_large = Rect::new(0, 0, 10, 5);
+        let mut frame_large = Frame::new(10, 5, &mut pool);
+        StatefulWidget::render(&list, area_large, &mut frame_large, &mut state);
+        assert_eq!(state.offset, 5);
+        assert_eq!(row_text(&frame_large, 0), "Item 5");
+        assert_eq!(row_text(&frame_large, 4), "Item 9");
     }
 
     #[test]

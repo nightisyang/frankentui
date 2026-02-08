@@ -413,30 +413,30 @@ fn interpolate(template: &str, args: &[(&str, &str)]) -> String {
     while let Some(ch) = chars.next() {
         if ch == '{' {
             // Try to read a token name until '}'
-            let mut token = String::new();
+            let mut placeholder = String::new();
             let mut found_close = false;
             for c in chars.by_ref() {
                 if c == '}' {
                     found_close = true;
                     break;
                 }
-                token.push(c);
+                placeholder.push(c);
             }
 
             if found_close {
                 // Look up the token in args
-                if let Some(&(_, value)) = args.iter().find(|&&(name, _)| name == token) {
+                if let Some(&(_, value)) = args.iter().find(|&&(name, _)| name == placeholder) {
                     result.push_str(value);
                 } else {
                     // No match: leave token as-is
                     result.push('{');
-                    result.push_str(&token);
+                    result.push_str(&placeholder);
                     result.push('}');
                 }
             } else {
                 // Unclosed brace: emit as-is
                 result.push('{');
-                result.push_str(&token);
+                result.push_str(&placeholder);
             }
         } else {
             result.push(ch);

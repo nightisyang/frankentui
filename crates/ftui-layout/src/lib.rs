@@ -775,10 +775,7 @@ where
         }
 
         if total_weight == 0 {
-            // If all weights are zero (e.g. all Ratio(0, N)), distribute nothing?
-            // Or break early?
-            // If we have remaining space but 0 weight, we can't distribute proportionally.
-            // Breaking seems correct as no one wants it.
+            // If all weights are zero (e.g. all Ratio(0, N)), distribute nothing.
             break;
         }
 
@@ -1219,6 +1216,36 @@ mod tests {
         let flex = Flex::horizontal().constraints([Constraint::Ratio(1, 0)]);
         let rects = flex.split(Rect::new(0, 0, 100, 10));
         assert_eq!(rects.len(), 1);
+    }
+
+    #[test]
+    fn ratio_is_weighted_not_an_absolute_fraction() {
+        let area = Rect::new(0, 0, 100, 1);
+
+        // Percentage is absolute against the total available.
+        let rects = Flex::horizontal()
+            .constraints([Constraint::Percentage(25.0)])
+            .split(area);
+        assert_eq!(rects[0].width, 25);
+
+        // A lone Ratio is a grow item, so it takes all space.
+        let rects = Flex::horizontal()
+            .constraints([Constraint::Ratio(1, 4)])
+            .split(area);
+        assert_eq!(rects[0].width, 100);
+    }
+
+    #[test]
+    fn ratio_is_weighted_against_other_grow_items() {
+        let area = Rect::new(0, 0, 100, 1);
+
+        // Ratio weight is (n/d). Fill has weight 1.0.
+        // Ratio(1,4) vs Fill => 0.25 vs 1.0 => 20% vs 80%.
+        let rects = Flex::horizontal()
+            .constraints([Constraint::Ratio(1, 4), Constraint::Fill])
+            .split(area);
+        assert_eq!(rects[0].width, 20);
+        assert_eq!(rects[1].width, 80);
     }
 
     #[test]

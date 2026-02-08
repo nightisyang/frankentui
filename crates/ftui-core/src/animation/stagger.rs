@@ -42,6 +42,22 @@ use std::time::Duration;
 
 use super::{EasingFn, ease_in, ease_in_out, ease_out};
 
+const NANOS_PER_SEC: u128 = 1_000_000_000;
+
+#[must_use]
+fn duration_from_nanos_u128(nanos: u128) -> Duration {
+    let secs_u128 = nanos / NANOS_PER_SEC;
+    let sub_nanos = (nanos % NANOS_PER_SEC) as u32;
+
+    match u64::try_from(secs_u128) {
+        Ok(secs) => Duration::new(secs, sub_nanos),
+        Err(_) => {
+            // Saturate to Duration::MAX.
+            Duration::new(u64::MAX, (NANOS_PER_SEC - 1) as u32)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -82,28 +98,32 @@ pub fn stagger_offsets(count: usize, delay: Duration, mode: StaggerMode) -> Vec<
         return vec![Duration::ZERO];
     }
 
-    // For Linear mode, use exact integer arithmetic to avoid float drift.
-    if matches!(mode, StaggerMode::Linear) {
-        return (0..count).map(|i| delay.saturating_mul(i as u32)).collect();
+    match mode {
+        // For Linear mode, use exact integer arithmetic to avoid float drift.
+        StaggerMode::Linear => {
+            let mut offsets = Vec::with_capacity(count);
+            let mut current = Duration::ZERO;
+            for _ in 0..count {
+                offsets.push(current);
+                current = current.saturating_add(delay);
+            }
+            offsets
+        }
+        StaggerMode::EaseIn => stagger_offsets(count, delay, StaggerMode::Custom(ease_in)),
+        StaggerMode::EaseOut => stagger_offsets(count, delay, StaggerMode::Custom(ease_out)),
+        StaggerMode::EaseInOut => stagger_offsets(count, delay, StaggerMode::Custom(ease_in_out)),
+        StaggerMode::Custom(easing) => {
+            let total_nanos = delay.as_nanos() as f64 * (count - 1) as f64;
+            (0..count)
+                .map(|i| {
+                    let t = i as f32 / (count - 1) as f32;
+                    let eased = easing(t);
+                    let nanos = (total_nanos * eased as f64) as u128;
+                    duration_from_nanos_u128(nanos)
+                })
+                .collect()
+        }
     }
-
-    let total_nanos = delay.as_nanos() as f64 * (count - 1) as f64;
-    let easing: EasingFn = match mode {
-        StaggerMode::Linear => unreachable!(),
-        StaggerMode::EaseIn => ease_in,
-        StaggerMode::EaseOut => ease_out,
-        StaggerMode::EaseInOut => ease_in_out,
-        StaggerMode::Custom(f) => f,
-    };
-
-    (0..count)
-        .map(|i| {
-            let t = i as f32 / (count - 1) as f32;
-            let eased = easing(t);
-            let nanos = (total_nanos * eased as f64) as u64;
-            Duration::from_nanos(nanos)
-        })
-        .collect()
 }
 
 /// Compute stagger offsets with random jitter.
@@ -128,7 +148,10 @@ pub fn stagger_offsets_with_jitter(
 
     // Simple xorshift64 PRNG for deterministic jitter.
     let mut state = seed.wrapping_add(1); // Avoid 0 state.
-    let jitter_nanos = jitter.as_nanos() as i64;
+    // Clamp to avoid overflow in span computation and signed arithmetic.
+    let max_jitter = ((i128::MAX as u128) - 1) / 2;
+    let jitter_nanos = jitter.as_nanos().min(max_jitter) as i128;
+    let span = (jitter_nanos as u128).saturating_mul(2).saturating_add(1);
 
     for offset in &mut offsets {
         // xorshift64
@@ -137,10 +160,11 @@ pub fn stagger_offsets_with_jitter(
         state ^= state << 17;
 
         // Map to [-jitter_nanos, +jitter_nanos]
-        let raw = (state as i64) % (2 * jitter_nanos + 1) - jitter_nanos;
-        let base_nanos = offset.as_nanos() as i64;
-        let jittered = (base_nanos + raw).max(0) as u64;
-        *offset = Duration::from_nanos(jittered);
+        let r = (state as u128) % span; // [0, span)
+        let raw = r as i128 - jitter_nanos; // [-jitter_nanos, +jitter_nanos]
+        let base_nanos = offset.as_nanos().min(i128::MAX as u128) as i128;
+        let jittered_nanos = base_nanos.saturating_add(raw).max(0) as u128;
+        *offset = duration_from_nanos_u128(jittered_nanos);
     }
 
     offsets
@@ -278,6 +302,25 @@ mod tests {
         );
         for offset in &offsets {
             assert!(*offset >= Duration::ZERO);
+        }
+    }
+
+    #[test]
+    fn jitter_offsets_within_bounds() {
+        let count = 50;
+        let delay = MS_100;
+        let jitter = MS_50;
+
+        let base = stagger_offsets(count, delay, StaggerMode::Linear);
+        let jittered = stagger_offsets_with_jitter(count, delay, StaggerMode::Linear, jitter, 123);
+
+        for (b, j) in base.into_iter().zip(jittered) {
+            let lower = b.saturating_sub(jitter);
+            let upper = b.saturating_add(jitter);
+            assert!(
+                j >= lower && j <= upper,
+                "jittered offset out of bounds: base={b:?} jittered={j:?} bounds=[{lower:?}, {upper:?}]"
+            );
         }
     }
 

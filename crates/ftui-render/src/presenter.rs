@@ -567,47 +567,57 @@ impl<W: Write> Presenter<W> {
         pool: Option<&GraphemePool>,
         links: Option<&LinkRegistry>,
     ) -> io::Result<()> {
-        // Skip continuation cells (second cell of wide characters).
-        // The wide character already advanced the cursor by its full width.
+        // Continuation cells are the tail cells of wide glyphs. Emitting the
+        // head glyph already advanced the terminal cursor by the full width, so
+        // we normally skip emitting these cells.
         //
-        // EXCEPTION: Orphan continuations (not covered by a preceding wide char)
-        // must be treated as empty cells to ensure old content is cleared.
-        // If cursor_x is unknown (None) or hasn't been advanced past this
-        // position by a previous wide char emission (cx <= x), treat as orphan.
-        let is_orphan = cell.is_continuation() && self.cursor_x.is_none_or(|cx| cx <= x);
-
-        if cell.is_continuation() && !is_orphan {
-            return Ok(());
+        // If we ever start emitting at a continuation cell (e.g. a run begins
+        // mid-wide-character), we must still advance the terminal cursor by one
+        // cell to keep subsequent emissions aligned. Prefer CUF over writing a
+        // space so we don't overwrite a valid wide-glyph tail.
+        if cell.is_continuation() {
+            match self.cursor_x {
+                // Cursor already advanced past this cell by a previously-emitted wide head.
+                Some(cx) if cx > x => return Ok(()),
+                // Cursor is positioned at (or before) this continuation cell: advance by 1.
+                Some(cx) => {
+                    ansi::cuf(&mut self.writer, 1)?;
+                    self.cursor_x = Some(cx.saturating_add(1));
+                    return Ok(());
+                }
+                // Defensive: move_cursor_optimal should always set cursor_x before emit_cell is called.
+                None => {
+                    ansi::cuf(&mut self.writer, 1)?;
+                    self.cursor_x = Some(x.saturating_add(1));
+                    return Ok(());
+                }
+            }
         }
 
-        // Treat orphan as empty default cell
-        let effective_cell = if is_orphan { &Cell::default() } else { cell };
-
         // Emit style changes if needed
-        self.emit_style_changes(effective_cell)?;
+        self.emit_style_changes(cell)?;
 
         // Emit link changes if needed
-        self.emit_link_changes(effective_cell, links)?;
+        self.emit_link_changes(cell, links)?;
 
         // Calculate effective width and check for zero-width content (e.g. combining marks)
         // stored as standalone cells. These must be replaced to maintain grid alignment.
-        let raw_width = effective_cell.content.width();
-        let is_zero_width_content =
-            raw_width == 0 && !effective_cell.is_empty() && !effective_cell.is_continuation();
+        let raw_width = cell.content.width();
+        let is_zero_width_content = raw_width == 0 && !cell.is_empty() && !cell.is_continuation();
 
         if is_zero_width_content {
             // Replace with U+FFFD Replacement Character (width 1)
             self.writer.write_all(b"\xEF\xBF\xBD")?;
         } else {
             // Emit normal content
-            self.emit_content(effective_cell, pool)?;
+            self.emit_content(cell, pool)?;
         }
 
         // Update cursor position (character output advances cursor)
         if let Some(cx) = self.cursor_x {
             // Empty cells are emitted as spaces (width 1).
             // Zero-width content replaced by U+FFFD is width 1.
-            let width = if effective_cell.is_empty() || is_zero_width_content {
+            let width = if cell.is_empty() || is_zero_width_content {
                 1
             } else {
                 raw_width
@@ -1360,6 +1370,36 @@ mod tests {
         // Should contain the wide character
         let output_str = String::from_utf8_lossy(&output);
         assert!(output_str.contains('中'));
+    }
+
+    #[test]
+    fn continuation_at_run_start_advances_cursor_without_overwriting() {
+        let mut presenter = test_presenter();
+        let mut old = Buffer::new(3, 1);
+        let mut new = Buffer::new(3, 1);
+
+        // Construct an inconsistent old/new pair that forces a diff which begins at a
+        // continuation cell. This simulates starting emission mid-wide-character.
+        //
+        // In this case, the presenter must advance the cursor by one cell, but must
+        // not overwrite the cell with a space (which can clobber a valid wide glyph tail).
+        old.set_raw(0, 0, Cell::from_char('中'));
+        new.set_raw(0, 0, Cell::from_char('中'));
+        old.set_raw(1, 0, Cell::from_char('X'));
+        new.set_raw(1, 0, Cell::CONTINUATION);
+
+        let diff = BufferDiff::compute(&old, &new);
+        assert_eq!(diff.changes(), &[(1u16, 0u16)]);
+
+        presenter.present(&new, &diff).unwrap();
+        let output = get_output(presenter);
+
+        // Advance should be done via CUF (\x1b[C), not by emitting a space.
+        assert!(output.windows(3).any(|w| w == b"\x1b[C"));
+        assert!(
+            !output.contains(&b' '),
+            "should not write a space when advancing over a continuation cell"
+        );
     }
 
     #[test]
