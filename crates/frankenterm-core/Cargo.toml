@@ -1,0 +1,18 @@
+[package]
+name = "frankenterm-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Host-agnostic VT/ANSI terminal engine: grid, parser, cursor, and scrollback."
+repository = "https://github.com/Dicklesworthstone/frankentui"
+homepage = "https://github.com/Dicklesworthstone/frankentui"
+documentation = "https://docs.rs/frankenterm-core"
+readme = "../../README.md"
+
+[features]
+default = []
+
+[dependencies]
+bitflags = "2.10.0"
+
+[dev-dependencies]
