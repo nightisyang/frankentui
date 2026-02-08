@@ -241,6 +241,196 @@
         "bytes": "number"
       }
     },
+    "input": {
+      "required": [
+        "input_type",
+        "encoding",
+        "input_hash"
+      ],
+      "optional": [
+        "bytes_b64",
+        "details",
+        "mode",
+        "hash_key",
+        "cols",
+        "rows"
+      ],
+      "types": {
+        "input_type": "string",
+        "encoding": "string",
+        "bytes_b64": "string",
+        "input_hash": "string",
+        "details": "string",
+        "mode": "string",
+        "hash_key": "string",
+        "cols": ["number", "null"],
+        "rows": ["number", "null"]
+      }
+    },
+    "frame": {
+      "required": [
+        "frame_idx",
+        "hash_algo",
+        "frame_hash"
+      ],
+      "optional": [
+        "ts_ms",
+        "mode",
+        "hash_key",
+        "cols",
+        "rows",
+        "patch_hash",
+        "patch_bytes",
+        "patch_cells",
+        "patch_runs",
+        "render_ms",
+        "present_ms",
+        "present_bytes",
+        "checksum_chain"
+      ],
+      "types": {
+        "frame_idx": "number",
+        "hash_algo": "string",
+        "frame_hash": "string",
+        "ts_ms": "number",
+        "mode": "string",
+        "hash_key": "string",
+        "cols": ["number", "null"],
+        "rows": ["number", "null"],
+        "patch_hash": "string",
+        "patch_bytes": "number",
+        "patch_cells": "number",
+        "patch_runs": "number",
+        "render_ms": "number",
+        "present_ms": "number",
+        "present_bytes": "number",
+        "checksum_chain": "string"
+      }
+    },
+    "error": {
+      "required": [
+        "message"
+      ],
+      "optional": [
+        "case",
+        "step",
+        "mode",
+        "hash_key",
+        "cols",
+        "rows",
+        "exit_code",
+        "stack",
+        "details"
+      ],
+      "types": {
+        "message": "string",
+        "case": "string",
+        "step": "string",
+        "mode": "string",
+        "hash_key": "string",
+        "cols": ["number", "null"],
+        "rows": ["number", "null"],
+        "exit_code": ["number", "null"],
+        "stack": "string",
+        "details": "string"
+      }
+    },
+    "browser_env": {
+      "required": [
+        "browser",
+        "user_agent",
+        "dpr"
+      ],
+      "optional": [
+        "browser_version",
+        "platform",
+        "locale",
+        "timezone",
+        "headless",
+        "viewport_css_px",
+        "viewport_px",
+        "zoom",
+        "canvas_css_px",
+        "canvas_px"
+      ],
+      "types": {
+        "browser": "string",
+        "browser_version": "string",
+        "user_agent": "string",
+        "dpr": "number",
+        "platform": "string",
+        "locale": "string",
+        "timezone": "string",
+        "headless": "boolean",
+        "viewport_css_px": "object",
+        "viewport_px": "object",
+        "zoom": "number",
+        "canvas_css_px": "object",
+        "canvas_px": "object"
+      }
+    },
+    "gpu_adapter": {
+      "required": [
+        "api",
+        "adapter_name"
+      ],
+      "optional": [
+        "backend",
+        "vendor",
+        "architecture",
+        "device",
+        "description",
+        "limits",
+        "features",
+        "is_fallback_adapter"
+      ],
+      "types": {
+        "api": "string",
+        "adapter_name": "string",
+        "backend": "string",
+        "vendor": "string",
+        "architecture": "string",
+        "device": "string",
+        "description": "string",
+        "limits": "object",
+        "features": "array",
+        "is_fallback_adapter": "boolean"
+      }
+    },
+    "ws_metrics": {
+      "required": [
+        "label",
+        "ws_url",
+        "bytes_tx",
+        "bytes_rx",
+        "messages_tx",
+        "messages_rx"
+      ],
+      "optional": [
+        "connect_ms",
+        "reconnects",
+        "close_code",
+        "close_reason",
+        "dropped_messages",
+        "rtt_histogram_ms",
+        "latency_histogram_ms"
+      ],
+      "types": {
+        "label": "string",
+        "ws_url": "string",
+        "bytes_tx": "number",
+        "bytes_rx": "number",
+        "messages_tx": "number",
+        "messages_rx": "number",
+        "connect_ms": "number",
+        "reconnects": "number",
+        "close_code": ["number", "null"],
+        "close_reason": "string",
+        "dropped_messages": "number",
+        "rtt_histogram_ms": "object",
+        "latency_histogram_ms": "object"
+      }
+    },
     "large_screen_env": {
       "required": [
         "term",

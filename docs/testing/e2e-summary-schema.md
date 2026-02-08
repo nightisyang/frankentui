@@ -110,17 +110,25 @@ Common optional fields (depending on event type) include `mode`, `cols`,
 
 ### Event Types
 
+Authoritative definitions live in:
+
+- `tests/e2e/lib/e2e_jsonl_schema.json`
+
 | Type | Purpose | Key Fields |
 |------|---------|-----------|
-| `env` | Environment snapshot | `platform`, `arch`, `rust_version`, `cargo_version` |
+| `env` | Environment snapshot | `host`, `rustc`, `cargo`, `git_commit`, `git_dirty`, `deterministic`, `term` |
+| `browser_env` | Web environment snapshot | `browser`, `user_agent`, `dpr` |
+| `gpu_adapter` | WebGPU adapter info (when available) | `api`, `adapter_name`, `vendor`, `device` |
+| `ws_metrics` | Websocket wire counters + latency histograms | `bytes_tx`, `bytes_rx`, `messages_tx`, `messages_rx`, `latency_histogram_ms` |
 | `run_start` | Suite start | `command`, `log_dir`, `results_dir` |
 | `run_end` | Suite end | `status`, `duration_ms`, `failed_count` |
-| `step_start` | Step begin | `step`, `description` |
-| `step_end` | Step end | `step`, `status`, `duration_ms` |
+| `step_start` | Step begin | `step`, `mode`, `hash_key`, `cols`, `rows` |
+| `step_end` | Step end | `step`, `status`, `duration_ms`, `mode`, `hash_key`, `cols`, `rows` |
 | `case_step_start` | Case step begin | `case`, `step`, `action`, `details` |
 | `case_step_end` | Case step end | `case`, `step`, `status`, `duration_ms` |
+| `case` | Case summary | `scenario`, `status`, `hash`, `screen`, `duration_ms` |
 | `input` | Input injection | `input_type`, `encoding`, `bytes_b64`, `input_hash` |
-| `frame` | Render frame | `frame_idx`, `frame_hash`, `hash_algo`, `render_ms`, `present_ms` |
+| `frame` | Render frame gate | `frame_idx`, `frame_hash`, `hash_algo`, `patch_hash`, `patch_bytes` |
 | `pty_capture` | PTY metadata | `output_file`, `output_sha256`, `output_bytes` |
 | `assert` | Assertion result | `assertion`, `status`, `details` |
 | `artifact` | Artifact reference | `path`, `artifact_type`, `status`, `sha256`, `bytes` |
@@ -128,6 +136,10 @@ Common optional fields (depending on event type) include `mode`, `cols`,
 
 `artifact` events use `status` = `present` or `missing`. In CI strict mode,
 missing required artifacts fail the run with a clear error.
+
+Note: additional specialized case types exist (e.g. `large_screen_case`,
+`span_diff_case`, `selector_case`). Prefer treating the schema file as the
+single source of truth.
 
 ### Hashing Requirements
 
