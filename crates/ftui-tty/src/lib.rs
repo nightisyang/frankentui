@@ -17,10 +17,12 @@
 //! | Sync output       | `CSI ? 2026 h`            | `CSI ? 2026 l`            |
 
 use core::time::Duration;
-use std::io::{self, Write};
+use std::collections::VecDeque;
+use std::io::{self, Read, Write};
 
 use ftui_backend::{Backend, BackendClock, BackendEventSource, BackendFeatures, BackendPresenter};
 use ftui_core::event::Event;
+use ftui_core::input_parser::InputParser;
 use ftui_core::terminal_capabilities::TerminalCapabilities;
 use ftui_render::buffer::Buffer;
 use ftui_render::diff::BufferDiff;
@@ -144,7 +146,8 @@ impl BackendClock for TtyClock {
 /// Native Unix event source (raw terminal bytes → `Event`).
 ///
 /// Manages terminal feature toggles by emitting the appropriate escape
-/// sequences. Real event I/O is added by bd-lff4p.4.3.
+/// sequences. Reads raw bytes from the tty fd, feeds them through
+/// `InputParser`, and serves parsed events via `poll_event`/`read_event`.
 pub struct TtyEventSource {
     features: BackendFeatures,
     width: u16,
@@ -152,10 +155,16 @@ pub struct TtyEventSource {
     /// When true, escape sequences are actually written to stdout.
     /// False in test/headless mode.
     live: bool,
+    /// Parser state machine: decodes terminal byte sequences into Events.
+    parser: InputParser,
+    /// Buffered events from the most recent parse.
+    event_queue: VecDeque<Event>,
+    /// Tty file handle for reading input (None in headless mode).
+    tty_reader: Option<std::fs::File>,
 }
 
 impl TtyEventSource {
-    /// Create an event source in headless mode (no escape sequence output).
+    /// Create an event source in headless mode (no escape sequence output, no I/O).
     #[must_use]
     pub fn new(width: u16, height: u16) -> Self {
         Self {
@@ -163,17 +172,41 @@ impl TtyEventSource {
             width,
             height,
             live: false,
+            parser: InputParser::new(),
+            event_queue: VecDeque::new(),
+            tty_reader: None,
         }
     }
 
-    /// Create an event source in live mode (writes escape sequences to stdout).
-    #[must_use]
-    fn live(width: u16, height: u16) -> Self {
-        Self {
+    /// Create an event source in live mode (reads from /dev/tty, writes
+    /// escape sequences to stdout).
+    fn live(width: u16, height: u16) -> io::Result<Self> {
+        let tty_reader = std::fs::File::open("/dev/tty")?;
+        Ok(Self {
             features: BackendFeatures::default(),
             width,
             height,
             live: true,
+            parser: InputParser::new(),
+            event_queue: VecDeque::new(),
+            tty_reader: Some(tty_reader),
+        })
+    }
+
+    /// Create an event source that reads from an arbitrary file descriptor.
+    ///
+    /// Escape sequences are NOT written to stdout (headless feature toggle
+    /// behavior). This is primarily useful for testing with pipes.
+    #[cfg(test)]
+    fn from_reader(width: u16, height: u16, reader: std::fs::File) -> Self {
+        Self {
+            features: BackendFeatures::default(),
+            width,
+            height,
+            live: false,
+            parser: InputParser::new(),
+            event_queue: VecDeque::new(),
+            tty_reader: Some(reader),
         }
     }
 
@@ -181,6 +214,55 @@ impl TtyEventSource {
     #[must_use]
     pub fn features(&self) -> BackendFeatures {
         self.features
+    }
+
+    /// Read available bytes from the tty reader and feed them to the parser.
+    fn drain_available_bytes(&mut self) -> io::Result<()> {
+        let Some(ref mut tty) = self.tty_reader else {
+            return Ok(());
+        };
+        let mut buf = [0u8; 1024];
+        match tty.read(&mut buf) {
+            Ok(0) => Ok(()),
+            Ok(n) => {
+                let events = self.parser.parse(&buf[..n]);
+                self.event_queue.extend(events);
+                Ok(())
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Poll the tty fd for available data using `poll(2)`.
+    #[cfg(unix)]
+    fn poll_tty(&mut self, timeout: Duration) -> io::Result<bool> {
+        use std::os::fd::AsFd;
+        let ready = {
+            let Some(ref tty) = self.tty_reader else {
+                return Ok(false);
+            };
+            let mut poll_fds = [nix::poll::PollFd::new(
+                tty.as_fd(),
+                nix::poll::PollFlags::POLLIN,
+            )];
+            let timeout_ms: u16 = timeout.as_millis().try_into().unwrap_or(u16::MAX);
+            match nix::poll::poll(&mut poll_fds, nix::poll::PollTimeout::from(timeout_ms)) {
+                Ok(n) => n,
+                Err(nix::errno::Errno::EINTR) => return Ok(false),
+                Err(e) => return Err(io::Error::other(e)),
+            }
+        };
+        if ready > 0 {
+            self.drain_available_bytes()?;
+        }
+        Ok(!self.event_queue.is_empty())
+    }
+
+    /// Stub for non-Unix platforms.
+    #[cfg(not(unix))]
+    fn poll_tty(&mut self, _timeout: Duration) -> io::Result<bool> {
+        Ok(false)
     }
 
     /// Write the escape sequences needed to transition from current to new features.
@@ -246,14 +328,16 @@ impl BackendEventSource for TtyEventSource {
         Ok(())
     }
 
-    fn poll_event(&mut self, _timeout: Duration) -> Result<bool, Self::Error> {
-        // TODO(bd-lff4p.4.3): poll raw stdin
-        Ok(false)
+    fn poll_event(&mut self, timeout: Duration) -> Result<bool, Self::Error> {
+        // If we already have buffered events, return immediately.
+        if !self.event_queue.is_empty() {
+            return Ok(true);
+        }
+        self.poll_tty(timeout)
     }
 
     fn read_event(&mut self) -> Result<Option<Event>, Self::Error> {
-        // TODO(bd-lff4p.4.3): parse raw bytes into Event
-        Ok(None)
+        Ok(self.event_queue.pop_front())
     }
 }
 
@@ -364,7 +448,7 @@ impl TtyBackend {
         let mut alt_screen_active = false;
 
         // Enable initial features.
-        let mut events = TtyEventSource::live(width, height);
+        let mut events = TtyEventSource::live(width, height)?;
         let setup: io::Result<()> = (|| {
             // Enter alt screen if requested.
             if options.alternate_screen {
@@ -535,15 +619,262 @@ mod tests {
     }
 
     #[test]
-    fn poll_returns_false_on_skeleton() {
+    fn poll_returns_false_headless() {
         let mut src = TtyEventSource::new(80, 24);
-        assert!(!src.poll_event(Duration::from_millis(10)).unwrap());
+        assert!(!src.poll_event(Duration::from_millis(0)).unwrap());
     }
 
     #[test]
-    fn read_returns_none_on_skeleton() {
+    fn read_returns_none_headless() {
         let mut src = TtyEventSource::new(80, 24);
         assert!(src.read_event().unwrap().is_none());
+    }
+
+    // ── Pipe-based input parity tests ─────────────────────────────────
+
+    /// Create a (reader_file, writer_stream) pair using Unix sockets.
+    #[cfg(unix)]
+    fn pipe_pair() -> (std::fs::File, std::os::unix::net::UnixStream) {
+        use std::os::unix::net::UnixStream;
+        let (a, b) = UnixStream::pair().unwrap();
+        // Convert reader to File via OwnedFd for compatibility with TtyEventSource.
+        let reader: std::fs::File = std::os::fd::OwnedFd::from(a).into();
+        (reader, b)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pipe_ascii_chars() {
+        use ftui_core::event::{KeyCode, KeyEvent, KeyEventKind, Modifiers};
+        let (reader, mut writer) = pipe_pair();
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+        writer.write_all(b"abc").unwrap();
+        assert!(src.poll_event(Duration::from_millis(100)).unwrap());
+        let e1 = src.read_event().unwrap().unwrap();
+        assert_eq!(
+            e1,
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('a'),
+                modifiers: Modifiers::NONE,
+                kind: KeyEventKind::Press,
+            })
+        );
+        let e2 = src.read_event().unwrap().unwrap();
+        assert_eq!(
+            e2,
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('b'),
+                modifiers: Modifiers::NONE,
+                kind: KeyEventKind::Press,
+            })
+        );
+        let e3 = src.read_event().unwrap().unwrap();
+        assert_eq!(
+            e3,
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: Modifiers::NONE,
+                kind: KeyEventKind::Press,
+            })
+        );
+        // Queue should now be empty.
+        assert!(src.read_event().unwrap().is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pipe_arrow_keys() {
+        use ftui_core::event::{KeyCode, KeyEvent};
+        let (reader, mut writer) = pipe_pair();
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+        // Up (A), Down (B), Right (C), Left (D)
+        writer.write_all(b"\x1b[A\x1b[B\x1b[C\x1b[D").unwrap();
+        assert!(src.poll_event(Duration::from_millis(100)).unwrap());
+        let codes: Vec<KeyCode> = std::iter::from_fn(|| {
+            src.read_event().unwrap().map(|e| match e {
+                Event::Key(KeyEvent { code, .. }) => code,
+                _ => panic!("expected key event"),
+            })
+        })
+        .collect();
+        assert_eq!(
+            codes,
+            vec![KeyCode::Up, KeyCode::Down, KeyCode::Right, KeyCode::Left]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pipe_ctrl_keys() {
+        use ftui_core::event::{KeyCode, KeyEvent, KeyEventKind, Modifiers};
+        let (reader, mut writer) = pipe_pair();
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+        // Ctrl+A = 0x01, Ctrl+C = 0x03
+        writer.write_all(&[0x01, 0x03]).unwrap();
+        assert!(src.poll_event(Duration::from_millis(100)).unwrap());
+        let e1 = src.read_event().unwrap().unwrap();
+        assert_eq!(
+            e1,
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('a'),
+                modifiers: Modifiers::CTRL,
+                kind: KeyEventKind::Press,
+            })
+        );
+        let e2 = src.read_event().unwrap().unwrap();
+        assert_eq!(
+            e2,
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: Modifiers::CTRL,
+                kind: KeyEventKind::Press,
+            })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pipe_function_keys() {
+        use ftui_core::event::{KeyCode, KeyEvent, KeyEventKind, Modifiers};
+        let (reader, mut writer) = pipe_pair();
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+        // F1 (SS3 P) and F5 (CSI 15~)
+        writer.write_all(b"\x1bOP\x1b[15~").unwrap();
+        assert!(src.poll_event(Duration::from_millis(100)).unwrap());
+        let e1 = src.read_event().unwrap().unwrap();
+        assert_eq!(
+            e1,
+            Event::Key(KeyEvent {
+                code: KeyCode::F(1),
+                modifiers: Modifiers::NONE,
+                kind: KeyEventKind::Press,
+            })
+        );
+        let e2 = src.read_event().unwrap().unwrap();
+        assert_eq!(
+            e2,
+            Event::Key(KeyEvent {
+                code: KeyCode::F(5),
+                modifiers: Modifiers::NONE,
+                kind: KeyEventKind::Press,
+            })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pipe_mouse_sgr_click() {
+        use ftui_core::event::{Modifiers, MouseButton, MouseEvent, MouseEventKind};
+        let (reader, mut writer) = pipe_pair();
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+        // SGR mouse: left click at (10, 20) — 1-indexed in protocol, 0-indexed in Event.
+        writer.write_all(b"\x1b[<0;10;20M").unwrap();
+        assert!(src.poll_event(Duration::from_millis(100)).unwrap());
+        let e = src.read_event().unwrap().unwrap();
+        assert_eq!(
+            e,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                x: 9,
+                y: 19,
+                modifiers: Modifiers::NONE,
+            })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pipe_focus_events() {
+        let (reader, mut writer) = pipe_pair();
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+        // Focus in (CSI I) and focus out (CSI O)
+        writer.write_all(b"\x1b[I\x1b[O").unwrap();
+        assert!(src.poll_event(Duration::from_millis(100)).unwrap());
+        assert_eq!(src.read_event().unwrap().unwrap(), Event::Focus(true));
+        assert_eq!(src.read_event().unwrap().unwrap(), Event::Focus(false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pipe_bracketed_paste() {
+        use ftui_core::event::PasteEvent;
+        let (reader, mut writer) = pipe_pair();
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+        writer.write_all(b"\x1b[200~hello world\x1b[201~").unwrap();
+        assert!(src.poll_event(Duration::from_millis(100)).unwrap());
+        let e = src.read_event().unwrap().unwrap();
+        assert_eq!(
+            e,
+            Event::Paste(PasteEvent {
+                text: "hello world".to_string(),
+                bracketed: true,
+            })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pipe_modified_arrow_key() {
+        use ftui_core::event::{KeyCode, KeyEvent, KeyEventKind, Modifiers};
+        let (reader, mut writer) = pipe_pair();
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+        // Ctrl+Up: CSI 1;5A
+        writer.write_all(b"\x1b[1;5A").unwrap();
+        assert!(src.poll_event(Duration::from_millis(100)).unwrap());
+        let e = src.read_event().unwrap().unwrap();
+        assert_eq!(
+            e,
+            Event::Key(KeyEvent {
+                code: KeyCode::Up,
+                modifiers: Modifiers::CTRL,
+                kind: KeyEventKind::Press,
+            })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pipe_scroll_events() {
+        use ftui_core::event::{Modifiers, MouseEvent, MouseEventKind};
+        let (reader, mut writer) = pipe_pair();
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+        // SGR scroll up at (5, 5): button=64 (scroll bit + up)
+        writer.write_all(b"\x1b[<64;5;5M").unwrap();
+        assert!(src.poll_event(Duration::from_millis(100)).unwrap());
+        let e = src.read_event().unwrap().unwrap();
+        assert_eq!(
+            e,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                x: 4,
+                y: 4,
+                modifiers: Modifiers::NONE,
+            })
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn poll_returns_buffered_events_immediately() {
+        use ftui_core::event::{KeyCode, KeyEvent, KeyEventKind, Modifiers};
+        let (reader, mut writer) = pipe_pair();
+        let mut src = TtyEventSource::from_reader(80, 24, reader);
+        // Write multiple chars to produce multiple events.
+        writer.write_all(b"xy").unwrap();
+        assert!(src.poll_event(Duration::from_millis(100)).unwrap());
+        // Consume only one event.
+        let _ = src.read_event().unwrap().unwrap();
+        // Second poll should return true immediately (buffered event).
+        assert!(src.poll_event(Duration::from_millis(0)).unwrap());
+        let e = src.read_event().unwrap().unwrap();
+        assert_eq!(
+            e,
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('y'),
+                modifiers: Modifiers::NONE,
+                kind: KeyEventKind::Press,
+            })
+        );
     }
 
     #[test]
