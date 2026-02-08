@@ -363,23 +363,36 @@ impl TtyBackend {
         let mut stdout = io::stdout();
         let mut alt_screen_active = false;
 
-        // Enter alt screen if requested.
-        if options.alternate_screen {
-            stdout.write_all(ALT_SCREEN_ENTER)?;
-            stdout.write_all(CLEAR_SCREEN)?;
-            stdout.write_all(CURSOR_HOME)?;
-            alt_screen_active = true;
-        }
-
         // Enable initial features.
         let mut events = TtyEventSource::live(width, height);
-        TtyEventSource::write_feature_delta(
-            &BackendFeatures::default(),
-            &options.features,
-            &mut stdout,
-        )?;
+        let setup: io::Result<()> = (|| {
+            // Enter alt screen if requested.
+            if options.alternate_screen {
+                stdout.write_all(ALT_SCREEN_ENTER)?;
+                stdout.write_all(CLEAR_SCREEN)?;
+                stdout.write_all(CURSOR_HOME)?;
+                alt_screen_active = true;
+            }
+
+            TtyEventSource::write_feature_delta(
+                &BackendFeatures::default(),
+                &options.features,
+                &mut stdout,
+            )?;
+
+            stdout.flush()?;
+            Ok(())
+        })();
+
+        if let Err(err) = setup {
+            // Best-effort cleanup: we may have partially enabled features or entered alt screen.
+            let _ =
+                write_cleanup_sequence(&options.features, options.alternate_screen, &mut stdout);
+            let _ = stdout.flush();
+            return Err(err);
+        }
+
         events.features = options.features;
-        stdout.flush()?;
 
         Ok(Self {
             clock: TtyClock::new(),

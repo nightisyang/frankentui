@@ -51,10 +51,10 @@ impl DirtySpan {
 
     /// Whether two spans overlap or are adjacent (gap <= merge_gap).
     fn mergeable(&self, other: &Self, merge_gap: u16) -> bool {
-        if self.start > other.end + merge_gap || other.start > self.end + merge_gap {
-            return false;
-        }
-        true
+        // Saturating math avoids overflow if callers pass large spans/gaps.
+        let other_end = other.end.saturating_add(merge_gap);
+        let self_end = self.end.saturating_add(merge_gap);
+        !(self.start > other_end || other.start > self_end)
     }
 
     /// Merge another span into this one (union).
@@ -192,10 +192,14 @@ impl DirtyTracker {
 
     /// Mark a single cell as dirty.
     pub fn mark_cell(&mut self, row: u16, col: u16) {
+        if col >= self.cols {
+            return;
+        }
         if let Some(dr) = self.rows.get_mut(row as usize) {
             let was_dirty = dr.is_dirty();
-            dr.mark_span(col, col + 1, self.merge_gap);
-            if !was_dirty {
+            let end = col.saturating_add(1).min(self.cols);
+            dr.mark_span(col, end, self.merge_gap);
+            if !was_dirty && dr.is_dirty() {
                 self.dirty_count += 1;
             }
         }
@@ -203,10 +207,17 @@ impl DirtyTracker {
 
     /// Mark a horizontal range `[start_col, end_col)` as dirty.
     pub fn mark_span(&mut self, row: u16, start_col: u16, end_col: u16) {
+        if start_col >= self.cols || end_col <= start_col {
+            return;
+        }
+        let end = end_col.min(self.cols);
+        if end <= start_col {
+            return;
+        }
         if let Some(dr) = self.rows.get_mut(row as usize) {
             let was_dirty = dr.is_dirty();
-            dr.mark_span(start_col, end_col, self.merge_gap);
-            if !was_dirty {
+            dr.mark_span(start_col, end, self.merge_gap);
+            if !was_dirty && dr.is_dirty() {
                 self.dirty_count += 1;
             }
         }
@@ -375,12 +386,12 @@ impl Patch {
 
         let mut current_row = self.updates[0].row;
         let mut start_col = self.updates[0].col;
-        let mut end_col = self.updates[0].col + 1;
+        let mut end_col = self.updates[0].col.saturating_add(1);
 
         for update in &self.updates[1..] {
             if update.row == current_row && update.col == end_col {
                 // Extend current run.
-                end_col = update.col + 1;
+                end_col = update.col.saturating_add(1);
             } else {
                 // Emit current run.
                 out.push(ChangeRun {
@@ -390,7 +401,7 @@ impl Patch {
                 });
                 current_row = update.row;
                 start_col = update.col;
-                end_col = update.col + 1;
+                end_col = update.col.saturating_add(1);
             }
         }
         // Emit final run.
@@ -757,6 +768,16 @@ mod tests {
     fn tracker_out_of_bounds_ignored() {
         let mut t = DirtyTracker::new(80, 24);
         t.mark_cell(99, 99);
+        assert!(!t.is_dirty());
+    }
+
+    #[test]
+    fn tracker_out_of_bounds_col_ignored() {
+        let mut t = DirtyTracker::new(80, 24);
+        t.mark_cell(0, u16::MAX);
+        t.mark_cell(0, 80); // col == cols
+        t.mark_span(0, 80, 81); // start == cols
+        t.mark_span(0, 10, 10); // empty span
         assert!(!t.is_dirty());
     }
 
