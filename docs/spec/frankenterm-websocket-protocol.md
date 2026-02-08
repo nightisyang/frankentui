@@ -51,6 +51,10 @@ with HTTP 400 and a JSON body:
 }
 ```
 
+If both `Sec-WebSocket-Protocol` and `?version=` are provided, they MUST match.
+If they do not match, the server MUST reject the upgrade with HTTP 400 and
+`error: "unsupported_protocol"`.
+
 ### 1.3 Frame Format
 
 All protocol messages use **WebSocket binary frames** containing a
@@ -70,6 +74,10 @@ length-prefixed envelope:
 
 WebSocket text frames are reserved for error diagnostics and MUST NOT carry
 protocol messages.
+
+Receivers MUST validate that the WebSocket frame payload length is exactly
+`1 + 3 + len`. Frames with truncated or trailing bytes MUST be rejected with an
+`Error` (`code: "invalid_message"`) and the connection SHOULD be closed.
 
 ### 1.4 Byte Order
 
@@ -208,11 +216,9 @@ characters, Ctrl+key). The server writes these directly to the PTY stdin.
 
 **Semantic event** (sub-type 0x01):
 ```
-┌──────────┬──────────┬──────┬──────┬────────────────┐
-│ 0x01 (1) │ kind (1) │ mods │ data │ (variable)     │
-│          │          │ (1)  │ len  │                 │
-│          │          │      │ (2)  │                 │
-└──────────┴──────────┴──────┴──────┴────────────────┘
+┌──────────┬──────────┬──────────┬────────────┬────────────────┐
+│ 0x01 (1) │ kind (1) │ mods (1) │ data_len(2)| data (variable) │
+└──────────┴──────────┴──────────┴────────────┴────────────────┘
 ```
 
 Kind values:
@@ -229,6 +235,11 @@ Kind values:
 | 0x08 | `Paste`      | UTF-8 paste content                            |
 | 0x09 | `FocusIn`    | (empty)                                        |
 | 0x0A | `FocusOut`   | (empty)                                        |
+
+`data_len` is a big-endian unsigned 16-bit length in bytes.
+
+Mouse `col`/`row` coordinates are 0-based cell coordinates within the current
+viewport (top-left cell is col=0,row=0), after DPR + font-metric mapping.
 
 Modifier byte (bitfield):
 
@@ -365,15 +376,18 @@ for 90 seconds, the connection is considered stale and SHOULD be closed.
 ### 2.12 FlowControl (0x0E)
 
 ```
-┌──────────────────────┬──────────────────────┐
-│ direction (1)        │ window_bytes (4)     │
-│ 0x00=output          │                      │
-│ 0x01=input           │                      │
-└──────────────────────┴──────────────────────┘
+┌──────────────────────────┬──────────────────────────┐
+│ output_consumed_bytes (4)│ input_consumed_bytes (4) │
+└──────────────────────────┴──────────────────────────┘
 ```
 
-Updates the flow control window (see Section 4). The receiver adjusts its send
-rate to stay within the advertised window.
+Updates the flow control window (see Section 4). Each side sends the number of
+bytes it has consumed since the last `FlowControl`, replenishing the sender's
+credit window.
+
+Rules:
+- Client → server: `output_consumed_bytes > 0`, `input_consumed_bytes == 0`.
+- Server → client: `input_consumed_bytes > 0`, `output_consumed_bytes == 0`.
 
 ### 2.13 SessionEnd (0x0F)
 
@@ -602,7 +616,7 @@ Additional environment variables set by the server:
 COLORTERM=truecolor     (if truecolor capability)
 LANG=en_US.UTF-8        (or client-specified locale)
 FRANKENTERM=1            (identifies FrankenTerm sessions)
-FRANKENTERM_VERSION=0.1  (protocol version)
+FRANKENTERM_PROTOCOL=frankenterm-ws-v1  (negotiated protocol version)
 ```
 
 ### 6.2 Capability Evolution
@@ -625,6 +639,7 @@ Every session emits a JSONL log file with the following record types:
   "session_id": "01958c3b-...",
   "git_sha": "abc123",
   "build_id": "ftui-remote/0.1.0",
+  "protocol_version": "frankenterm-ws-v1",
   "client_id": "frankenterm-web/0.1.0",
   "initial_size": { "cols": 120, "rows": 40 },
   "term_profile": "xterm-256color",
@@ -723,6 +738,32 @@ A new version (`v(N+1)`) is required for:
 The client requests a version via the `Sec-WebSocket-Protocol` header. The
 server selects the highest mutually supported version. If no common version
 exists, the connection is rejected at the HTTP level.
+
+### 8.4 Canonical JSON/Binary Schemas (v1)
+
+For `frankenterm-ws-v1`, JSON payload contracts are normative and follow JSON
+Schema Draft 2020-12 semantics.
+
+Schema identifiers:
+
+| Message       | Schema ID                                 | Required Fields |
+|---------------|--------------------------------------------|-----------------|
+| `Handshake`   | `urn:frankenterm:ws:v1:handshake`          | `protocol_version`, `client_id`, `capabilities`, `initial_size` |
+| `HandshakeAck`| `urn:frankenterm:ws:v1:handshake_ack`      | `protocol_version`, `session_id`, `server_id`, `effective_capabilities`, `term_profile`, `flow_control` |
+| `Clipboard`   | `urn:frankenterm:ws:v1:clipboard`          | `action`, `mime` |
+| `SessionEnd`  | `urn:frankenterm:ws:v1:session_end`        | `reason` |
+| `Error`       | `urn:frankenterm:ws:v1:error`              | `code`, `message`, `fatal` |
+
+Validation rules:
+- Unknown required fields are invalid.
+- Implementations SHOULD set `additionalProperties: false` for the top-level
+  objects above, except extensible maps like `capabilities`.
+- `protocol_version` MUST equal the negotiated subprotocol value.
+
+Binary payload contracts are normative via the wire layouts in Section 2
+(`Input`, `Output`, `Resize`, `ResizeAck`, `TerminalQuery`, `TerminalReply`,
+`FeatureToggle`, `FeatureAck`, `Keepalive`, `KeepaliveAck`, `FlowControl`).
+These layouts are the canonical binary schema for v1.
 
 ## 9. Conformance Testing
 
