@@ -180,12 +180,12 @@ where
     #[cfg(feature = "native-backend")]
     {
         let mut program = Program::with_native_backend(model, config)?;
-        return program.run();
+        program.run()
     }
     #[cfg(all(not(feature = "native-backend"), feature = "crossterm-compat"))]
     {
         let mut program = Program::with_config(model, config)?;
-        return program.run();
+        program.run()
     }
     #[cfg(not(any(feature = "native-backend", feature = "crossterm-compat")))]
     {

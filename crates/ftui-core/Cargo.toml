@@ -10,7 +10,7 @@ documentation = "https://docs.rs/ftui-core"
 readme = "../../README.md"
 
 [features]
-default = ["crossterm"]
+default = []
 # Enable the Crossterm terminal backend (legacy). When disabled, terminal_session
 # and Event::from_crossterm are unavailable. Prefer the native ftui-tty backend.
 crossterm = ["dep:crossterm"]
