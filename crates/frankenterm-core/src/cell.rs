@@ -331,6 +331,7 @@ impl HyperlinkRegistry {
     }
 
     /// Whether the registry has no hyperlinks.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -420,21 +421,25 @@ impl Cell {
     }
 
     /// The character content of this cell.
+    #[inline]
     pub fn content(&self) -> char {
         self.content
     }
 
     /// The display width in terminal columns.
+    #[inline]
     pub fn width(&self) -> u8 {
         self.width
     }
 
     /// Whether this cell is the leading half of a wide character.
+    #[inline]
     pub fn is_wide(&self) -> bool {
         self.flags.contains(CellFlags::WIDE_CHAR)
     }
 
     /// Whether this cell is a continuation (trailing half) of a wide character.
+    #[inline]
     pub fn is_wide_continuation(&self) -> bool {
         self.flags.contains(CellFlags::WIDE_CONTINUATION)
     }
