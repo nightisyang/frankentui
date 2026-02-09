@@ -235,6 +235,16 @@ impl Grid {
         }
     }
 
+    /// Fill every cell with the given character and default attributes.
+    ///
+    /// Used by DECALN (Screen Alignment Test) which fills the screen with 'E'.
+    pub fn fill_all(&mut self, ch: char) {
+        for cell in &mut self.cells {
+            *cell = Cell::default();
+            cell.set_content(ch, 1);
+        }
+    }
+
     // ── Insert / delete characters ──────────────────────────────────
 
     /// ICH: Insert `count` blank cells at `(row, col)`, shifting existing

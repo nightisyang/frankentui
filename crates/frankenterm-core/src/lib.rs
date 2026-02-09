@@ -34,7 +34,7 @@ pub mod scrollback;
 pub mod selection;
 
 pub use cell::{Cell, CellFlags, Color, HyperlinkId, HyperlinkRegistry, SgrAttrs, SgrFlags};
-pub use cursor::{Cursor, SavedCursor};
+pub use cursor::{Cursor, SavedCursor, translate_charset};
 pub use flow_control::{
     ActionLoss, BackpressureAction, DecisionReason, FlowControlConfig, FlowControlDecision,
     FlowControlPolicy, FlowControlSnapshot, InputEventClass, LatencyWindowMs, LossWeights,

@@ -30,6 +30,14 @@ pub struct Cursor {
     scroll_bottom: u16,
     /// Tab stop positions (sorted). `true` at column index means tab stop set.
     tab_stops: Vec<bool>,
+    /// Character set slots G0–G3. Each stores a charset designator byte:
+    /// `b'B'` = ASCII (default), `b'0'` = DEC Special Graphics, `b'A'` = UK.
+    pub charset_slots: [u8; 4],
+    /// Active character set slot index (0 = G0, default).
+    pub active_charset: u8,
+    /// Single-shift override: if `Some(2)` or `Some(3)`, the next printed char
+    /// uses G2 or G3 respectively, then clears back to `None`.
+    pub single_shift: Option<u8>,
 }
 
 impl Cursor {
@@ -48,6 +56,9 @@ impl Cursor {
             scroll_top: 0,
             scroll_bottom: rows,
             tab_stops,
+            charset_slots: [b'B'; 4],
+            active_charset: 0,
+            single_shift: None,
         }
     }
 
@@ -240,6 +251,9 @@ impl Default for Cursor {
                 }
                 stops
             },
+            charset_slots: [b'B'; 4],
+            active_charset: 0,
+            single_shift: None,
         }
     }
 }
@@ -254,6 +268,8 @@ pub struct SavedCursor {
     pub attrs: SgrAttrs,
     pub origin_mode: bool,
     pub pending_wrap: bool,
+    pub charset_slots: [u8; 4],
+    pub active_charset: u8,
 }
 
 impl SavedCursor {
@@ -265,6 +281,8 @@ impl SavedCursor {
             attrs: cursor.attrs,
             origin_mode,
             pending_wrap: cursor.pending_wrap,
+            charset_slots: cursor.charset_slots,
+            active_charset: cursor.active_charset,
         }
     }
 
@@ -274,6 +292,95 @@ impl SavedCursor {
         cursor.col = self.col;
         cursor.attrs = self.attrs;
         cursor.pending_wrap = self.pending_wrap;
+        cursor.charset_slots = self.charset_slots;
+        cursor.active_charset = self.active_charset;
+        cursor.single_shift = None;
+    }
+}
+
+// ── Character set translation ─────────────────────────────────────────
+
+/// Translate a character through the DEC Special Graphics charset (`ESC ( 0`).
+///
+/// Maps ASCII 0x60–0x7E to Unicode line-drawing and symbol characters.
+/// Characters outside this range pass through unchanged.
+fn dec_graphics_char(ch: char) -> char {
+    match ch {
+        '`' => '\u{25C6}', // ◆ diamond
+        'a' => '\u{2592}', // ▒ checker board
+        'b' => '\u{2409}', // ␉ HT symbol
+        'c' => '\u{240C}', // ␌ FF symbol
+        'd' => '\u{240D}', // ␍ CR symbol
+        'e' => '\u{240A}', // ␊ LF symbol
+        'f' => '\u{00B0}', // ° degree sign
+        'g' => '\u{00B1}', // ± plus-minus
+        'h' => '\u{2424}', // ␤ NL symbol
+        'i' => '\u{240B}', // ␋ VT symbol
+        'j' => '\u{2518}', // ┘ lower-right corner
+        'k' => '\u{2510}', // ┐ upper-right corner
+        'l' => '\u{250C}', // ┌ upper-left corner
+        'm' => '\u{2514}', // └ lower-left corner
+        'n' => '\u{253C}', // ┼ crossing lines
+        'o' => '\u{23BA}', // ⎺ scan line 1
+        'p' => '\u{23BB}', // ⎻ scan line 3
+        'q' => '\u{2500}', // ─ horizontal line
+        'r' => '\u{23BC}', // ⎼ scan line 7
+        's' => '\u{23BD}', // ⎽ scan line 9
+        't' => '\u{251C}', // ├ left tee
+        'u' => '\u{2524}', // ┤ right tee
+        'v' => '\u{2534}', // ┴ bottom tee
+        'w' => '\u{252C}', // ┬ top tee
+        'x' => '\u{2502}', // │ vertical line
+        'y' => '\u{2264}', // ≤ less-than-or-equal
+        'z' => '\u{2265}', // ≥ greater-than-or-equal
+        '{' => '\u{03C0}', // π pi
+        '|' => '\u{2260}', // ≠ not-equal
+        '}' => '\u{00A3}', // £ pound sign
+        '~' => '\u{00B7}', // · centered dot
+        _ => ch,
+    }
+}
+
+/// Translate a character through the given charset designator.
+///
+/// - `b'B'` (ASCII): pass-through
+/// - `b'0'` (DEC Special Graphics): line-drawing substitution
+/// - All others: pass-through (UK charset differences are negligible)
+pub fn translate_charset(ch: char, charset_designator: u8) -> char {
+    match charset_designator {
+        b'0' => dec_graphics_char(ch),
+        _ => ch,
+    }
+}
+
+impl Cursor {
+    /// Get the effective charset designator for the next printed character,
+    /// accounting for single-shift overrides.
+    pub fn effective_charset(&self) -> u8 {
+        if let Some(shift) = self.single_shift {
+            let slot = (shift as usize).min(3);
+            self.charset_slots[slot]
+        } else {
+            self.charset_slots[self.active_charset as usize & 3]
+        }
+    }
+
+    /// Consume the single-shift state (call after printing a character).
+    pub fn consume_single_shift(&mut self) {
+        self.single_shift = None;
+    }
+
+    /// Designate a charset for a slot.
+    pub fn designate_charset(&mut self, slot: u8, charset: u8) {
+        let idx = (slot as usize).min(3);
+        self.charset_slots[idx] = charset;
+    }
+
+    /// Reset charset state to defaults (all ASCII, G0 active, no single-shift).
+    pub fn reset_charset(&mut self) {
+        self.charset_slots = [b'B'; 4];
+        self.active_charset = 0;
+        self.single_shift = None;
     }
 }
 
