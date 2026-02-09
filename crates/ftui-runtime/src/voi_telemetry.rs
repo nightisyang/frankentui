@@ -49,6 +49,15 @@ mod tests {
     use super::*;
     use crate::voi_sampling::{VoiDecision, VoiLogEntry, VoiObservation, VoiSamplerSnapshot};
 
+    fn set_and_get_snapshot(snapshot: VoiSamplerSnapshot) -> VoiSamplerSnapshot {
+        let _lock = TEST_LOCK.lock().expect("test lock poisoned");
+        let mut guard = INLINE_AUTO_VOI_SNAPSHOT
+            .write()
+            .expect("snapshot lock poisoned");
+        *guard = Some(snapshot);
+        guard.clone().expect("snapshot should be present")
+    }
+
     fn make_snapshot(captured_ms: u64) -> VoiSamplerSnapshot {
         VoiSamplerSnapshot {
             captured_ms,
@@ -72,9 +81,7 @@ mod tests {
 
     #[test]
     fn store_and_retrieve() {
-        let snap = make_snapshot(1000);
-        set_inline_auto_voi_snapshot(Some(snap));
-        let retrieved = inline_auto_voi_snapshot().expect("should be Some");
+        let retrieved = set_and_get_snapshot(make_snapshot(1000));
         assert_eq!(retrieved.captured_ms, 1000);
         assert!((retrieved.alpha - 2.0).abs() < f64::EPSILON);
         assert!((retrieved.posterior_mean - 0.1).abs() < f64::EPSILON);
@@ -83,9 +90,8 @@ mod tests {
 
     #[test]
     fn overwrite_replaces_previous() {
-        set_inline_auto_voi_snapshot(Some(make_snapshot(100)));
-        set_inline_auto_voi_snapshot(Some(make_snapshot(200)));
-        let snap = inline_auto_voi_snapshot().unwrap();
+        let _ = set_and_get_snapshot(make_snapshot(100));
+        let snap = set_and_get_snapshot(make_snapshot(200));
         assert_eq!(snap.captured_ms, 200);
         clear_inline_auto_voi_snapshot();
     }
@@ -127,8 +133,7 @@ mod tests {
             time_since_sample_ms: 500.0,
             reason: "voi_gain",
         });
-        set_inline_auto_voi_snapshot(Some(snap));
-        let retrieved = inline_auto_voi_snapshot().unwrap();
+        let retrieved = set_and_get_snapshot(snap);
         let decision = retrieved.last_decision.as_ref().unwrap();
         assert_eq!(decision.event_idx, 42);
         assert!(decision.should_sample);
@@ -150,8 +155,7 @@ mod tests {
             e_value: 25.0,
             e_threshold: 20.0,
         });
-        set_inline_auto_voi_snapshot(Some(snap));
-        let retrieved = inline_auto_voi_snapshot().unwrap();
+        let retrieved = set_and_get_snapshot(snap);
         let obs = retrieved.last_observation.as_ref().unwrap();
         assert_eq!(obs.event_idx, 100);
         assert!(obs.violated);
@@ -193,8 +197,7 @@ mod tests {
                 e_threshold: 20.0,
             }),
         ];
-        set_inline_auto_voi_snapshot(Some(snap));
-        let retrieved = inline_auto_voi_snapshot().unwrap();
+        let retrieved = set_and_get_snapshot(snap);
         assert_eq!(retrieved.recent_logs.len(), 2);
         clear_inline_auto_voi_snapshot();
     }

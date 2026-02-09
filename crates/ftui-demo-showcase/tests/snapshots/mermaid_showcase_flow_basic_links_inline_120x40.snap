@@ -1,4 +1,4 @@
-Mermaid Showcase | Flow Basic (1/25) | Layout: Auto | Score: 0.8 | Viewport: auto | OK                                  
+Mermaid Showcase | Flow Basic (1/29) | Layout: Auto | Score: 0.8 | Viewport: auto | OK                                  
 ╭───────────Samples───────────╮╭──────────────────────────Viewport──────────────────────────╮╭────────Controls────────╮ 
 │> Flow Basic [flow, S, branch││                                                            ││Layout: Auto (l)        │ 
 │  Flow Subgraphs [flow, M, su││                                                            ││Tier: auto (t)          │ 
@@ -25,10 +25,10 @@ Mermaid Showcase | Flow Basic (1/25) | Layout: Auto | Score: 0.8 | Viewport: aut
 │  Block Beta Basic [block-bet││                                                  Fix       ││Warnings: 0             │ 
 │  Block Beta Nested [block-be││                                                            ││Links: 2/2              │ 
 │  Flow Node Shapes [flow, S, ││                                                            ││Parse: 0.00 ms          │ 
-│                             ││                                                            ││Layout: 0.00 ms         │ 
-│                             ││                                                            ││Render: 0.00 ms         │ 
-│                             ││                                                            ││Viewport: auto          │ 
-│                             ││                                                            ││Zoom: 100%              │ 
+│  ER Multi-Entity [er, L, mul││                                                            ││Layout: 0.00 ms         │ 
+│  Gantt Dependencies [gantt, ││                                                            ││Render: 0.00 ms         │ 
+│  Class Hierarchy [class, L, ││                                                            ││Viewport: auto          │ 
+│  State Concurrent [state, L,││                                                            ││Zoom: 100%              │ 
 │                             ││                                                            ││Iters: 1                │ 
 │                             ││                                                            ││Score: 0.77             │ 
 │                             ││                                                            ││Cross: 0                │ 

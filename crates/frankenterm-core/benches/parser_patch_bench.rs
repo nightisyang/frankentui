@@ -59,9 +59,6 @@ println!("hello");
 ```
 "#;
 
-    // NOTE: The core parser currently ignores non-ASCII bytes in the skeleton.
-    // We still include a unicode-heavy stream so throughput numbers remain
-    // representative for "real" output streams even before full UTF-8 support.
     const UNICODE_HEAVY: &[u8] = "unicode: café — 你好 — 😀\nline2: e\u{301}\n".as_bytes();
 
     vec![
@@ -81,6 +78,38 @@ println!("hello");
             id: "unicode_heavy_v1",
             bytes: UNICODE_HEAVY,
         },
+    ]
+}
+
+/// Generate larger corpora by repeating base patterns to target ~64 KB.
+/// These give more stable throughput measurements than the small corpora.
+fn large_corpora() -> Vec<(&'static str, Vec<u8>)> {
+    // Colored compiler output: dense SGR color switches with text.
+    let sgr_line = b"\x1b[1;32m   Compiling\x1b[0m frankenterm-core v0.1.0 \
+\x1b[2m(/repo/crates/frankenterm-core)\x1b[0m\r\n\
+\x1b[1;33mwarning\x1b[0m: unused variable `\x1b[1mx\x1b[0m`\r\n\
+ \x1b[1;34m-->\x1b[0m src/lib.rs:42:9\r\n";
+    let sgr_stream = sgr_line.repeat(64 * 1024 / sgr_line.len());
+
+    // Cursor-heavy stream: simulating ncurses-like full-screen updates.
+    let cursor_line = b"\x1b[1;1H\x1b[2J\x1b[1;1HABCDEFGHIJ\
+\x1b[2;1HKLMNOPQRST\x1b[3;1H0123456789\
+\x1b[1;5H\x1b[0K\x1b[3;8H\x1b[1P\x1b[2;3H\x1b[2@  ";
+    let cursor_stream = cursor_line.repeat(64 * 1024 / cursor_line.len());
+
+    // UTF-8 mixed content: CJK + emoji + Latin accents + ASCII.
+    let utf8_line = "你好世界 café résumé — 🦀🔥✅ line of text 日本語テスト\r\n".as_bytes();
+    let utf8_stream = utf8_line.repeat(64 * 1024 / utf8_line.len());
+
+    // Plain ASCII: best-case throughput baseline.
+    let ascii_line = b"The quick brown fox jumps over the lazy dog. 0123456789 ABCDEF\r\n";
+    let ascii_stream = ascii_line.repeat(64 * 1024 / ascii_line.len());
+
+    vec![
+        ("sgr_64k_v1", sgr_stream),
+        ("cursor_64k_v1", cursor_stream),
+        ("utf8_64k_v1", utf8_stream),
+        ("ascii_64k_v1", ascii_stream),
     ]
 }
 
@@ -239,6 +268,146 @@ fn patch_diff_apply_bench(c: &mut Criterion) {
     group.finish();
 }
 
+fn parser_throughput_large_bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("parser_throughput_large");
+    for (id, bytes) in large_corpora() {
+        let hash = fnv1a64(&bytes);
+        eprintln!(
+            "[frankenterm-core bench] corpus={} bytes={} fnv1a64={:016x}",
+            id,
+            bytes.len(),
+            hash
+        );
+
+        group.throughput(Throughput::Bytes(bytes.len() as u64));
+
+        group.bench_with_input(BenchmarkId::new("feed_vec", id), &bytes, |b, bytes| {
+            let mut parser = Parser::new();
+            b.iter(|| {
+                let actions = parser.feed(black_box(bytes));
+                black_box(actions.len());
+            });
+        });
+
+        group.bench_with_input(BenchmarkId::new("advance_count", id), &bytes, |b, bytes| {
+            let mut parser = Parser::new();
+            b.iter(|| {
+                let mut count = 0u64;
+                for &byte in black_box(bytes.as_slice()) {
+                    if parser.advance(byte).is_some() {
+                        count += 1;
+                    }
+                }
+                black_box(count);
+            });
+        });
+    }
+    group.finish();
+}
+
+fn full_pipeline_bench(c: &mut Criterion) {
+    use frankenterm_core::{Cursor, Scrollback};
+
+    let mut group = c.benchmark_group("full_pipeline");
+    for (id, bytes) in large_corpora() {
+        group.throughput(Throughput::Bytes(bytes.len() as u64));
+
+        group.bench_with_input(
+            BenchmarkId::new("parse_and_apply", id),
+            &bytes,
+            |b, bytes| {
+                b.iter(|| {
+                    let mut parser = Parser::new();
+                    let mut grid = Grid::new(120, 40);
+                    let mut cursor = Cursor::new(120, 40);
+                    let mut scrollback = Scrollback::new(512);
+
+                    for action in parser.feed(black_box(bytes)) {
+                        match action {
+                            Action::Print(ch) => {
+                                if cursor.pending_wrap {
+                                    cursor.col = 0;
+                                    if cursor.row + 1 >= cursor.scroll_bottom() {
+                                        grid.scroll_up_into(
+                                            cursor.scroll_top(),
+                                            cursor.scroll_bottom(),
+                                            1,
+                                            &mut scrollback,
+                                        );
+                                    } else if cursor.row + 1 < 40 {
+                                        cursor.row += 1;
+                                    }
+                                    cursor.pending_wrap = false;
+                                }
+                                if let Some(cell) = grid.cell_mut(cursor.row, cursor.col) {
+                                    cell.set_content(ch, 1);
+                                }
+                                if cursor.col + 1 >= 120 {
+                                    cursor.pending_wrap = true;
+                                } else {
+                                    cursor.col += 1;
+                                }
+                            }
+                            Action::Newline => {
+                                if cursor.row + 1 >= cursor.scroll_bottom() {
+                                    grid.scroll_up_into(
+                                        cursor.scroll_top(),
+                                        cursor.scroll_bottom(),
+                                        1,
+                                        &mut scrollback,
+                                    );
+                                } else if cursor.row + 1 < 40 {
+                                    cursor.row += 1;
+                                }
+                                cursor.pending_wrap = false;
+                            }
+                            Action::CarriageReturn => cursor.carriage_return(),
+                            Action::CursorPosition { row, col } => {
+                                cursor.move_to(row, col, 40, 120);
+                            }
+                            Action::CursorUp(n) => cursor.move_up(n),
+                            Action::CursorDown(n) => cursor.move_down(n, 40),
+                            Action::CursorRight(n) => cursor.move_right(n, 120),
+                            Action::CursorLeft(n) => cursor.move_left(n),
+                            Action::EraseInDisplay(mode) => match mode {
+                                0 => grid.erase_below(cursor.row, cursor.col, Color::Default),
+                                1 => grid.erase_above(cursor.row, cursor.col, Color::Default),
+                                2 => grid.erase_all(Color::Default),
+                                _ => {}
+                            },
+                            Action::EraseInLine(mode) => match mode {
+                                0 => grid.erase_line_right(cursor.row, cursor.col, Color::Default),
+                                1 => grid.erase_line_left(cursor.row, cursor.col, Color::Default),
+                                2 => grid.erase_line(cursor.row, Color::Default),
+                                _ => {}
+                            },
+                            Action::Sgr(params) => cursor.attrs.apply_sgr_params(&params),
+                            Action::ScrollUp(n) => grid.scroll_up_into(
+                                cursor.scroll_top(),
+                                cursor.scroll_bottom(),
+                                n,
+                                &mut scrollback,
+                            ),
+                            Action::ScrollDown(n) => {
+                                grid.scroll_down(cursor.scroll_top(), cursor.scroll_bottom(), n)
+                            }
+                            Action::InsertChars(n) => {
+                                grid.insert_chars(cursor.row, cursor.col, n, Color::Default);
+                            }
+                            Action::DeleteChars(n) => {
+                                grid.delete_chars(cursor.row, cursor.col, n, Color::Default);
+                            }
+                            _ => {}
+                        }
+                    }
+                    black_box(grid.cell(0, 0).map(Cell::content));
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
 fn parser_action_mix_bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("parser_action_mix");
 
@@ -275,6 +444,8 @@ fn parser_action_mix_bench(c: &mut Criterion) {
 criterion_group!(
     benches,
     parser_throughput_bench,
+    parser_throughput_large_bench,
+    full_pipeline_bench,
     parser_action_mix_bench,
     patch_diff_apply_bench
 );

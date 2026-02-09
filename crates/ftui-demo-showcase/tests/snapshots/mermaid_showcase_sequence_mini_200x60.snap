@@ -1,4 +1,4 @@
-Mermaid Showcase | Sequence Mini (7/25) | Layout: Auto | Score: 50.9 | Viewport: auto | OK                                                                                                              
+Mermaid Showcase | Sequence Mini (7/29) | Layout: Auto | Score: 50.9 | Viewport: auto | OK                                                                                                              
 ╭─────────────────────Samples──────────────────────╮╭───────────────────────────────────────────────Viewport───────────────────────────────────────────────╮╭─────────────────Controls─────────────────╮
 │  Flow Basic [flow, S, branch, decision]          ││                                                                                                      ││Layout: Auto (l)                          │
 │  Flow Subgraphs [flow, M, subgraph, clusters]    ││                                                                                                      ││Tier: auto (t)                            │
@@ -25,10 +25,10 @@ Mermaid Showcase | Sequence Mini (7/25) | Layout: Auto | Score: 50.9 | Viewport:
 │  Block Beta Basic [block-beta, S, block-beta, col││                            │                                             │                           ││                                          │
 │  Block Beta Nested [block-beta, M, block-beta, ne││                                                                                                      ││                                          │
 │  Flow Node Shapes [flow, S, shapes, node-shapes] ││                            │                                             │                           ││                                          │
-│                                                  ││                                                                                                      ││                                          │
-│                                                  ││                            │                       Hello                 │  ⢠⣀                       ││                                          │
-│                                                  ││                      ⠈⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠹⠝⠋                      ││                                          │
-│                                                  ││                            │                                             │                           ││                                          │
+│  ER Multi-Entity [er, L, multi-entity, complex-re││                                                                                                      ││                                          │
+│  Gantt Dependencies [gantt, L, dependencies, mile││                            │                       Hello                 │  ⢠⣀                       ││                                          │
+│  Class Hierarchy [class, L, inheritance, abstract││                      ⠈⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠉⠹⠝⠋                      ││                                          │
+│  State Concurrent [state, L, concurrent, fork, ch││                            │                                             │                           ││                                          │
 │                                                  ││                                                                                                      ││                                          │
 │                                                  ││                            │                                             │                           │╰──────────────────────────────────────────╯
 │                                                  ││                                                                                                      │╭─────────────────Metrics──────────────────╮

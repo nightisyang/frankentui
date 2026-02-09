@@ -1,4 +1,4 @@
-Mermaid Showcase | Gitgraph Basic (20/25) | Layout: Auto | Score: -3.4 | Viewport: auto | OK                            
+Mermaid Showcase | Gitgraph Basic (20/29) | Layout: Auto | Score: -3.4 | Viewport: auto | OK                            
 ╭───────────Samples───────────╮╭──────────────────────────Viewport──────────────────────────╮╭────────Controls────────╮ 
 │  Flow Basic [flow, S, branch││                                                            ││Layout: Auto (l)        │ 
 │  Flow Subgraphs [flow, M, su││                             feature──────────────────┐     ││Tier: auto (t)          │ 
@@ -25,10 +25,10 @@ Mermaid Showcase | Gitgraph Basic (20/25) | Layout: Auto | Score: -3.4 | Viewpor
 │  Block Beta Basic [block-bet││                                                            ││Warnings: 1             │ 
 │  Block Beta Nested [block-be││                                                            ││Parse: 0.00 ms          │ 
 │  Flow Node Shapes [flow, S, ││           ⣠⣤⣤⡀                                             ││Layout: 0.00 ms         │ 
-│                             ││         ⢠⣾⣿⣿⣿⣿⣦                                            ││Render: 0.00 ms         │ 
-│                             ││         ⠸⣿⣿⣿⣿⣿⡿                                            ││Viewport: auto          │ 
-│                             ││          ⠈⠻⠿⠿⠋                                             ││Zoom: 100%              │ 
-│                             ││                                                            ││Iters: 0                │ 
+│  ER Multi-Entity [er, L, mul││         ⢠⣾⣿⣿⣿⣿⣦                                            ││Render: 0.00 ms         │ 
+│  Gantt Dependencies [gantt, ││         ⠸⣿⣿⣿⣿⣿⡿                                            ││Viewport: auto          │ 
+│  Class Hierarchy [class, L, ││          ⠈⠻⠿⠿⠋                                             ││Zoom: 100%              │ 
+│  State Concurrent [state, L,││                                                            ││Iters: 0                │ 
 │                             ││                                                            ││Score: -3.42            │ 
 │                             ││                                                            ││Cross: 0                │ 
 │                             ││                                                            ││Bends: 0                │ 

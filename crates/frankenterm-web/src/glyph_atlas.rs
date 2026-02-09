@@ -424,12 +424,17 @@ impl GlyphAtlasCache {
             return Err(GlyphCacheError::GlyphTooLarge);
         }
 
-        // Ensure budget headroom by evicting LRU entries.
-        let slot_bytes = (slot_w as usize) * (slot_h as usize);
-        self.evict_until_within_budget(slot_bytes);
-
         // Try to allocate, evicting as needed to free reusable slots when shelves are full.
+        //
+        // Note: free-slot reuse can return a slot larger than requested. We do a
+        // budget pass using the requested area first, then (after allocation)
+        // re-run budget enforcement against the *actual* allocated slot size.
+        let slot_bytes_req = (slot_w as usize) * (slot_h as usize);
+        self.evict_until_within_budget(slot_bytes_req);
+
         let slot = self.alloc_slot_with_eviction(slot_w, slot_h)?;
+        let slot_bytes = slot.area_bytes();
+        self.evict_until_within_budget(slot_bytes);
 
         let draw = AtlasRect {
             x: slot.x + pad,
@@ -716,6 +721,9 @@ mod tests {
         // Best-fit should pick the freed slot (same slot origin).
         assert_eq!(p3.slot.x, p1.slot.x);
         assert_eq!(p3.slot.y, p1.slot.y);
+        // Reuse returns the full freed slot (which can be larger than the
+        // requested allocation); cache accounting must reflect the actual slot.
+        assert_eq!(cache.stats().bytes_cached, p3.slot.area_bytes() as u64);
     }
 
     #[test]

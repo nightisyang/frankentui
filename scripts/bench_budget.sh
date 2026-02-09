@@ -8,7 +8,7 @@
 #   ./scripts/bench_budget.sh              # Run all benchmarks with budget checks
 #   ./scripts/bench_budget.sh --quick      # Quick run (subset of benchmarks)
 #   ./scripts/bench_budget.sh --check-only # Parse existing results, no re-run
-#   ./scripts/bench_budget.sh --json       # Output JSONL perf log
+#   ./scripts/bench_budget.sh --json       # Output JSONL perf + confidence logs
 
 set -euo pipefail
 
@@ -20,6 +20,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 RESULTS_DIR="${PROJECT_ROOT}/target/benchmark-results"
 PERF_LOG="${RESULTS_DIR}/perf_log.jsonl"
+CONFIDENCE_LOG="${RESULTS_DIR}/perf_confidence.jsonl"
 RUN_ID="$(date +%Y%m%dT%H%M%S)-$$"
 
 # Performance budgets (name:max_ns:description)
@@ -113,6 +114,12 @@ declare -A BUDGETS=(
 # PANIC threshold multiplier (2x budget = hard failure)
 PANIC_MULTIPLIER=2
 
+# Expected-loss matrix for confidence hints:
+# - false positive: engineer time wasted investigating noise
+# - false negative: shipping a real perf regression
+LOSS_FALSE_POSITIVE=1
+LOSS_FALSE_NEGATIVE=5
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -174,6 +181,26 @@ log_json() {
     echo "{\"run_id\":\"$RUN_ID\",\"ts\":\"$(date -Iseconds)\",\"benchmark\":\"$benchmark\",\"actual_ns\":$actual_ns,\"budget_ns\":$budget_ns,\"pass\":$pass,\"status\":\"$status\"}" >> "$PERF_LOG"
 }
 
+log_confidence_json() {
+    local benchmark="$1"
+    local status="$2"
+    local actual_ns="$3"
+    local budget_ns="$4"
+    local ci_low_ns="$5"
+    local ci_high_ns="$6"
+    local sigma_ns="$7"
+    local z_score="$8"
+    local p_regression="$9"
+    local e_value="${10}"
+    local bayes_factor="${11}"
+    local loss_block="${12}"
+    local loss_allow="${13}"
+    local decision="${14}"
+    local hint="${15}"
+
+    echo "{\"run_id\":\"$RUN_ID\",\"ts\":\"$(date -Iseconds)\",\"benchmark\":\"$benchmark\",\"status\":\"$status\",\"actual_ns\":$actual_ns,\"budget_ns\":$budget_ns,\"ci_low_ns\":$ci_low_ns,\"ci_high_ns\":$ci_high_ns,\"sigma_ns\":$sigma_ns,\"z_score\":$z_score,\"posterior_prob_regression\":$p_regression,\"e_value\":$e_value,\"bayes_factor_10\":$bayes_factor,\"loss_block\":$loss_block,\"loss_allow\":$loss_allow,\"decision\":\"$decision\",\"confidence_hint\":\"$hint\",\"loss_matrix\":{\"false_positive\":$LOSS_FALSE_POSITIVE,\"false_negative\":$LOSS_FALSE_NEGATIVE}}" >> "$CONFIDENCE_LOG"
+}
+
 run_benchmarks() {
     log "${BLUE}=== Running Performance Benchmarks ===${NC}"
     mkdir -p "$RESULTS_DIR"
@@ -187,6 +214,7 @@ run_benchmarks() {
     : > "${RESULTS_DIR}/parser_patch_bench.txt"
     : > "${RESULTS_DIR}/renderer_bench.txt"
     : > "${PERF_LOG}"
+    : > "${CONFIDENCE_LOG}"
 
     local benches=(
         "ftui-render:cell_bench"
@@ -262,9 +290,12 @@ snapshot_results() {
     if [[ -f "$PERF_LOG" ]]; then
         cp -f "$PERF_LOG" "${RESULTS_DIR}/perf_log.${suffix}.jsonl"
     fi
+    if [[ -f "$CONFIDENCE_LOG" ]]; then
+        cp -f "$CONFIDENCE_LOG" "${RESULTS_DIR}/perf_confidence.${suffix}.jsonl"
+    fi
 }
 
-parse_criterion_output() {
+parse_criterion_stats() {
     local file="$1"
     local benchmark="$2"
 
@@ -277,8 +308,8 @@ parse_criterion_output() {
     #    "bench/name"
     #    "            time:   [1.23 us 1.45 us 1.67 us]"
     #
-    # We parse the middle estimate and return integer nanoseconds. "-1" means
-    # not found / unparsable.
+    # We parse the lower/middle/upper estimates and return integer nanoseconds
+    # as: "<middle_ns> <low_ns> <high_ns>". "-1 -1 -1" means not found.
     awk -v b="$benchmark" '
         function trim(s) {
             sub(/^[[:space:]]+/, "", s)
@@ -294,14 +325,20 @@ parse_criterion_output() {
             else ns = -1
             return ns
         }
-        function parse_time_line(line,    m, val, unit, ns) {
-            # Extract the middle estimate (2nd value inside the bracket list).
-            if (match(line, /\[[0-9.]+[[:space:]]+[^[:space:]]+[[:space:]]+([0-9.]+)[[:space:]]+([^[:space:]]+)/, m)) {
-                val = m[1] + 0.0
-                unit = m[2]
-                ns = to_ns(val, unit)
-                if (ns < 0) return 0
-                printf "%.0f\n", ns
+        function parse_time_line(line,    m, low, mid, high, low_u, mid_u, high_u, low_ns, mid_ns, high_ns) {
+            # Extract lower/middle/upper estimates from "[a unit b unit c unit]".
+            if (match(line, /\[([0-9.]+)[[:space:]]+([^[:space:]]+)[[:space:]]+([0-9.]+)[[:space:]]+([^[:space:]]+)[[:space:]]+([0-9.]+)[[:space:]]+([^[:space:]]+)\]/, m)) {
+                low = m[1] + 0.0
+                low_u = m[2]
+                mid = m[3] + 0.0
+                mid_u = m[4]
+                high = m[5] + 0.0
+                high_u = m[6]
+                low_ns = to_ns(low, low_u)
+                mid_ns = to_ns(mid, mid_u)
+                high_ns = to_ns(high, high_u)
+                if (low_ns < 0 || mid_ns < 0 || high_ns < 0) return 0
+                printf "%.0f %.0f %.0f\n", mid_ns, low_ns, high_ns
                 printed = 1
                 return 1
             }
@@ -330,9 +367,77 @@ parse_criterion_output() {
             }
         }
         END {
-            if (!printed) print "-1"
+            if (!printed) print "-1 -1 -1"
         }
     ' "$file"
+}
+
+compute_confidence_metrics() {
+    local status="$1"
+    local actual_ns="$2"
+    local budget_ns="$3"
+    local ci_low_ns="$4"
+    local ci_high_ns="$5"
+
+    awk -v status="$status" -v actual="$actual_ns" -v budget="$budget_ns" -v low="$ci_low_ns" -v high="$ci_high_ns" \
+        -v loss_fp="$LOSS_FALSE_POSITIVE" -v loss_fn="$LOSS_FALSE_NEGATIVE" '
+        function clamp(v, lo, hi) {
+            if (v < lo) return lo
+            if (v > hi) return hi
+            return v
+        }
+        BEGIN {
+            sigma = (high - low) / 3.92
+            # Guard against unrealistically tiny CI widths in short criterion runs.
+            min_sigma = budget * 0.01
+            if (min_sigma < 1.0) min_sigma = 1.0
+            if (sigma < min_sigma) sigma = min_sigma
+
+            delta = actual - budget
+            z = delta / sigma
+            delta_reg = delta
+            if (delta_reg < 0.0) delta_reg = 0.0
+
+            # Logistic approximation of Normal CDF.
+            logit_arg = clamp(-1.702 * z, -60.0, 60.0)
+            p_reg = 1.0 / (1.0 + exp(logit_arg))
+
+            # One-step e-value (nonnegative evidence for regression).
+            z_reg = delta_reg / sigma
+            lambda = z_reg
+            if (lambda > 1.0) lambda = 1.0
+            e_arg = clamp((lambda * z_reg) - ((lambda * lambda) / 2.0), -60.0, 60.0)
+            e_value = exp(e_arg)
+
+            # Bayes factor BF10 using Gaussian prior on regression delta.
+            tau = budget * 0.05
+            if (tau < sigma) tau = sigma
+            bf_arg = (delta_reg * delta_reg * tau * tau) \
+                / (2.0 * sigma * sigma * ((sigma * sigma) + (tau * tau)))
+            bf_arg = clamp(bf_arg, -60.0, 60.0)
+            bf10 = sqrt((sigma * sigma) / ((sigma * sigma) + (tau * tau))) \
+                * exp(bf_arg)
+
+            loss_block = (1.0 - p_reg) * loss_fp
+            loss_allow = p_reg * loss_fn
+            decision = (loss_block <= loss_allow) ? "block" : "allow"
+
+            hint = "pass"
+            if (status == "PANIC") {
+                hint = "likely_regression"
+            } else if (status == "FAIL") {
+                hint = "uncertain"
+                if (p_reg >= 0.95 || e_value >= 8.0 || bf10 >= 10.0) {
+                    hint = "likely_regression"
+                } else if (p_reg <= 0.50 && e_value <= 1.50 && bf10 <= 1.50) {
+                    hint = "likely_noise"
+                }
+            }
+
+            printf "%.3f %.3f %.6f %.6f %.6f %.6f %.6f %s %s\n",
+                sigma, z, p_reg, e_value, bf10, loss_block, loss_allow, decision, hint
+        }
+    '
 }
 
 check_budgets() {
@@ -344,6 +449,9 @@ check_budgets() {
     local failed=0
     local panicked=0
     local skipped=0
+    local likely_noise=0
+    local likely_regression=0
+    local uncertain=0
 
     printf "%-50s %15s %15s %10s\n" "Benchmark" "Actual" "Budget" "Status"
     printf "%-50s %15s %15s %10s\n" "---------" "------" "------" "------"
@@ -370,6 +478,7 @@ check_budgets() {
             printf "%-50s %15s %15s ${YELLOW}%10s${NC}\n" "$benchmark" "N/A" "${budget_ns}ns" "SKIP"
             ((skipped++))
             log_json "skip" "$benchmark" 0 "$budget_ns" "null"
+            log_confidence_json "$benchmark" "skip" 0 "$budget_ns" "null" "null" "null" "null" "null" "null" "null" "null" "null" "allow" "insufficient_data"
             continue
         fi
 
@@ -377,13 +486,14 @@ check_budgets() {
         local criterion_name
         criterion_name=$(echo "$benchmark" | sed 's|/|/|g')
 
-        local actual_ns
-        actual_ns=$(parse_criterion_output "$result_file" "$criterion_name")
+        local actual_ns ci_low_ns ci_high_ns
+        read -r actual_ns ci_low_ns ci_high_ns <<< "$(parse_criterion_stats "$result_file" "$criterion_name")"
 
         if [[ "$actual_ns" == "-1" ]]; then
             printf "%-50s %15s %15s ${YELLOW}%10s${NC}\n" "$benchmark" "N/A" "${budget_ns}ns" "SKIP"
             ((skipped++))
             log_json "skip" "$benchmark" 0 "$budget_ns" "null"
+            log_confidence_json "$benchmark" "skip" 0 "$budget_ns" "null" "null" "null" "null" "null" "null" "null" "null" "null" "allow" "insufficient_data"
             continue
         fi
 
@@ -426,7 +536,20 @@ check_budgets() {
         printf "%-50s %15s %15s ${status_color}%10s${NC}\n" \
             "$benchmark" "$actual_display" "$budget_display" "$status"
 
+        local sigma_ns z_score p_regression e_value bayes_factor loss_block loss_allow decision hint
+        read -r sigma_ns z_score p_regression e_value bayes_factor loss_block loss_allow decision hint <<< \
+            "$(compute_confidence_metrics "$status" "$actual_ns" "$budget_ns" "$ci_low_ns" "$ci_high_ns")"
+
+        case "$hint" in
+            likely_noise) ((likely_noise++)) ;;
+            likely_regression) ((likely_regression++)) ;;
+            *) ((uncertain++)) ;;
+        esac
+
         log_json "$status" "$benchmark" "$actual_ns" "$budget_ns" "$pass_json"
+        log_confidence_json "$benchmark" "$status" "$actual_ns" "$budget_ns" \
+            "$ci_low_ns" "$ci_high_ns" "$sigma_ns" "$z_score" "$p_regression" \
+            "$e_value" "$bayes_factor" "$loss_block" "$loss_allow" "$decision" "$hint"
     done
 
     log ""
@@ -435,6 +558,7 @@ check_budgets() {
     log "  Failed:  $failed"
     log "  Panicked: $panicked"
     log "  Skipped: $skipped"
+    log "  Confidence hints: likely_regression=$likely_regression likely_noise=$likely_noise uncertain=$uncertain"
     log ""
 
     if [[ "$panicked" -gt 0 ]]; then
@@ -461,6 +585,8 @@ main() {
     log ""
 
     mkdir -p "$RESULTS_DIR"
+    : > "$PERF_LOG"
+    : > "$CONFIDENCE_LOG"
 
     # Initialize perf log
     if [[ "$JSON_OUTPUT" == "true" ]]; then
@@ -492,6 +618,7 @@ main() {
         echo "{\"run_id\":\"$RUN_ID\",\"end_ts\":\"$(date -Iseconds)\",\"event\":\"end\",\"exit_code\":$exit_code}" >> "$PERF_LOG"
         log ""
         log "Perf log: $PERF_LOG"
+        log "Confidence log: $CONFIDENCE_LOG"
     fi
 
     exit $exit_code

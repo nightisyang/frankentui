@@ -1,4 +1,4 @@
-Mermaid Showcase | Journey Basic (21/25) | Layout: Auto | Score: -7.6 | Viewport: auto | OK                             
+Mermaid Showcase | Journey Basic (21/29) | Layout: Auto | Score: -7.6 | Viewport: auto | OK                             
 ╭───────────Samples───────────╮╭──────────────────────────Viewport──────────────────────────╮╭────────Controls────────╮ 
 │  Flow Basic [flow, S, branch││                                                            ││Layout: Auto (l)        │ 
 │  Flow Subgraphs [flow, M, su││                 +-------------------------+                ││Tier: auto (t)          │ 
@@ -27,11 +27,11 @@ Mermaid Showcase | Journey Basic (21/25) | Layout: Auto | Score: -7.6 | Viewport
 │  Block Beta Basic [block-bet││                 |                         |                ││Warnings: 1             │ 
 │  Block Beta Nested [block-be││                 |                         |                ││Parse: 0.00 ms          │ 
 │  Flow Node Shapes [flow, S, ││                 | +---------------------+ |                ││Layout: 0.00 ms         │ 
-│                             ││                 | | Tutorial
+│  ER Multi-Entity [er, L, mul││                 | | Tutorial
 ●●●○○ User | |                ││Render: 0.00 ms         │ 
-│                             ││                 | +---------------------+ |                ││Viewport: auto          │ 
-│                             ││                 |                         |                ││Zoom: 100%              │ 
-│                             ││                 |                         |                ││Iters: 0                │ 
+│  Gantt Dependencies [gantt, ││                 | +---------------------+ |                ││Viewport: auto          │ 
+│  Class Hierarchy [class, L, ││                 |                         |                ││Zoom: 100%              │ 
+│  State Concurrent [state, L,││                 |                         |                ││Iters: 0                │ 
 │                             ││                 |                         |                ││Score: -7.60            │ 
 │                             ││                 | +---------------------+ |                ││Cross: 0                │ 
 │                             ││                 | |First task

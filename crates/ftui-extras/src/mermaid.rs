@@ -4458,7 +4458,7 @@ pub fn normalize_ast_to_ir(
                 if ast.diagram_type != DiagramType::Pie {
                     continue;
                 }
-                if entry.label.trim().is_empty() {
+                if entry.label.is_empty() {
                     warnings.push(MermaidWarning::new(
                         MermaidWarningCode::InvalidValue,
                         "pie entry label is empty",
@@ -9351,13 +9351,30 @@ fn parse_gantt(line: &str, span: Span) -> Option<Statement> {
 
 fn parse_pie(line: &str, span: Span) -> Option<PieEntry> {
     let mut parts = line.splitn(2, ':');
-    let label = parts.next()?.trim();
+    let raw_label = parts.next()?.trim();
     let value = parts.next()?.trim();
-    if label.is_empty() || value.is_empty() {
+    if raw_label.is_empty() || value.is_empty() {
         return None;
     }
+
+    let label = if let Some(inner) = raw_label
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .or_else(|| {
+            raw_label
+                .strip_prefix('\'')
+                .and_then(|s| s.strip_suffix('\''))
+        }) {
+        inner.to_string()
+    } else {
+        normalize_ws(raw_label)
+    };
+    if label.is_empty() {
+        return None;
+    }
+
     Some(PieEntry {
-        label: normalize_ws(label.trim_matches(['"', '\''])),
+        label,
         value: normalize_ws(value),
         span,
     })
@@ -11315,6 +11332,32 @@ mod tests {
             .filter(|s| matches!(s, Statement::PieEntry(_)))
             .count();
         assert_eq!(entries, 2);
+    }
+
+    #[test]
+    fn parse_pie_preserves_quoted_whitespace_label() {
+        let parsed = parse_with_diagnostics("pie\n  \" \" : 1\n");
+        assert!(
+            parsed.errors.is_empty(),
+            "unexpected parse errors: {:?}",
+            parsed.errors
+        );
+        let ir = normalize_ast_to_ir(
+            &parsed.ast,
+            &MermaidConfig::default(),
+            &MermaidCompatibilityMatrix::default(),
+            &MermaidFallbackPolicy::default(),
+        );
+        assert!(
+            ir.errors.is_empty(),
+            "unexpected normalization errors: {:?}",
+            ir.errors
+        );
+        assert_eq!(
+            ir.ir.pie_entries.len(),
+            1,
+            "quoted whitespace label should remain a valid pie entry"
+        );
     }
 
     #[test]

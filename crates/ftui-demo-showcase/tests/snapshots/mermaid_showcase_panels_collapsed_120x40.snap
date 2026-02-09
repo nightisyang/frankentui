@@ -1,4 +1,4 @@
-Mermaid Showcase | Flow Basic (1/25) | Layout: Auto | Score: 0.8 | Viewport: auto | OK                                  
+Mermaid Showcase | Flow Basic (1/29) | Layout: Auto | Score: 0.8 | Viewport: auto | OK                                  
 ╭───────────Samples───────────╮╭──────────────────────────Viewport──────────────────────────╮╭───────Status Log───────╮ 
 │> Flow Basic [flow, S, branch││                                                            ││metrics: off            │ 
 │  Flow Subgraphs [flow, M, su││                                                            ││controls: off           │ 
@@ -25,10 +25,10 @@ Mermaid Showcase | Flow Basic (1/25) | Layout: Auto | Score: 0.8 | Viewport: aut
 │  Block Beta Basic [block-bet││                                                  Fix       ││                        │ 
 │  Block Beta Nested [block-be││                                                            ││                        │ 
 │  Flow Node Shapes [flow, S, ││                                                            ││                        │ 
-│                             ││                                                            ││                        │ 
-│                             ││                                                            ││                        │ 
-│                             ││                                                            ││                        │ 
-│                             ││                                                            ││                        │ 
+│  ER Multi-Entity [er, L, mul││                                                            ││                        │ 
+│  Gantt Dependencies [gantt, ││                                                            ││                        │ 
+│  Class Hierarchy [class, L, ││                                                            ││                        │ 
+│  State Concurrent [state, L,││                                                            ││                        │ 
 │                             ││                                                            ││                        │ 
 │                             ││                                                            ││                        │ 
 │                             ││                                                            ││                        │ 

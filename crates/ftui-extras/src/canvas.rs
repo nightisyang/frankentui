@@ -493,16 +493,35 @@ impl Painter {
         let mut bits: u8 = 0;
         let mut first_color: Option<PackedRgba> = None;
 
-        for col in 0..2 {
-            for row in 0..4 {
-                let x = px_x + col;
-                let y = px_y + row;
-                if self.get(x, y) {
-                    bits |= 1 << DOT_BITS[col as usize][row as usize];
-                    if first_color.is_none()
-                        && let Some(idx) = self.index(x, y)
+        // Fast path: avoid per-subpixel bounds checks when the full 2x4 block is in-bounds.
+        // This matters for dense canvases (e.g., VFX plasma) where we sample every subpixel.
+        if px_x >= 0 && px_y >= 0 && px_x + 1 < self.width_i32 && px_y + 3 < self.height_i32 {
+            let width = self.width_usize;
+            let base = px_y as usize * width + px_x as usize;
+            for (col, col_bits) in DOT_BITS.iter().enumerate() {
+                for (row, bit) in col_bits.iter().enumerate() {
+                    let idx = base + row * width + col;
+                    if self.pixels[idx] {
+                        bits |= 1 << *bit;
+                        if first_color.is_none() {
+                            first_color = self.colors[idx];
+                        }
+                    }
+                }
+            }
+        } else {
+            // Slow path: partial cells at edges and any out-of-bounds blocks.
+            for (col, col_bits) in DOT_BITS.iter().enumerate() {
+                for (row, bit) in col_bits.iter().enumerate() {
+                    let x = px_x + col as i32;
+                    let y = px_y + row as i32;
+                    if let Some(idx) = self.index(x, y)
+                        && self.pixels[idx]
                     {
-                        first_color = self.colors[idx];
+                        bits |= 1 << *bit;
+                        if first_color.is_none() {
+                            first_color = self.colors[idx];
+                        }
                     }
                 }
             }

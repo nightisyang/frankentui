@@ -123,6 +123,31 @@ To re-run benches (including `ftui-runtime:telemetry_bench` with
 ./scripts/bench_budget.sh --json
 ```
 
+This writes two machine-readable ledgers under `target/benchmark-results/`:
+
+- `perf_log.jsonl` — hard gate results (actual vs budget; pass/fail/skip)
+- `perf_confidence.jsonl` — confidence evidence per benchmark (CI width, one-step e-value, Bayes factor, expected-loss decision hint)
+
+### Confidence Ledger Entry (perf_confidence.jsonl)
+
+```json
+{
+  "run_id": "20260208T202350-2604979",
+  "benchmark": "web/frame_harness_stats/heavy_50pct/80x24",
+  "status": "PASS",
+  "actual_ns": 10000,
+  "budget_ns": 30000,
+  "ci_low_ns": 9900,
+  "ci_high_ns": 10100,
+  "posterior_prob_regression": 0.0,
+  "e_value": 1.0,
+  "bayes_factor_10": 0.196116,
+  "decision": "allow",
+  "confidence_hint": "pass",
+  "loss_matrix": { "false_positive": 1, "false_negative": 5 }
+}
+```
+
 ### Baseline with Hyperfine
 
 For absolute timing, use hyperfine with a minimal test program:
@@ -139,6 +164,15 @@ Benchmarks run in CI with the following gates:
 1. **Hard failure**: Any benchmark exceeds 2x its budget
 2. **Warning**: Any benchmark exceeds 1.5x its budget
 3. **Trend alert**: 10% regression from previous run
+4. **Confidence evidence (advisory)**: `perf_confidence.jsonl` provides one-sided regression evidence (`posterior_prob_regression`, `e_value`, `bayes_factor_10`) and expected-loss hints.
+
+### Decision Policy
+
+- The hard budget gate remains authoritative for CI pass/fail.
+- Confidence evidence is used to triage flaky over-budget cases:
+  - `confidence_hint=likely_regression` favors immediate fix/rollback.
+  - `confidence_hint=likely_noise` favors rerun + environment variance check.
+  - `confidence_hint=uncertain` favors collecting more runs before override.
 
 ### CI Integration Example
 
