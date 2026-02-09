@@ -273,6 +273,8 @@ impl PlasmaCanvasAdapter {
         for (y, wave) in self.y_wave.iter_mut().enumerate().take(h) {
             *wave = self.y_wave_sin_base[y] * cos_t2 + self.y_wave_cos_base[y] * sin_t2;
         }
+        let x_diag_sin = &self.x_diag_sin;
+        let x_diag_cos = &self.x_diag_cos;
 
         // Hoist quality branching outside the hot pixel loop so we avoid
         // a branch check per pixel on every frame.
@@ -281,14 +283,14 @@ impl PlasmaCanvasAdapter {
                 if use_sunset_fast_path {
                     for y in 0..h {
                         let v2 = self.y_wave[y];
-                        let y_sin = self.y_diag_sin[y];
-                        let y_cos = self.y_diag_cos[y];
+                        let y_diag_sin_t3 =
+                            self.y_diag_sin[y] * cos_t3 + self.y_diag_cos[y] * sin_t3;
+                        let y_diag_cos_t3 =
+                            self.y_diag_cos[y] * cos_t3 - self.y_diag_sin[y] * sin_t3;
                         let row_offset = y * w;
                         for x in 0..w {
                             let v1 = self.x_wave[x];
-                            let sin_xy = self.x_diag_sin[x] * y_cos + self.x_diag_cos[x] * y_sin;
-                            let cos_xy = self.x_diag_cos[x] * y_cos - self.x_diag_sin[x] * y_sin;
-                            let v3 = sin_xy * cos_t3 + cos_xy * sin_t3;
+                            let v3 = x_diag_sin[x] * y_diag_cos_t3 + x_diag_cos[x] * y_diag_sin_t3;
                             let idx = row_offset + x;
                             let v4 = self.radial_center_sin_base[idx] * cos_t4
                                 - self.radial_center_cos_base[idx] * sin_t4;
@@ -303,14 +305,14 @@ impl PlasmaCanvasAdapter {
                 } else {
                     for y in 0..h {
                         let v2 = self.y_wave[y];
-                        let y_sin = self.y_diag_sin[y];
-                        let y_cos = self.y_diag_cos[y];
+                        let y_diag_sin_t3 =
+                            self.y_diag_sin[y] * cos_t3 + self.y_diag_cos[y] * sin_t3;
+                        let y_diag_cos_t3 =
+                            self.y_diag_cos[y] * cos_t3 - self.y_diag_sin[y] * sin_t3;
                         let row_offset = y * w;
                         for x in 0..w {
                             let v1 = self.x_wave[x];
-                            let sin_xy = self.x_diag_sin[x] * y_cos + self.x_diag_cos[x] * y_sin;
-                            let cos_xy = self.x_diag_cos[x] * y_cos - self.x_diag_sin[x] * y_sin;
-                            let v3 = sin_xy * cos_t3 + cos_xy * sin_t3;
+                            let v3 = x_diag_sin[x] * y_diag_cos_t3 + x_diag_cos[x] * y_diag_sin_t3;
                             let idx = row_offset + x;
                             let v4 = self.radial_center_sin_base[idx] * cos_t4
                                 - self.radial_center_cos_base[idx] * sin_t4;
@@ -329,14 +331,14 @@ impl PlasmaCanvasAdapter {
                 if use_sunset_fast_path {
                     for y in 0..h {
                         let v2 = self.y_wave[y];
-                        let y_sin = self.y_diag_sin[y];
-                        let y_cos = self.y_diag_cos[y];
+                        let y_diag_sin_t3 =
+                            self.y_diag_sin[y] * cos_t3 + self.y_diag_cos[y] * sin_t3;
+                        let y_diag_cos_t3 =
+                            self.y_diag_cos[y] * cos_t3 - self.y_diag_sin[y] * sin_t3;
                         let row_offset = y * w;
                         for x in 0..w {
                             let v1 = self.x_wave[x];
-                            let sin_xy = self.x_diag_sin[x] * y_cos + self.x_diag_cos[x] * y_sin;
-                            let cos_xy = self.x_diag_cos[x] * y_cos - self.x_diag_sin[x] * y_sin;
-                            let v3 = sin_xy * cos_t3 + cos_xy * sin_t3;
+                            let v3 = x_diag_sin[x] * y_diag_cos_t3 + x_diag_cos[x] * y_diag_sin_t3;
                             let idx = row_offset + x;
                             let v4 = self.radial_center_sin_base[idx] * cos_t4
                                 - self.radial_center_cos_base[idx] * sin_t4;
@@ -347,14 +349,14 @@ impl PlasmaCanvasAdapter {
                 } else {
                     for y in 0..h {
                         let v2 = self.y_wave[y];
-                        let y_sin = self.y_diag_sin[y];
-                        let y_cos = self.y_diag_cos[y];
+                        let y_diag_sin_t3 =
+                            self.y_diag_sin[y] * cos_t3 + self.y_diag_cos[y] * sin_t3;
+                        let y_diag_cos_t3 =
+                            self.y_diag_cos[y] * cos_t3 - self.y_diag_sin[y] * sin_t3;
                         let row_offset = y * w;
                         for x in 0..w {
                             let v1 = self.x_wave[x];
-                            let sin_xy = self.x_diag_sin[x] * y_cos + self.x_diag_cos[x] * y_sin;
-                            let cos_xy = self.x_diag_cos[x] * y_cos - self.x_diag_sin[x] * y_sin;
-                            let v3 = sin_xy * cos_t3 + cos_xy * sin_t3;
+                            let v3 = x_diag_sin[x] * y_diag_cos_t3 + x_diag_cos[x] * y_diag_sin_t3;
                             let idx = row_offset + x;
                             let v4 = self.radial_center_sin_base[idx] * cos_t4
                                 - self.radial_center_cos_base[idx] * sin_t4;
@@ -369,14 +371,14 @@ impl PlasmaCanvasAdapter {
                 if use_sunset_fast_path {
                     for y in 0..h {
                         let v2 = self.y_wave[y];
-                        let y_sin = self.y_diag_sin[y];
-                        let y_cos = self.y_diag_cos[y];
+                        let y_diag_sin_t3 =
+                            self.y_diag_sin[y] * cos_t3 + self.y_diag_cos[y] * sin_t3;
+                        let y_diag_cos_t3 =
+                            self.y_diag_cos[y] * cos_t3 - self.y_diag_sin[y] * sin_t3;
                         let row_offset = y * w;
                         for x in 0..w {
                             let v1 = self.x_wave[x];
-                            let sin_xy = self.x_diag_sin[x] * y_cos + self.x_diag_cos[x] * y_sin;
-                            let cos_xy = self.x_diag_cos[x] * y_cos - self.x_diag_sin[x] * y_sin;
-                            let v3 = sin_xy * cos_t3 + cos_xy * sin_t3;
+                            let v3 = x_diag_sin[x] * y_diag_cos_t3 + x_diag_cos[x] * y_diag_sin_t3;
                             let t = ((v1 + v2 + v3) / 3.0 + 1.0) * 0.5;
                             painter.set_color_at_index_in_bounds(
                                 row_offset + x,
@@ -387,14 +389,14 @@ impl PlasmaCanvasAdapter {
                 } else {
                     for y in 0..h {
                         let v2 = self.y_wave[y];
-                        let y_sin = self.y_diag_sin[y];
-                        let y_cos = self.y_diag_cos[y];
+                        let y_diag_sin_t3 =
+                            self.y_diag_sin[y] * cos_t3 + self.y_diag_cos[y] * sin_t3;
+                        let y_diag_cos_t3 =
+                            self.y_diag_cos[y] * cos_t3 - self.y_diag_sin[y] * sin_t3;
                         let row_offset = y * w;
                         for x in 0..w {
                             let v1 = self.x_wave[x];
-                            let sin_xy = self.x_diag_sin[x] * y_cos + self.x_diag_cos[x] * y_sin;
-                            let cos_xy = self.x_diag_cos[x] * y_cos - self.x_diag_sin[x] * y_sin;
-                            let v3 = sin_xy * cos_t3 + cos_xy * sin_t3;
+                            let v3 = x_diag_sin[x] * y_diag_cos_t3 + x_diag_cos[x] * y_diag_sin_t3;
                             let t = ((v1 + v2 + v3) / 3.0 + 1.0) * 0.5;
                             painter.set_color_at_index_in_bounds(
                                 row_offset + x,
@@ -966,6 +968,43 @@ mod tests {
                     p2.get(x as i32, y as i32),
                     "Plasma should be deterministic at ({x}, {y})"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn plasma_diagonal_phase_row_precompute_is_identical() {
+        // Proof for the v3 rewrite used in hot loops:
+        // sin((x+y)*1.2 + t3) == sin(x*1.2) * cos(y*1.2 + t3) + cos(x*1.2) * sin(y*1.2 + t3)
+        // where sin(y*1.2 + t3), cos(y*1.2 + t3) are precomputed once per row.
+        let x_vals = [0.0_f64, 0.125, 0.5, 0.875, 1.0];
+        let y_vals = [0.0_f64, 0.2, 0.4, 0.7, 1.0];
+        let times = [0.0_f64, 0.33, 1.25, 2.5, 4.2];
+
+        for nx in x_vals {
+            for ny in y_vals {
+                let x_diag = (nx * 6.0) * 1.2;
+                let y_diag = (ny * 6.0) * 1.2;
+                let (x_sin, x_cos) = x_diag.sin_cos();
+                let (y_sin, y_cos) = y_diag.sin_cos();
+
+                for time in times {
+                    let t3 = time * 0.6;
+                    let (sin_t3, cos_t3) = t3.sin_cos();
+
+                    let sin_xy = x_sin * y_cos + x_cos * y_sin;
+                    let cos_xy = x_cos * y_cos - x_sin * y_sin;
+                    let old_v3 = sin_xy * cos_t3 + cos_xy * sin_t3;
+
+                    let y_diag_sin_t3 = y_sin * cos_t3 + y_cos * sin_t3;
+                    let y_diag_cos_t3 = y_cos * cos_t3 - y_sin * sin_t3;
+                    let new_v3 = x_sin * y_diag_cos_t3 + x_cos * y_diag_sin_t3;
+
+                    assert!(
+                        (old_v3 - new_v3).abs() < 1e-12,
+                        "v3 mismatch for nx={nx} ny={ny} time={time}: old={old_v3} new={new_v3}"
+                    );
+                }
             }
         }
     }
