@@ -735,6 +735,19 @@ impl<W: Write> Presenter<W> {
         let fg_changed = old.fg != new.fg;
         let bg_changed = old.bg != new.bg;
 
+        // Hot path for VFX-style workloads: attributes are unchanged and only
+        // colors vary. In this case, delta emission is always no worse than a
+        // reset+reapply baseline, so skip cost estimation and flag diff logic.
+        if old.attrs == new.attrs {
+            if fg_changed {
+                ansi::sgr_fg_packed(&mut self.writer, new.fg)?;
+            }
+            if bg_changed {
+                ansi::sgr_bg_packed(&mut self.writer, new.bg)?;
+            }
+            return Ok(());
+        }
+
         let mut collateral = StyleFlags::empty();
         if attrs_removed.contains(StyleFlags::BOLD) && new.attrs.contains(StyleFlags::DIM) {
             collateral |= StyleFlags::DIM;

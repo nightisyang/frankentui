@@ -982,10 +982,23 @@ impl VirtualTerminal {
                 // Insert Characters (ICH) — shift chars right at cursor, insert blanks
                 let n = Self::param(params, 0, 1);
                 let n = n.min(self.width.saturating_sub(self.cursor_x));
+                // Wide char fixup: clean up at cursor position before shift
+                self.fixup_wide_erase_row(self.cursor_y, self.cursor_x, n);
                 let row_start = self.idx(0, self.cursor_y);
                 let w = usize::from(self.width);
                 let cx = usize::from(self.cursor_x);
                 let count = usize::from(n);
+                // Wide char fixup: if the shift pushes a wide lead's continuation off-screen,
+                // blank the lead (it would end up at w-count-1 after shift if continuation was at w-count)
+                if count < w {
+                    let cutoff = w - count;
+                    if cutoff > 0
+                        && cutoff < w
+                        && self.grid[row_start + cutoff].ch == WIDE_CONTINUATION
+                    {
+                        self.grid[row_start + cutoff - 1] = VCell::default();
+                    }
+                }
                 // Shift characters right within the row
                 let row = &mut self.grid[row_start..row_start + w];
                 row[cx..].rotate_right(count.min(w - cx));
@@ -998,6 +1011,8 @@ impl VirtualTerminal {
                 // Delete Characters (DCH) — shift chars left at cursor, fill blanks at end
                 let n = Self::param(params, 0, 1);
                 let n = n.min(self.width.saturating_sub(self.cursor_x));
+                // Wide char fixup at delete boundaries
+                self.fixup_wide_erase_row(self.cursor_y, self.cursor_x, n);
                 let row_start = self.idx(0, self.cursor_y);
                 let w = usize::from(self.width);
                 let cx = usize::from(self.cursor_x);
@@ -1014,6 +1029,7 @@ impl VirtualTerminal {
                 // Erase Characters (ECH) — erase N chars from cursor without moving cursor
                 let n = Self::param(params, 0, 1);
                 let n = n.min(self.width.saturating_sub(self.cursor_x));
+                self.fixup_wide_erase_row(self.cursor_y, self.cursor_x, n);
                 let start = self.idx(self.cursor_x, self.cursor_y);
                 for i in 0..usize::from(n) {
                     self.grid[start + i] = VCell::default();
@@ -1408,17 +1424,45 @@ impl VirtualTerminal {
         }
     }
 
+    /// Clean up wide character boundaries before an erase/edit in a single row.
+    /// Checks cells at the edges of the range `[start_col, start_col+count)` and
+    /// blanks orphaned lead/continuation cells.
+    fn fixup_wide_erase_row(&mut self, row_y: u16, start_col: u16, count: u16) {
+        let w = self.width;
+        let sc = start_col;
+        let n = count;
+        if n == 0 || sc >= w {
+            return;
+        }
+        let row_start = self.idx(0, row_y);
+        // If the first erased cell is a continuation, its lead is orphaned → blank lead
+        if sc > 0 && self.grid[row_start + usize::from(sc)].ch == WIDE_CONTINUATION {
+            self.grid[row_start + usize::from(sc - 1)] = VCell::default();
+        }
+        // If the cell just after the erased range is a continuation, it's orphaned → blank it
+        let end_col = sc.saturating_add(n);
+        if end_col < w
+            && self.grid[row_start + usize::from(end_col)].ch == WIDE_CONTINUATION
+        {
+            self.grid[row_start + usize::from(end_col)] = VCell::default();
+        }
+    }
+
     fn erase_display(&mut self, mode: u16) {
         match mode {
             0 => {
                 // Erase from cursor to end
+                let count = self.width.saturating_sub(self.cursor_x);
+                self.fixup_wide_erase_row(self.cursor_y, self.cursor_x, count);
                 let start = self.idx(self.cursor_x, self.cursor_y);
                 for cell in &mut self.grid[start..] {
                     *cell = VCell::default();
                 }
             }
             1 => {
-                // Erase from start to cursor
+                // Erase from start to cursor (inclusive)
+                let count = self.cursor_x + 1;
+                self.fixup_wide_erase_row(self.cursor_y, 0, count);
                 let end = self.idx(self.cursor_x, self.cursor_y) + 1;
                 for cell in &mut self.grid[..end] {
                     *cell = VCell::default();
@@ -1443,6 +1487,8 @@ impl VirtualTerminal {
         match mode {
             0 => {
                 // Erase from cursor to end of line
+                let count = self.width.saturating_sub(self.cursor_x);
+                self.fixup_wide_erase_row(y, self.cursor_x, count);
                 let start = row_start + usize::from(self.cursor_x);
                 let end = row_start + usize::from(self.width);
                 for cell in &mut self.grid[start..end] {
@@ -1450,14 +1496,16 @@ impl VirtualTerminal {
                 }
             }
             1 => {
-                // Erase from start to cursor
-                let end = row_start + usize::from(self.cursor_x) + 1;
+                // Erase from start to cursor (inclusive)
+                let count = self.cursor_x + 1;
+                self.fixup_wide_erase_row(y, 0, count);
+                let end = row_start + usize::from(count);
                 for cell in &mut self.grid[row_start..end] {
                     *cell = VCell::default();
                 }
             }
             2 => {
-                // Erase entire line
+                // Erase entire line (no boundary fixup needed — whole row)
                 let end = row_start + usize::from(self.width);
                 for cell in &mut self.grid[row_start..end] {
                     *cell = VCell::default();

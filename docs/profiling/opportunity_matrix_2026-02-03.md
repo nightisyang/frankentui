@@ -134,9 +134,10 @@ This pass re-ran deterministic PTY harness measurements for the heavy effects
 |----|---------|--------|------------|--------|-------|--------|
 | H1 | `Painter::braille_cell` per-subpixel bounds/index checks | 5 | 4 | 2 | **10.0** | Implemented (fast in-bounds path) |
 | H2 | `Painter::clear` full-buffer reset each frame | 4 | 4 | 2 | **8.0** | Implemented (generation-stamp O(1) clear) |
-| H3 | `MetaballsCanvasAdapter::fill` field accumulation loops | 5 | 3 | 3 | **5.0** | Pending |
-| H4 | `PlasmaCanvasAdapter::fill` per-pixel palette interpolation | 4 | 3 | 3 | **4.0** | Pending |
+| H3 | `MetaballsCanvasAdapter::fill` field accumulation loops | 5 | 3 | 3 | **5.0** | In progress (`bd-3e1t.5.3.1`, MistyCliff) |
+| H4 | `PlasmaCanvasAdapter::fill` per-pixel palette interpolation | 4 | 3 | 3 | **4.0** | Implemented (`bd-3e1t.5.9`) |
 | H5 | Presenter ANSI emission on high-churn frames | 3 | 3 | 3 | **3.0** | Pending |
+| H6 | `Painter::point_colored_at_index_in_bounds` branch-elision trial | 4 | 3 | 2 | **6.0** | Trial reverted (regressed plasma/metaballs) |
 
 #### Measured deltas
 
@@ -182,6 +183,55 @@ Additional candidate heavy effects (base -> post_gen at 120x40):
 |---|---:|---:|---:|
 | doom 120x40 | 1.386 | 1.262 | -8.95% |
 | quake 120x40 | 2.661 | 2.485 | -6.61% |
+
+#### Follow-up sweep: current HEAD + reverted `canvas.rs` trial (2026-02-09)
+
+This follow-up used the same deterministic harness shape:
+
+- `--vfx-harness --vfx-cols=120 --vfx-rows=40 --vfx-tick-ms=16 --vfx-frames=180 --vfx-seed=12345 --vfx-perf`
+- Baseline inputs: `.scratch/vfx/bd-3e1t.5.3_{plasma,metaballs,doom,quake}_120x40_crossterm.jsonl`
+- Current inputs: `/tmp/vfx_bd3e1t53_current_{plasma,metaballs,doom,quake}_120x40.jsonl`
+- Reverted trial inputs: `/tmp/vfx_bd3e1t53_trial_canvasbranchless_{plasma,metaballs,doom,quake}_120x40.jsonl`
+
+`total_ms_p95` / `render_ms_p95` (base -> current):
+
+| Effect | Base total | Current total | Delta | Base render | Current render | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| plasma | 3.461 | 2.587 | -25.25% | 2.521 | 1.669 | -33.80% |
+| metaballs | 3.436 | 3.761 | +9.46% | 2.574 | 2.951 | +14.65% |
+| doom | 1.386 | 1.366 | -1.44% | 1.358 | 1.255 | -7.58% |
+| quake | 2.661 | 3.030 | +13.87% | 2.634 | 2.875 | +9.15% |
+
+Trial comparison (`canvas.rs` branch-elision, current -> trial):
+
+| Effect | Current total | Trial total | Delta | Current render | Trial render | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| plasma | 2.587 | 2.947 | +13.92% | 1.669 | 1.957 | +17.26% |
+| metaballs | 3.761 | 3.941 | +4.79% | 2.951 | 2.969 | +0.61% |
+| doom | 1.366 | 1.263 | -7.54% | 1.255 | 1.177 | -6.22% |
+| quake | 3.030 | 2.771 | -8.55% | 2.875 | 2.662 | -7.41% |
+
+Decision: revert branch-elision lever in `canvas.rs` because it regresses the two target-heavy effects (`plasma`, `metaballs`) despite improving `doom`/`quake`.
+
+#### Detached-worktree A/B (bd-3e1t.5.9 plasma commit pair)
+
+- Baseline commit: `0fcc6ce5ebdd7524a408b6f20b104dd4a97377ed`
+- Optimized commit: `295e8c77da6977157c124ff9a5183cd471f7073b`
+
+| Run ID | Effect | Frames | total_ms_p95 | render_ms_p95 | present_ms_p95 |
+|---|---|---:|---:|---:|---:|
+| `plasma-before-295e8c77` | plasma | 401 | 2.649 | 1.747 | 0.977 |
+| `plasma-after-295e8c77` | plasma | 401 | 2.693 | 1.791 | 1.080 |
+
+Determinism checks:
+
+| Sweep | SHA256(frame-hash stream) |
+|---|---|
+| plasma A/B pair (`before`/`after`) | `6fb20e469d4f064a81c695bb5b570246a365c80c3fcc03846dfdd16765c3b3b7` |
+| plasma base/current/trial | `f6614d778157c8df8c7cbd2013287903dfbb5e6b9df8e23998e7e51290792109` |
+| metaballs base/current/trial | `da23e973ab727f363e37441630baf5e3994dc7ce7e8f11b685f2483cfa7a0c48` |
+| doom base/current/trial | `2d6ce9188c7940b16ef846395d5618d6bb0cea490eccef11a876a8232ca74636` |
+| quake base/current/trial | `f2ac352209d03c920e2ce47443f6b08bfb91229785df82cd1096f151d57605e1` |
 
 #### Isomorphism notes
 

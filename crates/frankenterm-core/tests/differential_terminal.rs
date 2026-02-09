@@ -1,16 +1,153 @@
 use frankenterm_core::{
-    Action, Cell, Cursor, Grid, Modes, Parser, SavedCursor, Scrollback, translate_charset,
+    Action, Cell, Color, Cursor, Grid, Modes, Parser, SavedCursor, Scrollback, SgrFlags,
+    translate_charset,
 };
 use ftui_pty::virtual_terminal::VirtualTerminal;
 
 const KNOWN_MISMATCHES_FIXTURE: &str =
     include_str!("../../../tests/fixtures/vt-conformance/differential/known_mismatches.tsv");
 
+/// Normalized RGB color for comparison between core and reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Rgb(u8, u8, u8);
+
+/// Normalized per-cell style for differential comparison.
+///
+/// Maps both core `SgrAttrs` and reference `CellStyle` to a common representation
+/// so we can detect SGR attribute mismatches between the two implementations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NormalizedStyle {
+    fg: Option<Rgb>,
+    bg: Option<Rgb>,
+    bold: bool,
+    dim: bool,
+    italic: bool,
+    underline: bool,
+    blink: bool,
+    inverse: bool,
+    hidden: bool,
+    strikethrough: bool,
+}
+
+impl Default for NormalizedStyle {
+    fn default() -> Self {
+        Self {
+            fg: None,
+            bg: None,
+            bold: false,
+            dim: false,
+            italic: false,
+            underline: false,
+            blink: false,
+            inverse: false,
+            hidden: false,
+            strikethrough: false,
+        }
+    }
+}
+
+/// Standard ANSI color palette (indices 0-7) as RGB.
+const ANSI_COLORS: [Rgb; 8] = [
+    Rgb(0, 0, 0),       // Black
+    Rgb(170, 0, 0),     // Red
+    Rgb(0, 170, 0),     // Green
+    Rgb(170, 170, 0),   // Yellow
+    Rgb(0, 0, 170),     // Blue
+    Rgb(170, 0, 170),   // Magenta
+    Rgb(0, 170, 170),   // Cyan
+    Rgb(170, 170, 170), // White
+];
+
+/// Bright ANSI color palette (indices 8-15) as RGB.
+const BRIGHT_COLORS: [Rgb; 8] = [
+    Rgb(85, 85, 85),    // Bright Black
+    Rgb(255, 85, 85),   // Bright Red
+    Rgb(85, 255, 85),   // Bright Green
+    Rgb(255, 255, 85),  // Bright Yellow
+    Rgb(85, 85, 255),   // Bright Blue
+    Rgb(255, 85, 255),  // Bright Magenta
+    Rgb(85, 255, 255),  // Bright Cyan
+    Rgb(255, 255, 255), // Bright White
+];
+
+/// Resolve a 256-color index to RGB using the standard xterm palette.
+fn color_256_to_rgb(idx: u8) -> Rgb {
+    match idx {
+        0..=7 => ANSI_COLORS[idx as usize],
+        8..=15 => BRIGHT_COLORS[(idx - 8) as usize],
+        16..=231 => {
+            let n = idx - 16;
+            let b = n % 6;
+            let g = (n / 6) % 6;
+            let r = n / 36;
+            let to_rgb = |v: u8| if v == 0 { 0u8 } else { 55 + 40 * v };
+            Rgb(to_rgb(r), to_rgb(g), to_rgb(b))
+        }
+        232..=255 => {
+            let v = 8 + 10 * (idx - 232);
+            Rgb(v, v, v)
+        }
+    }
+}
+
+/// Resolve a core `Color` enum to an `Option<Rgb>`.
+fn resolve_core_color(color: &Color) -> Option<Rgb> {
+    match color {
+        Color::Default => None,
+        Color::Named(idx) => {
+            let i = *idx as usize;
+            if i < 8 {
+                Some(ANSI_COLORS[i])
+            } else if i < 16 {
+                Some(BRIGHT_COLORS[i - 8])
+            } else {
+                None
+            }
+        }
+        Color::Indexed(idx) => Some(color_256_to_rgb(*idx)),
+        Color::Rgb(r, g, b) => Some(Rgb(*r, *g, *b)),
+    }
+}
+
+/// Build a `NormalizedStyle` from core `SgrAttrs`.
+fn normalize_core_style(attrs: &frankenterm_core::SgrAttrs) -> NormalizedStyle {
+    NormalizedStyle {
+        fg: resolve_core_color(&attrs.fg),
+        bg: resolve_core_color(&attrs.bg),
+        bold: attrs.flags.contains(SgrFlags::BOLD),
+        dim: attrs.flags.contains(SgrFlags::DIM),
+        italic: attrs.flags.contains(SgrFlags::ITALIC),
+        underline: attrs.flags.contains(SgrFlags::UNDERLINE),
+        blink: attrs.flags.contains(SgrFlags::BLINK),
+        inverse: attrs.flags.contains(SgrFlags::INVERSE),
+        hidden: attrs.flags.contains(SgrFlags::HIDDEN),
+        strikethrough: attrs.flags.contains(SgrFlags::STRIKETHROUGH),
+    }
+}
+
+/// Build a `NormalizedStyle` from reference `CellStyle`.
+fn normalize_ref_style(style: &ftui_pty::virtual_terminal::CellStyle) -> NormalizedStyle {
+    NormalizedStyle {
+        fg: style.fg.map(|c| Rgb(c.r, c.g, c.b)),
+        bg: style.bg.map(|c| Rgb(c.r, c.g, c.b)),
+        bold: style.bold,
+        dim: style.dim,
+        italic: style.italic,
+        underline: style.underline,
+        blink: style.blink,
+        inverse: style.reverse,
+        hidden: style.hidden,
+        strikethrough: style.strikethrough,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TerminalSnapshot {
     screen_text: String,
     cursor_row: u16,
     cursor_col: u16,
+    /// Per-row, per-visible-column style (skipping wide continuations).
+    cell_styles: Vec<Vec<NormalizedStyle>>,
 }
 
 #[derive(Debug)]
@@ -402,10 +539,26 @@ impl CoreTerminalHarness {
     }
 
     fn snapshot(&self) -> TerminalSnapshot {
+        let mut cell_styles = Vec::with_capacity(self.rows as usize);
+        for row in 0..self.rows {
+            let mut row_styles = Vec::new();
+            for col in 0..self.cols {
+                if let Some(cell) = self.grid.cell(row, col) {
+                    if cell.is_wide_continuation() {
+                        continue;
+                    }
+                    row_styles.push(normalize_core_style(&cell.attrs));
+                } else {
+                    row_styles.push(NormalizedStyle::default());
+                }
+            }
+            cell_styles.push(row_styles);
+        }
         TerminalSnapshot {
             screen_text: self.screen_text(),
             cursor_row: self.cursor.row,
             cursor_col: self.cursor.col,
+            cell_styles,
         }
     }
 
@@ -457,10 +610,27 @@ fn run_reference_snapshot(input: &[u8], cols: u16, rows: u16) -> TerminalSnapsho
     let mut vt = VirtualTerminal::new(cols, rows);
     vt.feed(input);
     let (cursor_col, cursor_row) = vt.cursor();
+    let mut cell_styles = Vec::with_capacity(rows as usize);
+    for row in 0..rows {
+        let mut row_styles = Vec::new();
+        for col in 0..cols {
+            if let Some(cell) = vt.cell_at(col, row) {
+                // Skip wide-char continuation cells (NUL char in reference)
+                if cell.ch == '\0' {
+                    continue;
+                }
+                row_styles.push(normalize_ref_style(&cell.style));
+            } else {
+                row_styles.push(NormalizedStyle::default());
+            }
+        }
+        cell_styles.push(row_styles);
+    }
     TerminalSnapshot {
         screen_text: vt.screen_text(),
         cursor_row,
         cursor_col,
+        cell_styles,
     }
 }
 
@@ -1565,6 +1735,215 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             rows: 3,
             // Row 1: 中文 (4 cells), Row 2: AB — no wrap ambiguity
             bytes: b"\xe4\xb8\xad\xe6\x96\x87\r\nAB",
+        },
+        // ── Line edit: insert/delete lines ──────────────────────────
+        SupportedFixture {
+            id: "insert_line",
+            cols: 5,
+            rows: 3,
+            // A at (0,0), CUP(2,1)+B, CUP(3,1)+C, CUP(1,1), IL(1)
+            bytes: b"A\x1b[2HB\x00\x00\x1b[3HC\x00\x00\x1b[1;1H\x1b[1L",
+        },
+        SupportedFixture {
+            id: "delete_line",
+            cols: 5,
+            rows: 3,
+            // A at (0,0), CUP(2,1)+B, CUP(3,1)+C, CUP(1,1), DL(1)
+            bytes: b"A\x1b[2HB\x1b[3HC\x1b[1;1H\x1b[1M",
+        },
+        SupportedFixture {
+            id: "insert_line_mid_screen",
+            cols: 6,
+            rows: 4,
+            // Fill 4 rows: LINE0-LINE3, CUP(2,1), IL(1)
+            bytes: b"LINE0\n\rLINE1\n\rLINE2\n\rLINE3\x1b[2;1H\x1b[1L",
+        },
+        SupportedFixture {
+            id: "delete_line_mid_screen",
+            cols: 6,
+            rows: 4,
+            // Fill 4 rows: LINE0-LINE3, CUP(2,1), DL(1)
+            bytes: b"LINE0\n\rLINE1\n\rLINE2\n\rLINE3\x1b[2;1H\x1b[1M",
+        },
+        // ── Line edit: insert/delete chars ──────────────────────────
+        SupportedFixture {
+            id: "insert_chars_basic",
+            cols: 8,
+            rows: 3,
+            // ABCDE, CUP(1,2), ICH(2)+'X'
+            bytes: b"ABCDE\x1b[1;2H\x1b[2@X",
+        },
+        SupportedFixture {
+            id: "delete_chars_basic",
+            cols: 8,
+            rows: 3,
+            // ABCDE, CUP(1,2), DCH(2)+'X'
+            bytes: b"ABCDE\x1b[1;2H\x1b[2PX",
+        },
+        SupportedFixture {
+            id: "insert_chars_at_margin",
+            cols: 8,
+            rows: 3,
+            // ABCDEFGH, CUP(1,7), ICH(3)+'X'
+            bytes: b"ABCDEFGH\x1b[1;7H\x1b[3@X",
+        },
+        SupportedFixture {
+            id: "delete_chars_overflow",
+            cols: 8,
+            rows: 3,
+            // ABCDE, CUP(1,3), DCH(10) — count > remaining
+            bytes: b"ABCDE\x1b[1;3H\x1b[10P",
+        },
+        SupportedFixture {
+            id: "insert_delete_chars",
+            cols: 10,
+            rows: 3,
+            // ABCDEFG, CUP(1,3), ICH(2), CUP(1,6), DCH(1)+'X'
+            bytes: b"ABCDEFG\x1b[1;3H\x1b[2@\x1b[1;6H\x1b[1PX",
+        },
+        SupportedFixture {
+            id: "insert_chars_at_end",
+            cols: 5,
+            rows: 3,
+            // ABCDE, CUP(1,5), ICH(2) — at end of row
+            bytes: b"ABCDE\x1b[1;5H\x1b[2@",
+        },
+        SupportedFixture {
+            id: "delete_chars_mid_row",
+            cols: 5,
+            rows: 3,
+            // ABCDE, CUP(1,2), DCH(2) — delete from middle
+            bytes: b"ABCDE\x1b[1;2H\x1b[2P",
+        },
+        // ── Line edit: IRM interactions ─────────────────────────────
+        SupportedFixture {
+            id: "irm_with_full_row",
+            cols: 5,
+            rows: 3,
+            // IRM on, ABC, CUP home, XY → inserts XY before ABC
+            bytes: b"\x1b[4hABC\x1b[HXY",
+        },
+        SupportedFixture {
+            id: "delete_then_insert",
+            cols: 10,
+            rows: 3,
+            // ABCDE, CUP home, DCH(2), IRM on, XY
+            bytes: b"ABCDE\x1b[H\x1b[2P\x1b[4hXY",
+        },
+        SupportedFixture {
+            id: "irm_insert_before_wide",
+            cols: 8,
+            rows: 3,
+            // Wide char (世) + A, CUP(1,1), IRM on, print X
+            bytes: b"\xe4\xb8\x96A\x1b[1;1H\x1b[4hX",
+        },
+        // ── Line edit: SGR background interactions ──────────────────
+        SupportedFixture {
+            id: "insert_chars_uses_current_bg",
+            cols: 8,
+            rows: 3,
+            // SGR 31, ABCDEF, SGR 44, CUP(1,3), ICH(2)
+            bytes: b"\x1b[31mABCDEF\x1b[44m\x1b[1;3H\x1b[2@",
+        },
+        SupportedFixture {
+            id: "delete_chars_uses_current_bg",
+            cols: 8,
+            rows: 3,
+            // SGR 31, ABCDEF, SGR 42, CUP(1,3), DCH(2)
+            bytes: b"\x1b[31mABCDEF\x1b[42m\x1b[1;3H\x1b[2P",
+        },
+        // ── Wide char: basic and wrap ───────────────────────────────
+        SupportedFixture {
+            id: "wide_char_basic",
+            cols: 10,
+            rows: 3,
+            bytes: b"A\xe4\xb8\xadB",
+        },
+        SupportedFixture {
+            id: "wide_char_wrap",
+            cols: 5,
+            rows: 3,
+            bytes: b"ABCD\xe4\xb8\xad",
+        },
+        SupportedFixture {
+            id: "cjk_basic",
+            cols: 10,
+            rows: 3,
+            bytes: b"A\xe4\xb8\x96\xe7\x95\x8cB",
+        },
+        SupportedFixture {
+            id: "cjk_wrap_at_margin",
+            cols: 6,
+            rows: 3,
+            bytes: b"ABCDE\xe4\xb8\x96",
+        },
+        SupportedFixture {
+            id: "consecutive_wide_chars",
+            cols: 10,
+            rows: 3,
+            bytes: b"\xe4\xb8\x96\xe7\x95\x8c",
+        },
+        // ── Wide char: overwrite interactions ───────────────────────
+        SupportedFixture {
+            id: "overwrite_continuation_with_narrow",
+            cols: 10,
+            rows: 3,
+            bytes: b"\xe4\xb8\x96\x1b[1;2HY",
+        },
+        SupportedFixture {
+            id: "overwrite_wide_first_half",
+            cols: 8,
+            rows: 3,
+            bytes: b"\xe4\xb8\x96\x1b[1;1HX",
+        },
+        SupportedFixture {
+            id: "overwrite_wide_second_half",
+            cols: 8,
+            rows: 3,
+            bytes: b"\xe4\xb8\x96\x1b[1;2HY",
+        },
+        // ── Wide char: erase/edit interactions ──────────────────────
+        SupportedFixture {
+            id: "ech_splits_wide_char",
+            cols: 8,
+            rows: 1,
+            bytes: b"A\xe4\xb8\xadB\x1b[1;3H\x1b[1X",
+        },
+        SupportedFixture {
+            id: "ech_at_wide_head",
+            cols: 8,
+            rows: 1,
+            bytes: b"A\xe4\xb8\xadB\x1b[1;2H\x1b[1X",
+        },
+        SupportedFixture {
+            id: "ich_splits_wide_char",
+            cols: 8,
+            rows: 1,
+            bytes: b"A\xe4\xb8\xadBC\x1b[1;3H\x1b[1@",
+        },
+        SupportedFixture {
+            id: "dch_half_wide_char",
+            cols: 8,
+            rows: 1,
+            bytes: b"A\xe4\xb8\xadBCD\x1b[1;2H\x1b[1P",
+        },
+        SupportedFixture {
+            id: "dch_at_continuation",
+            cols: 8,
+            rows: 1,
+            bytes: b"A\xe4\xb8\xadBC\x1b[1;3H\x1b[1P",
+        },
+        SupportedFixture {
+            id: "el_right_from_wide_continuation",
+            cols: 8,
+            rows: 1,
+            bytes: b"A\xe4\xb8\xadBCD\x1b[1;3H\x1b[0K",
+        },
+        SupportedFixture {
+            id: "el_left_through_wide_head",
+            cols: 8,
+            rows: 1,
+            bytes: b"A\xe4\xb8\xadBC\x1b[1;2H\x1b[1K",
         },
     ]
 }

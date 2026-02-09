@@ -151,11 +151,24 @@ impl Grid {
 
     /// ECH: Erase `count` characters starting at `(row, col)`.
     pub fn erase_chars(&mut self, row: u16, col: u16, count: u16, bg: Color) {
-        if row >= self.rows || col >= self.cols {
+        if row >= self.rows || col >= self.cols || count == 0 {
             return;
         }
         let end = (col + count).min(self.cols);
-        self.erase_range(row, col, row, end, bg);
+
+        // ECH behavior is column-oriented: when targeting the continuation half
+        // of a wide glyph, preserve the lead cell and only blank addressed cells.
+        // Keep right-boundary cleanup so we don't leave orphan continuations.
+        if end < self.cols {
+            let idx = self.index(row, end);
+            if self.cells[idx].is_wide_continuation() {
+                self.cells[idx].erase(bg);
+            }
+        }
+        for c in col..end {
+            let idx = self.index(row, c);
+            self.cells[idx].erase(bg);
+        }
     }
 
     /// Erase a rectangular region. Single row if `end_row == start_row`,
@@ -916,6 +929,22 @@ mod tests {
         assert_eq!(g.cell(0, 1).unwrap().content(), ' ');
         assert_eq!(g.cell(0, 2).unwrap().content(), ' ');
         assert_eq!(g.cell(0, 3).unwrap().content(), 'X');
+    }
+
+    #[test]
+    fn erase_chars_at_wide_continuation_preserves_lead() {
+        let mut g = Grid::new(8, 1);
+        g.cell_mut(0, 0).unwrap().set_content('A', 1);
+        g.write_wide_char(0, 1, '中', SgrAttrs::default());
+        g.cell_mut(0, 3).unwrap().set_content('B', 1);
+
+        g.erase_chars(0, 2, 1, Color::Default);
+
+        assert_eq!(g.cell(0, 1).unwrap().content(), '中');
+        assert!(g.cell(0, 1).unwrap().is_wide());
+        assert_eq!(g.cell(0, 2).unwrap().content(), ' ');
+        assert!(!g.cell(0, 2).unwrap().is_wide_continuation());
+        assert_eq!(g.cell(0, 3).unwrap().content(), 'B');
     }
 
     // ── Insert/delete characters ────────────────────────────────────

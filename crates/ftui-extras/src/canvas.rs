@@ -86,6 +86,10 @@ pub struct Painter {
     width_i32: i32,
     /// Cached height as i32 for bounds checks.
     height_i32: i32,
+    /// Cached width as u32 for unsigned bounds checks.
+    width_u32: u32,
+    /// Cached height as u32 for unsigned bounds checks.
+    height_u32: u32,
     /// Cached width as usize for index math.
     width_usize: usize,
     /// Resolution mode.
@@ -112,6 +116,8 @@ impl Painter {
             height,
             width_i32: width as i32,
             height_i32: height as i32,
+            width_u32: width as u32,
+            height_u32: height as u32,
             width_usize: width as usize,
             mode,
             pixels: vec![0; len],
@@ -137,6 +143,8 @@ impl Painter {
         self.height = height;
         self.width_i32 = width as i32;
         self.height_i32 = height as i32;
+        self.width_u32 = width as u32;
+        self.height_u32 = height as u32;
         self.width_usize = width as usize;
         let len = width as usize * height as usize;
         if len > self.pixels.len() {
@@ -175,23 +183,31 @@ impl Painter {
 
     /// Set a single pixel.
     pub fn point(&mut self, x: i32, y: i32) {
-        if let Some(idx) = self.index(x, y) {
-            if !self.is_full_coverage_current() {
-                self.pixels[idx] = self.generation;
-            }
-            // Uncolored points must not inherit stale color from older generations.
-            self.colors[idx] = None;
+        let xu = x as u32;
+        let yu = y as u32;
+        if xu >= self.width_u32 || yu >= self.height_u32 {
+            return;
         }
+        let idx = yu as usize * self.width_usize + xu as usize;
+        if !self.is_full_coverage_current() {
+            self.pixels[idx] = self.generation;
+        }
+        // Uncolored points must not inherit stale color from older generations.
+        self.colors[idx] = None;
     }
 
     /// Set a single pixel with color.
     pub fn point_colored(&mut self, x: i32, y: i32, color: PackedRgba) {
-        if let Some(idx) = self.index(x, y) {
-            if !self.is_full_coverage_current() {
-                self.pixels[idx] = self.generation;
-            }
-            self.colors[idx] = Some(color);
+        let xu = x as u32;
+        let yu = y as u32;
+        if xu >= self.width_u32 || yu >= self.height_u32 {
+            return;
         }
+        let idx = yu as usize * self.width_usize + xu as usize;
+        if !self.is_full_coverage_current() {
+            self.pixels[idx] = self.generation;
+        }
+        self.colors[idx] = Some(color);
     }
 
     /// Set a single pixel with color when coordinates are already bounds-checked.
@@ -467,12 +483,16 @@ impl Painter {
 
     /// Check if a pixel is set.
     pub fn get(&self, x: i32, y: i32) -> bool {
-        if self.is_full_coverage_current() {
-            return x >= 0 && y >= 0 && x < self.width_i32 && y < self.height_i32;
+        let xu = x as u32;
+        let yu = y as u32;
+        if xu >= self.width_u32 || yu >= self.height_u32 {
+            return false;
         }
-        self.index(x, y)
-            .map(|i| self.pixels[i] == self.generation)
-            .unwrap_or(false)
+        if self.is_full_coverage_current() {
+            return true;
+        }
+        let idx = yu as usize * self.width_usize + xu as usize;
+        self.pixels[idx] == self.generation
     }
 
     #[inline]
@@ -487,10 +507,12 @@ impl Painter {
 
     #[inline]
     fn index(&self, x: i32, y: i32) -> Option<usize> {
-        if x < 0 || y < 0 || x >= self.width_i32 || y >= self.height_i32 {
+        let xu = x as u32;
+        let yu = y as u32;
+        if xu >= self.width_u32 || yu >= self.height_u32 {
             return None;
         }
-        Some(y as usize * self.width_usize + x as usize)
+        Some(yu as usize * self.width_usize + xu as usize)
     }
 
     /// Render this painter's pixels into a cell grid.

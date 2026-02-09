@@ -52,6 +52,7 @@ pub struct FrankenTermWeb {
     auto_link_ids: Vec<u32>,
     auto_link_urls: HashMap<u32, String>,
     link_open_policy: LinkOpenPolicy,
+    text_shaping: TextShapingConfig,
     hovered_link_id: u32,
     cursor_offset: Option<u32>,
     cursor_style: CursorStyle,
@@ -114,6 +115,11 @@ struct LinkOpenPolicy {
     allow_https: bool,
     allowed_hosts: Vec<String>,
     blocked_hosts: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct TextShapingConfig {
+    enabled: bool,
 }
 
 impl Default for LinkOpenPolicy {
@@ -232,6 +238,7 @@ impl FrankenTermWeb {
             auto_link_ids: Vec::new(),
             auto_link_urls: HashMap::new(),
             link_open_policy: LinkOpenPolicy::default(),
+            text_shaping: TextShapingConfig::default(),
             hovered_link_id: 0,
             cursor_offset: None,
             cursor_style: CursorStyle::None,
@@ -301,6 +308,8 @@ impl FrankenTermWeb {
             .unwrap_or(false);
         self.focused = parse_init_bool(&options, "focused").unwrap_or(false);
         self.link_open_policy = parse_link_open_policy(options.as_ref())?;
+        self.text_shaping =
+            parse_text_shaping_config(options.as_ref(), TextShapingConfig::default())?;
         self.initialized = true;
         Ok(())
     }
@@ -763,6 +772,28 @@ impl FrankenTermWeb {
         link_open_policy_to_js(&self.link_open_policy)
     }
 
+    /// Configure text shaping / ligature behavior.
+    ///
+    /// Supported keys:
+    /// - `enabled`: bool
+    /// - `shapingEnabled` / `shaping_enabled`: bool
+    /// - `textShaping` / `text_shaping`: bool
+    ///
+    /// Default behavior is disabled to preserve baseline perf characteristics.
+    #[wasm_bindgen(js_name = setTextShaping)]
+    pub fn set_text_shaping(&mut self, options: JsValue) -> Result<(), JsValue> {
+        self.text_shaping = parse_text_shaping_config(Some(&options), self.text_shaping)?;
+        Ok(())
+    }
+
+    /// Return current text shaping configuration.
+    ///
+    /// Shape: `{ enabled, engine, fallback }`
+    #[wasm_bindgen(js_name = textShapingState)]
+    pub fn text_shaping_state(&self) -> JsValue {
+        text_shaping_config_to_js(self.text_shaping)
+    }
+
     /// Extract selected text from current shadow cells (for copy workflows).
     #[wasm_bindgen(js_name = extractSelectionText)]
     pub fn extract_selection_text(&self) -> String {
@@ -924,6 +955,7 @@ impl FrankenTermWeb {
         self.link_clicks.clear();
         self.auto_link_ids.clear();
         self.auto_link_urls.clear();
+        self.text_shaping = TextShapingConfig::default();
         self.hovered_link_id = 0;
         self.cursor_offset = None;
         self.cursor_style = CursorStyle::None;
@@ -1916,6 +1948,26 @@ fn parse_link_open_policy(options: Option<&JsValue>) -> Result<LinkOpenPolicy, J
     Ok(policy)
 }
 
+fn parse_text_shaping_config(
+    options: Option<&JsValue>,
+    mut config: TextShapingConfig,
+) -> Result<TextShapingConfig, JsValue> {
+    let Some(options) = options else {
+        return Ok(config);
+    };
+
+    if let Some(v) = get_bool(options, "enabled")?
+        .or(get_bool(options, "shapingEnabled")?)
+        .or(get_bool(options, "shaping_enabled")?)
+        .or(get_bool(options, "textShaping")?)
+        .or(get_bool(options, "text_shaping")?)
+    {
+        config.enabled = v;
+    }
+
+    Ok(config)
+}
+
 fn get_host_list(obj: &JsValue, keys: &[&str]) -> Result<Option<Vec<String>>, JsValue> {
     for key in keys {
         let v = Reflect::get(obj, &JsValue::from_str(key))?;
@@ -1958,10 +2010,7 @@ fn parse_http_url_scheme_and_host(url: &str) -> Option<(&'static str, String)> {
     } else {
         return None;
     };
-    let authority = rest
-        .split(|ch| matches!(ch, '/' | '?' | '#'))
-        .next()
-        .unwrap_or_default();
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
     let host = canonicalize_host(authority)?;
     Some((normalized_scheme, host))
 }
@@ -2016,6 +2065,26 @@ fn link_open_policy_to_js(policy: &LinkOpenPolicy) -> JsValue {
     }
     let _ = Reflect::set(&obj, &JsValue::from_str("blockedHosts"), &blocked_hosts);
 
+    obj.into()
+}
+
+fn text_shaping_config_to_js(config: TextShapingConfig) -> JsValue {
+    let obj = Object::new();
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("enabled"),
+        &JsValue::from_bool(config.enabled),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("engine"),
+        &JsValue::from_str("none"),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("fallback"),
+        &JsValue::from_str("cell_scalar"),
+    );
     obj.into()
 }
 
@@ -2699,6 +2768,50 @@ mod tests {
         let allowed = policy.evaluate(Some("https://allowed.test/docs"));
         assert!(allowed.allowed);
         assert_eq!(allowed.reason, None);
+    }
+
+    #[test]
+    fn text_shaping_is_disabled_by_default() {
+        let term = FrankenTermWeb::new();
+        assert_eq!(term.text_shaping, TextShapingConfig::default());
+
+        let state = term.text_shaping_state();
+        assert_eq!(
+            Reflect::get(&state, &JsValue::from_str("enabled"))
+                .unwrap()
+                .as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            Reflect::get(&state, &JsValue::from_str("engine"))
+                .unwrap()
+                .as_string()
+                .as_deref(),
+            Some("none")
+        );
+    }
+
+    #[test]
+    fn set_text_shaping_accepts_aliases_and_toggles_state() {
+        let mut term = FrankenTermWeb::new();
+
+        let enable = Object::new();
+        let _ = Reflect::set(
+            &enable,
+            &JsValue::from_str("shapingEnabled"),
+            &JsValue::from_bool(true),
+        );
+        assert!(term.set_text_shaping(enable.into()).is_ok());
+        assert_eq!(term.text_shaping, TextShapingConfig { enabled: true });
+
+        let disable = Object::new();
+        let _ = Reflect::set(
+            &disable,
+            &JsValue::from_str("enabled"),
+            &JsValue::from_bool(false),
+        );
+        assert!(term.set_text_shaping(disable.into()).is_ok());
+        assert_eq!(term.text_shaping, TextShapingConfig { enabled: false });
     }
 
     #[test]
