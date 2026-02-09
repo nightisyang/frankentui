@@ -916,4 +916,446 @@ mod tests {
         assert_eq!(current.bg, Some(BLUE));
         assert!(current.has_attr(StyleFlags::BOLD));
     }
+
+    // --- ConsoleSink ---
+
+    #[test]
+    fn console_sink_capture_is_empty_initially() {
+        let sink = ConsoleSink::capture();
+        assert_eq!(sink.captured().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn console_sink_writer_returns_none_for_captured() {
+        let sink = ConsoleSink::writer(Vec::<u8>::new());
+        assert!(sink.captured().is_none());
+    }
+
+    #[test]
+    fn console_sink_writer_output() {
+        let buf: Vec<u8> = Vec::new();
+        let sink = ConsoleSink::writer(buf);
+        let mut console = Console::new(80, sink);
+
+        console.println_text("hello");
+        console.flush().unwrap();
+
+        // into_captured returns empty string for writer sinks
+        let output = console.into_captured();
+        assert_eq!(output, "");
+    }
+
+    #[test]
+    fn console_sink_debug_format() {
+        let cap = ConsoleSink::capture();
+        let dbg = format!("{:?}", cap);
+        assert!(dbg.contains("Capture"));
+
+        let w = ConsoleSink::writer(Vec::<u8>::new());
+        let dbg = format!("{:?}", w);
+        assert!(dbg.contains("Writer"));
+    }
+
+    // --- CapturedLine ---
+
+    #[test]
+    fn captured_line_from_plain() {
+        let line = CapturedLine::from_plain("abc");
+        assert_eq!(line.plain_text(), "abc");
+        assert_eq!(line.width(), 3);
+        assert_eq!(line.segments.len(), 1);
+        assert_eq!(line.segments[0].style, Style::default());
+    }
+
+    #[test]
+    fn captured_line_width_with_wide_chars() {
+        let line = CapturedLine::from_plain("中文");
+        assert_eq!(line.width(), 4); // each CJK char = 2 columns
+    }
+
+    #[test]
+    fn captured_line_empty() {
+        let line = CapturedLine::from_plain("");
+        assert_eq!(line.plain_text(), "");
+        assert_eq!(line.width(), 0);
+    }
+
+    // --- ConsoleBuffer ---
+
+    #[test]
+    fn console_buffer_is_empty_when_only_empty_segments() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::with_options(80, sink, WrapMode::None);
+
+        // Print empty text — should not create a real line
+        console.print_text("");
+        console.newline();
+
+        // flush_line only writes if !is_empty, and is_empty returns true
+        // if all segments have empty text
+        let lines = console.into_captured_lines();
+        assert_eq!(lines.len(), 0);
+    }
+
+    // --- WrapMode ---
+
+    #[test]
+    fn wrap_mode_default_is_word() {
+        assert_eq!(WrapMode::default(), WrapMode::Word);
+    }
+
+    // --- Console construction ---
+
+    #[test]
+    fn console_width_accessor() {
+        let console = Console::new(42, ConsoleSink::capture());
+        assert_eq!(console.width(), 42);
+    }
+
+    #[test]
+    fn console_with_options_sets_wrap_mode() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::with_options(10, sink, WrapMode::Character);
+
+        console.print_text("ABCDEFGHIJKLM");
+        console.flush().unwrap();
+
+        let lines = console.into_captured_lines();
+        assert_eq!(lines[0].plain_text(), "ABCDEFGHIJ"); // character-wrapped
+    }
+
+    // --- Style stack edge cases ---
+
+    #[test]
+    fn pop_style_on_empty_stack_returns_none() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::new(80, sink);
+
+        assert!(console.pop_style().is_none());
+    }
+
+    #[test]
+    fn pop_style_returns_pushed_style() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::new(80, sink);
+
+        let style = Style::new().bold();
+        console.push_style(style);
+        let popped = console.pop_style().unwrap();
+        assert!(popped.has_attr(StyleFlags::BOLD));
+    }
+
+    #[test]
+    fn current_style_empty_stack_is_default() {
+        let console = Console::new(80, ConsoleSink::capture());
+        assert_eq!(console.current_style(), Style::default());
+    }
+
+    #[test]
+    fn style_stack_deep_nesting() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::new(80, sink);
+
+        console.push_style(Style::new().fg(RED));
+        console.push_style(Style::new().bg(BLUE));
+        console.push_style(Style::new().bold());
+        console.push_style(Style::new().italic());
+
+        let merged = console.current_style();
+        assert_eq!(merged.fg, Some(RED));
+        assert_eq!(merged.bg, Some(BLUE));
+        assert!(merged.has_attr(StyleFlags::BOLD));
+        assert!(merged.has_attr(StyleFlags::ITALIC));
+    }
+
+    // --- print_styled / println_styled ---
+
+    #[test]
+    fn println_styled_includes_newline() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::new(80, sink);
+
+        console.println_styled("styled line", Style::new().bold());
+
+        let lines = console.into_captured_lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].plain_text(), "styled line");
+        assert!(lines[0].segments[0].style.has_attr(StyleFlags::BOLD));
+    }
+
+    #[test]
+    fn print_styled_merges_with_stack() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::with_options(80, sink, WrapMode::None);
+
+        console.push_style(Style::new().fg(RED));
+        console.print_styled("text", Style::new().bold());
+        console.newline();
+
+        let lines = console.into_captured_lines();
+        // Should have RED from stack + BOLD from segment
+        assert_eq!(lines[0].segments[0].style.fg, Some(RED));
+        assert!(lines[0].segments[0].style.has_attr(StyleFlags::BOLD));
+    }
+
+    // --- println / println_text ---
+
+    #[test]
+    fn println_text_creates_line() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::new(80, sink);
+
+        console.println_text("hello");
+        console.println_text("world");
+
+        let output = console.into_captured();
+        assert_eq!(output, "hello\nworld");
+    }
+
+    // --- blank_line ---
+
+    #[test]
+    fn blank_line_increments_line_count() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::new(80, sink);
+
+        console.blank_line();
+        assert_eq!(console.line_count(), 1);
+
+        console.blank_line();
+        assert_eq!(console.line_count(), 2);
+    }
+
+    // --- rule ---
+
+    #[test]
+    fn rule_uses_custom_character() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::new(5, sink);
+
+        console.rule('=');
+
+        let lines = console.into_captured_lines();
+        assert_eq!(lines[0].plain_text(), "=====");
+    }
+
+    #[test]
+    fn rule_with_pending_content_flushes_first() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::with_options(10, sink, WrapMode::None);
+
+        console.print_text("hello");
+        console.rule('-');
+
+        let lines = console.into_captured_lines();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].plain_text(), "hello");
+        assert_eq!(lines[1].plain_text(), "----------");
+    }
+
+    // --- into_captured_lines for Writer sink ---
+
+    #[test]
+    fn into_captured_lines_returns_empty_for_writer() {
+        let sink = ConsoleSink::writer(Vec::<u8>::new());
+        let console = Console::new(80, sink);
+        let lines = console.into_captured_lines();
+        assert!(lines.is_empty());
+    }
+
+    // --- Word wrapping edge cases ---
+
+    #[test]
+    fn word_wrap_single_space() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::with_options(80, sink, WrapMode::Word);
+
+        console.print_text(" ");
+        console.flush().unwrap();
+
+        let lines = console.into_captured_lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].plain_text(), " ");
+    }
+
+    #[test]
+    fn word_wrap_exact_width_fit() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::with_options(5, sink, WrapMode::Word);
+
+        console.print_text("abcde");
+        console.flush().unwrap();
+
+        let lines = console.into_captured_lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].plain_text(), "abcde");
+    }
+
+    #[test]
+    fn word_wrap_width_1() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::with_options(1, sink, WrapMode::Word);
+
+        console.print_text("abc");
+        console.flush().unwrap();
+
+        let lines = console.into_captured_lines();
+        // Each char gets its own line
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].plain_text(), "a");
+        assert_eq!(lines[1].plain_text(), "b");
+        assert_eq!(lines[2].plain_text(), "c");
+    }
+
+    // --- Character wrapping edge cases ---
+
+    #[test]
+    fn char_wrap_exact_multiple() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::with_options(3, sink, WrapMode::Character);
+
+        console.print_text("abcdef");
+        console.flush().unwrap();
+
+        let lines = console.into_captured_lines();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].plain_text(), "abc");
+        assert_eq!(lines[1].plain_text(), "def");
+    }
+
+    #[test]
+    fn char_wrap_wide_char_at_boundary() {
+        // Width 3: can't fit a 2-wide char in the last 1 cell
+        let sink = ConsoleSink::capture();
+        let mut console = Console::with_options(3, sink, WrapMode::Character);
+
+        console.print_text("a中b");
+        console.flush().unwrap();
+
+        let lines = console.into_captured_lines();
+        // "a" fits (1/3), "中" fits (3/3), then "b" wraps
+        assert_eq!(lines[0].plain_text(), "a中");
+        assert_eq!(lines[1].plain_text(), "b");
+    }
+
+    // --- split_next_word ---
+
+    #[test]
+    fn split_next_word_multiple_spaces() {
+        let (word, rest) = split_next_word("  hello  world");
+        // Skips leading whitespace, finds "hello", includes one trailing space
+        assert_eq!(word, "  hello ");
+        assert_eq!(rest, " world");
+    }
+
+    #[test]
+    fn split_next_word_all_whitespace() {
+        let (word, rest) = split_next_word("   ");
+        // All whitespace: start == text.len() path
+        assert_eq!(word, "   ");
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn split_next_word_no_trailing_space() {
+        let (word, rest) = split_next_word("word");
+        assert_eq!(word, "word");
+        assert_eq!(rest, "");
+    }
+
+    #[test]
+    fn split_next_word_tab_as_whitespace() {
+        let (word, rest) = split_next_word("hello\tworld");
+        // \t is whitespace, so splits there
+        assert_eq!(word, "hello");
+        assert_eq!(rest, "\tworld");
+    }
+
+    // --- split_at_width ---
+
+    #[test]
+    fn split_at_width_already_fits() {
+        assert_eq!(split_at_width("ab", 10), ("ab", ""));
+    }
+
+    #[test]
+    fn split_at_width_empty() {
+        assert_eq!(split_at_width("", 5), ("", ""));
+    }
+
+    #[test]
+    fn split_at_width_zero_width() {
+        assert_eq!(split_at_width("abc", 0), ("", "abc"));
+    }
+
+    // --- Multiple segments on one line ---
+
+    #[test]
+    fn multiple_prints_same_line() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::with_options(80, sink, WrapMode::None);
+
+        console.print_text("Hello, ");
+        console.print_text("world!");
+        console.newline();
+
+        let lines = console.into_captured_lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].plain_text(), "Hello, world!");
+        assert_eq!(lines[0].segments.len(), 2);
+    }
+
+    // --- Flush behavior ---
+
+    #[test]
+    fn flush_writes_pending_content() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::new(80, sink);
+
+        console.print_text("pending");
+        assert_eq!(console.line_count(), 0);
+
+        console.flush().unwrap();
+        assert_eq!(console.line_count(), 1);
+    }
+
+    #[test]
+    fn into_captured_flushes_pending() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::new(80, sink);
+
+        console.print_text("no newline");
+        // into_captured should flush
+        let output = console.into_captured();
+        assert_eq!(output, "no newline");
+    }
+
+    #[test]
+    fn into_captured_lines_flushes_pending() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::new(80, sink);
+
+        console.print_text("no newline");
+        let lines = console.into_captured_lines();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].plain_text(), "no newline");
+    }
+
+    // --- Segment style override ---
+
+    #[test]
+    fn segment_style_supplements_stack() {
+        let sink = ConsoleSink::capture();
+        let mut console = Console::with_options(80, sink, WrapMode::None);
+
+        console.push_style(Style::new().fg(RED));
+        // Segment adds BOLD on top of stack's RED fg
+        console.print(Segment::styled("text", Style::new().bold()));
+        console.newline();
+
+        let lines = console.into_captured_lines();
+        // Stack's fg persists, segment's bold merges in
+        assert_eq!(lines[0].segments[0].style.fg, Some(RED));
+        assert!(lines[0].segments[0].style.has_attr(StyleFlags::BOLD));
+    }
 }
