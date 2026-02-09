@@ -85,21 +85,25 @@ pub struct StringModelAdapter<S: StringModel> {
 
 impl<S: StringModel> StringModelAdapter<S> {
     /// Create a new adapter wrapping the given string model.
+    #[inline]
     pub fn new(inner: S) -> Self {
         Self { inner }
     }
 
     /// Get a reference to the inner model.
+    #[inline]
     pub fn inner(&self) -> &S {
         &self.inner
     }
 
     /// Get a mutable reference to the inner model.
+    #[inline]
     pub fn inner_mut(&mut self) -> &mut S {
         &mut self.inner
     }
 
     /// Consume the adapter and return the inner model.
+    #[inline]
     pub fn into_inner(self) -> S {
         self.inner
     }

@@ -104,21 +104,25 @@ impl InputMacro {
     }
 
     /// Get the metadata.
+    #[inline]
     pub fn metadata(&self) -> &MacroMetadata {
         &self.metadata
     }
 
     /// Get the number of recorded events.
+    #[inline]
     pub fn len(&self) -> usize {
         self.events.len()
     }
 
     /// Check if the macro has no events.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }
 
     /// Get the total duration of the recording.
+    #[inline]
     pub fn total_duration(&self) -> Duration {
         self.metadata.total_duration
     }

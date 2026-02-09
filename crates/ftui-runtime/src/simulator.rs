@@ -171,11 +171,13 @@ impl<M: Model> ProgramSimulator<M> {
     }
 
     /// Get a reference to the model.
+    #[inline]
     pub fn model(&self) -> &M {
         &self.model
     }
 
     /// Get a mutable reference to the model.
+    #[inline]
     pub fn model_mut(&mut self) -> &mut M {
         &mut self.model
     }
@@ -183,21 +185,25 @@ impl<M: Model> ProgramSimulator<M> {
     /// Check if the simulated program is still running.
     ///
     /// Returns `false` after a `Cmd::Quit` has been executed.
+    #[inline]
     pub fn is_running(&self) -> bool {
         self.running
     }
 
     /// Get the current tick rate (if any).
+    #[inline]
     pub fn tick_rate(&self) -> Option<Duration> {
         self.tick_rate
     }
 
     /// Get all log messages emitted via `Cmd::Log`.
+    #[inline]
     pub fn logs(&self) -> &[String] {
         &self.logs
     }
 
     /// Get the command execution log.
+    #[inline]
     pub fn command_log(&self) -> &[CmdRecord] {
         &self.command_log
     }

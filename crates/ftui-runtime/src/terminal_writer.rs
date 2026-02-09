@@ -747,16 +747,19 @@ impl<W: Write> TerminalWriter<W> {
     }
 
     /// Get the current terminal width.
+    #[inline]
     pub fn width(&self) -> u16 {
         self.term_width
     }
 
     /// Get the current terminal height.
+    #[inline]
     pub fn height(&self) -> u16 {
         self.term_height
     }
 
     /// Get the current screen mode.
+    #[inline]
     pub fn screen_mode(&self) -> ScreenMode {
         self.screen_mode
     }
