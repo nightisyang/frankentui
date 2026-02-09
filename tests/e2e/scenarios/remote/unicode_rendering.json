@@ -1,0 +1,18 @@
+{
+  "name": "remote_unicode_rendering",
+  "description": "Unicode rendering correctness: CJK, combining marks, emoji, RTL",
+  "initial_cols": 80,
+  "initial_rows": 24,
+  "steps": [
+    {"type": "send", "data": "printf '\\xe2\\x94\\x8c\\xe2\\x94\\x80\\xe2\\x94\\x80\\xe2\\x94\\x80\\xe2\\x94\\x90\\n'\n", "delay_ms": 200, "comment": "Box drawing: top"},
+    {"type": "send", "data": "printf '\\xe2\\x94\\x82 A \\xe2\\x94\\x82\\n'\n", "delay_ms": 100, "comment": "Box drawing: middle"},
+    {"type": "send", "data": "printf '\\xe2\\x94\\x94\\xe2\\x94\\x80\\xe2\\x94\\x80\\xe2\\x94\\x80\\xe2\\x94\\x98\\n'\n", "delay_ms": 100, "comment": "Box drawing: bottom"},
+    {"type": "send", "data": "printf 'CJK: \\xe4\\xb8\\xad\\xe6\\x96\\x87\\xe6\\xb5\\x8b\\xe8\\xaf\\x95\\n'\n", "delay_ms": 100, "comment": "Chinese characters"},
+    {"type": "send", "data": "printf 'Combining: e\\xcc\\x81 (e + acute)\\n'\n", "delay_ms": 100, "comment": "Combining accent"},
+    {"type": "send", "data": "printf 'Fullwidth: \\xef\\xbc\\xa1\\xef\\xbc\\xa2\\xef\\xbc\\xa3\\n'\n", "delay_ms": 100, "comment": "Fullwidth ABC"},
+    {"type": "send", "data": "printf 'Mixed: abc\\xe4\\xb8\\xad123\\n'\n", "delay_ms": 100, "comment": "Mixed width"},
+    {"type": "send", "data": "printf 'Emoji: \\xf0\\x9f\\x98\\x80\\xf0\\x9f\\x8e\\x89\\xf0\\x9f\\x9a\\x80\\n'\n", "delay_ms": 100, "comment": "Emoji"},
+    {"type": "drain"}
+  ],
+  "timeout_s": 15
+}

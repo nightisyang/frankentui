@@ -1,0 +1,25 @@
+{
+  "name": "remote_resize_storm",
+  "description": "Rapid resize events over WebSocket to test geometry stability",
+  "initial_cols": 120,
+  "initial_rows": 40,
+  "steps": [
+    {"type": "send", "data": "echo 'RESIZE_STORM_START'\n", "delay_ms": 200},
+    {"type": "drain"},
+    {"type": "resize", "cols": 80, "rows": 24, "delay_ms": 50},
+    {"type": "send", "data": "tput cols; tput lines\n", "delay_ms": 100},
+    {"type": "resize", "cols": 160, "rows": 50, "delay_ms": 30},
+    {"type": "resize", "cols": 40, "rows": 10, "delay_ms": 30},
+    {"type": "resize", "cols": 200, "rows": 60, "delay_ms": 30},
+    {"type": "resize", "cols": 80, "rows": 24, "delay_ms": 30},
+    {"type": "resize", "cols": 120, "rows": 40, "delay_ms": 30},
+    {"type": "send", "data": "tput cols; tput lines\n", "delay_ms": 100},
+    {"type": "drain"},
+    {"type": "resize", "cols": 1, "rows": 1, "delay_ms": 50},
+    {"type": "resize", "cols": 300, "rows": 100, "delay_ms": 50},
+    {"type": "resize", "cols": 80, "rows": 24, "delay_ms": 50},
+    {"type": "send", "data": "echo 'RESIZE_STORM_END'\n", "delay_ms": 200},
+    {"type": "drain"}
+  ],
+  "timeout_s": 30
+}
