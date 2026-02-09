@@ -310,28 +310,33 @@ impl<M: Model> WasmRunner<M> {
     }
 
     /// Reference to the model.
+    #[inline]
     #[must_use]
     pub fn model(&self) -> &M {
         &self.model
     }
 
     /// Mutable reference to the model.
+    #[inline]
     pub fn model_mut(&mut self) -> &mut M {
         &mut self.model
     }
 
     /// Drain and return accumulated log messages.
+    #[inline]
     pub fn drain_logs(&mut self) -> Vec<String> {
         std::mem::take(&mut self.logs)
     }
 
     /// Reference to accumulated log messages.
+    #[inline]
     #[must_use]
     pub fn logs(&self) -> &[String] {
         &self.logs
     }
 
     /// Reference to the most recently rendered buffer.
+    #[inline]
     #[must_use]
     pub fn current_buffer(&self) -> &Buffer {
         &self.current
