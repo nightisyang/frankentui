@@ -888,4 +888,95 @@ mod tests {
         assert_eq!(cache.stats().hits, fixtures.len() as u64);
         assert_eq!(cache.stats().misses, fixtures.len() as u64);
     }
+
+    #[test]
+    fn lru_touch_keeps_recent_entry_hot() {
+        // Each 6x6 raster occupies an 8x8 padded slot under current settings.
+        // Budget allows exactly two slots; third insert should evict true LRU.
+        let mut cache = GlyphAtlasCache::new(64, 64, 2 * 8 * 8);
+        let k1 = GlyphKey::from_char('a', 16);
+        let k2 = GlyphKey::from_char('b', 16);
+        let k3 = GlyphKey::from_char('c', 16);
+
+        let _ = cache
+            .get_or_insert_with(k1, |_| raster_solid(6, 6, GlyphMetrics::default()))
+            .expect("k1");
+        let _ = cache
+            .get_or_insert_with(k2, |_| raster_solid(6, 6, GlyphMetrics::default()))
+            .expect("k2");
+
+        // Touch k1 so k2 becomes least-recently-used.
+        assert!(cache.get(k1).is_some());
+
+        let _ = cache
+            .get_or_insert_with(k3, |_| raster_solid(6, 6, GlyphMetrics::default()))
+            .expect("k3");
+
+        assert!(
+            cache.get(k1).is_some(),
+            "touched key should survive eviction"
+        );
+        assert!(
+            cache.get(k2).is_none(),
+            "least-recently-used key should be evicted"
+        );
+        assert!(cache.get(k3).is_some());
+    }
+
+    #[test]
+    fn bytes_uploaded_changes_only_on_miss() {
+        let mut cache = GlyphAtlasCache::new(64, 64, 8 * 8);
+        let k1 = GlyphKey::from_char('x', 16);
+        let k2 = GlyphKey::from_char('y', 16);
+        let raster_bytes = (6 * 6) as u64;
+
+        let _ = cache
+            .get_or_insert_with(k1, |_| raster_solid(6, 6, GlyphMetrics::default()))
+            .expect("first insert");
+        assert_eq!(cache.stats().bytes_uploaded, raster_bytes);
+
+        let mut calls = 0u32;
+        let _ = cache
+            .get_or_insert_with(k1, |_| {
+                calls += 1;
+                raster_solid(6, 6, GlyphMetrics::default())
+            })
+            .expect("cached hit");
+        assert_eq!(calls, 0, "rasterizer should not run on cache hit");
+        assert_eq!(
+            cache.stats().bytes_uploaded,
+            raster_bytes,
+            "bytes_uploaded should not change on hit"
+        );
+
+        // Force an eviction and then reinsert k1; both operations are misses and should
+        // advance bytes_uploaded by one raster each.
+        let _ = cache
+            .get_or_insert_with(k2, |_| raster_solid(6, 6, GlyphMetrics::default()))
+            .expect("k2 insert");
+        assert_eq!(cache.stats().bytes_uploaded, raster_bytes * 2);
+
+        let _ = cache
+            .get_or_insert_with(k1, |_| raster_solid(6, 6, GlyphMetrics::default()))
+            .expect("k1 reinsert");
+        assert_eq!(cache.stats().bytes_uploaded, raster_bytes * 3);
+    }
+
+    #[test]
+    fn cached_bytes_never_exceeds_budget() {
+        let budget = 8 * 8;
+        let mut cache = GlyphAtlasCache::new(64, 64, budget);
+
+        for ch in ['a', 'b', 'c', 'd', 'e', 'f'] {
+            let _ = cache
+                .get_or_insert_with(GlyphKey::from_char(ch, 16), |_| {
+                    raster_solid(6, 6, GlyphMetrics::default())
+                })
+                .expect("insert");
+            assert!(
+                cache.stats().bytes_cached <= budget as u64,
+                "cached_bytes exceeded budget after inserting {ch}"
+            );
+        }
+    }
 }
