@@ -1,0 +1,17 @@
+{
+  "name": "el_left_through_wide_head",
+  "description": "EL 1 (erase left) with cursor at wide char head should also clean up the orphaned continuation",
+  "initial_size": [8, 1],
+  "input_bytes_hex": "41e4b8ad42431b5b313b32481b5b314b",
+  "comment": "Print A, 中 (wide: cols 1-2), BC. CUP(1,2) → cursor at (0,1) the wide char head. EL 1 erases from start of line through cursor (cols 0-1). The continuation at (0,2) is orphaned and cleaned up.",
+  "expected": {
+    "cursor": { "row": 0, "col": 1 },
+    "cells": [
+      { "row": 0, "col": 0, "char": " " },
+      { "row": 0, "col": 1, "char": " " },
+      { "row": 0, "col": 2, "char": " " },
+      { "row": 0, "col": 3, "char": "B" },
+      { "row": 0, "col": 4, "char": "C" }
+    ]
+  }
+}

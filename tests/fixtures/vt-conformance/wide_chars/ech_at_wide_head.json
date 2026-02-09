@@ -1,0 +1,16 @@
+{
+  "name": "ech_at_wide_head",
+  "description": "ECH 1 at the head cell of a wide char should also clean up the orphaned continuation",
+  "initial_size": [8, 1],
+  "input_bytes_hex": "41e4b8ad421b5b313b32481b5b3158",
+  "comment": "Print A, 中 (wide: cols 1-2), B. CUP(1,2) → cursor at (0,1) the wide char head. ECH 1 erases (0,1). The continuation at (0,2) is orphaned because its head was erased.",
+  "expected": {
+    "cursor": { "row": 0, "col": 1 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "A" },
+      { "row": 0, "col": 1, "char": " " },
+      { "row": 0, "col": 2, "char": " " },
+      { "row": 0, "col": 3, "char": "B" }
+    ]
+  }
+}
