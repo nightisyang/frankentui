@@ -90,36 +90,42 @@ impl TextView {
     }
 
     /// Current wrap mode.
+    #[inline]
     #[must_use]
     pub const fn wrap_mode(&self) -> WrapMode {
         self.wrap
     }
 
     /// Current viewport width used for wrapping.
+    #[inline]
     #[must_use]
     pub const fn width(&self) -> usize {
         self.width
     }
 
     /// Number of logical (source) lines in the text.
+    #[inline]
     #[must_use]
     pub const fn source_line_count(&self) -> usize {
         self.source_line_count
     }
 
     /// Number of virtual (wrapped) lines.
+    #[inline]
     #[must_use]
     pub fn virtual_line_count(&self) -> usize {
         self.lines.len()
     }
 
     /// Maximum display width across all virtual lines.
+    #[inline]
     #[must_use]
     pub const fn max_width(&self) -> usize {
         self.max_width
     }
 
     /// Access all virtual lines.
+    #[inline]
     #[must_use]
     pub fn lines(&self) -> &[ViewLine] {
         &self.lines

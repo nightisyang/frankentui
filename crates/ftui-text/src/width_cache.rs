@@ -192,6 +192,7 @@ impl WidthCache {
     }
 
     /// Get cache statistics.
+    #[inline]
     #[must_use]
     pub fn stats(&self) -> CacheStats {
         CacheStats {
@@ -203,18 +204,21 @@ impl WidthCache {
     }
 
     /// Get the current number of cached entries.
+    #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
         self.cache.len()
     }
 
     /// Check if the cache is empty.
+    #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.cache.is_empty()
     }
 
     /// Get the cache capacity.
+    #[inline]
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.cache.cap().get()

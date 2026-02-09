@@ -39,24 +39,28 @@ impl Rope {
     }
 
     /// Total length in bytes.
+    #[inline]
     #[must_use]
     pub fn len_bytes(&self) -> usize {
         self.rope.len_bytes()
     }
 
     /// Total length in Unicode scalar values.
+    #[inline]
     #[must_use]
     pub fn len_chars(&self) -> usize {
         self.rope.len_chars()
     }
 
     /// Total number of lines (newline count + 1).
+    #[inline]
     #[must_use]
     pub fn len_lines(&self) -> usize {
         self.rope.len_lines()
     }
 
     /// Returns `true` if the rope is empty.
+    #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.rope.len_bytes() == 0
@@ -148,24 +152,28 @@ impl Rope {
     }
 
     /// Convert a character index to a byte index.
+    #[inline]
     #[must_use]
     pub fn char_to_byte(&self, char_idx: usize) -> usize {
         self.rope.char_to_byte(char_idx.min(self.len_chars()))
     }
 
     /// Convert a byte index to a character index.
+    #[inline]
     #[must_use]
     pub fn byte_to_char(&self, byte_idx: usize) -> usize {
         self.rope.byte_to_char(byte_idx.min(self.len_bytes()))
     }
 
     /// Convert a character index to a line index.
+    #[inline]
     #[must_use]
     pub fn char_to_line(&self, char_idx: usize) -> usize {
         self.rope.char_to_line(char_idx.min(self.len_chars()))
     }
 
     /// Get the character index at the start of a line.
+    #[inline]
     #[must_use]
     pub fn line_to_char(&self, line_idx: usize) -> usize {
         if line_idx >= self.len_lines() {
@@ -176,6 +184,7 @@ impl Rope {
     }
 
     /// Convert a byte index to (line, column) in characters.
+    #[inline]
     #[must_use]
     pub fn byte_to_line_col(&self, byte_idx: usize) -> (usize, usize) {
         let char_idx = self.byte_to_char(byte_idx);
@@ -185,6 +194,7 @@ impl Rope {
     }
 
     /// Convert (line, column) in characters to a byte index.
+    #[inline]
     #[must_use]
     pub fn line_col_to_byte(&self, line_idx: usize, col: usize) -> usize {
         let line_start = self.line_to_char(line_idx);
