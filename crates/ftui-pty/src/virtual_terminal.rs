@@ -259,6 +259,9 @@ pub struct VirtualTerminal {
     // Title
     title: String,
     quirks: QuirkSet,
+    /// DECOM (DEC private mode 6): origin mode — cursor addressing relative
+    /// to scroll region.
+    origin_mode: bool,
     /// Last printed character for REP (CSI b) support.
     last_char: Option<char>,
     /// UTF-8 accumulator for multi-byte character decoding.
@@ -267,6 +270,8 @@ pub struct VirtualTerminal {
     utf8_len: u8,
     /// Expected total bytes for current UTF-8 sequence.
     utf8_expected: u8,
+    /// Tab stops — `tab_stops[col]` is true if col is a tab stop.
+    tab_stops: Vec<bool>,
 }
 
 impl VirtualTerminal {
@@ -311,11 +316,18 @@ impl VirtualTerminal {
             alternate_cursor: None,
             title: String::new(),
             quirks,
+            origin_mode: false,
             last_char: None,
             utf8_buf: [0; 4],
             utf8_len: 0,
             utf8_expected: 0,
+            tab_stops: Self::default_tab_stops(width),
         }
+    }
+
+    /// Build default tab stops every 8 columns.
+    fn default_tab_stops(width: u16) -> Vec<bool> {
+        (0..width).map(|c| c > 0 && c % 8 == 0).collect()
     }
 
     // ── Dimensions & Cursor ─────────────────────────────────────────
@@ -505,9 +517,16 @@ impl VirtualTerminal {
                 self.cursor_x = self.cursor_x.saturating_sub(1);
             }
             b'\t' => {
-                // Tab: advance to next 8-column stop
-                let next_tab = (self.cursor_x / 8 + 1) * 8;
-                self.cursor_x = next_tab.min(self.width.saturating_sub(1));
+                // Tab: advance to next tab stop
+                let max_col = self.width.saturating_sub(1);
+                let mut col = self.cursor_x + 1;
+                while col < self.width {
+                    if self.tab_stops[usize::from(col)] {
+                        break;
+                    }
+                    col += 1;
+                }
+                self.cursor_x = col.min(max_col);
             }
             b'\x07' => {
                 // Bell: ignored
@@ -584,6 +603,14 @@ impl VirtualTerminal {
                 {
                     self.cursor_x = x.min(self.width.saturating_sub(1));
                     self.cursor_y = y.min(self.height.saturating_sub(1));
+                }
+                self.parse_state = ParseState::Ground;
+            }
+            b'H' => {
+                // HTS: set tab stop at current cursor column
+                let col = usize::from(self.cursor_x);
+                if col < self.tab_stops.len() {
+                    self.tab_stops[col] = true;
                 }
                 self.parse_state = ParseState::Ground;
             }
@@ -735,7 +762,12 @@ impl VirtualTerminal {
                 // Cursor Position (1-indexed)
                 let row = Self::param(params, 0, 1).saturating_sub(1);
                 let col = Self::param(params, 1, 1).saturating_sub(1);
-                self.cursor_y = row.min(self.height.saturating_sub(1));
+                if self.origin_mode {
+                    let abs_row = row.saturating_add(self.scroll_top);
+                    self.cursor_y = abs_row.min(self.scroll_bottom);
+                } else {
+                    self.cursor_y = row.min(self.height.saturating_sub(1));
+                }
                 self.cursor_x = col.min(self.width.saturating_sub(1));
             }
             b'J' => {
@@ -809,7 +841,12 @@ impl VirtualTerminal {
             b'd' => {
                 // Vertical Position Absolute (1-indexed)
                 let row = Self::param(params, 0, 1).saturating_sub(1);
-                self.cursor_y = row.min(self.height.saturating_sub(1));
+                if self.origin_mode {
+                    let abs_row = row.saturating_add(self.scroll_top);
+                    self.cursor_y = abs_row.min(self.scroll_bottom);
+                } else {
+                    self.cursor_y = row.min(self.height.saturating_sub(1));
+                }
             }
             b'm' => {
                 // SGR
@@ -828,7 +865,11 @@ impl VirtualTerminal {
                     self.scroll_bottom = bottom;
                 }
                 self.cursor_x = 0;
-                self.cursor_y = 0;
+                if self.origin_mode {
+                    self.cursor_y = self.scroll_top;
+                } else {
+                    self.cursor_y = 0;
+                }
             }
             b'@' => {
                 // Insert Characters (ICH) — shift chars right at cursor, insert blanks
@@ -880,10 +921,49 @@ impl VirtualTerminal {
                     }
                 }
             }
+            b'Z' => {
+                // CBT: Cursor Backward Tabulation — move to previous tab stop
+                let n = Self::param(params, 0, 1);
+                for _ in 0..n {
+                    if self.cursor_x == 0 {
+                        break;
+                    }
+                    let mut col = self.cursor_x - 1;
+                    loop {
+                        if self.tab_stops[usize::from(col)] {
+                            break;
+                        }
+                        if col == 0 {
+                            break;
+                        }
+                        col -= 1;
+                    }
+                    self.cursor_x = col;
+                }
+            }
+            b'g' => {
+                // TBC: Tab Clear
+                let mode = Self::param(params, 0, 0);
+                match mode {
+                    0 => {
+                        // Clear tab stop at current column
+                        let col = usize::from(self.cursor_x);
+                        if col < self.tab_stops.len() {
+                            self.tab_stops[col] = false;
+                        }
+                    }
+                    3 | 5 => {
+                        // Clear all tab stops
+                        self.tab_stops.fill(false);
+                    }
+                    _ => {}
+                }
+            }
             b'p' if self.csi_intermediate.contains(&b'!') => {
                 // Soft Reset (DECSTR) — CSI ! p
                 self.current_style = CellStyle::default();
                 self.cursor_visible = true;
+                self.origin_mode = false;
                 self.scroll_top = 0;
                 self.scroll_bottom = self.height.saturating_sub(1);
             }
@@ -982,6 +1062,19 @@ impl VirtualTerminal {
 
     fn set_dec_mode(&mut self, mode: u16, enable: bool) {
         match mode {
+            6 => {
+                // DECOM: origin mode — cursor addressing relative to scroll region.
+                self.origin_mode = enable;
+                // Enabling DECOM homes cursor to top of scroll region;
+                // disabling homes to (0,0).
+                if enable {
+                    self.cursor_x = 0;
+                    self.cursor_y = self.scroll_top;
+                } else {
+                    self.cursor_x = 0;
+                    self.cursor_y = 0;
+                }
+            }
             25 => self.cursor_visible = enable,
             1049 => {
                 // Alternate screen buffer
@@ -1222,6 +1315,7 @@ impl VirtualTerminal {
         self.last_char = None;
         self.utf8_len = 0;
         self.utf8_expected = 0;
+        self.tab_stops = Self::default_tab_stops(self.width);
     }
 
     fn param(params: &[u16], idx: usize, default: u16) -> u16 {
@@ -1824,5 +1918,76 @@ mod tests {
         // Lead blanked to space, col 1 becomes 'X'
         assert_eq!(vt.row_text(0), " X");
         assert_eq!(vt.cursor(), (2, 0));
+    }
+
+    // ── Tab stop tests ─────────────────────────────────────────────
+
+    #[test]
+    fn default_tab_stops_every_8() {
+        let vt = VirtualTerminal::new(20, 3);
+        // Default stops at 8, 16
+        assert!(!vt.tab_stops[0]);
+        assert!(vt.tab_stops[8]);
+        assert!(vt.tab_stops[16]);
+        assert!(!vt.tab_stops[1]);
+        assert!(!vt.tab_stops[7]);
+    }
+
+    #[test]
+    fn hts_sets_custom_tab_stop() {
+        let mut vt = VirtualTerminal::new(20, 3);
+        // Move to col 5, ESC H to set tab stop
+        vt.feed(b"\x1b[1;6H\x1bH");
+        assert!(vt.tab_stops[5]);
+        // Tab from col 0 should now stop at 5
+        vt.feed(b"\x1b[1;1H\t");
+        assert_eq!(vt.cursor(), (5, 0));
+    }
+
+    #[test]
+    fn tbc_clears_single_tab_stop() {
+        let mut vt = VirtualTerminal::new(20, 3);
+        // Clear tab stop at col 8
+        vt.feed(b"\x1b[1;9H\x1b[0g");
+        assert!(!vt.tab_stops[8]);
+        // Tab from col 0 should now go to col 16
+        vt.feed(b"\x1b[1;1H\t");
+        assert_eq!(vt.cursor(), (16, 0));
+    }
+
+    #[test]
+    fn tbc_clears_all_tab_stops() {
+        let mut vt = VirtualTerminal::new(20, 3);
+        // Clear all tab stops
+        vt.feed(b"\x1b[3g");
+        // Tab from col 0 → clamps to last col (no stops)
+        vt.feed(b"\x1b[1;1H\t");
+        assert_eq!(vt.cursor(), (19, 0));
+    }
+
+    #[test]
+    fn cbt_moves_to_previous_tab_stop() {
+        let mut vt = VirtualTerminal::new(20, 3);
+        // Move to col 10, CBT → back to col 8
+        vt.feed(b"\x1b[1;11H\x1b[Z");
+        assert_eq!(vt.cursor(), (8, 0));
+    }
+
+    #[test]
+    fn cbt_at_col_zero() {
+        let mut vt = VirtualTerminal::new(20, 3);
+        // CBT at col 0 stays at col 0
+        vt.feed(b"\x1b[Z");
+        assert_eq!(vt.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn reset_restores_default_tab_stops() {
+        let mut vt = VirtualTerminal::new(20, 3);
+        // Clear all, then reset
+        vt.feed(b"\x1b[3g");
+        assert!(!vt.tab_stops[8]);
+        vt.feed(b"\x1bc"); // RIS (full reset)
+        assert!(vt.tab_stops[8]);
     }
 }

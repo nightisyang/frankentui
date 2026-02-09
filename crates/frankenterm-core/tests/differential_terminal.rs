@@ -1010,6 +1010,49 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             // Write "ABCDE", LF → row 1 but col stays, write "X"
             bytes: b"ABCDE\nX",
         },
+        // ── Custom tab stops (HTS, TBC, CBT) ────────────────────────
+        SupportedFixture {
+            id: "hts_set_custom_stop",
+            cols: 20,
+            rows: 3,
+            // CUP(1,5), ESC H (set stop), CUP(1,1), tab → col 5, write "X"
+            bytes: b"\x1b[1;6H\x1bH\x1b[1;1H\tX",
+        },
+        SupportedFixture {
+            id: "tbc_clear_single_stop",
+            cols: 20,
+            rows: 3,
+            // CUP(1,9) → col 8, CSI 0g (clear stop at 8), CUP(1,1), tab → col 16
+            bytes: b"\x1b[1;9H\x1b[0g\x1b[1;1H\tX",
+        },
+        SupportedFixture {
+            id: "tbc_clear_all_stops",
+            cols: 20,
+            rows: 3,
+            // Clear all stops, tab from col 0 → last col, CUP back to write
+            bytes: b"\x1b[3g\t\x1b[1;1HX",
+        },
+        SupportedFixture {
+            id: "cbt_back_tab",
+            cols: 20,
+            rows: 3,
+            // CUP(1,11) → col 10, CBT → col 8, write "X"
+            bytes: b"\x1b[1;11H\x1b[ZX",
+        },
+        SupportedFixture {
+            id: "cbt_multiple",
+            cols: 20,
+            rows: 3,
+            // CUP(1,18) → col 17, CBT 2 → back to 8 then to 0, write "X"
+            bytes: b"\x1b[1;18H\x1b[2ZX",
+        },
+        SupportedFixture {
+            id: "hts_multiple_custom_stops",
+            cols: 20,
+            rows: 3,
+            // Set stops at 3 and 6, clear all defaults, tab through custom stops
+            bytes: b"\x1b[3g\x1b[1;4H\x1bH\x1b[1;7H\x1bH\x1b[1;1H\tA\tB",
+        },
     ]
 }
 
