@@ -123,13 +123,18 @@ impl QuakeFramebuffer {
         }
 
         let stride = stride.max(1) as u32;
+        let pw_usize = pw as usize;
+        let fb_width = self.width as usize;
 
         for py in (0..ph).step_by(stride as usize) {
             let fb_y = (py * self.height) / ph;
+            let fb_row_start = fb_y as usize * fb_width;
+            let painter_row_start = py as usize * pw_usize;
             for px in (0..pw).step_by(stride as usize) {
-                let fb_x = (px * self.width) / pw;
-                let color = self.get_pixel(fb_x, fb_y);
-                painter.point_colored(px as i32, py as i32, color);
+                let fb_x = ((px * self.width) / pw) as usize;
+                let color = self.pixels[fb_row_start + fb_x];
+                let painter_idx = painter_row_start + px as usize;
+                painter.point_colored_at_index_in_bounds(painter_idx, color);
             }
         }
     }
