@@ -1,0 +1,37 @@
+{
+  "name": "index_scrolls_at_bottom",
+  "description": "IND at bottom row scrolls entire screen up by one line",
+  "initial_size": [
+    10,
+    3
+  ],
+  "input_bytes_hex": "524f57301b5b333b314841421b444344",
+  "expected": {
+    "cursor": {
+      "row": 2,
+      "col": 4
+    },
+    "cells": [
+      {
+        "row": 1,
+        "col": 0,
+        "char": "A"
+      },
+      {
+        "row": 1,
+        "col": 1,
+        "char": "B"
+      },
+      {
+        "row": 2,
+        "col": 2,
+        "char": "C"
+      },
+      {
+        "row": 2,
+        "col": 3,
+        "char": "D"
+      }
+    ]
+  }
+}

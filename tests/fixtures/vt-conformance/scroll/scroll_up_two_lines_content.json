@@ -1,0 +1,47 @@
+{
+  "name": "scroll_up_two_lines_content",
+  "description": "CSI 2S scrolls up 2 lines, moving content up and adding blank lines at bottom",
+  "initial_size": [
+    6,
+    4
+  ],
+  "input_bytes_hex": "4c494e45300a0d4c494e45310a0d4c494e45320a0d4c494e45331b5b3253",
+  "expected": {
+    "cursor": {
+      "row": 3,
+      "col": 5
+    },
+    "cells": [
+      {
+        "row": 0,
+        "col": 0,
+        "char": "L"
+      },
+      {
+        "row": 0,
+        "col": 4,
+        "char": "2"
+      },
+      {
+        "row": 1,
+        "col": 0,
+        "char": "L"
+      },
+      {
+        "row": 1,
+        "col": 4,
+        "char": "3"
+      },
+      {
+        "row": 2,
+        "col": 0,
+        "char": " "
+      },
+      {
+        "row": 3,
+        "col": 0,
+        "char": " "
+      }
+    ]
+  }
+}

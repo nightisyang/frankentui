@@ -1,0 +1,47 @@
+{
+  "name": "decaln_resets_cursor",
+  "description": "DECALN fills grid with E and moves cursor to origin (0,0)",
+  "initial_size": [
+    5,
+    3
+  ],
+  "input_bytes_hex": "1b5b333b34481b2338",
+  "expected": {
+    "cursor": {
+      "row": 0,
+      "col": 0
+    },
+    "cells": [
+      {
+        "row": 0,
+        "col": 0,
+        "char": "E"
+      },
+      {
+        "row": 0,
+        "col": 4,
+        "char": "E"
+      },
+      {
+        "row": 1,
+        "col": 0,
+        "char": "E"
+      },
+      {
+        "row": 1,
+        "col": 4,
+        "char": "E"
+      },
+      {
+        "row": 2,
+        "col": 0,
+        "char": "E"
+      },
+      {
+        "row": 2,
+        "col": 4,
+        "char": "E"
+      }
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "name": "lnm_newline_does_cr",
+  "description": "With LNM enabled, newline moves cursor to column 0 of next line",
+  "initial_size": [
+    10,
+    3
+  ],
+  "input_bytes_hex": "1b5b3230684142430a44",
+  "expected": {
+    "cursor": {
+      "row": 1,
+      "col": 1
+    },
+    "cells": [
+      {
+        "row": 0,
+        "col": 0,
+        "char": "A"
+      },
+      {
+        "row": 0,
+        "col": 1,
+        "char": "B"
+      },
+      {
+        "row": 0,
+        "col": 2,
+        "char": "C"
+      },
+      {
+        "row": 1,
+        "col": 0,
+        "char": "D"
+      }
+    ]
+  }
+}

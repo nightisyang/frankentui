@@ -1,0 +1,37 @@
+{
+  "name": "form_feed_as_lf",
+  "description": "Form feed (0x0C) behaves as line feed - moves cursor down one line",
+  "initial_size": [
+    10,
+    5
+  ],
+  "input_bytes_hex": "41420c4344",
+  "expected": {
+    "cursor": {
+      "row": 1,
+      "col": 4
+    },
+    "cells": [
+      {
+        "row": 0,
+        "col": 0,
+        "char": "A"
+      },
+      {
+        "row": 0,
+        "col": 1,
+        "char": "B"
+      },
+      {
+        "row": 1,
+        "col": 2,
+        "char": "C"
+      },
+      {
+        "row": 1,
+        "col": 3,
+        "char": "D"
+      }
+    ]
+  }
+}

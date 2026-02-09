@@ -1,0 +1,22 @@
+{
+  "name": "cha_not_affected_by_decom",
+  "description": "CHA moves cursor to absolute column on current row regardless of origin mode",
+  "initial_size": [
+    10,
+    6
+  ],
+  "input_bytes_hex": "1b5b333b35721b5b3f36681b5b364758",
+  "expected": {
+    "cursor": {
+      "row": 0,
+      "col": 6
+    },
+    "cells": [
+      {
+        "row": 0,
+        "col": 5,
+        "char": "X"
+      }
+    ]
+  }
+}

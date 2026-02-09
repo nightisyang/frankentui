@@ -1,0 +1,57 @@
+{
+  "name": "el_left_preserves_right",
+  "description": "EL 1 erases from cursor to beginning of line, preserving content after cursor",
+  "initial_size": [
+    10,
+    3
+  ],
+  "input_bytes_hex": "41424344454647481b5b313b34481b5b314b",
+  "expected": {
+    "cursor": {
+      "row": 0,
+      "col": 3
+    },
+    "cells": [
+      {
+        "row": 0,
+        "col": 0,
+        "char": " "
+      },
+      {
+        "row": 0,
+        "col": 1,
+        "char": " "
+      },
+      {
+        "row": 0,
+        "col": 2,
+        "char": " "
+      },
+      {
+        "row": 0,
+        "col": 3,
+        "char": " "
+      },
+      {
+        "row": 0,
+        "col": 4,
+        "char": "E"
+      },
+      {
+        "row": 0,
+        "col": 5,
+        "char": "F"
+      },
+      {
+        "row": 0,
+        "col": 6,
+        "char": "G"
+      },
+      {
+        "row": 0,
+        "col": 7,
+        "char": "H"
+      }
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "name": "cnl_with_count",
+  "description": "CNL moves cursor down by count and to column 0",
+  "initial_size": [
+    10,
+    5
+  ],
+  "input_bytes_hex": "4142431b5b324544",
+  "expected": {
+    "cursor": {
+      "row": 2,
+      "col": 1
+    },
+    "cells": [
+      {
+        "row": 0,
+        "col": 0,
+        "char": "A"
+      },
+      {
+        "row": 0,
+        "col": 1,
+        "char": "B"
+      },
+      {
+        "row": 0,
+        "col": 2,
+        "char": "C"
+      },
+      {
+        "row": 2,
+        "col": 0,
+        "char": "D"
+      }
+    ]
+  }
+}
