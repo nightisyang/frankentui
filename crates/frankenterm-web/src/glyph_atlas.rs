@@ -747,4 +747,137 @@ mod tests {
         assert!(objective.pressure_ratio > 0.0);
         assert!(objective.loss > 0.0);
     }
+
+    #[test]
+    fn golden_fixture_placement_and_dirty_rects_are_stable() {
+        // Deterministic fixture: insertion order, sizes, and allocator behavior
+        // must produce stable atlas coordinates across runs.
+        let mut cache = GlyphAtlasCache::new(32, 32, 32 * 32);
+
+        #[derive(Clone, Copy)]
+        struct Fixture {
+            key: GlyphKey,
+            raster_w: u16,
+            raster_h: u16,
+            metrics: GlyphMetrics,
+            expected_slot: AtlasRect,
+        }
+
+        let fixtures = [
+            Fixture {
+                key: GlyphKey::from_char('A', 16),
+                raster_w: 3,
+                raster_h: 5,
+                metrics: GlyphMetrics {
+                    advance_x: 3,
+                    bearing_x: 0,
+                    bearing_y: 4,
+                },
+                expected_slot: AtlasRect {
+                    x: 0,
+                    y: 0,
+                    w: 5, // +2 padding
+                    h: 7, // +2 padding
+                },
+            },
+            Fixture {
+                key: GlyphKey::from_char('B', 16),
+                raster_w: 4,
+                raster_h: 4,
+                metrics: GlyphMetrics {
+                    advance_x: 4,
+                    bearing_x: 1,
+                    bearing_y: 3,
+                },
+                expected_slot: AtlasRect {
+                    x: 5,
+                    y: 0,
+                    w: 6,
+                    h: 6,
+                },
+            },
+            Fixture {
+                key: GlyphKey::from_char('C', 16),
+                raster_w: 7,
+                raster_h: 3,
+                metrics: GlyphMetrics {
+                    advance_x: 7,
+                    bearing_x: 0,
+                    bearing_y: 2,
+                },
+                expected_slot: AtlasRect {
+                    x: 11,
+                    y: 0,
+                    w: 9,
+                    h: 5,
+                },
+            },
+            Fixture {
+                key: GlyphKey::from_char('D', 16),
+                raster_w: 2,
+                raster_h: 8,
+                metrics: GlyphMetrics {
+                    advance_x: 2,
+                    bearing_x: -1,
+                    bearing_y: 7,
+                },
+                expected_slot: AtlasRect {
+                    x: 20,
+                    y: 0,
+                    w: 4,
+                    h: 10,
+                },
+            },
+            Fixture {
+                // Forces a shelf row break (cursor_x + slot_w would exceed atlas width).
+                key: GlyphKey::from_char('E', 16),
+                raster_w: 10,
+                raster_h: 10,
+                metrics: GlyphMetrics {
+                    advance_x: 10,
+                    bearing_x: 0,
+                    bearing_y: 9,
+                },
+                expected_slot: AtlasRect {
+                    x: 0,
+                    y: 10,
+                    w: 12,
+                    h: 12,
+                },
+            },
+        ];
+
+        let mut expected_dirty = Vec::with_capacity(fixtures.len());
+
+        for f in fixtures {
+            let placement = cache
+                .get_or_insert_with(f.key, |_| raster_solid(f.raster_w, f.raster_h, f.metrics))
+                .expect("fixture insert");
+
+            let expected_draw = AtlasRect {
+                x: f.expected_slot.x + 1,
+                y: f.expected_slot.y + 1,
+                w: f.raster_w,
+                h: f.raster_h,
+            };
+
+            assert_eq!(placement.id, glyph_id(f.key));
+            assert_eq!(placement.metrics, f.metrics);
+            assert_eq!(placement.slot, f.expected_slot);
+            assert_eq!(placement.draw, expected_draw);
+
+            expected_dirty.push(expected_draw);
+        }
+
+        let dirty = cache.take_dirty_rects();
+        assert_eq!(dirty, expected_dirty);
+
+        // Second pass should be all hits and placements must remain identical.
+        for f in fixtures {
+            let placement = cache.get(f.key).expect("hit");
+            assert_eq!(placement.slot, f.expected_slot);
+        }
+        assert_eq!(cache.stats().hits, fixtures.len() as u64);
+        assert_eq!(cache.stats().misses, fixtures.len() as u64);
+    }
 }
