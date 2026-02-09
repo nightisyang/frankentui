@@ -633,4 +633,349 @@ mod tests {
         assert!(!fm.navigate(NavDirection::Up));
         assert_eq!(fm.current(), Some(1));
     }
+
+    // --- FocusManager construction ---
+
+    #[test]
+    fn new_manager_has_no_focus() {
+        let fm = FocusManager::new();
+        assert_eq!(fm.current(), None);
+        assert!(!fm.is_trapped());
+    }
+
+    #[test]
+    fn default_and_new_are_equivalent() {
+        let a = FocusManager::new();
+        let b = FocusManager::default();
+        assert_eq!(a.current(), b.current());
+        assert_eq!(a.is_trapped(), b.is_trapped());
+    }
+
+    // --- is_focused ---
+
+    #[test]
+    fn is_focused_returns_true_for_current() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.focus(1);
+        assert!(fm.is_focused(1));
+        assert!(!fm.is_focused(2));
+    }
+
+    #[test]
+    fn is_focused_returns_false_when_no_focus() {
+        let fm = FocusManager::new();
+        assert!(!fm.is_focused(1));
+    }
+
+    // --- focus edge cases ---
+
+    #[test]
+    fn focus_non_existent_node_returns_none() {
+        let mut fm = FocusManager::new();
+        assert!(fm.focus(999).is_none());
+        assert_eq!(fm.current(), None);
+    }
+
+    #[test]
+    fn focus_already_focused_returns_same_id() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.focus(1);
+        // Focusing same node returns current (early exit)
+        assert_eq!(fm.focus(1), Some(1));
+        assert_eq!(fm.current(), Some(1));
+    }
+
+    // --- blur ---
+
+    #[test]
+    fn blur_when_no_focus_returns_none() {
+        let mut fm = FocusManager::new();
+        assert_eq!(fm.blur(), None);
+    }
+
+    #[test]
+    fn blur_generates_focus_lost_event() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.focus(1);
+        fm.take_focus_event(); // clear
+        fm.blur();
+        assert_eq!(fm.take_focus_event(), Some(FocusEvent::FocusLost { id: 1 }));
+    }
+
+    // --- focus_first / focus_last ---
+
+    #[test]
+    fn focus_first_selects_lowest_tab_index() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(3, 2));
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+
+        assert!(fm.focus_first());
+        assert_eq!(fm.current(), Some(1));
+    }
+
+    #[test]
+    fn focus_last_selects_highest_tab_index() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.graph_mut().insert(node(3, 2));
+
+        assert!(fm.focus_last());
+        assert_eq!(fm.current(), Some(3));
+    }
+
+    #[test]
+    fn focus_first_on_empty_graph_returns_false() {
+        let mut fm = FocusManager::new();
+        assert!(!fm.focus_first());
+    }
+
+    #[test]
+    fn focus_last_on_empty_graph_returns_false() {
+        let mut fm = FocusManager::new();
+        assert!(!fm.focus_last());
+    }
+
+    // --- Tab wrapping ---
+
+    #[test]
+    fn focus_next_wraps_at_end() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+
+        fm.focus(2);
+        assert!(fm.focus_next()); // wraps
+        assert_eq!(fm.current(), Some(1));
+    }
+
+    #[test]
+    fn focus_prev_wraps_at_start() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+
+        fm.focus(1);
+        assert!(fm.focus_prev()); // wraps
+        assert_eq!(fm.current(), Some(2));
+    }
+
+    #[test]
+    fn focus_next_with_no_current_selects_first() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+
+        assert!(fm.focus_next());
+        assert_eq!(fm.current(), Some(1));
+    }
+
+    #[test]
+    fn focus_next_on_empty_returns_false() {
+        let mut fm = FocusManager::new();
+        assert!(!fm.focus_next());
+    }
+
+    // --- History ---
+
+    #[test]
+    fn focus_back_on_empty_history_returns_false() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.focus(1);
+        assert!(!fm.focus_back());
+    }
+
+    #[test]
+    fn clear_history_prevents_back() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+
+        fm.focus(1);
+        fm.focus(2);
+        fm.clear_history();
+        assert!(!fm.focus_back());
+        assert_eq!(fm.current(), Some(2));
+    }
+
+    #[test]
+    fn focus_back_skips_removed_nodes() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.graph_mut().insert(node(3, 2));
+
+        fm.focus(1);
+        fm.focus(2);
+        fm.focus(3);
+
+        // Remove node 2 from graph
+        fm.graph_mut().remove(2);
+
+        // focus_back should skip 2 and go to 1
+        assert!(fm.focus_back());
+        assert_eq!(fm.current(), Some(1));
+    }
+
+    // --- Groups ---
+
+    #[test]
+    fn create_group_filters_non_focusable() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        // Node 999 doesn't exist in the graph
+        fm.create_group(1, vec![1, 999]);
+
+        let group = fm.groups.get(&1).unwrap();
+        assert_eq!(group.members.len(), 1);
+        assert!(group.contains(1));
+    }
+
+    #[test]
+    fn add_to_group_creates_group_if_needed() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.add_to_group(42, 1);
+        assert!(fm.groups.contains_key(&42));
+        assert!(fm.groups.get(&42).unwrap().contains(1));
+    }
+
+    #[test]
+    fn add_to_group_skips_unfocusable() {
+        let mut fm = FocusManager::new();
+        fm.add_to_group(1, 999); // 999 not in graph
+        // Group may or may not exist, but if it does, 999 is not in it
+        if let Some(group) = fm.groups.get(&1) {
+            assert!(!group.contains(999));
+        }
+    }
+
+    #[test]
+    fn add_to_group_no_duplicates() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.add_to_group(1, 1);
+        fm.add_to_group(1, 1);
+        assert_eq!(fm.groups.get(&1).unwrap().members.len(), 1);
+    }
+
+    #[test]
+    fn remove_from_group() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.create_group(1, vec![1, 2]);
+        fm.remove_from_group(1, 1);
+        assert!(!fm.groups.get(&1).unwrap().contains(1));
+        assert!(fm.groups.get(&1).unwrap().contains(2));
+    }
+
+    #[test]
+    fn remove_from_nonexistent_group_is_noop() {
+        let mut fm = FocusManager::new();
+        fm.remove_from_group(999, 1); // should not panic
+    }
+
+    // --- FocusGroup ---
+
+    #[test]
+    fn focus_group_with_wrap() {
+        let group = FocusGroup::new(1, vec![1, 2]).with_wrap(false);
+        assert!(!group.wrap);
+    }
+
+    #[test]
+    fn focus_group_with_exit_key() {
+        let group = FocusGroup::new(1, vec![]).with_exit_key(KeyCode::Escape);
+        assert_eq!(group.exit_key, Some(KeyCode::Escape));
+    }
+
+    #[test]
+    fn focus_group_default_wraps() {
+        let group = FocusGroup::new(1, vec![]);
+        assert!(group.wrap);
+        assert_eq!(group.exit_key, None);
+    }
+
+    // --- Trap stack ---
+
+    #[test]
+    fn nested_traps() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.graph_mut().insert(node(2, 1));
+        fm.graph_mut().insert(node(3, 2));
+        fm.graph_mut().insert(node(4, 3));
+
+        fm.create_group(10, vec![1, 2]);
+        fm.create_group(20, vec![3, 4]);
+
+        fm.focus(1);
+        fm.push_trap(10);
+        assert!(fm.is_trapped());
+
+        fm.push_trap(20);
+        // Should be in inner trap, focused on first of group 20
+        assert_eq!(fm.current(), Some(3));
+
+        // Pop inner trap
+        fm.pop_trap();
+        // Should still be trapped (in group 10)
+        assert!(fm.is_trapped());
+
+        // Pop outer trap
+        fm.pop_trap();
+        assert!(!fm.is_trapped());
+    }
+
+    #[test]
+    fn pop_trap_on_empty_returns_false() {
+        let mut fm = FocusManager::new();
+        assert!(!fm.pop_trap());
+    }
+
+    // --- Focus events ---
+
+    #[test]
+    fn take_focus_event_clears_it() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.focus(1);
+
+        assert!(fm.take_focus_event().is_some());
+        assert!(fm.take_focus_event().is_none());
+    }
+
+    #[test]
+    fn focus_event_accessor() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        fm.focus(1);
+
+        assert_eq!(fm.focus_event(), Some(&FocusEvent::FocusGained { id: 1 }));
+    }
+
+    // --- Navigate with no current ---
+
+    #[test]
+    fn navigate_direction_with_no_current_returns_false() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(spatial_node(1, 0, 0, 10, 3, 0));
+        assert!(!fm.navigate(NavDirection::Right));
+    }
+
+    // --- graph accessors ---
+
+    #[test]
+    fn graph_accessor_returns_reference() {
+        let mut fm = FocusManager::new();
+        fm.graph_mut().insert(node(1, 0));
+        assert!(fm.graph().get(1).is_some());
+    }
 }
