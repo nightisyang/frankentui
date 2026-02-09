@@ -1,0 +1,16 @@
+{
+  "name": "rep_last_char_only",
+  "description": "REP repeats only the most recently printed character, not earlier ones",
+  "initial_size": [10, 3],
+  "input_bytes_hex": "41421b5b3262",
+  "comment": "Print A at (0,0) then B at (0,1). REP(2) repeats B at cols 2,3. Result: ABBB. Cursor at (0,4).",
+  "expected": {
+    "cursor": { "row": 0, "col": 4 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "A" },
+      { "row": 0, "col": 1, "char": "B" },
+      { "row": 0, "col": 2, "char": "B" },
+      { "row": 0, "col": 3, "char": "B" }
+    ]
+  }
+}

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use frankenterm_core::{Action, Cursor, Grid, Parser, SavedCursor, Scrollback, SgrFlags};
+use frankenterm_core::{Action, Cursor, Grid, Modes, Parser, SavedCursor, Scrollback, SgrFlags};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +64,9 @@ struct CoreTerminalHarness {
     cursor: Cursor,
     saved_cursor: SavedCursor,
     scrollback: Scrollback,
+    modes: Modes,
+    /// Last printed graphic character, used for REP (CSI b).
+    last_char: Option<char>,
     cols: u16,
     rows: u16,
 }
@@ -78,6 +81,8 @@ impl CoreTerminalHarness {
             cursor: Cursor::new(cols, rows),
             saved_cursor: SavedCursor::default(),
             scrollback: Scrollback::new(512),
+            modes: Modes::new(),
+            last_char: None,
             cols,
             rows,
         }
@@ -203,8 +208,26 @@ impl CoreTerminalHarness {
                 }
             }
             Action::Sgr(params) => self.cursor.attrs.apply_sgr_params(&params),
-            // Mode toggles are currently not modeled in this conformance harness.
-            Action::DecSet(_) | Action::DecRst(_) | Action::AnsiSet(_) | Action::AnsiRst(_) => {}
+            Action::DecSet(params) => {
+                for &p in &params {
+                    self.modes.set_dec_mode(p, true);
+                }
+            }
+            Action::DecRst(params) => {
+                for &p in &params {
+                    self.modes.set_dec_mode(p, false);
+                }
+            }
+            Action::AnsiSet(params) => {
+                for &p in &params {
+                    self.modes.set_ansi_mode(p, true);
+                }
+            }
+            Action::AnsiRst(params) => {
+                for &p in &params {
+                    self.modes.set_ansi_mode(p, false);
+                }
+            }
             Action::SaveCursor => self.saved_cursor = SavedCursor::save(&self.cursor, false),
             Action::RestoreCursor => self.saved_cursor.restore(&mut self.cursor),
             Action::Index => {
@@ -239,6 +262,7 @@ impl CoreTerminalHarness {
                 self.cursor = Cursor::new(self.cols, self.rows);
                 self.saved_cursor = SavedCursor::default();
                 self.scrollback = Scrollback::new(512);
+                self.modes.reset();
             }
             Action::SetTitle(_) | Action::HyperlinkStart(_) | Action::HyperlinkEnd => {}
             Action::SetTabStop => {
@@ -263,6 +287,24 @@ impl CoreTerminalHarness {
                     self.cursor.attrs.bg,
                 );
             }
+            Action::ScreenAlignment => {
+                // DECALN: fill entire grid with 'E'
+                for row in 0..self.rows {
+                    for col in 0..self.cols {
+                        if let Some(cell) = self.grid.cell_mut(row, col) {
+                            cell.set_content('E', 1);
+                        }
+                    }
+                }
+                self.cursor.move_to(0, 0, self.rows, self.cols);
+            }
+            Action::RepeatChar(count) => {
+                if let Some(ch) = self.last_char {
+                    for _ in 0..count {
+                        self.apply_print(ch);
+                    }
+                }
+            }
             // Keypad mode changes tracked but not applied in conformance harness.
             Action::ApplicationKeypad | Action::NormalKeypad => {}
             Action::Escape(_) => {}
@@ -270,8 +312,19 @@ impl CoreTerminalHarness {
     }
 
     fn apply_print(&mut self, ch: char) {
+        self.last_char = Some(ch);
         if self.cursor.pending_wrap {
-            self.wrap_to_next_line();
+            if self.modes.autowrap() {
+                self.wrap_to_next_line();
+            } else {
+                // DECAWM off: overwrite rightmost column, stay at margin
+                self.cursor.pending_wrap = false;
+            }
+        }
+        // IRM: insert mode shifts chars right before writing
+        if self.modes.insert_mode() {
+            self.grid
+                .insert_chars(self.cursor.row, self.cursor.col, 1, self.cursor.attrs.bg);
         }
         if let Some(cell) = self.grid.cell_mut(self.cursor.row, self.cursor.col) {
             cell.set_content(ch, 1);
@@ -286,6 +339,14 @@ impl CoreTerminalHarness {
     }
 
     fn apply_newline(&mut self) {
+        // LNM (mode 20): if enabled, newline implies carriage return
+        if self
+            .modes
+            .ansi
+            .contains(frankenterm_core::AnsiModes::LINEFEED_NEWLINE)
+        {
+            self.cursor.col = 0;
+        }
         if self.cursor.row + 1 >= self.cursor.scroll_bottom() {
             self.grid.scroll_up_into(
                 self.cursor.scroll_top(),

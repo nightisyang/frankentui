@@ -1,0 +1,17 @@
+{
+  "name": "irm_insert_mode",
+  "description": "IRM (insert mode) shifts chars right when printing instead of overwriting",
+  "initial_size": [10, 3],
+  "input_bytes_hex": "414243441b5b481b5b346858",
+  "comment": "Print ABCD, CUP(1,1) home, IRM on (CSI 4 h), print X; X inserts at col 0, shifts ABCD right -> XABCD; cursor at (0,1)",
+  "expected": {
+    "cursor": { "row": 0, "col": 1 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "X" },
+      { "row": 0, "col": 1, "char": "A" },
+      { "row": 0, "col": 2, "char": "B" },
+      { "row": 0, "col": 3, "char": "C" },
+      { "row": 0, "col": 4, "char": "D" }
+    ]
+  }
+}

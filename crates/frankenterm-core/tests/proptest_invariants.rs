@@ -202,6 +202,13 @@ fn apply_action(action: Action, grid: &mut Grid, cursor: &mut Cursor, scrollback
             cursor.pending_wrap = false;
         }
         Action::ApplicationKeypad | Action::NormalKeypad => {}
+        Action::ScreenAlignment => {
+            grid.erase_all(cursor.attrs.bg);
+            // DECALN fills with 'E' but the proptest harness doesn't need full fidelity.
+        }
+        Action::RepeatChar(_) => {
+            // REP depends on last-printed-char state not tracked here.
+        }
         Action::Escape(_) => {
             // Unsupported sequences are ignored.
         }

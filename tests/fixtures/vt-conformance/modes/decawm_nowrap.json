@@ -1,0 +1,17 @@
+{
+  "name": "decawm_nowrap",
+  "description": "With DECAWM disabled, printing at right margin overwrites last col without wrapping",
+  "initial_size": [5, 3],
+  "input_bytes_hex": "1b5b3f376c4142434445464748",
+  "comment": "CSI ? 7 l (DECAWM off) then print ABCDEFGH; E fills col 4, F/G/H overwrite col 4; cursor stays at (0,4)",
+  "expected": {
+    "cursor": { "row": 0, "col": 4 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "A" },
+      { "row": 0, "col": 1, "char": "B" },
+      { "row": 0, "col": 2, "char": "C" },
+      { "row": 0, "col": 3, "char": "D" },
+      { "row": 0, "col": 4, "char": "H" }
+    ]
+  }
+}

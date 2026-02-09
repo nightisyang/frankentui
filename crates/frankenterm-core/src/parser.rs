@@ -107,6 +107,10 @@ pub enum Action {
     NormalKeypad,
     /// ECH (`CSI Ps X`): erase characters at cursor position (replace with blanks).
     EraseChars(u16),
+    /// DECALN (`ESC # 8`): DEC screen alignment test — fill entire grid with 'E'.
+    ScreenAlignment,
+    /// REP (`CSI Ps b`): repeat the most recently printed graphic character Ps times.
+    RepeatChar(u16),
     /// A raw escape/CSI/OSC sequence captured verbatim (starts with ESC).
     Escape(Vec<u8>),
 }
@@ -115,6 +119,8 @@ pub enum Action {
 enum State {
     Ground,
     Esc,
+    /// ESC # intermediate — waiting for the final byte (e.g., '8' for DECALN).
+    EscHash,
     Csi,
     Osc,
     OscEsc,
@@ -173,6 +179,7 @@ impl Parser {
         match self.state {
             State::Ground => self.advance_ground(b),
             State::Esc => self.advance_esc(b),
+            State::EscHash => self.advance_esc_hash(b),
             State::Csi => self.advance_csi(b),
             State::Osc => self.advance_osc(b),
             State::OscEsc => self.advance_osc_esc(b),
@@ -320,10 +327,28 @@ impl Parser {
                 self.buf.clear();
                 Some(Action::NormalKeypad)
             }
+            // ESC # intermediate — wait for the final byte (e.g., DECALN).
+            b'#' => {
+                self.state = State::EscHash;
+                None
+            }
             _ => {
                 self.state = State::Ground;
                 Some(Action::Escape(self.take_buf()))
             }
+        }
+    }
+
+    fn advance_esc_hash(&mut self, b: u8) -> Option<Action> {
+        self.buf.push(b);
+        self.state = State::Ground;
+        match b {
+            // DECALN: DEC screen alignment test (ESC # 8).
+            b'8' => {
+                self.buf.clear();
+                Some(Action::ScreenAlignment)
+            }
+            _ => Some(Action::Escape(self.take_buf())),
         }
     }
 
@@ -486,6 +511,10 @@ impl Parser {
             ))),
             // ECH: erase characters at cursor (CSI Ps X)
             b'X' => Some(Action::EraseChars(Self::csi_count_or_one(
+                params.first().copied(),
+            ))),
+            // REP: repeat the most recently printed graphic character (CSI Ps b)
+            b'b' => Some(Action::RepeatChar(Self::csi_count_or_one(
                 params.first().copied(),
             ))),
             // SM: set ANSI mode(s)
@@ -1056,5 +1085,31 @@ mod tests {
                 Action::ClearTabStop(3),
             ]
         );
+    }
+
+    #[test]
+    fn esc_hash_8_is_screen_alignment() {
+        let mut p = Parser::new();
+        assert_eq!(p.feed(b"\x1b#8"), vec![Action::ScreenAlignment]);
+    }
+
+    #[test]
+    fn esc_hash_unknown_is_escape() {
+        let mut p = Parser::new();
+        let actions = p.feed(b"\x1b#3");
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], Action::Escape(_)));
+    }
+
+    #[test]
+    fn csi_b_is_repeat_char() {
+        let mut p = Parser::new();
+        assert_eq!(p.feed(b"\x1b[5b"), vec![Action::RepeatChar(5)]);
+    }
+
+    #[test]
+    fn csi_b_default_is_one() {
+        let mut p = Parser::new();
+        assert_eq!(p.feed(b"\x1b[b"), vec![Action::RepeatChar(1)]);
     }
 }

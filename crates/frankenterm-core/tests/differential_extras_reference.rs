@@ -182,6 +182,7 @@ impl CoreTerminalHarness {
             }
             // Keypad mode toggles do not affect baseline grid snapshot output.
             Action::ApplicationKeypad | Action::NormalKeypad => {}
+            Action::ScreenAlignment | Action::RepeatChar(_) => {}
             Action::Escape(_) => {}
             Action::DecSet(_) | Action::DecRst(_) => {}
             Action::AnsiSet(_) | Action::AnsiRst(_) => {}

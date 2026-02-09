@@ -1,0 +1,16 @@
+{
+  "name": "rep_basic",
+  "description": "REP (CSI 3 b) repeats the last printed character 3 more times",
+  "initial_size": [10, 3],
+  "input_bytes_hex": "411b5b3362",
+  "comment": "Print A at (0,0), REP(3) prints A at cols 1, 2, 3. Cursor at (0,4).",
+  "expected": {
+    "cursor": { "row": 0, "col": 4 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "A" },
+      { "row": 0, "col": 1, "char": "A" },
+      { "row": 0, "col": 2, "char": "A" },
+      { "row": 0, "col": 3, "char": "A" }
+    ]
+  }
+}

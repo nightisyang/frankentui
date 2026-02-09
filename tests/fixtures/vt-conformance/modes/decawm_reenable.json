@@ -1,0 +1,21 @@
+{
+  "name": "decawm_reenable",
+  "description": "Disabling then re-enabling DECAWM restores wrap behavior",
+  "initial_size": [5, 3],
+  "input_bytes_hex": "1b5b3f376c414243441b5b3f37684546474849",
+  "comment": "CSI ? 7 l (off), print ABCD at cols 0-3, cursor at col 4; CSI ? 7 h (on), print E at col 4 (sets pending_wrap), F wraps to (1,0), FGHI fill cols 0-3; cursor at (1,4)",
+  "expected": {
+    "cursor": { "row": 1, "col": 4 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "A" },
+      { "row": 0, "col": 1, "char": "B" },
+      { "row": 0, "col": 2, "char": "C" },
+      { "row": 0, "col": 3, "char": "D" },
+      { "row": 0, "col": 4, "char": "E" },
+      { "row": 1, "col": 0, "char": "F" },
+      { "row": 1, "col": 1, "char": "G" },
+      { "row": 1, "col": 2, "char": "H" },
+      { "row": 1, "col": 3, "char": "I" }
+    ]
+  }
+}
