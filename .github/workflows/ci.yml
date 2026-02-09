@@ -768,11 +768,13 @@ jobs:
       - name: Build fuzz targets
         run: cargo fuzz build
 
-      - name: Quick fuzz run (60s per target)
+      - name: Quick fuzz run (20s per target)
         run: |
           cargo fuzz run fuzz_input_parser -- -max_len=4096 -max_total_time=20
           cargo fuzz run fuzz_input_parser_structured -- -max_len=4096 -max_total_time=20
           cargo fuzz run fuzz_input_parser_long_seq -- -max_total_time=20
+          cargo fuzz run fuzz_vt_parser -- -max_len=4096 -max_total_time=20
+          cargo fuzz run fuzz_grid_mutations -- -max_len=4096 -max_total_time=20
 
   # ==========================================================================
   # MSRV Check (Minimum Supported Rust Version)
