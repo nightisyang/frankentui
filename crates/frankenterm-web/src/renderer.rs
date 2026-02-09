@@ -859,8 +859,6 @@ mod gpu {
                 return 0;
             }
             let (cell_w, cell_h) = self.glyph_pixel_size();
-            let glyph_w = cell_w.saturating_sub(2).max(1);
-            let glyph_h = cell_h.saturating_sub(2).max(1);
             let key = GlyphKey::from_char(ch, cell_h.max(1));
 
             let existing_slot = self.glyph_slot_by_key.get(&key).copied();
@@ -869,7 +867,10 @@ mod gpu {
             }
 
             let placement = match self.glyph_cache.get_or_insert_with(key, |_| {
-                rasterize_procedural_glyph(codepoint, glyph_w, glyph_h)
+                // Procedural fallback raster must match the per-cell quad size; otherwise the
+                // UV mapping would stretch it. The production font rasterizer (bd-lff4p.2.4)
+                // is expected to generate cell-sized bitmaps for this pipeline as well.
+                rasterize_procedural_glyph(codepoint, cell_w, cell_h)
             }) {
                 Ok(placement) => placement,
                 Err(_) => return 0,
