@@ -57,6 +57,43 @@ struct AttrExpectation {
     strikethrough: bool,
     #[serde(default)]
     overline: bool,
+    #[serde(default)]
+    fg_color: Option<ColorExpectation>,
+    #[serde(default)]
+    bg_color: Option<ColorExpectation>,
+}
+
+/// JSON-friendly representation of a terminal color for fixture expectations.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ColorExpectation {
+    Default,
+    Named(u8),
+    Indexed(u8),
+    Rgb([u8; 3]),
+}
+
+impl ColorExpectation {
+    fn matches(&self, color: Color) -> bool {
+        match (self, color) {
+            (ColorExpectation::Default, Color::Default) => true,
+            (ColorExpectation::Named(n), Color::Named(c)) => *n == c,
+            (ColorExpectation::Indexed(n), Color::Indexed(c)) => *n == c,
+            (ColorExpectation::Rgb([r, g, b]), Color::Rgb(cr, cg, cb)) => {
+                *r == cr && *g == cg && *b == cb
+            }
+            _ => false,
+        }
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            ColorExpectation::Default => "default".to_string(),
+            ColorExpectation::Named(n) => format!("named({n})"),
+            ColorExpectation::Indexed(n) => format!("indexed({n})"),
+            ColorExpectation::Rgb([r, g, b]) => format!("rgb({r},{g},{b})"),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -610,6 +647,33 @@ fn run_fixture(path: &Path) -> Result<(), String> {
                 SgrFlags::OVERLINE,
                 attrs.overline,
             )?;
+
+            if let Some(expected_fg) = &attrs.fg_color {
+                let got_fg = got.attrs.fg;
+                if !expected_fg.matches(got_fg) {
+                    return Err(format!(
+                        "{}: fg color mismatch at ({},{}): got {}, expected {}",
+                        fixture.name,
+                        exp.row,
+                        exp.col,
+                        describe_color(got_fg),
+                        expected_fg.describe()
+                    ));
+                }
+            }
+            if let Some(expected_bg) = &attrs.bg_color {
+                let got_bg = got.attrs.bg;
+                if !expected_bg.matches(got_bg) {
+                    return Err(format!(
+                        "{}: bg color mismatch at ({},{}): got {}, expected {}",
+                        fixture.name,
+                        exp.row,
+                        exp.col,
+                        describe_color(got_bg),
+                        expected_bg.describe()
+                    ));
+                }
+            }
         }
     }
 
@@ -632,6 +696,15 @@ fn assert_flag(
     Err(format!(
         "{fixture}: attr mismatch at ({row},{col}) for {label}: got {got}, expected {expected}"
     ))
+}
+
+fn describe_color(color: Color) -> String {
+    match color {
+        Color::Default => "default".to_string(),
+        Color::Named(n) => format!("named({n})"),
+        Color::Indexed(n) => format!("indexed({n})"),
+        Color::Rgb(r, g, b) => format!("rgb({r},{g},{b})"),
+    }
 }
 
 fn decode_hex(s: &str) -> Result<Vec<u8>, String> {

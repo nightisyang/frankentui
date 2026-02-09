@@ -10,11 +10,15 @@
 //! - Per-cell background + glyph-atlas foreground sampling
 //! - Dirty-span patch updates via `queue.write_buffer` slices
 //!
-//! Atlas glyph generation is currently deterministic/procedural pending final
-//! font-raster contract from bd-lff4p.2.4.
+//! Atlas glyph generation currently uses a deterministic procedural rasterizer.
+//! GPU metadata wiring follows the glyph placement/metrics contract from
+//! bd-lff4p.2.4, so production rasterization can be swapped in without changing
+//! shader-side layout math.
 
+#[cfg(any(target_arch = "wasm32", test))]
+use crate::glyph_atlas::GlyphPlacement;
 #[cfg(target_arch = "wasm32")]
-use crate::glyph_atlas::{GlyphMetrics, GlyphPlacement, GlyphRaster};
+use crate::glyph_atlas::{GlyphMetrics, GlyphRaster};
 use std::fmt;
 
 // ---------------------------------------------------------------------------
@@ -28,9 +32,9 @@ pub const CELL_DATA_BYTES: usize = 16;
 #[cfg(any(target_arch = "wasm32", test))]
 const UNIFORM_BYTES: usize = 32;
 
-/// Size of one glyph metadata entry in bytes (4 × f32 = 16 bytes).
-#[cfg(target_arch = "wasm32")]
-const GLYPH_META_BYTES: usize = 16;
+/// Size of one glyph metadata entry in bytes (8 × f32 = 32 bytes).
+#[cfg(any(target_arch = "wasm32", test))]
+const GLYPH_META_BYTES: usize = 32;
 
 /// Glyph atlas dimensions (R8 texture, power-of-two for straightforward uploads).
 #[cfg(target_arch = "wasm32")]
@@ -87,38 +91,63 @@ impl Default for CellData {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct GlyphMetaEntry {
     uv_min_x: f32,
     uv_min_y: f32,
     uv_max_x: f32,
     uv_max_y: f32,
+    layout_min_x: f32,
+    layout_min_y: f32,
+    layout_max_x: f32,
+    layout_max_y: f32,
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 impl GlyphMetaEntry {
+    #[cfg(target_arch = "wasm32")]
     const EMPTY: Self = Self {
         uv_min_x: 0.0,
         uv_min_y: 0.0,
         uv_max_x: 0.0,
         uv_max_y: 0.0,
+        layout_min_x: 0.0,
+        layout_min_y: 0.0,
+        layout_max_x: 1.0,
+        layout_max_y: 1.0,
     };
 
     #[must_use]
-    fn from_placement(placement: GlyphPlacement, atlas_width: u16, atlas_height: u16) -> Self {
+    fn from_placement(
+        placement: GlyphPlacement,
+        atlas_width: u16,
+        atlas_height: u16,
+        cell_width_px: u16,
+        cell_height_px: u16,
+    ) -> Self {
         let inv_w = 1.0f32 / f32::from(atlas_width.max(1));
         let inv_h = 1.0f32 / f32::from(atlas_height.max(1));
         let x0 = f32::from(placement.draw.x) * inv_w;
         let y0 = f32::from(placement.draw.y) * inv_h;
         let x1 = f32::from(placement.draw.x.saturating_add(placement.draw.w)) * inv_w;
         let y1 = f32::from(placement.draw.y.saturating_add(placement.draw.h)) * inv_h;
+        let cell_w = f32::from(cell_width_px.max(1));
+        let cell_h = f32::from(cell_height_px.max(1));
+        let layout_min_x = f32::from(placement.metrics.bearing_x) / cell_w;
+        let layout_min_y = (cell_h - f32::from(placement.metrics.bearing_y)) / cell_h;
+        let layout_max_x = layout_min_x + (f32::from(placement.draw.w) / cell_w);
+        let layout_max_y = layout_min_y + (f32::from(placement.draw.h) / cell_h);
 
         Self {
             uv_min_x: x0.clamp(0.0, 1.0),
             uv_min_y: y0.clamp(0.0, 1.0),
             uv_max_x: x1.clamp(0.0, 1.0),
             uv_max_y: y1.clamp(0.0, 1.0),
+            layout_min_x,
+            layout_min_y,
+            layout_max_x,
+            layout_max_y,
         }
     }
 
@@ -129,6 +158,10 @@ impl GlyphMetaEntry {
         out[4..8].copy_from_slice(&self.uv_min_y.to_le_bytes());
         out[8..12].copy_from_slice(&self.uv_max_x.to_le_bytes());
         out[12..16].copy_from_slice(&self.uv_max_y.to_le_bytes());
+        out[16..20].copy_from_slice(&self.layout_min_x.to_le_bytes());
+        out[20..24].copy_from_slice(&self.layout_min_y.to_le_bytes());
+        out[24..28].copy_from_slice(&self.layout_max_x.to_le_bytes());
+        out[28..32].copy_from_slice(&self.layout_max_y.to_le_bytes());
         out
     }
 }
@@ -380,6 +413,10 @@ struct GlyphMeta {
     // UV coordinates in normalized atlas space.
     uv_min: vec2<f32>,
     uv_max: vec2<f32>,
+    // Cell-local glyph layout box in normalized coordinates.
+    // This allows proper placement for non-cell-sized raster bounds.
+    layout_min: vec2<f32>,
+    layout_max: vec2<f32>,
 }
 
 @group(0) @binding(4) var<storage, read> glyph_meta: array<GlyphMeta>;
@@ -484,11 +521,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var glyph_alpha = 0.0;
     if (in.glyph_id != 0u) {
         let meta = glyph_meta[in.glyph_id];
-        let atlas_uv = vec2<f32>(
-            mix(meta.uv_min.x, meta.uv_max.x, clamp(uv.x, 0.0, 1.0)),
-            mix(meta.uv_min.y, meta.uv_max.y, clamp(uv.y, 0.0, 1.0)),
-        );
-        glyph_alpha = textureSample(glyph_atlas, glyph_sampler, atlas_uv).r;
+        if (all(uv >= meta.layout_min) && all(uv <= meta.layout_max)) {
+            let span = max(meta.layout_max - meta.layout_min, vec2<f32>(0.00001, 0.00001));
+            let local_uv = clamp(
+                (uv - meta.layout_min) / span,
+                vec2<f32>(0.0, 0.0),
+                vec2<f32>(1.0, 1.0),
+            );
+            let atlas_uv = vec2<f32>(
+                mix(meta.uv_min.x, meta.uv_max.x, local_uv.x),
+                mix(meta.uv_min.y, meta.uv_max.y, local_uv.y),
+            );
+            glyph_alpha = textureSample(glyph_atlas, glyph_sampler, atlas_uv).r;
+        }
     }
 
     let decoration_alpha = select(0.0, 1.0, underline || strike);
@@ -1069,8 +1114,13 @@ mod gpu {
                 slot
             });
 
-            let meta =
-                GlyphMetaEntry::from_placement(placement, self.atlas_width, self.atlas_height);
+            let meta = GlyphMetaEntry::from_placement(
+                placement,
+                self.atlas_width,
+                self.atlas_height,
+                cell_w,
+                cell_h,
+            );
             if self.glyph_meta_cpu[slot as usize] != meta {
                 self.glyph_meta_cpu[slot as usize] = meta;
                 let byte_offset = (slot as u64) * (GLYPH_META_BYTES as u64);
@@ -1226,6 +1276,7 @@ fn uniforms_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::glyph_atlas::{AtlasRect, GlyphMetrics};
 
     #[test]
     fn cell_data_to_bytes_roundtrip() {
@@ -1315,5 +1366,58 @@ mod tests {
         let g = grid_geometry(80, 24, 8, 16, f32::NAN, -2.0);
         assert_eq!(g.dpr, 1.0);
         assert_eq!(g.zoom, 1.0);
+    }
+
+    #[test]
+    fn glyph_meta_entry_from_placement_encodes_uv_and_layout() {
+        let placement = GlyphPlacement {
+            id: 1,
+            slot: AtlasRect {
+                x: 8,
+                y: 8,
+                w: 16,
+                h: 16,
+            },
+            draw: AtlasRect {
+                x: 10,
+                y: 20,
+                w: 8,
+                h: 12,
+            },
+            metrics: GlyphMetrics {
+                advance_x: 8,
+                bearing_x: 2,
+                bearing_y: 12,
+            },
+        };
+        let meta = GlyphMetaEntry::from_placement(placement, 100, 200, 8, 16);
+        assert!((meta.uv_min_x - 0.10).abs() < f32::EPSILON);
+        assert!((meta.uv_min_y - 0.10).abs() < f32::EPSILON);
+        assert!((meta.uv_max_x - 0.18).abs() < f32::EPSILON);
+        assert!((meta.uv_max_y - 0.16).abs() < f32::EPSILON);
+        assert!((meta.layout_min_x - 0.25).abs() < f32::EPSILON);
+        assert!((meta.layout_min_y - 0.25).abs() < f32::EPSILON);
+        assert!((meta.layout_max_x - 1.25).abs() < f32::EPSILON);
+        assert!((meta.layout_max_y - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn glyph_meta_entry_to_bytes_includes_layout_fields() {
+        let meta = GlyphMetaEntry {
+            uv_min_x: 0.1,
+            uv_min_y: 0.2,
+            uv_max_x: 0.3,
+            uv_max_y: 0.4,
+            layout_min_x: -0.1,
+            layout_min_y: 0.0,
+            layout_max_x: 1.2,
+            layout_max_y: 1.1,
+        };
+        let bytes = meta.to_bytes();
+        assert_eq!(bytes.len(), GLYPH_META_BYTES);
+        assert_eq!(f32::from_le_bytes(bytes[16..20].try_into().unwrap()), -0.1);
+        assert_eq!(f32::from_le_bytes(bytes[20..24].try_into().unwrap()), 0.0);
+        assert_eq!(f32::from_le_bytes(bytes[24..28].try_into().unwrap()), 1.2);
+        assert_eq!(f32::from_le_bytes(bytes[28..32].try_into().unwrap()), 1.1);
     }
 }

@@ -19,14 +19,21 @@ use ftui_render::diff::BufferDiff;
 /// Color mapping: `PackedRgba(u32)` is passed through directly (same
 /// encoding: R in high byte, A in low byte).
 ///
-/// Glyph ID: the Unicode codepoint is used directly for now. The glyph
-/// atlas (bd-lff4p.2.4) will eventually provide a lookup.
+/// Glyph ID: for direct chars we pass the Unicode codepoint to the renderer,
+/// which resolves atlas slots lazily.
+///
+/// Grapheme-cluster cells currently use a deterministic visible placeholder
+/// because the web patch feed does not yet carry grapheme-pool payloads.
+/// This is a graceful fallback until full cluster support lands.
 ///
 /// Attributes: `StyleFlags` bits are passed through as-is.
+const GRAPHEME_FALLBACK_CODEPOINT: u32 = '□' as u32;
+
 #[must_use]
 pub fn cell_from_render(cell: &Cell) -> CellData {
     let glyph_id = match cell.content {
         CellContent::EMPTY | CellContent::CONTINUATION => 0,
+        other if other.is_grapheme() => GRAPHEME_FALLBACK_CODEPOINT,
         other => other.as_char().map_or(0, |c| c as u32),
     };
 
@@ -120,6 +127,38 @@ pub fn full_buffer_patch(buffer: &Buffer) -> CellPatch {
     CellPatch { offset: 0, cells }
 }
 
+/// Aggregate upload stats for a batch of patches.
+///
+/// These values are useful for deterministic frame harness logging without
+/// having to duplicate accounting logic at call sites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PatchBatchStats {
+    /// Number of logical dirty cells represented by the patch batch.
+    pub dirty_cells: u32,
+    /// Number of contiguous patch runs.
+    pub patch_count: u32,
+    /// Total bytes expected to be uploaded for the patch payload.
+    pub bytes_uploaded: u64,
+}
+
+/// Compute aggregate stats for a patch batch.
+#[must_use]
+pub fn patch_batch_stats(patches: &[CellPatch]) -> PatchBatchStats {
+    let dirty_cells_u64 = patches
+        .iter()
+        .map(|patch| patch.cells.len() as u64)
+        .sum::<u64>();
+    let patch_count = patches.len().min(u32::MAX as usize) as u32;
+    let dirty_cells = dirty_cells_u64.min(u64::from(u32::MAX)) as u32;
+    let bytes_uploaded = dirty_cells_u64.saturating_mul(std::mem::size_of::<CellData>() as u64);
+
+    PatchBatchStats {
+        dirty_cells,
+        patch_count,
+        bytes_uploaded,
+    }
+}
+
 fn cell_at_xy(buffer: &Buffer, x: u16, y: u16) -> CellData {
     debug_assert!(x < buffer.width(), "diff x out of bounds");
     debug_assert!(y < buffer.height(), "diff y out of bounds");
@@ -129,7 +168,7 @@ fn cell_at_xy(buffer: &Buffer, x: u16, y: u16) -> CellData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ftui_render::cell::{CellAttrs, PackedRgba, StyleFlags};
+    use ftui_render::cell::{CellAttrs, GraphemeId, PackedRgba, StyleFlags};
 
     fn make_cell(ch: char, fg: u32, bg: u32, flags: StyleFlags) -> Cell {
         Cell {
@@ -171,6 +210,16 @@ mod tests {
         let cell = Cell::CONTINUATION;
         let gpu = cell_from_render(&cell);
         assert_eq!(gpu.glyph_id, 0);
+    }
+
+    #[test]
+    fn cell_from_render_grapheme_uses_placeholder() {
+        let cell = Cell {
+            content: CellContent::from_grapheme(GraphemeId::new(7, 2)),
+            ..Cell::default()
+        };
+        let gpu = cell_from_render(&cell);
+        assert_eq!(gpu.glyph_id, GRAPHEME_FALLBACK_CODEPOINT);
     }
 
     #[test]
@@ -262,5 +311,38 @@ mod tests {
         assert_eq!(patches.len(), 1);
         assert_eq!(patches[0].offset, 4);
         assert_eq!(patches[0].cells.len(), 2);
+    }
+
+    #[test]
+    fn patch_batch_stats_empty() {
+        let stats = patch_batch_stats(&[]);
+        assert_eq!(
+            stats,
+            PatchBatchStats {
+                dirty_cells: 0,
+                patch_count: 0,
+                bytes_uploaded: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn patch_batch_stats_matches_patch_payload() {
+        let old = Buffer::new(10, 2);
+        let mut new = Buffer::new(10, 2);
+        new.set_raw(0, 0, Cell::from_char('A'));
+        new.set_raw(1, 0, Cell::from_char('B'));
+        new.set_raw(7, 1, Cell::from_char('Z'));
+
+        let diff = BufferDiff::compute(&old, &new);
+        let patches = diff_to_patches(&new, &diff);
+        let stats = patch_batch_stats(&patches);
+
+        assert_eq!(stats.patch_count, 2);
+        assert_eq!(stats.dirty_cells, 3);
+        assert_eq!(
+            stats.bytes_uploaded,
+            3 * std::mem::size_of::<CellData>() as u64
+        );
     }
 }

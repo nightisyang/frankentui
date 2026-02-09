@@ -12,7 +12,9 @@
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use frankenterm_web::frame_harness::{FrameRecord, FrameTimeCollector};
 use frankenterm_web::glyph_atlas::{GlyphAtlasCache, GlyphKey, GlyphRaster};
-use frankenterm_web::patch_feed::{cell_from_render, diff_to_patches, full_buffer_patch};
+use frankenterm_web::patch_feed::{
+    cell_from_render, diff_to_patches, full_buffer_patch, patch_batch_stats,
+};
 use frankenterm_web::renderer::{CELL_DATA_BYTES, CellData};
 use ftui_render::buffer::Buffer;
 use ftui_render::cell::{Cell, CellAttrs, PackedRgba, StyleFlags};
@@ -232,8 +234,7 @@ fn bench_frame_harness_stats(c: &mut Criterion) {
 
                         let diff = BufferDiff::compute(old, new);
                         let patches = diff_to_patches(new, &diff);
-                        let dirty: u32 = patches.iter().map(|p| p.cells.len() as u32).sum();
-                        let bytes: u64 = dirty as u64 * CELL_DATA_BYTES as u64;
+                        let patch_stats = patch_batch_stats(&patches);
                         black_box(&patches);
 
                         let elapsed = start.elapsed();
@@ -241,9 +242,11 @@ fn bench_frame_harness_stats(c: &mut Criterion) {
 
                         collector.record_frame(FrameRecord {
                             elapsed,
-                            dirty_cells: dirty,
-                            patch_count: patches.len() as u32,
-                            bytes_uploaded: bytes,
+                            cpu_submit: None,
+                            gpu_time: None,
+                            dirty_cells: patch_stats.dirty_cells,
+                            patch_count: patch_stats.patch_count,
+                            bytes_uploaded: patch_stats.bytes_uploaded,
                         });
                     }
 

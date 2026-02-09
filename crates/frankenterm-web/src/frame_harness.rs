@@ -15,6 +15,8 @@
 //!     // ... render frame ...
 //!     collector.record_frame(FrameRecord {
 //!         elapsed: start.elapsed(),
+//!         cpu_submit: None,
+//!         gpu_time: None,
 //!         dirty_cells: 42,
 //!         patch_count: 3,
 //!         bytes_uploaded: 42 * 16,
@@ -33,6 +35,10 @@ use std::time::Duration;
 pub struct FrameRecord {
     /// Wall-clock time for the frame (CPU side).
     pub elapsed: Duration,
+    /// CPU submit time for this frame, if measured separately from total elapsed.
+    pub cpu_submit: Option<Duration>,
+    /// GPU execution time for this frame, if timestamp queries are available.
+    pub gpu_time: Option<Duration>,
     /// Number of dirty cells updated this frame.
     pub dirty_cells: u32,
     /// Number of contiguous patches uploaded.
@@ -81,35 +87,33 @@ impl FrameTimeCollector {
             .map(|r| r.elapsed.as_micros() as u64)
             .collect();
         times_us.sort_unstable();
+        let mut cpu_submit_us: Vec<u64> = self
+            .records
+            .iter()
+            .filter_map(|r| r.cpu_submit.map(|d| d.as_micros() as u64))
+            .collect();
+        cpu_submit_us.sort_unstable();
+        let mut gpu_time_us: Vec<u64> = self
+            .records
+            .iter()
+            .filter_map(|r| r.gpu_time.map(|d| d.as_micros() as u64))
+            .collect();
+        gpu_time_us.sort_unstable();
 
         let total_dirty: u64 = self.records.iter().map(|r| r.dirty_cells as u64).sum();
         let total_patches: u64 = self.records.iter().map(|r| r.patch_count as u64).sum();
         let total_bytes: u64 = self.records.iter().map(|r| r.bytes_uploaded).sum();
 
         let n = times_us.len();
-        let histogram = if n == 0 {
-            FrameTimeHistogram::default()
-        } else {
-            FrameTimeHistogram {
-                count: n as u64,
-                min_us: times_us[0],
-                max_us: times_us[n - 1],
-                p50_us: percentile(&times_us, 0.50),
-                p95_us: percentile(&times_us, 0.95),
-                p99_us: percentile(&times_us, 0.99),
-                mean_us: if n > 0 {
-                    times_us.iter().sum::<u64>() / n as u64
-                } else {
-                    0
-                },
-            }
-        };
+        let histogram = histogram_or_default(&times_us);
 
         SessionReport {
             run_id: self.run_id.clone(),
             cols: self.cols,
             rows: self.rows,
             frame_time: histogram,
+            cpu_submit_time: optional_histogram(&cpu_submit_us),
+            gpu_time: optional_histogram(&gpu_time_us),
             patch_stats: PatchStats {
                 total_dirty_cells: total_dirty,
                 total_patches,
@@ -141,21 +145,39 @@ impl FrameTimeCollector {
     pub fn to_jsonl(&self) -> String {
         let mut out = String::new();
         for (i, r) in self.records.iter().enumerate() {
-            let line = format!(
-                "{{\"run_id\":\"{}\",\"cols\":{},\"rows\":{},\"frame_idx\":{},\"elapsed_us\":{},\"dirty_cells\":{},\"patch_count\":{},\"bytes_uploaded\":{}}}\n",
-                self.run_id,
-                self.cols,
-                self.rows,
-                i,
-                r.elapsed.as_micros(),
-                r.dirty_cells,
-                r.patch_count,
-                r.bytes_uploaded,
-            );
-            out.push_str(&line);
+            let row = JsonlFrameRecord {
+                run_id: &self.run_id,
+                cols: self.cols,
+                rows: self.rows,
+                frame_idx: i,
+                elapsed_us: r.elapsed.as_micros() as u64,
+                cpu_submit_us: r.cpu_submit.map(|d| d.as_micros() as u64),
+                gpu_time_us: r.gpu_time.map(|d| d.as_micros() as u64),
+                dirty_cells: r.dirty_cells,
+                patch_count: r.patch_count,
+                bytes_uploaded: r.bytes_uploaded,
+            };
+            if let Ok(line) = serde_json::to_string(&row) {
+                out.push_str(&line);
+                out.push('\n');
+            }
         }
         out
     }
+}
+
+#[derive(Debug, Serialize)]
+struct JsonlFrameRecord<'a> {
+    run_id: &'a str,
+    cols: u16,
+    rows: u16,
+    frame_idx: usize,
+    elapsed_us: u64,
+    cpu_submit_us: Option<u64>,
+    gpu_time_us: Option<u64>,
+    dirty_cells: u32,
+    patch_count: u32,
+    bytes_uploaded: u64,
 }
 
 /// Percentile histogram of frame times.
@@ -188,6 +210,8 @@ pub struct SessionReport {
     pub cols: u16,
     pub rows: u16,
     pub frame_time: FrameTimeHistogram,
+    pub cpu_submit_time: Option<FrameTimeHistogram>,
+    pub gpu_time: Option<FrameTimeHistogram>,
     pub patch_stats: PatchStats,
 }
 
@@ -207,6 +231,29 @@ fn percentile(sorted: &[u64], p: f64) -> u64 {
     sorted[idx]
 }
 
+fn histogram_or_default(samples: &[u64]) -> FrameTimeHistogram {
+    if samples.is_empty() {
+        return FrameTimeHistogram::default();
+    }
+    FrameTimeHistogram {
+        count: samples.len() as u64,
+        min_us: samples[0],
+        max_us: samples[samples.len() - 1],
+        p50_us: percentile(samples, 0.50),
+        p95_us: percentile(samples, 0.95),
+        p99_us: percentile(samples, 0.99),
+        mean_us: samples.iter().sum::<u64>() / samples.len() as u64,
+    }
+}
+
+fn optional_histogram(samples: &[u64]) -> Option<FrameTimeHistogram> {
+    if samples.is_empty() {
+        None
+    } else {
+        Some(histogram_or_default(samples))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +271,8 @@ mod tests {
         let mut c = FrameTimeCollector::new("test", 80, 24);
         c.record_frame(FrameRecord {
             elapsed: Duration::from_micros(500),
+            cpu_submit: None,
+            gpu_time: None,
             dirty_cells: 10,
             patch_count: 2,
             bytes_uploaded: 160,
@@ -243,6 +292,8 @@ mod tests {
         for i in 1..=100u64 {
             c.record_frame(FrameRecord {
                 elapsed: Duration::from_micros(i),
+                cpu_submit: None,
+                gpu_time: None,
                 dirty_cells: 1,
                 patch_count: 1,
                 bytes_uploaded: 16,
@@ -267,6 +318,8 @@ mod tests {
         for _ in 0..5 {
             c.record_frame(FrameRecord {
                 elapsed: Duration::from_micros(100),
+                cpu_submit: None,
+                gpu_time: None,
                 dirty_cells: 1,
                 patch_count: 1,
                 bytes_uploaded: 16,
@@ -286,6 +339,8 @@ mod tests {
         let mut c = FrameTimeCollector::new("test", 80, 24);
         c.record_frame(FrameRecord {
             elapsed: Duration::from_micros(123),
+            cpu_submit: None,
+            gpu_time: None,
             dirty_cells: 5,
             patch_count: 1,
             bytes_uploaded: 80,
@@ -302,12 +357,16 @@ mod tests {
         let mut c = FrameTimeCollector::new("test", 80, 24);
         c.record_frame(FrameRecord {
             elapsed: Duration::from_micros(100),
+            cpu_submit: None,
+            gpu_time: None,
             dirty_cells: 10,
             patch_count: 2,
             bytes_uploaded: 160,
         });
         c.record_frame(FrameRecord {
             elapsed: Duration::from_micros(200),
+            cpu_submit: None,
+            gpu_time: None,
             dirty_cells: 20,
             patch_count: 4,
             bytes_uploaded: 320,
@@ -317,5 +376,71 @@ mod tests {
         assert!((r.patch_stats.avg_dirty_per_frame - 15.0).abs() < f64::EPSILON);
         assert!((r.patch_stats.avg_patches_per_frame - 3.0).abs() < f64::EPSILON);
         assert!((r.patch_stats.avg_bytes_per_frame - 240.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn optional_timing_histograms_are_reported_when_present() {
+        let mut c = FrameTimeCollector::new("timed", 80, 24);
+        c.record_frame(FrameRecord {
+            elapsed: Duration::from_micros(400),
+            cpu_submit: Some(Duration::from_micros(150)),
+            gpu_time: Some(Duration::from_micros(220)),
+            dirty_cells: 10,
+            patch_count: 2,
+            bytes_uploaded: 160,
+        });
+        c.record_frame(FrameRecord {
+            elapsed: Duration::from_micros(500),
+            cpu_submit: None,
+            gpu_time: Some(Duration::from_micros(260)),
+            dirty_cells: 12,
+            patch_count: 3,
+            bytes_uploaded: 192,
+        });
+
+        let r = c.report();
+        let cpu = r.cpu_submit_time.expect("cpu timing should be present");
+        let gpu = r.gpu_time.expect("gpu timing should be present");
+        assert_eq!(cpu.count, 1);
+        assert_eq!(cpu.min_us, 150);
+        assert_eq!(gpu.count, 2);
+        assert_eq!(gpu.min_us, 220);
+        assert_eq!(gpu.max_us, 260);
+    }
+
+    #[test]
+    fn optional_timing_histograms_absent_when_not_recorded() {
+        let mut c = FrameTimeCollector::new("untimed", 80, 24);
+        c.record_frame(FrameRecord {
+            elapsed: Duration::from_micros(250),
+            cpu_submit: None,
+            gpu_time: None,
+            dirty_cells: 1,
+            patch_count: 1,
+            bytes_uploaded: 16,
+        });
+
+        let r = c.report();
+        assert!(r.cpu_submit_time.is_none());
+        assert!(r.gpu_time.is_none());
+    }
+
+    #[test]
+    fn jsonl_escapes_run_id() {
+        let mut c = FrameTimeCollector::new("bench\"alpha\nbeta", 80, 24);
+        c.record_frame(FrameRecord {
+            elapsed: Duration::from_micros(123),
+            cpu_submit: None,
+            gpu_time: None,
+            dirty_cells: 3,
+            patch_count: 1,
+            bytes_uploaded: 48,
+        });
+
+        let jsonl = c.to_jsonl();
+        let lines: Vec<&str> = jsonl.lines().collect();
+        assert_eq!(lines.len(), 1);
+        let parsed: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(parsed["run_id"], "bench\"alpha\nbeta");
     }
 }
