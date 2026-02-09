@@ -716,6 +716,258 @@ mod tests {
         assert_eq!(grid.hyperlink_uri_at(9, 9, &reg), None);
     }
 
+    // ── SGR flag set/remove cycles ────────────────────────────────────
+
+    #[test]
+    fn sgr_dim_flag() {
+        let mut a = SgrAttrs::default();
+        a.apply_sgr_params(&[2]);
+        assert!(a.flags.contains(SgrFlags::DIM));
+        a.apply_sgr_params(&[22]); // removes BOLD | DIM
+        assert!(!a.flags.contains(SgrFlags::DIM));
+    }
+
+    #[test]
+    fn sgr_underline_and_variants() {
+        let mut a = SgrAttrs::default();
+        a.apply_sgr_params(&[4]);
+        assert!(a.flags.contains(SgrFlags::UNDERLINE));
+        a.apply_sgr_params(&[24]); // removes underline + double + curly
+        assert!(!a.flags.contains(SgrFlags::UNDERLINE));
+
+        a.apply_sgr_params(&[21]);
+        assert!(a.flags.contains(SgrFlags::DOUBLE_UNDERLINE));
+        a.apply_sgr_params(&[24]);
+        assert!(!a.flags.contains(SgrFlags::DOUBLE_UNDERLINE));
+    }
+
+    #[test]
+    fn sgr_blink_inverse_hidden_strikethrough() {
+        let mut a = SgrAttrs::default();
+
+        a.apply_sgr_params(&[5]);
+        assert!(a.flags.contains(SgrFlags::BLINK));
+        a.apply_sgr_params(&[25]);
+        assert!(!a.flags.contains(SgrFlags::BLINK));
+
+        a.apply_sgr_params(&[7]);
+        assert!(a.flags.contains(SgrFlags::INVERSE));
+        a.apply_sgr_params(&[27]);
+        assert!(!a.flags.contains(SgrFlags::INVERSE));
+
+        a.apply_sgr_params(&[8]);
+        assert!(a.flags.contains(SgrFlags::HIDDEN));
+        a.apply_sgr_params(&[28]);
+        assert!(!a.flags.contains(SgrFlags::HIDDEN));
+
+        a.apply_sgr_params(&[9]);
+        assert!(a.flags.contains(SgrFlags::STRIKETHROUGH));
+        a.apply_sgr_params(&[29]);
+        assert!(!a.flags.contains(SgrFlags::STRIKETHROUGH));
+    }
+
+    #[test]
+    fn sgr_overline() {
+        let mut a = SgrAttrs::default();
+        a.apply_sgr_params(&[53]);
+        assert!(a.flags.contains(SgrFlags::OVERLINE));
+        a.apply_sgr_params(&[55]);
+        assert!(!a.flags.contains(SgrFlags::OVERLINE));
+    }
+
+    #[test]
+    fn sgr_bold_dim_remove_clears_both() {
+        let mut a = SgrAttrs::default();
+        a.apply_sgr_params(&[1, 2]); // set bold + dim
+        assert!(a.flags.contains(SgrFlags::BOLD));
+        assert!(a.flags.contains(SgrFlags::DIM));
+        a.apply_sgr_params(&[22]); // removes both
+        assert!(!a.flags.contains(SgrFlags::BOLD));
+        assert!(!a.flags.contains(SgrFlags::DIM));
+    }
+
+    #[test]
+    fn sgr_bright_fg_colors() {
+        let mut a = SgrAttrs::default();
+        a.apply_sgr_params(&[90]);
+        assert_eq!(a.fg, Color::Named(8)); // bright black
+        a.apply_sgr_params(&[97]);
+        assert_eq!(a.fg, Color::Named(15)); // bright white
+    }
+
+    #[test]
+    fn sgr_bright_bg_colors() {
+        let mut a = SgrAttrs::default();
+        a.apply_sgr_params(&[100]);
+        assert_eq!(a.bg, Color::Named(8));
+        a.apply_sgr_params(&[107]);
+        assert_eq!(a.bg, Color::Named(15));
+    }
+
+    #[test]
+    fn sgr_underline_color_set_and_reset() {
+        let mut a = SgrAttrs::default();
+        a.apply_sgr_params(&[58, 5, 42]);
+        assert_eq!(a.underline_color, Some(Color::Indexed(42)));
+        a.apply_sgr_params(&[59]);
+        assert_eq!(a.underline_color, None);
+
+        a.apply_sgr_params(&[58, 2, 10, 20, 30]);
+        assert_eq!(a.underline_color, Some(Color::Rgb(10, 20, 30)));
+    }
+
+    #[test]
+    fn sgr_multiple_params_in_one_call() {
+        let mut a = SgrAttrs::default();
+        a.apply_sgr_params(&[1, 3, 31, 42]);
+        assert!(a.flags.contains(SgrFlags::BOLD));
+        assert!(a.flags.contains(SgrFlags::ITALIC));
+        assert_eq!(a.fg, Color::Named(1)); // red
+        assert_eq!(a.bg, Color::Named(2)); // green
+    }
+
+    #[test]
+    fn sgr_unknown_param_ignored() {
+        let mut a = SgrAttrs::default();
+        a.apply_sgr_params(&[999]);
+        assert_eq!(a, SgrAttrs::default());
+    }
+
+    #[test]
+    fn sgr_indexed_fg_clamps_to_255() {
+        let mut a = SgrAttrs::default();
+        a.apply_sgr_params(&[38, 5, 300]);
+        assert_eq!(a.fg, Color::Indexed(255));
+    }
+
+    #[test]
+    fn sgr_rgb_clamps_to_255() {
+        let mut a = SgrAttrs::default();
+        a.apply_sgr_params(&[38, 2, 999, 500, 300]);
+        assert_eq!(a.fg, Color::Rgb(255, 255, 255));
+    }
+
+    #[test]
+    fn sgr_extended_color_with_bad_mode_ignored() {
+        let mut a = SgrAttrs::default();
+        // mode=99 is neither 5 (indexed) nor 2 (rgb) → ignored
+        a.apply_sgr_params(&[38, 99, 100]);
+        assert_eq!(a.fg, Color::Default);
+    }
+
+    #[test]
+    fn sgr_truncated_extended_color_ignored() {
+        let mut a = SgrAttrs::default();
+        // 38 alone, no mode byte
+        a.apply_sgr_params(&[38]);
+        assert_eq!(a.fg, Color::Default);
+        // 38;5 without index
+        a.apply_sgr_params(&[38, 5]);
+        assert_eq!(a.fg, Color::Default);
+        // 38;2 without enough rgb values
+        a.apply_sgr_params(&[38, 2, 10]);
+        assert_eq!(a.fg, Color::Default);
+    }
+
+    // ── HyperlinkRegistry utility methods ───────────────────────────────
+
+    #[test]
+    fn hyperlink_intern_empty_returns_zero() {
+        let mut reg = HyperlinkRegistry::new();
+        assert_eq!(reg.intern(""), 0);
+    }
+
+    #[test]
+    fn hyperlink_get_zero_returns_none() {
+        let reg = HyperlinkRegistry::new();
+        assert_eq!(reg.get(0), None);
+    }
+
+    #[test]
+    fn hyperlink_get_invalid_id_returns_none() {
+        let reg = HyperlinkRegistry::new();
+        assert_eq!(reg.get(999), None);
+    }
+
+    #[test]
+    fn hyperlink_contains() {
+        let mut reg = HyperlinkRegistry::new();
+        let id = reg.intern("https://test.com");
+        assert!(reg.contains(id));
+        assert!(!reg.contains(0));
+        assert!(!reg.contains(999));
+    }
+
+    #[test]
+    fn hyperlink_len_and_is_empty() {
+        let mut reg = HyperlinkRegistry::new();
+        assert!(reg.is_empty());
+        assert_eq!(reg.len(), 0);
+
+        let id = reg.intern("https://a.test");
+        assert!(!reg.is_empty());
+        assert_eq!(reg.len(), 1);
+
+        reg.intern("https://b.test");
+        assert_eq!(reg.len(), 2);
+
+        // Same URI doesn't increase count
+        reg.intern("https://a.test");
+        assert_eq!(reg.len(), 2);
+
+        // Release frees slot
+        reg.acquire_id(id);
+        reg.release_id(id);
+        assert_eq!(reg.len(), 1);
+    }
+
+    #[test]
+    fn hyperlink_clear_resets() {
+        let mut reg = HyperlinkRegistry::new();
+        let id = reg.intern("https://x.test");
+        reg.clear();
+        assert!(reg.is_empty());
+        assert_eq!(reg.get(id), None);
+    }
+
+    #[test]
+    fn hyperlink_release_id_zero_is_noop() {
+        let mut reg = HyperlinkRegistry::new();
+        reg.release_id(0); // should not panic
+        assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn hyperlink_release_invalid_id_is_noop() {
+        let mut reg = HyperlinkRegistry::new();
+        reg.release_id(500); // should not panic
+    }
+
+    #[test]
+    fn hyperlink_acquire_id_zero_is_noop() {
+        let mut reg = HyperlinkRegistry::new();
+        reg.acquire_id(0); // should not panic
+        assert!(reg.is_empty());
+    }
+
+    // ── Cell with_attrs ────────────────────────────────────────────────
+
+    #[test]
+    fn cell_with_attrs_preserves_values() {
+        let attrs = SgrAttrs {
+            flags: SgrFlags::ITALIC | SgrFlags::UNDERLINE,
+            fg: Color::Rgb(10, 20, 30),
+            bg: Color::Indexed(42),
+            underline_color: Some(Color::Named(3)),
+        };
+        let cell = Cell::with_attrs('Q', 2, attrs);
+        assert_eq!(cell.content(), 'Q');
+        assert_eq!(cell.width(), 2);
+        assert_eq!(cell.attrs, attrs);
+        assert_eq!(cell.hyperlink, 0);
+        assert!(!cell.is_wide());
+    }
+
     #[test]
     fn clear_on_scrollback_eviction() {
         let mut reg = HyperlinkRegistry::new();
