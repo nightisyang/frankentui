@@ -291,6 +291,70 @@ mod config_tests {
         assert_eq!(cloned.rows, 40);
         assert_eq!(cloned.env.len(), 1);
     }
+
+    #[test]
+    fn with_size_zero() {
+        let config = PtyCaptureConfig::default().with_size(0, 0);
+        assert_eq!(config.cols, 0);
+        assert_eq!(config.rows, 0);
+    }
+
+    #[test]
+    fn with_size_large() {
+        let config = PtyCaptureConfig::default().with_size(500, 200);
+        assert_eq!(config.cols, 500);
+        assert_eq!(config.rows, 200);
+    }
+
+    #[test]
+    fn with_term_empty_string() {
+        let config = PtyCaptureConfig::default().with_term("");
+        assert_eq!(config.term, Some(String::new()));
+    }
+
+    #[test]
+    fn with_env_preserves_order() {
+        let config = PtyCaptureConfig::default()
+            .with_env("C", "3")
+            .with_env("A", "1")
+            .with_env("B", "2");
+        assert_eq!(config.env[0].0, "C");
+        assert_eq!(config.env[1].0, "A");
+        assert_eq!(config.env[2].0, "B");
+    }
+
+    #[test]
+    fn with_env_allows_duplicate_keys() {
+        let config = PtyCaptureConfig::default()
+            .with_env("KEY", "val1")
+            .with_env("KEY", "val2");
+        assert_eq!(config.env.len(), 2);
+    }
+
+    #[test]
+    fn builder_chaining_all_methods() {
+        let config = PtyCaptureConfig::default()
+            .with_size(132, 43)
+            .with_term("screen")
+            .with_env("LANG", "en_US.UTF-8")
+            .with_env("LC_ALL", "C");
+        assert_eq!(config.cols, 132);
+        assert_eq!(config.rows, 43);
+        assert_eq!(config.term, Some("screen".to_string()));
+        assert_eq!(config.env.len(), 2);
+    }
+
+    #[test]
+    fn default_does_not_set_env() {
+        let config = PtyCaptureConfig::default();
+        assert!(config.env.is_empty());
+    }
+
+    #[test]
+    fn default_term_is_xterm_256color() {
+        let config = PtyCaptureConfig::default();
+        assert_eq!(config.term.as_deref(), Some("xterm-256color"));
+    }
 }
 
 #[cfg(all(test, feature = "pty-capture", unix))]
@@ -485,5 +549,141 @@ mod tests {
         assert!(log_line.contains("\"env\""));
         assert!(log_line.contains("\"FTUI_RUN_ID\""));
         assert!(log_line.contains("\"FTUI_SEED\""));
+    }
+
+    #[test]
+    fn pty_capture_send_input() {
+        // cat reads stdin and echoes to stdout
+        let cmd = CommandBuilder::new("cat");
+        let mut capture = PtyCapture::spawn(PtyCaptureConfig::default(), cmd).unwrap();
+
+        capture.send_input(b"hello\n").unwrap();
+        let output = drain_until_eof(&mut capture, Duration::from_millis(500)).unwrap();
+        let text = normalize_output(&output);
+        assert!(text.contains("hello"), "expected echo of input");
+    }
+
+    #[test]
+    fn pty_capture_send_empty_input_is_noop() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "printf done"]);
+        let mut capture = PtyCapture::spawn(PtyCaptureConfig::default(), cmd).unwrap();
+
+        // Empty send should succeed without error
+        capture.send_input(b"").unwrap();
+
+        let output = drain_until_eof(&mut capture, Duration::from_secs(2)).unwrap();
+        assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn pty_capture_wait_returns_exit_status() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "exit 0"]);
+        let mut capture = PtyCapture::spawn(PtyCaptureConfig::default(), cmd).unwrap();
+
+        let status = capture.wait().unwrap();
+        assert!(status.success());
+    }
+
+    #[test]
+    fn pty_capture_wait_nonzero_exit() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "exit 42"]);
+        let mut capture = PtyCapture::spawn(PtyCaptureConfig::default(), cmd).unwrap();
+
+        let status = capture.wait().unwrap();
+        assert!(!status.success());
+    }
+
+    #[test]
+    fn pty_capture_child_pid_is_some() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "exit 0"]);
+        let capture = PtyCapture::spawn(PtyCaptureConfig::default(), cmd).unwrap();
+
+        // On unix, process_id should return Some
+        assert!(capture.child_pid().is_some());
+    }
+
+    #[test]
+    fn pty_capture_is_eof_initially_false() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "sleep 0.5"]);
+        let capture = PtyCapture::spawn(PtyCaptureConfig::default(), cmd).unwrap();
+
+        assert!(!capture.is_eof());
+    }
+
+    #[test]
+    fn pty_capture_eof_after_child_exits() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "printf eof-test"]);
+        let mut capture = PtyCapture::spawn(PtyCaptureConfig::default(), cmd).unwrap();
+
+        let _ = drain_until_eof(&mut capture, Duration::from_secs(2)).unwrap();
+        // After draining to EOF, is_eof should be true
+        assert!(capture.is_eof());
+    }
+
+    #[test]
+    fn pty_capture_read_available_nonblocking() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "sleep 1; printf never"]);
+        let mut capture = PtyCapture::spawn(PtyCaptureConfig::default(), cmd).unwrap();
+
+        // Non-blocking read should return empty immediately
+        let output = capture.read_available().unwrap();
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn pty_capture_read_after_eof_returns_empty() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "printf done"]);
+        let mut capture = PtyCapture::spawn(PtyCaptureConfig::default(), cmd).unwrap();
+
+        let _ = drain_until_eof(&mut capture, Duration::from_secs(2)).unwrap();
+        assert!(capture.is_eof());
+
+        // Subsequent reads should return empty
+        let output = capture.read_available().unwrap();
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn pty_capture_debug_format() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "exit 0"]);
+        let capture = PtyCapture::spawn(PtyCaptureConfig::default(), cmd).unwrap();
+
+        let dbg = format!("{capture:?}");
+        assert!(dbg.contains("PtyCapture"));
+        assert!(dbg.contains("eof"));
+    }
+
+    #[test]
+    fn pty_capture_custom_size() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "tput cols; tput lines"]);
+        let config = PtyCaptureConfig::default().with_size(132, 50);
+        let mut capture = PtyCapture::spawn(config, cmd).unwrap();
+
+        let output = drain_until_eof(&mut capture, Duration::from_secs(2)).unwrap();
+        let text = normalize_output(&output);
+        assert!(text.contains("132"), "expected cols=132 in output");
+        assert!(text.contains("50"), "expected lines=50 in output");
+    }
+
+    #[test]
+    fn pty_capture_custom_env() {
+        let mut cmd = CommandBuilder::new("sh");
+        cmd.args(["-c", "printf $MY_VAR"]);
+        let config = PtyCaptureConfig::default().with_env("MY_VAR", "custom_value");
+        let mut capture = PtyCapture::spawn(config, cmd).unwrap();
+
+        let output = drain_until_eof(&mut capture, Duration::from_secs(2)).unwrap();
+        let text = normalize_output(&output);
+        assert!(text.contains("custom_value"), "expected env var in output");
     }
 }
