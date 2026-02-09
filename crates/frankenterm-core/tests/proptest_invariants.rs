@@ -236,6 +236,15 @@ fn apply_action(action: Action, grid: &mut Grid, cursor: &mut Cursor, scrollback
         }
         Action::FocusIn | Action::FocusOut => {}
         Action::PasteStart | Action::PasteEnd => {}
+        // Device attribute queries produce reply bytes; no grid effect.
+        Action::DeviceAttributes
+        | Action::DeviceAttributesSecondary
+        | Action::DeviceStatusReport
+        | Action::CursorPositionReport => {}
+        // Character set designation; no grid effect in proptest harness.
+        Action::DesignateCharset { .. } => {}
+        // Single-shift to G2/G3; no grid effect in proptest harness.
+        Action::SingleShift2 | Action::SingleShift3 => {}
         Action::Escape(_) => {
             // Unsupported sequences are ignored.
         }

@@ -383,6 +383,15 @@ impl CoreTerminalHarness {
             // Focus/paste events are input-side; no grid effect.
             Action::FocusIn | Action::FocusOut => {}
             Action::PasteStart | Action::PasteEnd => {}
+            // Device attribute queries produce reply bytes; no grid effect.
+            Action::DeviceAttributes
+            | Action::DeviceAttributesSecondary
+            | Action::DeviceStatusReport
+            | Action::CursorPositionReport => {}
+            // Character set designation; no grid effect in conformance harness.
+            Action::DesignateCharset { .. } => {}
+            // Single-shift to G2/G3; no grid effect in conformance harness.
+            Action::SingleShift2 | Action::SingleShift3 => {}
             Action::Escape(_) => {}
         }
     }

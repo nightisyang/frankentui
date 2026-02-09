@@ -12,9 +12,7 @@
 
 use frankenterm_core::Modes;
 
-use frankenterm_core::reply::{
-    ReplyContext, ReplyEngine, TerminalQuery, parse_terminal_query,
-};
+use frankenterm_core::reply::{ReplyContext, ReplyEngine, TerminalQuery, parse_terminal_query};
 use proptest::prelude::*;
 
 // ═════════════════════════════════════════════════════════════════════════

@@ -27,7 +27,7 @@
 //! println!("{}", report.to_json());
 //! ```
 
-use crate::renderer::{CellData, GridGeometry};
+use crate::renderer::{CellData, GridGeometry, cell_attr_link_id, cell_attr_style_bits};
 use serde::Serialize;
 use std::time::Duration;
 
@@ -305,6 +305,187 @@ pub fn stable_frame_hash(cells: &[CellData], geometry: GeometrySnapshot) -> Stri
         hash = fnv1a64_extend(hash, &cell.to_bytes());
     }
     format!("{FRAME_HASH_ALGO}:{hash:016x}")
+}
+
+/// Borrowed frame payload used for golden checksum verification.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameGoldenActual<'a> {
+    pub geometry: GeometrySnapshot,
+    pub cells: &'a [CellData],
+}
+
+/// Compact diagnostics for the rendered region when a golden mismatch occurs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct FrameRegionSummary {
+    pub cols: u16,
+    pub rows: u16,
+    pub total_cells: usize,
+    pub non_empty_cells: usize,
+    pub glyph_cells: usize,
+    pub styled_cells: usize,
+    pub linked_cells: usize,
+    pub active_min_col: Option<u16>,
+    pub active_max_col: Option<u16>,
+    pub active_min_row: Option<u16>,
+    pub active_max_row: Option<u16>,
+}
+
+/// Actionable mismatch payload for golden frame checksum verification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FrameGoldenMismatch {
+    pub frame_idx: usize,
+    pub expected_hash: String,
+    pub actual_hash: String,
+    pub region_summary: FrameRegionSummary,
+    pub reproduction_trace_id: String,
+    pub expected_frame_count: usize,
+    pub actual_frame_count: usize,
+}
+
+impl FrameGoldenMismatch {
+    /// Serialize mismatch details for JSONL logging.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
+impl std::fmt::Display for FrameGoldenMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let summary = &self.region_summary;
+        write!(
+            f,
+            "golden frame mismatch: frame_idx={} expected_hash={} actual_hash={} reproduction_trace_id={} expected_frames={} actual_frames={} region_summary={{cols:{},rows:{},total_cells:{},non_empty_cells:{},glyph_cells:{},styled_cells:{},linked_cells:{},active_min_col:{:?},active_max_col:{:?},active_min_row:{:?},active_max_row:{:?}}}",
+            self.frame_idx,
+            self.expected_hash,
+            self.actual_hash,
+            self.reproduction_trace_id,
+            self.expected_frame_count,
+            self.actual_frame_count,
+            summary.cols,
+            summary.rows,
+            summary.total_cells,
+            summary.non_empty_cells,
+            summary.glyph_cells,
+            summary.styled_cells,
+            summary.linked_cells,
+            summary.active_min_col,
+            summary.active_max_col,
+            summary.active_min_row,
+            summary.active_max_row,
+        )
+    }
+}
+
+impl std::error::Error for FrameGoldenMismatch {}
+
+#[must_use]
+fn reproduction_trace_id(run_id: &str, frame_idx: usize) -> String {
+    format!("{run_id}#frame-{frame_idx}")
+}
+
+/// Build a compact, deterministic summary for a rendered frame region.
+#[must_use]
+pub fn summarize_frame_region(
+    cells: &[CellData],
+    geometry: GeometrySnapshot,
+) -> FrameRegionSummary {
+    let mut summary = FrameRegionSummary {
+        cols: geometry.cols,
+        rows: geometry.rows,
+        total_cells: cells.len(),
+        ..FrameRegionSummary::default()
+    };
+
+    let cols = usize::from(geometry.cols);
+    for (idx, cell) in cells.iter().enumerate() {
+        if *cell != CellData::EMPTY {
+            summary.non_empty_cells = summary.non_empty_cells.saturating_add(1);
+            if cols > 0 {
+                let Ok(x) = u16::try_from(idx % cols) else {
+                    continue;
+                };
+                let Ok(y) = u16::try_from(idx / cols) else {
+                    continue;
+                };
+                summary.active_min_col = Some(summary.active_min_col.map_or(x, |v| v.min(x)));
+                summary.active_max_col = Some(summary.active_max_col.map_or(x, |v| v.max(x)));
+                summary.active_min_row = Some(summary.active_min_row.map_or(y, |v| v.min(y)));
+                summary.active_max_row = Some(summary.active_max_row.map_or(y, |v| v.max(y)));
+            }
+        }
+        if cell.glyph_id != 0 {
+            summary.glyph_cells = summary.glyph_cells.saturating_add(1);
+        }
+        if cell_attr_style_bits(cell.attrs) != 0 {
+            summary.styled_cells = summary.styled_cells.saturating_add(1);
+        }
+        if cell_attr_link_id(cell.attrs) != 0 {
+            summary.linked_cells = summary.linked_cells.saturating_add(1);
+        }
+    }
+
+    summary
+}
+
+/// Verify a rendered frame sequence against deterministic golden frame hashes.
+///
+/// On mismatch, returns structured diagnostics containing frame index,
+/// region summary, and a reproduction trace id suitable for CI artifacts.
+pub fn verify_golden_frame_hashes(
+    run_id: &str,
+    expected_hashes: &[String],
+    actual_frames: &[FrameGoldenActual<'_>],
+) -> Result<(), Box<FrameGoldenMismatch>> {
+    let min_len = expected_hashes.len().min(actual_frames.len());
+    for frame_idx in 0..min_len {
+        let actual = actual_frames[frame_idx];
+        let actual_hash = stable_frame_hash(actual.cells, actual.geometry);
+        if actual_hash != expected_hashes[frame_idx] {
+            return Err(Box::new(FrameGoldenMismatch {
+                frame_idx,
+                expected_hash: expected_hashes[frame_idx].clone(),
+                actual_hash,
+                region_summary: summarize_frame_region(actual.cells, actual.geometry),
+                reproduction_trace_id: reproduction_trace_id(run_id, frame_idx),
+                expected_frame_count: expected_hashes.len(),
+                actual_frame_count: actual_frames.len(),
+            }));
+        }
+    }
+
+    if expected_hashes.len() > actual_frames.len() {
+        let frame_idx = actual_frames.len();
+        let expected_hash = expected_hashes
+            .get(frame_idx)
+            .cloned()
+            .unwrap_or_else(|| "missing".to_string());
+        return Err(Box::new(FrameGoldenMismatch {
+            frame_idx,
+            expected_hash,
+            actual_hash: "missing".to_string(),
+            region_summary: FrameRegionSummary::default(),
+            reproduction_trace_id: reproduction_trace_id(run_id, frame_idx),
+            expected_frame_count: expected_hashes.len(),
+            actual_frame_count: actual_frames.len(),
+        }));
+    }
+
+    if actual_frames.len() > expected_hashes.len() {
+        let frame_idx = expected_hashes.len();
+        let actual = actual_frames[frame_idx];
+        return Err(Box::new(FrameGoldenMismatch {
+            frame_idx,
+            expected_hash: "missing".to_string(),
+            actual_hash: stable_frame_hash(actual.cells, actual.geometry),
+            region_summary: summarize_frame_region(actual.cells, actual.geometry),
+            reproduction_trace_id: reproduction_trace_id(run_id, frame_idx),
+            expected_frame_count: expected_hashes.len(),
+            actual_frame_count: actual_frames.len(),
+        }));
+    }
+
+    Ok(())
 }
 
 /// Build one JSONL `frame` record for browser resize-storm traces.
@@ -642,5 +823,139 @@ mod tests {
         );
         assert_eq!(parsed["geometry"]["pixel_width"], 1200);
         assert_eq!(parsed["geometry"]["pixel_height"], 800);
+    }
+
+    #[test]
+    fn verify_golden_frame_hashes_accepts_matching_sequence() {
+        let geometry = GeometrySnapshot {
+            cols: 2,
+            rows: 1,
+            pixel_width: 20,
+            pixel_height: 10,
+            cell_width_px: 10.0,
+            cell_height_px: 10.0,
+            dpr: 1.0,
+            zoom: 1.0,
+        };
+        let frame0 = vec![CellData::EMPTY, CellData::EMPTY];
+        let frame1 = vec![
+            CellData::EMPTY,
+            CellData {
+                glyph_id: 7,
+                attrs: 0,
+                ..CellData::EMPTY
+            },
+        ];
+        let expected = vec![
+            stable_frame_hash(&frame0, geometry),
+            stable_frame_hash(&frame1, geometry),
+        ];
+        let actual = vec![
+            FrameGoldenActual {
+                geometry,
+                cells: &frame0,
+            },
+            FrameGoldenActual {
+                geometry,
+                cells: &frame1,
+            },
+        ];
+
+        assert!(verify_golden_frame_hashes("run-pass", &expected, &actual).is_ok());
+    }
+
+    #[test]
+    fn verify_golden_frame_hashes_reports_frame_index_region_and_repro_id() {
+        let geometry = GeometrySnapshot {
+            cols: 3,
+            rows: 1,
+            pixel_width: 30,
+            pixel_height: 10,
+            cell_width_px: 10.0,
+            cell_height_px: 10.0,
+            dpr: 1.0,
+            zoom: 1.0,
+        };
+        let frame0 = vec![CellData::EMPTY; 3];
+        let frame1 = vec![
+            CellData::EMPTY,
+            CellData {
+                glyph_id: 9,
+                attrs: 0x0200, // link_id = 2
+                ..CellData::EMPTY
+            },
+            CellData {
+                glyph_id: 0,
+                attrs: 0x0001, // style bits
+                ..CellData::EMPTY
+            },
+        ];
+
+        let expected = vec![
+            stable_frame_hash(&frame0, geometry),
+            "fnv1a64:0000000000000000".to_string(),
+        ];
+        let actual = vec![
+            FrameGoldenActual {
+                geometry,
+                cells: &frame0,
+            },
+            FrameGoldenActual {
+                geometry,
+                cells: &frame1,
+            },
+        ];
+
+        let mismatch =
+            *verify_golden_frame_hashes("run-mismatch", &expected, &actual).expect_err("mismatch");
+        assert_eq!(mismatch.frame_idx, 1);
+        assert_eq!(mismatch.reproduction_trace_id, "run-mismatch#frame-1");
+        assert_eq!(mismatch.region_summary.cols, 3);
+        assert_eq!(mismatch.region_summary.rows, 1);
+        assert_eq!(mismatch.region_summary.total_cells, 3);
+        assert_eq!(mismatch.region_summary.non_empty_cells, 2);
+        assert_eq!(mismatch.region_summary.glyph_cells, 1);
+        assert_eq!(mismatch.region_summary.styled_cells, 1);
+        assert_eq!(mismatch.region_summary.linked_cells, 1);
+        assert_eq!(mismatch.region_summary.active_min_col, Some(1));
+        assert_eq!(mismatch.region_summary.active_max_col, Some(2));
+        assert_eq!(mismatch.region_summary.active_min_row, Some(0));
+        assert_eq!(mismatch.region_summary.active_max_row, Some(0));
+        let json = mismatch.to_json();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["frame_idx"], 1);
+        assert_eq!(parsed["reproduction_trace_id"], "run-mismatch#frame-1");
+    }
+
+    #[test]
+    fn verify_golden_frame_hashes_reports_length_mismatch() {
+        let geometry = GeometrySnapshot {
+            cols: 1,
+            rows: 1,
+            pixel_width: 10,
+            pixel_height: 10,
+            cell_width_px: 10.0,
+            cell_height_px: 10.0,
+            dpr: 1.0,
+            zoom: 1.0,
+        };
+        let frame0 = vec![CellData::EMPTY];
+        let expected = vec![
+            stable_frame_hash(&frame0, geometry),
+            "fnv1a64:ffff000000000000".to_string(),
+        ];
+        let actual = vec![FrameGoldenActual {
+            geometry,
+            cells: &frame0,
+        }];
+
+        let mismatch =
+            *verify_golden_frame_hashes("run-short", &expected, &actual).expect_err("mismatch");
+        assert_eq!(mismatch.frame_idx, 1);
+        assert_eq!(mismatch.expected_hash, "fnv1a64:ffff000000000000");
+        assert_eq!(mismatch.actual_hash, "missing");
+        assert_eq!(mismatch.reproduction_trace_id, "run-short#frame-1");
+        assert_eq!(mismatch.expected_frame_count, 2);
+        assert_eq!(mismatch.actual_frame_count, 1);
     }
 }

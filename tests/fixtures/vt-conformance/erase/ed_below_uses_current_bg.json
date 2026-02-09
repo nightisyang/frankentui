@@ -1,0 +1,63 @@
+{
+  "name": "ed_below_uses_current_bg",
+  "description": "ED 0 erases using current background color for blank cells",
+  "initial_size": [
+    10,
+    3
+  ],
+  "input_bytes_hex": "41424344451b5b34366d1b5b313b33481b5b304a",
+  "expected": {
+    "cursor": {
+      "row": 0,
+      "col": 2
+    },
+    "cells": [
+      {
+        "row": 0,
+        "col": 0,
+        "char": "A",
+        "attrs": {
+          "bg_color": "default"
+        }
+      },
+      {
+        "row": 0,
+        "col": 1,
+        "char": "B",
+        "attrs": {
+          "bg_color": "default"
+        }
+      },
+      {
+        "row": 0,
+        "col": 2,
+        "char": " ",
+        "attrs": {
+          "bg_color": {
+            "named": 6
+          }
+        }
+      },
+      {
+        "row": 0,
+        "col": 3,
+        "char": " ",
+        "attrs": {
+          "bg_color": {
+            "named": 6
+          }
+        }
+      },
+      {
+        "row": 0,
+        "col": 4,
+        "char": " ",
+        "attrs": {
+          "bg_color": {
+            "named": 6
+          }
+        }
+      }
+    ]
+  }
+}

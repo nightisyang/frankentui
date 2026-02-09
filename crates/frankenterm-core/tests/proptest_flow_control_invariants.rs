@@ -14,8 +14,8 @@
 //! 10. Evaluate never panics on any valid snapshot.
 
 use frankenterm_core::{
-    BackpressureAction, DecisionReason, FlowControlPolicy, FlowControlSnapshot,
-    InputEventClass, LatencyWindowMs, QueueDepthBytes, RateWindowBps, jain_fairness_index,
+    BackpressureAction, DecisionReason, FlowControlPolicy, FlowControlSnapshot, InputEventClass,
+    LatencyWindowMs, QueueDepthBytes, RateWindowBps, jain_fairness_index,
 };
 use proptest::prelude::*;
 
@@ -32,14 +32,18 @@ fn arb_queue_depth() -> impl Strategy<Value = QueueDepthBytes> {
 }
 
 fn arb_rate_window() -> impl Strategy<Value = RateWindowBps> {
-    (0u32..=2_000_000, 0u32..=2_000_000, 1u32..=2_000_000, 1u32..=2_000_000).prop_map(
-        |(lambda_in, lambda_out, mu_in, mu_out)| RateWindowBps {
+    (
+        0u32..=2_000_000,
+        0u32..=2_000_000,
+        1u32..=2_000_000,
+        1u32..=2_000_000,
+    )
+        .prop_map(|(lambda_in, lambda_out, mu_in, mu_out)| RateWindowBps {
             lambda_in,
             lambda_out,
             mu_in,
             mu_out,
-        },
-    )
+        })
 }
 
 fn arb_latency() -> impl Strategy<Value = LatencyWindowMs> {
@@ -58,16 +62,16 @@ fn arb_snapshot() -> impl Strategy<Value = FlowControlSnapshot> {
         0u64..=200_000,
         0u64..=10_000,
     )
-        .prop_map(
-            |(queues, rates, latency, svc_in, svc_out, hard_cap_dur)| FlowControlSnapshot {
+        .prop_map(|(queues, rates, latency, svc_in, svc_out, hard_cap_dur)| {
+            FlowControlSnapshot {
                 queues,
                 rates,
                 latency,
                 serviced_input_bytes: svc_in,
                 serviced_output_bytes: svc_out,
                 output_hard_cap_duration_ms: hard_cap_dur,
-            },
-        )
+            }
+        })
 }
 
 fn default_policy() -> FlowControlPolicy {

@@ -1,0 +1,65 @@
+{
+  "name": "el_left_uses_current_bg",
+  "description": "EL 1 (erase left) uses current background color for erased cells",
+  "initial_size": [
+    10,
+    3
+  ],
+  "input_bytes_hex": "48454c4c4f1b5b34356d1b5b313b34481b5b314b",
+  "expected": {
+    "cursor": {
+      "row": 0,
+      "col": 3
+    },
+    "cells": [
+      {
+        "row": 0,
+        "col": 0,
+        "char": " ",
+        "attrs": {
+          "bg_color": {
+            "named": 5
+          }
+        }
+      },
+      {
+        "row": 0,
+        "col": 1,
+        "char": " ",
+        "attrs": {
+          "bg_color": {
+            "named": 5
+          }
+        }
+      },
+      {
+        "row": 0,
+        "col": 2,
+        "char": " ",
+        "attrs": {
+          "bg_color": {
+            "named": 5
+          }
+        }
+      },
+      {
+        "row": 0,
+        "col": 3,
+        "char": " ",
+        "attrs": {
+          "bg_color": {
+            "named": 5
+          }
+        }
+      },
+      {
+        "row": 0,
+        "col": 4,
+        "char": "O",
+        "attrs": {
+          "bg_color": "default"
+        }
+      }
+    ]
+  }
+}

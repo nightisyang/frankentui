@@ -2,10 +2,10 @@
 
 use crate::frame_harness::{GeometrySnapshot, resize_storm_frame_jsonl};
 use crate::input::{
-    CompositionInput, CompositionPhase, CompositionState, FocusInput, InputEvent, KeyInput,
-    KeyPhase, ModifierTracker, Modifiers, MouseButton, MouseInput, MousePhase, TouchInput,
-    TouchPhase, TouchPoint, VtInputEncoderFeatures, WheelInput, encode_vt_input_event,
-    normalize_dom_key_code,
+    AccessibilityInput, CompositionInput, CompositionPhase, CompositionState, FocusInput,
+    InputEvent, KeyInput, KeyPhase, ModifierTracker, Modifiers, MouseButton, MouseInput,
+    MousePhase, TouchInput, TouchPhase, TouchPoint, VtInputEncoderFeatures, WheelInput,
+    encode_vt_input_event, normalize_dom_key_code,
 };
 use crate::renderer::{
     CellData, CellPatch, CursorStyle, GridGeometry, RendererConfig, WebGpuRenderer,
@@ -38,6 +38,10 @@ pub struct FrankenTermWeb {
     cursor_offset: Option<u32>,
     cursor_style: CursorStyle,
     selection_range: Option<(u32, u32)>,
+    screen_reader_enabled: bool,
+    high_contrast_enabled: bool,
+    reduced_motion_enabled: bool,
+    live_announcements: Vec<String>,
     shadow_cells: Vec<CellData>,
     renderer: Option<WebGpuRenderer>,
 }
@@ -75,6 +79,10 @@ impl FrankenTermWeb {
             cursor_offset: None,
             cursor_style: CursorStyle::None,
             selection_range: None,
+            screen_reader_enabled: false,
+            high_contrast_enabled: false,
+            reduced_motion_enabled: false,
+            live_announcements: Vec::new(),
             shadow_cells: Vec::new(),
             renderer: None,
         }
@@ -117,6 +125,15 @@ impl FrankenTermWeb {
         self.canvas = Some(canvas);
         self.renderer = Some(renderer);
         self.encoder_features = parse_encoder_features(&options);
+        self.screen_reader_enabled = parse_init_bool(&options, "screenReader")
+            .or(parse_init_bool(&options, "screen_reader"))
+            .unwrap_or(false);
+        self.high_contrast_enabled = parse_init_bool(&options, "highContrast")
+            .or(parse_init_bool(&options, "high_contrast"))
+            .unwrap_or(false);
+        self.reduced_motion_enabled = parse_init_bool(&options, "reducedMotion")
+            .or(parse_init_bool(&options, "reduced_motion"))
+            .unwrap_or(false);
         self.initialized = true;
         Ok(())
     }
@@ -240,6 +257,9 @@ impl FrankenTermWeb {
                 self.mods.reconcile(event_mods(&ev));
             }
 
+            if let InputEvent::Accessibility(a11y) = &ev {
+                self.apply_accessibility_input(a11y);
+            }
             self.handle_interaction_event(&ev);
 
             let json = ev
@@ -442,6 +462,69 @@ impl FrankenTermWeb {
         out
     }
 
+    /// Update accessibility preferences from a JS object.
+    ///
+    /// Supported keys:
+    /// - `screenReader` / `screen_reader`: boolean
+    /// - `highContrast` / `high_contrast`: boolean
+    /// - `reducedMotion` / `reduced_motion`: boolean
+    /// - `announce`: string (optional live-region message)
+    #[wasm_bindgen(js_name = setAccessibility)]
+    pub fn set_accessibility(&mut self, options: JsValue) -> Result<(), JsValue> {
+        let input = parse_accessibility_input(&options)?;
+        self.apply_accessibility_input(&input);
+        Ok(())
+    }
+
+    /// Return current accessibility preferences.
+    ///
+    /// Shape:
+    /// `{ screenReader, highContrast, reducedMotion, pendingAnnouncements }`
+    #[wasm_bindgen(js_name = accessibilityState)]
+    pub fn accessibility_state(&self) -> JsValue {
+        let obj = Object::new();
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("screenReader"),
+            &JsValue::from_bool(self.screen_reader_enabled),
+        );
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("highContrast"),
+            &JsValue::from_bool(self.high_contrast_enabled),
+        );
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("reducedMotion"),
+            &JsValue::from_bool(self.reduced_motion_enabled),
+        );
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("pendingAnnouncements"),
+            &JsValue::from_f64(self.live_announcements.len() as f64),
+        );
+        obj.into()
+    }
+
+    /// Drain queued live-region announcements for host-side screen-reader wiring.
+    #[wasm_bindgen(js_name = drainAccessibilityAnnouncements)]
+    pub fn drain_accessibility_announcements(&mut self) -> Array {
+        let out = Array::new();
+        for entry in self.live_announcements.drain(..) {
+            out.push(&JsValue::from_str(&entry));
+        }
+        out
+    }
+
+    /// Build plain-text viewport mirror for screen readers.
+    #[wasm_bindgen(js_name = screenReaderMirrorText)]
+    pub fn screen_reader_mirror_text(&self) -> String {
+        if !self.screen_reader_enabled {
+            return String::new();
+        }
+        self.build_screen_reader_mirror_text()
+    }
+
     /// Request a frame render. Encodes and submits a WebGPU draw pass.
     pub fn render(&mut self) -> Result<(), JsValue> {
         let Some(renderer) = self.renderer.as_mut() else {
@@ -466,6 +549,10 @@ impl FrankenTermWeb {
         self.cursor_offset = None;
         self.cursor_style = CursorStyle::None;
         self.selection_range = None;
+        self.screen_reader_enabled = false;
+        self.high_contrast_enabled = false;
+        self.reduced_motion_enabled = false;
+        self.live_announcements.clear();
         self.shadow_cells.clear();
     }
 }
@@ -523,6 +610,58 @@ impl FrankenTermWeb {
         }
     }
 
+    fn apply_accessibility_input(&mut self, input: &AccessibilityInput) {
+        if let Some(v) = input.screen_reader {
+            self.screen_reader_enabled = v;
+        }
+        if let Some(v) = input.high_contrast {
+            self.high_contrast_enabled = v;
+        }
+        if let Some(v) = input.reduced_motion {
+            self.reduced_motion_enabled = v;
+        }
+        if let Some(text) = input.announce.as_deref() {
+            self.push_live_announcement(text);
+        }
+    }
+
+    fn push_live_announcement(&mut self, text: &str) {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        // Keep the queue bounded so host-side consumers can poll lazily.
+        if self.live_announcements.len() >= 64 {
+            self.live_announcements.remove(0);
+        }
+        self.live_announcements.push(trimmed.to_string());
+    }
+
+    fn build_screen_reader_mirror_text(&self) -> String {
+        let cols = usize::from(self.cols.max(1));
+        let rows = usize::from(self.rows);
+        let mut out = String::new();
+        for y in 0..rows {
+            if y > 0 {
+                out.push('\n');
+            }
+            let row_start = y.saturating_mul(cols);
+            let row_end = row_start.saturating_add(cols).min(self.shadow_cells.len());
+            let mut line = String::new();
+            for idx in row_start..row_end {
+                let glyph_id = self.shadow_cells[idx].glyph_id;
+                let ch = if glyph_id == 0 {
+                    ' '
+                } else {
+                    char::from_u32(glyph_id).unwrap_or('□')
+                };
+                line.push(ch);
+            }
+            out.push_str(line.trim_end_matches(' '));
+        }
+        out
+    }
+
     fn handle_interaction_event(&mut self, ev: &InputEvent) {
         let InputEvent::Mouse(mouse) = ev else {
             return;
@@ -555,7 +694,9 @@ fn event_mods(ev: &InputEvent) -> Modifiers {
         InputEvent::Mouse(m) => m.mods,
         InputEvent::Wheel(w) => w.mods,
         InputEvent::Touch(t) => t.mods,
-        InputEvent::Composition(_) | InputEvent::Focus(_) => Modifiers::empty(),
+        InputEvent::Composition(_) | InputEvent::Focus(_) | InputEvent::Accessibility(_) => {
+            Modifiers::empty()
+        }
     }
 }
 
@@ -568,6 +709,7 @@ fn parse_input_event(event: &JsValue) -> Result<InputEvent, JsValue> {
         "touch" => parse_touch_event(event),
         "composition" => parse_composition_event(event),
         "focus" => parse_focus_event(event),
+        "accessibility" => parse_accessibility_event(event),
         other => Err(JsValue::from_str(&format!("unknown input kind: {other}"))),
     }
 }
@@ -649,6 +791,40 @@ fn parse_focus_event(event: &JsValue) -> Result<InputEvent, JsValue> {
     let focused = get_bool(event, "focused")?
         .ok_or_else(|| JsValue::from_str("focus event missing focused:boolean"))?;
     Ok(InputEvent::Focus(FocusInput { focused }))
+}
+
+fn parse_accessibility_event(event: &JsValue) -> Result<InputEvent, JsValue> {
+    let input = parse_accessibility_input(event)?;
+    if input.screen_reader.is_none()
+        && input.high_contrast.is_none()
+        && input.reduced_motion.is_none()
+        && input.announce.is_none()
+    {
+        return Err(JsValue::from_str(
+            "accessibility event requires at least one of screenReader/highContrast/reducedMotion/announce",
+        ));
+    }
+    Ok(InputEvent::Accessibility(input))
+}
+
+fn parse_accessibility_input(event: &JsValue) -> Result<AccessibilityInput, JsValue> {
+    let screen_reader = parse_bool_alias(event, "screenReader", "screen_reader")?;
+    let high_contrast = parse_bool_alias(event, "highContrast", "high_contrast")?;
+    let reduced_motion = parse_bool_alias(event, "reducedMotion", "reduced_motion")?;
+    let announce = get_string_opt(event, "announce")?.map(Into::into);
+    Ok(AccessibilityInput {
+        screen_reader,
+        high_contrast,
+        reduced_motion,
+        announce,
+    })
+}
+
+fn parse_bool_alias(event: &JsValue, camel: &str, snake: &str) -> Result<Option<bool>, JsValue> {
+    if let Some(value) = get_bool(event, camel)? {
+        return Ok(Some(value));
+    }
+    get_bool(event, snake)
 }
 
 fn parse_key_phase(event: &JsValue) -> Result<KeyPhase, JsValue> {

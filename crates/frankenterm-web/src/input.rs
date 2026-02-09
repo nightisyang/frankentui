@@ -254,6 +254,15 @@ pub struct FocusInput {
     pub focused: bool,
 }
 
+/// Accessibility preference/control event from the web host.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AccessibilityInput {
+    pub screen_reader: Option<bool>,
+    pub high_contrast: Option<bool>,
+    pub reduced_motion: Option<bool>,
+    pub announce: Option<Box<str>>,
+}
+
 /// Normalized, deterministic web input event.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum InputEvent {
@@ -263,6 +272,7 @@ pub enum InputEvent {
     Touch(TouchInput),
     Composition(CompositionInput),
     Focus(FocusInput),
+    Accessibility(AccessibilityInput),
 }
 
 /// Rewrite result after applying composition-state normalization.
@@ -526,6 +536,16 @@ pub enum InputEventJson {
     Focus {
         focused: bool,
     },
+    Accessibility {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        screen_reader: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        high_contrast: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reduced_motion: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        announce: Option<String>,
+    },
 }
 
 impl InputEvent {
@@ -591,6 +611,12 @@ impl From<&InputEvent> for InputEventJson {
                 data: comp.data.as_deref().map(str::to_string),
             },
             InputEvent::Focus(f) => Self::Focus { focused: f.focused },
+            InputEvent::Accessibility(a11y) => Self::Accessibility {
+                screen_reader: a11y.screen_reader,
+                high_contrast: a11y.high_contrast,
+                reduced_motion: a11y.reduced_motion,
+                announce: a11y.announce.as_deref().map(str::to_string),
+            },
         }
     }
 }
@@ -645,6 +671,17 @@ impl From<InputEventJson> for InputEvent {
                 data: data.map(Into::into),
             }),
             InputEventJson::Focus { focused } => Self::Focus(FocusInput { focused }),
+            InputEventJson::Accessibility {
+                screen_reader,
+                high_contrast,
+                reduced_motion,
+                announce,
+            } => Self::Accessibility(AccessibilityInput {
+                screen_reader,
+                high_contrast,
+                reduced_motion,
+                announce: announce.map(Into::into),
+            }),
         }
     }
 }
@@ -675,6 +712,7 @@ pub fn encode_vt_input_event(event: &InputEvent, features: VtInputEncoderFeature
         InputEvent::Touch(_) => Vec::new(),
         InputEvent::Composition(comp) => encode_composition_input(comp, features),
         InputEvent::Focus(focus) => encode_focus_input(*focus, features),
+        InputEvent::Accessibility(_) => Vec::new(),
     }
 }
 
@@ -1202,6 +1240,33 @@ mod tests {
             },
         );
         assert_eq!(encoded, b"\x1b[57364;5:3u".to_vec());
+    }
+
+    #[test]
+    fn accessibility_event_json_roundtrip_is_stable() {
+        let ev = InputEvent::Accessibility(AccessibilityInput {
+            screen_reader: Some(true),
+            high_contrast: Some(false),
+            reduced_motion: Some(true),
+            announce: Some("ready".into()),
+        });
+        let json = ev.to_json_string().expect("serialize");
+        let roundtrip = InputEvent::from_json_str(&json).expect("deserialize");
+        assert_eq!(ev, roundtrip);
+    }
+
+    #[test]
+    fn vt_encoder_ignores_accessibility_event() {
+        let ev = InputEvent::Accessibility(AccessibilityInput {
+            screen_reader: Some(true),
+            high_contrast: Some(true),
+            reduced_motion: Some(true),
+            announce: None,
+        });
+        assert!(
+            encode_vt_input_event(&ev, VtInputEncoderFeatures::default()).is_empty(),
+            "accessibility control events are host-side only and must not emit VT bytes"
+        );
     }
 
     proptest! {
