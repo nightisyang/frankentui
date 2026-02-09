@@ -1,0 +1,15 @@
+{
+  "name": "soft_reset_clears_charset",
+  "description": "DECSTR (CSI ! p) resets charset designation back to ASCII",
+  "initial_size": [10, 3],
+  "input_bytes_hex": "1b283071781b5b217071",
+  "comment": "ESC ( 0 activates DEC graphics. Print q(0x71)=─, x(0x78)=│. DECSTR (CSI ! p) resets charset. Print q=literal 'q'. Cursor at (0,3).",
+  "expected": {
+    "cursor": { "row": 0, "col": 3 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "─" },
+      { "row": 0, "col": 1, "char": "│" },
+      { "row": 0, "col": 2, "char": "q" }
+    ]
+  }
+}

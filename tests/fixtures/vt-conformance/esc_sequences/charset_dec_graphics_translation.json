@@ -1,0 +1,19 @@
+{
+  "name": "charset_dec_graphics_translation",
+  "description": "ESC ( 0 designates DEC Special Graphics for G0; printing chars in 0x60-0x7E maps to box-drawing Unicode",
+  "initial_size": [10, 3],
+  "input_bytes_hex": "1b28306a6b6c6d6e7178",
+  "comment": "ESC ( 0 switches G0 to DEC graphics. Print j(0x6A)=┘ k(0x6B)=┐ l(0x6C)=┌ m(0x6D)=└ n(0x6E)=┼ q(0x71)=─ x(0x78)=│. Cursor at (0,7).",
+  "expected": {
+    "cursor": { "row": 0, "col": 7 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "┘" },
+      { "row": 0, "col": 1, "char": "┐" },
+      { "row": 0, "col": 2, "char": "┌" },
+      { "row": 0, "col": 3, "char": "└" },
+      { "row": 0, "col": 4, "char": "┼" },
+      { "row": 0, "col": 5, "char": "─" },
+      { "row": 0, "col": 6, "char": "│" }
+    ]
+  }
+}
