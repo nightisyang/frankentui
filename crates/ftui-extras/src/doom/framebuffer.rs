@@ -92,9 +92,9 @@ impl DoomFramebuffer {
         let base_b_f = base_b as f32;
         for y in top..bottom {
             let light = light_top + light_delta * ((y - top) as f32 * inv_height);
-            let r = (base_r_f * light) as u8;
-            let g = (base_g_f * light) as u8;
-            let b = (base_b_f * light) as u8;
+            let r = (base_r_f * light).min(255.0) as u8;
+            let g = (base_g_f * light).min(255.0) as u8;
+            let b = (base_b_f * light).min(255.0) as u8;
             self.pixels[(y * self.width + x) as usize] = PackedRgba::rgb(r, g, b);
         }
     }
@@ -171,5 +171,81 @@ mod tests {
         assert_eq!(fb.get_pixel(5, 2), PackedRgba::GREEN);
         assert_eq!(fb.get_pixel(5, 7), PackedRgba::GREEN);
         assert_eq!(fb.get_pixel(5, 8), PackedRgba::BLACK);
+    }
+
+    #[test]
+    fn draw_column_out_of_bounds_x_is_safe() {
+        let mut fb = DoomFramebuffer::new(5, 5);
+        fb.draw_column(10, 0, 5, PackedRgba::RED);
+        // Should not panic
+    }
+
+    #[test]
+    fn draw_column_shaded_gradient() {
+        let mut fb = DoomFramebuffer::new(10, 10);
+        fb.draw_column_shaded(0, 0, 4, 100, 100, 100, 1.0, 0.0);
+        // Top pixel should be brighter than bottom pixel
+        let top = fb.get_pixel(0, 0);
+        let bot = fb.get_pixel(0, 3);
+        assert!(top.r() >= bot.r(), "top should be brighter than bottom");
+    }
+
+    #[test]
+    fn draw_column_shaded_zero_height_is_safe() {
+        let mut fb = DoomFramebuffer::new(5, 5);
+        fb.draw_column_shaded(0, 3, 3, 100, 100, 100, 1.0, 1.0);
+        // Should not panic with zero-height column
+    }
+
+    #[test]
+    fn draw_column_shaded_clamps_overflow() {
+        let mut fb = DoomFramebuffer::new(5, 5);
+        // light_top = 2.0 with base_r = 200 would produce 400.0, must clamp to 255
+        fb.draw_column_shaded(0, 0, 1, 200, 200, 200, 2.0, 2.0);
+        let pixel = fb.get_pixel(0, 0);
+        assert_eq!(pixel.r(), 255);
+        assert_eq!(pixel.g(), 255);
+        assert_eq!(pixel.b(), 255);
+    }
+
+    #[test]
+    fn draw_column_shaded_out_of_bounds_x_is_safe() {
+        let mut fb = DoomFramebuffer::new(5, 5);
+        fb.draw_column_shaded(10, 0, 5, 100, 100, 100, 1.0, 0.5);
+        // Should not panic
+    }
+
+    #[test]
+    fn clear_resets_to_black() {
+        let mut fb = DoomFramebuffer::new(5, 5);
+        fb.set_pixel(0, 0, PackedRgba::RED);
+        fb.set_pixel(4, 4, PackedRgba::GREEN);
+        fb.clear();
+        assert_eq!(fb.get_pixel(0, 0), PackedRgba::BLACK);
+        assert_eq!(fb.get_pixel(4, 4), PackedRgba::BLACK);
+    }
+
+    #[test]
+    fn resize_changes_dimensions() {
+        let mut fb = DoomFramebuffer::new(5, 5);
+        fb.set_pixel(2, 2, PackedRgba::RED);
+        fb.resize(10, 10);
+        assert_eq!(fb.width, 10);
+        assert_eq!(fb.height, 10);
+        assert_eq!(fb.pixels.len(), 100);
+    }
+
+    #[test]
+    fn draw_column_shaded_uniform_light() {
+        let mut fb = DoomFramebuffer::new(10, 10);
+        // With uniform light, all pixels in column should be identical
+        fb.draw_column_shaded(3, 1, 5, 100, 150, 200, 0.5, 0.5);
+        let expected = PackedRgba::rgb(50, 75, 100);
+        for y in 1..5 {
+            assert_eq!(fb.get_pixel(3, y), expected, "uniform light at y={y}");
+        }
+        // Pixels outside range should be black
+        assert_eq!(fb.get_pixel(3, 0), PackedRgba::BLACK);
+        assert_eq!(fb.get_pixel(3, 5), PackedRgba::BLACK);
     }
 }
