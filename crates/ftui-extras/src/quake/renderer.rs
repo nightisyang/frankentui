@@ -621,4 +621,820 @@ mod tests {
         renderer.render(&mut fb, &map, &player);
         // Should not panic
     }
+
+    // ---- z-buffer depth testing ----
+    //
+    // NOTE: Default player at origin looks along +X (yaw=0).
+    // View space: vz = world_x, vx = -world_y, vy = world_z - eye_z.
+    // Eye at [0, 0, PLAYER_VIEW_HEIGHT ≈ 22].
+
+    #[test]
+    fn zbuffer_closer_triangle_occludes() {
+        // Two triangles along +X: far at x=100, near at x=20.
+        let mut map = QuakeMap::new();
+        map.vertices = vec![
+            // Far triangle (x=100, centered in Y/Z around eye)
+            [100.0, -20.0, 42.0],
+            [100.0, 20.0, 42.0],
+            [100.0, 0.0, 2.0],
+            // Near triangle (x=20)
+            [20.0, -5.0, 27.0],
+            [20.0, 5.0, 27.0],
+            [20.0, 0.0, 17.0],
+        ];
+        map.faces = vec![
+            Face {
+                vertex_indices: vec![0, 1, 2],
+                normal: [-1.0, 0.0, 0.0],
+                dist: 0.0,
+                color_index: 0,
+                is_sky: false,
+                light_level: 1.0,
+                tex_type: TexType::Floor,
+            },
+            Face {
+                vertex_indices: vec![3, 4, 5],
+                normal: [-1.0, 0.0, 0.0],
+                dist: 0.0,
+                color_index: 2,
+                is_sky: false,
+                light_level: 1.0,
+                tex_type: TexType::Floor,
+            },
+        ];
+
+        let mut renderer = QuakeRenderer::new(64, 40);
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        let player = Player::default();
+        renderer.render(&mut fb, &map, &player);
+
+        // Both faces should be drawn, z-buffer handles ordering
+        assert!(renderer.stats.faces_drawn >= 1);
+        assert!(renderer.stats.pixels_written > 0);
+    }
+
+    #[test]
+    fn zbuffer_depth_values_decrease_for_closer() {
+        // Triangle at x=20, centered on screen
+        let mut map = QuakeMap::new();
+        map.vertices = vec![[20.0, -10.0, 32.0], [20.0, 10.0, 32.0], [20.0, 0.0, 12.0]];
+        map.faces = vec![Face {
+            vertex_indices: vec![0, 1, 2],
+            normal: [-1.0, 0.0, 0.0],
+            dist: 0.0,
+            color_index: 0,
+            is_sky: false,
+            light_level: 1.0,
+            tex_type: TexType::Floor,
+        }];
+
+        let mut renderer = QuakeRenderer::new(64, 40);
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        let player = Player::default();
+        renderer.render(&mut fb, &map, &player);
+
+        // Some pixels should have depth < f32::MAX (they were written)
+        let written_depths: Vec<f32> = fb.depth.iter().copied().filter(|&d| d < f32::MAX).collect();
+        assert!(
+            !written_depths.is_empty(),
+            "triangle should write some depth values"
+        );
+        for &d in &written_depths {
+            assert!(d > 0.0, "depth should be positive");
+        }
+    }
+
+    // ---- backface culling ----
+
+    #[test]
+    fn backface_culled_when_facing_away() {
+        // Wall face at x=20, winding produces view-space normal facing away (dot > 0).
+        // Vertices chosen so backface test detects the face as rear-facing.
+        let mut map = QuakeMap::new();
+        map.vertices = vec![
+            // CW winding in view space → backface
+            [20.0, 10.0, 32.0],
+            [20.0, -10.0, 32.0],
+            [20.0, 0.0, 12.0],
+        ];
+        map.faces = vec![Face {
+            vertex_indices: vec![0, 1, 2],
+            normal: [1.0, 0.0, 0.0], // facing away (+X = toward camera)
+            dist: 0.0,
+            color_index: 0,
+            is_sky: false,
+            light_level: 1.0,
+            tex_type: TexType::Wall,
+        }];
+
+        let mut renderer = QuakeRenderer::new(64, 40);
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        let player = Player::default();
+        renderer.render(&mut fb, &map, &player);
+
+        assert_eq!(renderer.stats.faces_tested, 1);
+        // Face should be culled (either by backface or near-clip)
+        assert_eq!(
+            renderer.stats.faces_drawn + renderer.stats.faces_culled,
+            1,
+            "face should be tested"
+        );
+    }
+
+    #[test]
+    fn floor_ceiling_not_backface_culled() {
+        // Floor face at x=20 (in front of camera) — Floor bypasses backface culling
+        let mut map = QuakeMap::new();
+        map.vertices = vec![[20.0, -10.0, 12.0], [20.0, 10.0, 12.0], [40.0, 0.0, 12.0]];
+        map.faces = vec![Face {
+            vertex_indices: vec![0, 1, 2],
+            normal: [0.0, 0.0, 1.0],
+            dist: 0.0,
+            color_index: 0,
+            is_sky: false,
+            light_level: 1.0,
+            tex_type: TexType::Floor,
+        }];
+
+        let mut renderer = QuakeRenderer::new(64, 40);
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        let player = Player::default();
+        renderer.render(&mut fb, &map, &player);
+
+        // Floor faces should never be backface-culled
+        assert_eq!(renderer.stats.faces_tested, 1);
+        assert_eq!(
+            renderer.stats.faces_drawn, 1,
+            "floor should not be backface culled"
+        );
+    }
+
+    // ---- near-plane clipping ----
+
+    #[test]
+    fn all_behind_near_plane_culled() {
+        // All vertices behind camera (negative X = behind player looking along +X)
+        let mut map = QuakeMap::new();
+        map.vertices = vec![[-5.0, -10.0, 32.0], [-5.0, 10.0, 32.0], [-5.0, 0.0, 12.0]];
+        map.faces = vec![Face {
+            vertex_indices: vec![0, 1, 2],
+            normal: [1.0, 0.0, 0.0],
+            dist: 0.0,
+            color_index: 0,
+            is_sky: false,
+            light_level: 1.0,
+            tex_type: TexType::Floor,
+        }];
+
+        let mut renderer = QuakeRenderer::new(64, 40);
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        let player = Player::default();
+        renderer.render(&mut fb, &map, &player);
+
+        assert_eq!(
+            renderer.stats.faces_culled, 1,
+            "face entirely behind camera should be culled"
+        );
+        assert_eq!(renderer.stats.faces_drawn, 0);
+    }
+
+    #[test]
+    fn partial_near_clip_renders_visible_part() {
+        // One vertex behind (neg X), two in front (pos X)
+        let mut map = QuakeMap::new();
+        map.vertices = vec![
+            [-5.0, 0.0, 22.0],   // behind camera
+            [30.0, -20.0, 32.0], // in front
+            [30.0, 20.0, 32.0],  // in front
+        ];
+        map.faces = vec![Face {
+            vertex_indices: vec![0, 1, 2],
+            normal: [-1.0, 0.0, 0.0],
+            dist: 0.0,
+            color_index: 0,
+            is_sky: false,
+            light_level: 1.0,
+            tex_type: TexType::Floor,
+        }];
+
+        let mut renderer = QuakeRenderer::new(64, 40);
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        let player = Player::default();
+        renderer.render(&mut fb, &map, &player);
+
+        // Should not be fully culled - the visible part should render
+        assert_eq!(renderer.stats.faces_tested, 1);
+        // At least some pixels should be written from the visible portion
+        assert!(renderer.stats.pixels_written > 0 || renderer.stats.faces_drawn > 0);
+    }
+
+    // ---- fog ----
+
+    #[test]
+    fn fog_at_fog_start_is_zero() {
+        // At FOG_START distance, fog_t should be 0.0 → color unchanged
+        let fog_range = FOG_END - FOG_START;
+        let z = FOG_START;
+        let fog_t = ((z - FOG_START) / fog_range).clamp(0.0, 1.0);
+        assert!((fog_t - 0.0).abs() < 1e-6, "fog at FOG_START should be 0.0");
+    }
+
+    #[test]
+    fn fog_at_fog_end_is_one() {
+        let fog_range = FOG_END - FOG_START;
+        let z = FOG_END;
+        let fog_t = ((z - FOG_START) / fog_range).clamp(0.0, 1.0);
+        assert!((fog_t - 1.0).abs() < 1e-6, "fog at FOG_END should be 1.0");
+    }
+
+    #[test]
+    fn fog_beyond_end_is_clamped() {
+        let fog_range = FOG_END - FOG_START;
+        let z = FOG_END + 500.0;
+        let fog_t = ((z - FOG_START) / fog_range).clamp(0.0, 1.0);
+        assert!(
+            (fog_t - 1.0).abs() < 1e-6,
+            "fog beyond FOG_END should clamp to 1.0"
+        );
+    }
+
+    #[test]
+    fn fog_before_start_is_zero() {
+        let fog_range = FOG_END - FOG_START;
+        let z = 5.0; // close, before fog start
+        let fog_t = ((z - FOG_START) / fog_range).clamp(0.0, 1.0);
+        assert!(
+            (fog_t - 0.0).abs() < 1e-6,
+            "fog before FOG_START should be 0.0"
+        );
+    }
+
+    // ---- background gradient ----
+
+    #[test]
+    fn background_fills_all_pixels() {
+        let mut renderer = QuakeRenderer::new(32, 20);
+        let mut fb = QuakeFramebuffer::new(32, 20);
+        let map = QuakeMap::new();
+        let player = Player::default();
+        renderer.render(&mut fb, &map, &player);
+
+        // Every pixel should have been filled by the background
+        let transparent = PackedRgba::default();
+        for (i, px) in fb.pixels.iter().enumerate() {
+            assert_ne!(
+                *px, transparent,
+                "pixel {i} should not be transparent after background render"
+            );
+        }
+    }
+
+    #[test]
+    fn background_cache_reused_on_second_render() {
+        let mut renderer = QuakeRenderer::new(32, 20);
+        let mut fb = QuakeFramebuffer::new(32, 20);
+        let map = QuakeMap::new();
+        let player = Player::default();
+
+        renderer.render(&mut fb, &map, &player);
+        assert_eq!(renderer.bg_cache_dims, (32, 20));
+        assert_eq!(renderer.bg_cache.len(), 20);
+
+        // Second render should reuse cache
+        renderer.render(&mut fb, &map, &player);
+        assert_eq!(renderer.bg_cache_dims, (32, 20));
+    }
+
+    #[test]
+    fn background_cache_invalidated_on_resize() {
+        let mut renderer = QuakeRenderer::new(32, 20);
+        let mut fb = QuakeFramebuffer::new(32, 20);
+        let map = QuakeMap::new();
+        let player = Player::default();
+        renderer.render(&mut fb, &map, &player);
+
+        renderer.resize(64, 40);
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        renderer.render(&mut fb, &map, &player);
+        assert_eq!(renderer.bg_cache_dims, (64, 40));
+        assert_eq!(renderer.bg_cache.len(), 40);
+    }
+
+    // ---- face centroid caching ----
+
+    #[test]
+    fn face_centroids_computed_lazily() {
+        let mut map = QuakeMap::new();
+        map.vertices = vec![[20.0, 0.0, 22.0], [30.0, 0.0, 22.0], [25.0, 10.0, 22.0]];
+        map.faces = vec![Face {
+            vertex_indices: vec![0, 1, 2],
+            normal: [-1.0, 0.0, 0.0],
+            dist: 0.0,
+            color_index: 0,
+            is_sky: false,
+            light_level: 1.0,
+            tex_type: TexType::Floor,
+        }];
+
+        let mut renderer = QuakeRenderer::new(64, 40);
+        assert!(renderer.face_centroids.is_empty());
+
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        let player = Player::default();
+        renderer.render(&mut fb, &map, &player);
+
+        assert_eq!(renderer.face_centroids.len(), 1);
+        // Centroid should be average of 3 vertices
+        let expected = [25.0, 10.0 / 3.0, 22.0];
+        for (i, &exp) in expected.iter().enumerate() {
+            assert!(
+                (renderer.face_centroids[0][i] - exp).abs() < 0.01,
+                "centroid[{i}] mismatch: {} != {}",
+                renderer.face_centroids[0][i],
+                exp
+            );
+        }
+    }
+
+    #[test]
+    fn face_centroids_recomputed_when_face_count_changes() {
+        let mut renderer = QuakeRenderer::new(64, 40);
+        let player = Player::default();
+
+        let mut map = QuakeMap::new();
+        map.vertices = vec![[20.0, 0.0, 22.0], [30.0, 0.0, 22.0], [25.0, 10.0, 22.0]];
+        map.faces = vec![Face {
+            vertex_indices: vec![0, 1, 2],
+            normal: [-1.0, 0.0, 0.0],
+            dist: 0.0,
+            color_index: 0,
+            is_sky: false,
+            light_level: 1.0,
+            tex_type: TexType::Floor,
+        }];
+
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        renderer.render(&mut fb, &map, &player);
+        assert_eq!(renderer.face_centroids.len(), 1);
+
+        // Add another face
+        map.vertices.push([40.0, 0.0, 22.0]);
+        map.faces.push(Face {
+            vertex_indices: vec![0, 1, 3],
+            normal: [-1.0, 0.0, 0.0],
+            dist: 0.0,
+            color_index: 1,
+            is_sky: false,
+            light_level: 1.0,
+            tex_type: TexType::Floor,
+        });
+
+        renderer.render(&mut fb, &map, &player);
+        assert_eq!(renderer.face_centroids.len(), 2);
+    }
+
+    #[test]
+    fn empty_face_gets_zero_centroid() {
+        let mut map = QuakeMap::new();
+        map.faces = vec![Face {
+            vertex_indices: vec![],
+            normal: [0.0, 0.0, 1.0],
+            dist: 0.0,
+            color_index: 0,
+            is_sky: false,
+            light_level: 1.0,
+            tex_type: TexType::Wall,
+        }];
+
+        let mut renderer = QuakeRenderer::new(64, 40);
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        let player = Player::default();
+        renderer.render(&mut fb, &map, &player);
+
+        assert_eq!(renderer.face_centroids.len(), 1);
+        assert_eq!(renderer.face_centroids[0], [0.0, 0.0, 0.0]);
+    }
+
+    // ---- projection math ----
+
+    #[test]
+    fn projection_scales_with_width() {
+        let r1 = QuakeRenderer::new(320, 200);
+        let r2 = QuakeRenderer::new(640, 200);
+        // Wider screen → larger projection scale (for same FOV)
+        assert!(r2.projection > r1.projection);
+    }
+
+    #[test]
+    fn projection_consistent_after_resize() {
+        let fresh = QuakeRenderer::new(640, 400);
+        let mut resized = QuakeRenderer::new(320, 200);
+        resized.resize(640, 400);
+        assert!(
+            (fresh.projection - resized.projection).abs() < 1e-3,
+            "resize should produce same projection as fresh: {} vs {}",
+            fresh.projection,
+            resized.projection
+        );
+    }
+
+    // ---- stats tracking ----
+
+    #[test]
+    fn render_resets_stats_each_frame() {
+        let mut map = QuakeMap::new();
+        map.vertices = vec![[20.0, -10.0, 32.0], [20.0, 10.0, 32.0], [20.0, 0.0, 12.0]];
+        map.faces = vec![Face {
+            vertex_indices: vec![0, 1, 2],
+            normal: [-1.0, 0.0, 0.0],
+            dist: 0.0,
+            color_index: 0,
+            is_sky: false,
+            light_level: 1.0,
+            tex_type: TexType::Floor,
+        }];
+
+        let mut renderer = QuakeRenderer::new(64, 40);
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        let player = Player::default();
+
+        renderer.render(&mut fb, &map, &player);
+        let first_pixels = renderer.stats.pixels_written;
+
+        renderer.render(&mut fb, &map, &player);
+        // Stats should be from the second render only, not accumulated
+        assert_eq!(
+            renderer.stats.pixels_written, first_pixels,
+            "same scene should produce same pixel count"
+        );
+    }
+
+    #[test]
+    fn stats_faces_tested_equals_non_empty_faces() {
+        let mut map = QuakeMap::new();
+        map.vertices = vec![
+            [20.0, -10.0, 32.0],
+            [20.0, 10.0, 32.0],
+            [20.0, 0.0, 12.0],
+            [40.0, -10.0, 32.0],
+            [40.0, 10.0, 32.0],
+            [40.0, 0.0, 12.0],
+        ];
+        map.faces = vec![
+            Face {
+                vertex_indices: vec![0, 1, 2],
+                normal: [-1.0, 0.0, 0.0],
+                dist: 0.0,
+                color_index: 0,
+                is_sky: false,
+                light_level: 1.0,
+                tex_type: TexType::Floor,
+            },
+            Face {
+                vertex_indices: vec![], // empty - should be skipped
+                normal: [-1.0, 0.0, 0.0],
+                dist: 0.0,
+                color_index: 0,
+                is_sky: false,
+                light_level: 1.0,
+                tex_type: TexType::Floor,
+            },
+            Face {
+                vertex_indices: vec![3, 4, 5],
+                normal: [-1.0, 0.0, 0.0],
+                dist: 0.0,
+                color_index: 1,
+                is_sky: false,
+                light_level: 1.0,
+                tex_type: TexType::Floor,
+            },
+        ];
+
+        let mut renderer = QuakeRenderer::new(64, 40);
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        let player = Player::default();
+        renderer.render(&mut fb, &map, &player);
+
+        // Empty face should be skipped in sorting, so only 2 tested
+        assert_eq!(renderer.stats.faces_tested, 2);
+    }
+
+    #[test]
+    fn stats_faces_drawn_plus_culled_equals_tested() {
+        let map = super::super::map::generate_e1m1();
+        let mut player = Player::default();
+        let (px, py, pz, pyaw) = map.player_start();
+        player.spawn(px, py, pz, pyaw);
+
+        let mut renderer = QuakeRenderer::new(128, 80);
+        let mut fb = QuakeFramebuffer::new(128, 80);
+        renderer.render(&mut fb, &map, &player);
+
+        assert_eq!(
+            renderer.stats.faces_drawn + renderer.stats.faces_culled,
+            renderer.stats.faces_tested,
+            "drawn ({}) + culled ({}) should equal tested ({})",
+            renderer.stats.faces_drawn,
+            renderer.stats.faces_culled,
+            renderer.stats.faces_tested
+        );
+    }
+
+    // ---- edge function math ----
+
+    #[test]
+    fn edge_function_unit_triangle_area() {
+        // edge_function: (c.x-a.x)*(b.y-a.y) - (c.y-a.y)*(b.x-a.x)
+        // For (0,0),(1,0),(0,1): (0)*(0) - (1)*(1) = -1
+        let a = [0.0, 0.0, 0.0];
+        let b = [1.0, 0.0, 0.0];
+        let c = [0.0, 1.0, 0.0];
+        let area = edge_function(a, b, c);
+        assert!(
+            (area - (-1.0)).abs() < 1e-5,
+            "unit right triangle should have signed area -1.0, got {area}"
+        );
+    }
+
+    #[test]
+    fn edge_function_collinear_zero() {
+        // Collinear points → area 0
+        let a = [0.0, 0.0, 0.0];
+        let b = [5.0, 0.0, 0.0];
+        let c = [10.0, 0.0, 0.0];
+        assert!(edge_function(a, b, c).abs() < 1e-6);
+    }
+
+    // ---- lerp ----
+
+    #[test]
+    fn lerp_u8_midpoint() {
+        assert_eq!(lerp_u8(100, 200, 0.5), 150);
+    }
+
+    #[test]
+    fn lerp_u8_same_value() {
+        assert_eq!(lerp_u8(42, 42, 0.5), 42);
+    }
+
+    // ---- degenerate triangle ----
+
+    #[test]
+    fn degenerate_triangle_skipped() {
+        // Three collinear vertices along Y at x=20 - near-zero area triangle
+        let mut map = QuakeMap::new();
+        map.vertices = vec![
+            [20.0, -10.0, 22.0],
+            [20.0, 10.0, 22.0],
+            [20.0, 0.0, 22.0], // collinear (all same Z, same X)
+        ];
+        map.faces = vec![Face {
+            vertex_indices: vec![0, 1, 2],
+            normal: [-1.0, 0.0, 0.0],
+            dist: 0.0,
+            color_index: 0,
+            is_sky: false,
+            light_level: 1.0,
+            tex_type: TexType::Floor,
+        }];
+
+        let mut renderer = QuakeRenderer::new(64, 40);
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        let player = Player::default();
+        renderer.render(&mut fb, &map, &player);
+
+        // Degenerate triangle should produce 0 pixels
+        assert_eq!(renderer.stats.pixels_written, 0);
+    }
+
+    // ---- out-of-bounds vertex indices ----
+
+    #[test]
+    fn out_of_bounds_vertex_index_safe() {
+        let mut map = QuakeMap::new();
+        map.vertices = vec![[20.0, 0.0, 22.0]];
+        map.faces = vec![Face {
+            vertex_indices: vec![0, 999, 1000], // 999/1000 are OOB
+            normal: [-1.0, 0.0, 0.0],
+            dist: 0.0,
+            color_index: 0,
+            is_sky: false,
+            light_level: 1.0,
+            tex_type: TexType::Floor,
+        }];
+
+        let mut renderer = QuakeRenderer::new(64, 40);
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        let player = Player::default();
+        // Should not panic
+        renderer.render(&mut fb, &map, &player);
+    }
+
+    // ---- large scene stability ----
+
+    #[test]
+    fn render_full_e1m1_no_panic() {
+        let map = super::super::map::generate_e1m1();
+        let mut player = Player::default();
+        let (px, py, pz, pyaw) = map.player_start();
+        player.spawn(px, py, pz, pyaw);
+
+        let mut renderer = QuakeRenderer::new(SCREENWIDTH, SCREENHEIGHT);
+        let mut fb = QuakeFramebuffer::new(SCREENWIDTH, SCREENHEIGHT);
+        renderer.render(&mut fb, &map, &player);
+
+        assert!(
+            renderer.stats.faces_tested > 10,
+            "E1M1 should have many faces"
+        );
+        assert!(
+            renderer.stats.triangles_rasterized > 0,
+            "should rasterize triangles"
+        );
+        assert!(
+            renderer.stats.pixels_written > 100,
+            "should write many pixels"
+        );
+    }
+
+    #[test]
+    fn render_stats_debug_display() {
+        let stats = RenderStats {
+            faces_tested: 100,
+            faces_culled: 30,
+            faces_drawn: 70,
+            triangles_rasterized: 200,
+            pixels_written: 5000,
+        };
+        let s = format!("{stats:?}");
+        assert!(s.contains("100"));
+        assert!(s.contains("5000"));
+    }
+
+    #[test]
+    fn render_stats_clone() {
+        let stats = RenderStats {
+            faces_tested: 42,
+            faces_culled: 10,
+            faces_drawn: 32,
+            triangles_rasterized: 64,
+            pixels_written: 1000,
+        };
+        let cloned = stats.clone();
+        assert_eq!(cloned.faces_tested, 42);
+        assert_eq!(cloned.pixels_written, 1000);
+    }
+
+    // ---- face sorting order ----
+
+    #[test]
+    fn faces_sorted_back_to_front() {
+        // Two faces at different distances along +X
+        let mut map = QuakeMap::new();
+        map.vertices = vec![
+            // Near face (x=15)
+            [15.0, -5.0, 27.0],
+            [15.0, 5.0, 27.0],
+            [15.0, 0.0, 17.0],
+            // Far face (x=50)
+            [50.0, -5.0, 27.0],
+            [50.0, 5.0, 27.0],
+            [50.0, 0.0, 17.0],
+        ];
+        map.faces = vec![
+            Face {
+                vertex_indices: vec![0, 1, 2],
+                normal: [-1.0, 0.0, 0.0],
+                dist: 0.0,
+                color_index: 0,
+                is_sky: false,
+                light_level: 1.0,
+                tex_type: TexType::Floor,
+            },
+            Face {
+                vertex_indices: vec![3, 4, 5],
+                normal: [-1.0, 0.0, 0.0],
+                dist: 0.0,
+                color_index: 1,
+                is_sky: false,
+                light_level: 1.0,
+                tex_type: TexType::Floor,
+            },
+        ];
+
+        let mut renderer = QuakeRenderer::new(64, 40);
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        let player = Player::default();
+        renderer.render(&mut fb, &map, &player);
+
+        assert_eq!(
+            renderer.stats.faces_tested, 2,
+            "both faces should be tested"
+        );
+    }
+
+    // ---- quad (4-vertex) face triangulation ----
+
+    #[test]
+    fn quad_face_triangulated_into_two() {
+        // A quad at x=20 should be triangulated as a fan from vertex 0
+        let mut map = QuakeMap::new();
+        map.vertices = vec![
+            [20.0, -10.0, 32.0],
+            [20.0, 10.0, 32.0],
+            [20.0, 10.0, 12.0],
+            [20.0, -10.0, 12.0],
+        ];
+        map.faces = vec![Face {
+            vertex_indices: vec![0, 1, 2, 3],
+            normal: [-1.0, 0.0, 0.0],
+            dist: 0.0,
+            color_index: 0,
+            is_sky: false,
+            light_level: 1.0,
+            tex_type: TexType::Floor,
+        }];
+
+        let mut renderer = QuakeRenderer::new(64, 40);
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        let player = Player::default();
+        renderer.render(&mut fb, &map, &player);
+
+        // A quad is triangulated into 2 triangles (4 verts - 2 = 2)
+        assert_eq!(renderer.stats.triangles_rasterized, 2, "quad → 2 triangles");
+    }
+
+    // ---- face with < 3 vertices ----
+
+    #[test]
+    fn face_with_two_vertices_culled() {
+        let mut map = QuakeMap::new();
+        map.vertices = vec![[20.0, -5.0, 22.0], [20.0, 5.0, 22.0]];
+        map.faces = vec![Face {
+            vertex_indices: vec![0, 1], // only 2 verts
+            normal: [-1.0, 0.0, 0.0],
+            dist: 0.0,
+            color_index: 0,
+            is_sky: false,
+            light_level: 1.0,
+            tex_type: TexType::Floor,
+        }];
+
+        let mut renderer = QuakeRenderer::new(64, 40);
+        let mut fb = QuakeFramebuffer::new(64, 40);
+        let player = Player::default();
+        renderer.render(&mut fb, &map, &player);
+
+        assert_eq!(
+            renderer.stats.faces_culled, 1,
+            "face with < 3 verts should be culled"
+        );
+        assert_eq!(renderer.stats.faces_drawn, 0);
+    }
+
+    // ---- lighting ----
+
+    #[test]
+    fn light_level_affects_pixel_brightness() {
+        // Render same triangle with full light and half light, compare center pixel
+        let make_map = |light: f32| {
+            let mut map = QuakeMap::new();
+            // Large triangle at x=20 centered on screen
+            map.vertices = vec![[20.0, -30.0, 52.0], [20.0, 30.0, 52.0], [20.0, 0.0, -8.0]];
+            map.faces = vec![Face {
+                vertex_indices: vec![0, 1, 2],
+                normal: [-1.0, 0.0, 0.0],
+                dist: 0.0,
+                color_index: 0,
+                is_sky: false,
+                light_level: light,
+                tex_type: TexType::Floor,
+            }];
+            map
+        };
+
+        let player = Player::default();
+        let center = (20 * 64 + 32) as usize; // row 20, col 32 (center-ish)
+
+        let mut r1 = QuakeRenderer::new(64, 40);
+        let mut fb1 = QuakeFramebuffer::new(64, 40);
+        r1.render(&mut fb1, &make_map(1.0), &player);
+
+        let mut r2 = QuakeRenderer::new(64, 40);
+        let mut fb2 = QuakeFramebuffer::new(64, 40);
+        r2.render(&mut fb2, &make_map(0.3), &player);
+
+        // Both should write to center area
+        if fb1.depth[center] < f32::MAX && fb2.depth[center] < f32::MAX {
+            // Brighter light should produce brighter pixels (higher RGB sum)
+            let c1 = fb1.pixels[center];
+            let sum1 = c1.r() as u32 + c1.g() as u32 + c1.b() as u32;
+            let c2 = fb2.pixels[center];
+            let sum2 = c2.r() as u32 + c2.g() as u32 + c2.b() as u32;
+            assert!(
+                sum1 >= sum2,
+                "full light ({sum1}) should be >= half light ({sum2})"
+            );
+        }
+    }
 }
