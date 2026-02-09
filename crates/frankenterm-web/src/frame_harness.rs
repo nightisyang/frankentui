@@ -28,6 +28,7 @@
 //! ```
 
 use crate::renderer::{CellData, GridGeometry, cell_attr_link_id, cell_attr_style_bits};
+use frankenterm_core::ScrollbackWindow;
 use serde::Serialize;
 use std::time::Duration;
 
@@ -273,6 +274,26 @@ struct ResizeStormFrameJsonlRecord<'a> {
     geometry: GeometrySnapshot,
 }
 
+#[derive(Debug, Serialize)]
+struct ScrollbackVirtualizationJsonlRecord<'a> {
+    schema_version: &'static str,
+    #[serde(rename = "type")]
+    record_type: &'static str,
+    timestamp: &'a str,
+    run_id: &'a str,
+    frame_idx: u64,
+    scrollback_lines: usize,
+    viewport_start: usize,
+    viewport_end: usize,
+    render_start: usize,
+    render_end: usize,
+    viewport_lines: usize,
+    render_lines: usize,
+    overscan_before: usize,
+    overscan_after: usize,
+    render_cost_us: u64,
+}
+
 #[must_use]
 fn fnv1a64_extend(mut hash: u64, bytes: &[u8]) -> u64 {
     for &b in bytes {
@@ -514,6 +535,41 @@ pub fn resize_storm_frame_jsonl(
         cols: geometry.cols,
         rows: geometry.rows,
         geometry,
+    };
+    serde_json::to_string(&row).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// Build one JSONL `scrollback_frame` record for virtualized scrollback telemetry.
+///
+/// The record is designed for E2E/perf harnesses and includes:
+/// - total scrollback size,
+/// - viewport/render ranges,
+/// - overscan extents,
+/// - render cost in microseconds.
+#[must_use]
+pub fn scrollback_virtualization_frame_jsonl(
+    run_id: &str,
+    timestamp: &str,
+    frame_idx: u64,
+    window: ScrollbackWindow,
+    render_cost: Duration,
+) -> String {
+    let row = ScrollbackVirtualizationJsonlRecord {
+        schema_version: E2E_JSONL_SCHEMA_VERSION,
+        record_type: "scrollback_frame",
+        timestamp,
+        run_id,
+        frame_idx,
+        scrollback_lines: window.total_lines,
+        viewport_start: window.viewport_start,
+        viewport_end: window.viewport_end,
+        render_start: window.render_start,
+        render_end: window.render_end,
+        viewport_lines: window.viewport_len(),
+        render_lines: window.render_len(),
+        overscan_before: window.viewport_start.saturating_sub(window.render_start),
+        overscan_after: window.render_end.saturating_sub(window.viewport_end),
+        render_cost_us: render_cost.as_micros() as u64,
     };
     serde_json::to_string(&row).unwrap_or_else(|_| "{}".to_string())
 }
@@ -823,6 +879,42 @@ mod tests {
         );
         assert_eq!(parsed["geometry"]["pixel_width"], 1200);
         assert_eq!(parsed["geometry"]["pixel_height"], 800);
+    }
+
+    #[test]
+    fn scrollback_virtualization_frame_jsonl_contains_ranges_and_cost() {
+        let window = ScrollbackWindow {
+            total_lines: 100_000,
+            max_scroll_offset: 99_960,
+            scroll_offset_from_bottom: 123,
+            viewport_start: 10_000,
+            viewport_end: 10_040,
+            render_start: 9_992,
+            render_end: 10_048,
+        };
+        let line = scrollback_virtualization_frame_jsonl(
+            "run-vscroll",
+            "2026-02-09T04:30:00Z",
+            17,
+            window,
+            Duration::from_micros(2314),
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&line).unwrap();
+
+        assert_eq!(parsed["schema_version"], "e2e-jsonl-v1");
+        assert_eq!(parsed["type"], "scrollback_frame");
+        assert_eq!(parsed["run_id"], "run-vscroll");
+        assert_eq!(parsed["frame_idx"], 17);
+        assert_eq!(parsed["scrollback_lines"], 100000);
+        assert_eq!(parsed["viewport_start"], 10000);
+        assert_eq!(parsed["viewport_end"], 10040);
+        assert_eq!(parsed["render_start"], 9992);
+        assert_eq!(parsed["render_end"], 10048);
+        assert_eq!(parsed["viewport_lines"], 40);
+        assert_eq!(parsed["render_lines"], 56);
+        assert_eq!(parsed["overscan_before"], 8);
+        assert_eq!(parsed["overscan_after"], 8);
+        assert_eq!(parsed["render_cost_us"], 2314);
     }
 
     #[test]

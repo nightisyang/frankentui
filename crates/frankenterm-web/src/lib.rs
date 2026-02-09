@@ -17,6 +17,7 @@ pub mod glyph_atlas;
 pub mod input;
 pub mod patch_feed;
 pub mod renderer;
+pub mod scroll;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm;
