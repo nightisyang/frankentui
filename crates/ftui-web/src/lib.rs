@@ -733,4 +733,260 @@ mod tests {
         assert!(flat.cells.is_empty());
         assert!(flat.spans.is_empty());
     }
+
+    // --- WebBackendError ---
+
+    #[test]
+    fn web_backend_error_display() {
+        let err = WebBackendError::Unsupported("test op");
+        assert_eq!(format!("{err}"), "unsupported: test op");
+    }
+
+    #[test]
+    fn web_backend_error_is_std_error() {
+        let err = WebBackendError::Unsupported("foo");
+        let _: &dyn std::error::Error = &err;
+    }
+
+    #[test]
+    fn web_backend_error_eq() {
+        assert_eq!(
+            WebBackendError::Unsupported("a"),
+            WebBackendError::Unsupported("a")
+        );
+        assert_ne!(
+            WebBackendError::Unsupported("a"),
+            WebBackendError::Unsupported("b")
+        );
+    }
+
+    // --- DeterministicClock ---
+
+    #[test]
+    fn clock_set_overrides_current() {
+        let mut c = DeterministicClock::new();
+        c.set(Duration::from_secs(42));
+        assert_eq!(c.now_mono(), Duration::from_secs(42));
+    }
+
+    #[test]
+    fn clock_default_is_zero() {
+        let c = DeterministicClock::default();
+        assert_eq!(c.now_mono(), Duration::ZERO);
+    }
+
+    #[test]
+    fn clock_clone() {
+        let mut c = DeterministicClock::new();
+        c.advance(Duration::from_millis(100));
+        let c2 = c.clone();
+        assert_eq!(c2.now_mono(), Duration::from_millis(100));
+    }
+
+    // --- WebEventSource ---
+
+    #[test]
+    fn event_source_set_size() {
+        let mut ev = WebEventSource::new(80, 24);
+        ev.set_size(120, 50);
+        assert_eq!(ev.size().unwrap(), (120, 50));
+    }
+
+    #[test]
+    fn event_source_drain_events() {
+        let mut ev = WebEventSource::new(80, 24);
+        ev.push_event(Event::Tick);
+        ev.push_event(Event::Tick);
+
+        let drained: Vec<_> = ev.drain_events().collect();
+        assert_eq!(drained.len(), 2);
+        assert_eq!(ev.poll_event(Duration::ZERO).unwrap(), false);
+    }
+
+    #[test]
+    fn event_source_features() {
+        let mut ev = WebEventSource::new(80, 24);
+        let f = BackendFeatures::default();
+        ev.set_features(f).unwrap();
+        let _ = ev.features(); // should not panic
+    }
+
+    #[test]
+    fn event_source_empty_read_returns_none() {
+        let mut ev = WebEventSource::new(80, 24);
+        assert_eq!(ev.read_event().unwrap(), None);
+    }
+
+    // --- WebPresenter ---
+
+    #[test]
+    fn presenter_default_is_new() {
+        let a = WebPresenter::new();
+        let b = WebPresenter::default();
+        assert!(a.outputs().logs.is_empty());
+        assert!(b.outputs().logs.is_empty());
+    }
+
+    #[test]
+    fn presenter_outputs_accessor() {
+        let mut p = WebPresenter::new();
+        p.write_log("test").unwrap();
+        assert_eq!(p.outputs().logs.len(), 1);
+    }
+
+    #[test]
+    fn presenter_outputs_mut() {
+        let mut p = WebPresenter::new();
+        p.outputs_mut().logs.push("manual".to_string());
+        assert_eq!(p.outputs().logs, vec!["manual"]);
+    }
+
+    #[test]
+    fn presenter_take_outputs_clears() {
+        let mut p = WebPresenter::new();
+        p.write_log("a").unwrap();
+        let taken = p.take_outputs();
+        assert_eq!(taken.logs, vec!["a"]);
+        assert!(p.outputs().logs.is_empty());
+    }
+
+    #[test]
+    fn presenter_capabilities_are_modern() {
+        let p = WebPresenter::new();
+        let caps = p.capabilities();
+        assert!(caps.true_color);
+    }
+
+    #[test]
+    fn presenter_present_ui_owned() {
+        let mut p = WebPresenter::new();
+        let buf = Buffer::new(3, 2);
+        p.present_ui_owned(buf, None, true);
+
+        let out = p.take_outputs();
+        assert!(out.last_full_repaint_hint);
+        assert_eq!(out.last_buffer.unwrap().width(), 3);
+        assert_eq!(out.last_patches.len(), 1);
+        assert!(out.last_patch_stats.is_some());
+        assert!(out.last_patch_hash.is_some());
+    }
+
+    // --- WebBackend ---
+
+    #[test]
+    fn web_backend_construction() {
+        let mut wb = WebBackend::new(80, 24);
+        assert_eq!(wb.events_mut().size().unwrap(), (80, 24));
+        assert_eq!(wb.clock_mut().now_mono(), Duration::ZERO);
+    }
+
+    #[test]
+    fn web_backend_implements_backend_trait() {
+        let mut wb = WebBackend::new(80, 24);
+        // Verify Backend trait methods
+        let _ = wb.clock();
+        let _ = wb.events();
+        let _ = wb.presenter();
+    }
+
+    // --- patch_batch_stats ---
+
+    #[test]
+    fn patch_batch_stats_empty() {
+        let stats = patch_batch_stats(&[]);
+        assert_eq!(stats.dirty_cells, 0);
+        assert_eq!(stats.patch_count, 0);
+        assert_eq!(stats.bytes_uploaded, 0);
+    }
+
+    #[test]
+    fn patch_batch_stats_counts_cells() {
+        let patches = vec![
+            WebPatchRun {
+                offset: 0,
+                cells: vec![
+                    WebPatchCell {
+                        bg: 0,
+                        fg: 0,
+                        glyph: 0,
+                        attrs: 0,
+                    };
+                    3
+                ],
+            },
+            WebPatchRun {
+                offset: 10,
+                cells: vec![WebPatchCell {
+                    bg: 0,
+                    fg: 0,
+                    glyph: 0,
+                    attrs: 0,
+                }],
+            },
+        ];
+        let stats = patch_batch_stats(&patches);
+        assert_eq!(stats.dirty_cells, 4);
+        assert_eq!(stats.patch_count, 2);
+        assert_eq!(stats.bytes_uploaded, 64); // 4 cells * 16 bytes
+    }
+
+    // --- patch_batch_hash ---
+
+    #[test]
+    fn patch_hash_empty_is_deterministic() {
+        let a = patch_batch_hash(&[]);
+        let b = patch_batch_hash(&[]);
+        assert_eq!(a, b);
+        assert!(a.starts_with("fnv1a64:"));
+    }
+
+    // --- build_patch_runs ---
+
+    #[test]
+    fn build_patch_runs_full_repaint_hint() {
+        let buf = Buffer::new(2, 2);
+        let patches = build_patch_runs(&buf, None, true);
+        assert_eq!(patches.len(), 1);
+        assert_eq!(patches[0].offset, 0);
+        assert_eq!(patches[0].cells.len(), 4);
+    }
+
+    #[test]
+    fn build_patch_runs_no_diff_triggers_full() {
+        let buf = Buffer::new(3, 1);
+        let patches = build_patch_runs(&buf, None, false);
+        // None diff → full buffer patch
+        assert_eq!(patches.len(), 1);
+        assert_eq!(patches[0].cells.len(), 3);
+    }
+
+    // --- WebOutputs default ---
+
+    #[test]
+    fn web_outputs_default_is_empty() {
+        let out = WebOutputs::default();
+        assert!(out.logs.is_empty());
+        assert!(out.last_buffer.is_none());
+        assert!(out.last_patches.is_empty());
+        assert!(out.last_patch_stats.is_none());
+        assert!(out.last_patch_hash.is_none());
+        assert!(!out.last_full_repaint_hint);
+    }
+
+    // --- cell_to_patch ---
+
+    #[test]
+    fn cell_to_patch_empty_cell() {
+        let cell = Cell::default();
+        let patch = cell_to_patch(&cell);
+        // Empty cell should have glyph=0
+        assert_eq!(patch.glyph, 0);
+    }
+
+    #[test]
+    fn cell_to_patch_ascii_char() {
+        let cell = Cell::from_char('A');
+        let patch = cell_to_patch(&cell);
+        assert_eq!(patch.glyph, 'A' as u32);
+    }
 }
