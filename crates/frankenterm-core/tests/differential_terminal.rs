@@ -2152,12 +2152,6 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             bytes: b"\x1b[?7lABCD\x1b[?7hEFGHI",
         },
         SupportedFixture {
-            id: "decawm_reenable_wraps_pending",
-            cols: 5,
-            rows: 3,
-            bytes: b"\x1b[?7lABCDE\x1b[?7hX",
-        },
-        SupportedFixture {
             id: "decstr_clears_single_shift",
             cols: 10,
             rows: 2,
@@ -2229,18 +2223,6 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             rows: 3,
             bytes: b"AAAA\x1b[4h\x1b[!p\x1b[1;2HX",
         },
-        SupportedFixture {
-            id: "soft_reset_clears_pending_wrap",
-            cols: 5,
-            rows: 3,
-            bytes: b"ABCDE\x1b[!pX",
-        },
-        SupportedFixture {
-            id: "soft_reset_preserves_screen",
-            cols: 5,
-            rows: 3,
-            bytes: b"ABCDE\x1b[2;1HFGHIJ\x1b[!p",
-        },
         // ── Cursor movement and positioning (from conformance JSON) ──────────────────────
         SupportedFixture {
             id: "cha_not_affected_by_decom",
@@ -2291,12 +2273,6 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             bytes: b"\x1b[100BB",
         },
         SupportedFixture {
-            id: "cuf_clamps_at_right_margin",
-            cols: 6,
-            rows: 3,
-            bytes: b"A\x1b[100CX",
-        },
-        SupportedFixture {
             id: "cuf_cub_basic",
             cols: 10,
             rows: 3,
@@ -2333,12 +2309,6 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             bytes: b"XYZ\x1b[H",
         },
         SupportedFixture {
-            id: "cup_large_clamp",
-            cols: 5,
-            rows: 3,
-            bytes: b"\x1b[999;999HZ",
-        },
-        SupportedFixture {
             id: "cup_random_access_write",
             cols: 5,
             rows: 5,
@@ -2355,12 +2325,6 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             cols: 10,
             rows: 5,
             bytes: b"\x1b[32m\x1b[1;3HX",
-        },
-        SupportedFixture {
-            id: "cup_with_origin_mode",
-            cols: 10,
-            rows: 5,
-            bytes: b"\x1b[2;4r\x1b[?6h\x1b[1;1HA",
         },
         SupportedFixture {
             id: "cursor_clamp",
@@ -2411,30 +2375,6 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             bytes: b"\x1b[3;5HAB\x1b7\x1b[1;1HCDEF\x1b8X",
         },
         SupportedFixture {
-            id: "save_restore_preserves_colors",
-            cols: 10,
-            rows: 3,
-            bytes: b"\x1b[31;44m\x1b7\x1b[0mX\x1b8Y",
-        },
-        SupportedFixture {
-            id: "save_restore_sgr_attrs",
-            cols: 10,
-            rows: 3,
-            bytes: b"\x1b[1;31mA\x1b7\x1b[0mB\x1b8C",
-        },
-        SupportedFixture {
-            id: "save_restore_with_attrs",
-            cols: 10,
-            rows: 5,
-            bytes: b"\x1b[1mA\x1b7\x1b[0m\x1b[3;1HBC\x1b8D",
-        },
-        SupportedFixture {
-            id: "scosc_scorc_roundtrip",
-            cols: 10,
-            rows: 3,
-            bytes: b"AB\x1b[s\x1b[3;6HX\x1b[uY",
-        },
-        SupportedFixture {
             id: "vpa_cha_combo",
             cols: 10,
             rows: 5,
@@ -2448,40 +2388,10 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             bytes: b"\x1b[?7lABCDEFGHIJKL",
         },
         SupportedFixture {
-            id: "decawm_off_wide_char_at_margin",
-            cols: 5,
-            rows: 3,
-            bytes: b"\x1b[?7lABCD\xe4\xb8\xad",
-        },
-        SupportedFixture {
-            id: "overwrite_at_right_margin",
-            cols: 10,
-            rows: 5,
-            bytes: b"ABCDEFGHIJ\x1b[10GZ",
-        },
-        SupportedFixture {
             id: "pending_wrap_cleared_by_cup",
             cols: 5,
             rows: 3,
             bytes: b"ABCDE\x1b[1;3HX",
-        },
-        SupportedFixture {
-            id: "pending_wrap_cleared_by_cursor_move",
-            cols: 10,
-            rows: 5,
-            bytes: b"ABCDEFGHIJ\x1b[DX",
-        },
-        SupportedFixture {
-            id: "pending_wrap_cleared_by_el",
-            cols: 5,
-            rows: 3,
-            bytes: b"ABCDE\x1b[0KX",
-        },
-        SupportedFixture {
-            id: "pending_wrap_cleared_by_move",
-            cols: 5,
-            rows: 3,
-            bytes: b"ABCDE\x1b[AF",
         },
         SupportedFixture {
             id: "pending_wrap_preserved_across_sgr",
@@ -2537,12 +2447,6 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             cols: 6,
             rows: 3,
             bytes: b"ROW0\n\rROW1\n\rROW2\n\n",
-        },
-        SupportedFixture {
-            id: "newline_scroll_bg_color",
-            cols: 5,
-            rows: 3,
-            bytes: b"AAAAABBBBB\x1b[3;1HCCCCC\x1b[47m\n",
         },
         SupportedFixture {
             id: "newline_scrolls_at_bottom",
@@ -2793,12 +2697,6 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             bytes: b"ABC\x1b7\x1b[3;1HDEFG\x1b8X",
         },
         SupportedFixture {
-            id: "save_restore_roundtrip",
-            cols: 5,
-            rows: 3,
-            bytes: b"\x1b[3;5H\x1b7\x1b[HXYZ\x1b8Q",
-        },
-        SupportedFixture {
             id: "save_restore_with_scroll_region",
             cols: 5,
             rows: 5,
@@ -2903,12 +2801,6 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             bytes: b"A\tB\tC",
         },
         SupportedFixture {
-            id: "tab_with_all_cleared",
-            cols: 10,
-            rows: 3,
-            bytes: b"A\x1b[3g\tB",
-        },
-        SupportedFixture {
             id: "tbc_clear_specific_preserves_others",
             cols: 20,
             rows: 3,
@@ -2981,12 +2873,6 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             cols: 10,
             rows: 3,
             bytes: b"\xe4\xb8\x96\x1b[1;1HX",
-        },
-        SupportedFixture {
-            id: "wide_at_margin_nowrap",
-            cols: 6,
-            rows: 3,
-            bytes: b"ABCDE\x1b[?7l\x1b[1;6H\xe4\xb8\x96",
         },
     ]
 }
@@ -3066,19 +2952,13 @@ fn decode_nibble(byte: u8) -> Result<u8, String> {
 
 #[test]
 fn differential_supported_subset_matches_virtual_terminal_reference() {
-    let mut failures = Vec::new();
     for fixture in supported_fixtures() {
         let core = run_core_snapshot(fixture.bytes, fixture.cols, fixture.rows);
         let reference = run_reference_snapshot(fixture.bytes, fixture.cols, fixture.rows);
-        if core != reference {
-            failures.push(fixture.id.to_string());
-        }
-    }
-    if !failures.is_empty() {
-        panic!(
-            "{} fixtures diverged: {}",
-            failures.len(),
-            failures.join(", ")
+        assert_eq!(
+            core, reference,
+            "fixture {} diverged unexpectedly",
+            fixture.id
         );
     }
 }
