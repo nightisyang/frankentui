@@ -111,6 +111,28 @@ pub enum Action {
     ScreenAlignment,
     /// REP (`CSI Ps b`): repeat the most recently printed graphic character Ps times.
     RepeatChar(u16),
+    /// DECSCUSR (`CSI Ps SP q`): set cursor shape.
+    ///
+    /// 0 = default, 1 = blinking block, 2 = steady block,
+    /// 3 = blinking underline, 4 = steady underline,
+    /// 5 = blinking bar, 6 = steady bar.
+    SetCursorShape(u8),
+    /// DECSTR (`CSI ! p`): soft terminal reset.
+    ///
+    /// Resets most terminal state (modes, SGR, scroll region, cursor
+    /// visibility, character sets) without clearing the screen or
+    /// scrollback — unlike RIS (`ESC c`) which is a full reset.
+    SoftReset,
+    /// ED mode 3 (`CSI 3 J`): erase the entire display and scrollback buffer.
+    EraseScrollback,
+    /// Focus gained (`CSI I`): terminal window received focus.
+    FocusIn,
+    /// Focus lost (`CSI O`): terminal window lost focus.
+    FocusOut,
+    /// Bracketed paste start (`CSI 200 ~`).
+    PasteStart,
+    /// Bracketed paste end (`CSI 201 ~`).
+    PasteEnd,
     /// A raw escape/CSI/OSC sequence captured verbatim (starts with ESC).
     Escape(Vec<u8>),
 }
@@ -417,7 +439,31 @@ impl Parser {
             };
         }
 
-        let params = Self::parse_csi_params(param_bytes)?;
+        // Separate intermediate bytes (0x20..=0x2F per ECMA-48) from parameter
+        // bytes. Intermediates follow parameters and precede the final byte.
+        let intermediate_start = param_bytes
+            .iter()
+            .position(|&b| (0x20..=0x2F).contains(&b))
+            .unwrap_or(param_bytes.len());
+        let (numeric_bytes, intermediates) = param_bytes.split_at(intermediate_start);
+
+        // Dispatch sequences with intermediate bytes first.
+        match (intermediates, final_byte) {
+            // DECSCUSR (CSI Ps SP q): set cursor shape.
+            (b" ", b'q') => {
+                let params = Self::parse_csi_params(numeric_bytes)?;
+                let shape = params.first().copied().unwrap_or(0);
+                return Some(Action::SetCursorShape(shape.min(6) as u8));
+            }
+            // DECSTR (CSI ! p): soft terminal reset.
+            (b"!", b'p') => return Some(Action::SoftReset),
+            // Unknown intermediate+final combination.
+            _ if !intermediates.is_empty() => return None,
+            _ => {}
+        }
+
+        // Standard CSI dispatch (no intermediate bytes).
+        let params = Self::parse_csi_params(numeric_bytes)?;
 
         match final_byte {
             b'A' => Some(Action::CursorUp(Self::csi_count_or_one(
@@ -454,10 +500,10 @@ impl Parser {
             }
             b'J' => {
                 let mode = params.first().copied().unwrap_or(0);
-                if mode <= 2 {
-                    Some(Action::EraseInDisplay(mode as u8))
-                } else {
-                    None
+                match mode {
+                    0..=2 => Some(Action::EraseInDisplay(mode as u8)),
+                    3 => Some(Action::EraseScrollback),
+                    _ => None,
                 }
             }
             b'K' => {
@@ -517,6 +563,35 @@ impl Parser {
             b'b' => Some(Action::RepeatChar(Self::csi_count_or_one(
                 params.first().copied(),
             ))),
+            // SCOSC: save cursor position (ANSI-style, CSI s)
+            b's' => {
+                if params.is_empty() || (params.len() == 1 && params[0] == 0) {
+                    Some(Action::SaveCursor)
+                } else {
+                    // CSI with params on 's' could be DECSLRM; ignore for now.
+                    None
+                }
+            }
+            // SCORC: restore cursor position (ANSI-style, CSI u)
+            b'u' => {
+                if params.is_empty() || (params.len() == 1 && params[0] == 0) {
+                    Some(Action::RestoreCursor)
+                } else {
+                    None
+                }
+            }
+            // Focus events (CSI I / CSI O)
+            b'I' => Some(Action::FocusIn),
+            b'O' => Some(Action::FocusOut),
+            // Bracketed paste + function keys (CSI Ps ~)
+            b'~' => {
+                let param = params.first().copied().unwrap_or(0);
+                match param {
+                    200 => Some(Action::PasteStart),
+                    201 => Some(Action::PasteEnd),
+                    _ => None,
+                }
+            }
             // SM: set ANSI mode(s)
             b'h' => Some(Action::AnsiSet(params)),
             // RM: reset ANSI mode(s)
@@ -1111,5 +1186,157 @@ mod tests {
     fn csi_b_default_is_one() {
         let mut p = Parser::new();
         assert_eq!(p.feed(b"\x1b[b"), vec![Action::RepeatChar(1)]);
+    }
+
+    // ── DECSCUSR (cursor shape) ──────────────────────────────────
+
+    #[test]
+    fn csi_sp_q_is_set_cursor_shape() {
+        let mut p = Parser::new();
+        // CSI 2 SP q = steady block
+        assert_eq!(p.feed(b"\x1b[2 q"), vec![Action::SetCursorShape(2)]);
+    }
+
+    #[test]
+    fn csi_sp_q_all_shapes() {
+        let mut p = Parser::new();
+        // 0=default, 1=blinking block, 2=steady block, 3=blinking underline,
+        // 4=steady underline, 5=blinking bar, 6=steady bar
+        for shape in 0u8..=6 {
+            let seq = format!("\x1b[{shape} q");
+            let actions = p.feed(seq.as_bytes());
+            assert_eq!(
+                actions,
+                vec![Action::SetCursorShape(shape)],
+                "DECSCUSR shape {shape}"
+            );
+        }
+    }
+
+    #[test]
+    fn csi_sp_q_default_is_zero() {
+        let mut p = Parser::new();
+        // CSI SP q (no parameter) = default cursor shape (0)
+        assert_eq!(p.feed(b"\x1b[ q"), vec![Action::SetCursorShape(0)]);
+    }
+
+    #[test]
+    fn csi_sp_q_clamps_to_six() {
+        let mut p = Parser::new();
+        // Values above 6 are clamped
+        assert_eq!(p.feed(b"\x1b[99 q"), vec![Action::SetCursorShape(6)]);
+    }
+
+    // ── DECSTR (soft reset) ──────────────────────────────────────
+
+    #[test]
+    fn csi_bang_p_is_soft_reset() {
+        let mut p = Parser::new();
+        assert_eq!(p.feed(b"\x1b[!p"), vec![Action::SoftReset]);
+    }
+
+    #[test]
+    fn vim_cursor_shape_sequence() {
+        let mut p = Parser::new();
+        // Typical vim: set steady bar on insert, steady block on normal
+        let actions = p.feed(b"\x1b[6 q\x1b[2 q");
+        assert_eq!(
+            actions,
+            vec![
+                Action::SetCursorShape(6), // steady bar (insert mode)
+                Action::SetCursorShape(2), // steady block (normal mode)
+            ]
+        );
+    }
+
+    #[test]
+    fn soft_reset_in_typical_sequence() {
+        let mut p = Parser::new();
+        // Soft reset, then set up modes
+        let actions = p.feed(b"\x1b[!p\x1b[?7h\x1b[?25h");
+        assert_eq!(
+            actions,
+            vec![
+                Action::SoftReset,
+                Action::DecSet(vec![7]),  // enable autowrap
+                Action::DecSet(vec![25]), // show cursor
+            ]
+        );
+    }
+
+    // ── ED mode 3 (erase scrollback) ─────────────────────────────
+
+    #[test]
+    fn csi_3_j_is_erase_scrollback() {
+        let mut p = Parser::new();
+        assert_eq!(p.feed(b"\x1b[3J"), vec![Action::EraseScrollback]);
+    }
+
+    #[test]
+    fn csi_j_mode_0_1_2_still_work() {
+        let mut p = Parser::new();
+        assert_eq!(p.feed(b"\x1b[J"), vec![Action::EraseInDisplay(0)]);
+        assert_eq!(p.feed(b"\x1b[1J"), vec![Action::EraseInDisplay(1)]);
+        assert_eq!(p.feed(b"\x1b[2J"), vec![Action::EraseInDisplay(2)]);
+    }
+
+    // ── SCOSC / SCORC (CSI s / CSI u) ───────────────────────────
+
+    #[test]
+    fn csi_s_is_save_cursor() {
+        let mut p = Parser::new();
+        assert_eq!(p.feed(b"\x1b[s"), vec![Action::SaveCursor]);
+    }
+
+    #[test]
+    fn csi_u_is_restore_cursor() {
+        let mut p = Parser::new();
+        assert_eq!(p.feed(b"\x1b[u"), vec![Action::RestoreCursor]);
+    }
+
+    #[test]
+    fn csi_s_with_params_is_none() {
+        let mut p = Parser::new();
+        // CSI 1;2 s could be DECSLRM — should not emit SaveCursor.
+        // Unrecognised CSI sequences fall through as Action::Escape(raw).
+        let result = p.feed(b"\x1b[1;2s");
+        assert_eq!(result, vec![Action::Escape(b"\x1b[1;2s".to_vec())]);
+    }
+
+    // ── Focus events (CSI I / CSI O) ─────────────────────────────
+
+    #[test]
+    fn csi_i_is_focus_in() {
+        let mut p = Parser::new();
+        assert_eq!(p.feed(b"\x1b[I"), vec![Action::FocusIn]);
+    }
+
+    #[test]
+    fn csi_o_is_focus_out() {
+        let mut p = Parser::new();
+        assert_eq!(p.feed(b"\x1b[O"), vec![Action::FocusOut]);
+    }
+
+    // ── Bracketed paste (CSI 200~/201~) ──────────────────────────
+
+    #[test]
+    fn csi_200_tilde_is_paste_start() {
+        let mut p = Parser::new();
+        assert_eq!(p.feed(b"\x1b[200~"), vec![Action::PasteStart]);
+    }
+
+    #[test]
+    fn csi_201_tilde_is_paste_end() {
+        let mut p = Parser::new();
+        assert_eq!(p.feed(b"\x1b[201~"), vec![Action::PasteEnd]);
+    }
+
+    #[test]
+    fn csi_unknown_tilde_is_none() {
+        let mut p = Parser::new();
+        // CSI 99 ~ is an unknown function-key — not dispatched, falls through
+        // as Action::Escape(raw).
+        let result = p.feed(b"\x1b[99~");
+        assert_eq!(result, vec![Action::Escape(b"\x1b[99~".to_vec())]);
     }
 }

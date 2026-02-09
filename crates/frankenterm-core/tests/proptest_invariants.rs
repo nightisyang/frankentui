@@ -225,6 +225,17 @@ fn apply_action(action: Action, grid: &mut Grid, cursor: &mut Cursor, scrollback
         Action::RepeatChar(_) => {
             // REP depends on last-printed-char state not tracked here.
         }
+        Action::SetCursorShape(_) => {
+            // Cursor shape is visual-only, not tracked in proptest harness.
+        }
+        Action::SoftReset => {
+            // DECSTR resets modes/SGR/scroll region; simplified here.
+        }
+        Action::EraseScrollback => {
+            // Scrollback clear has no visible grid effect.
+        }
+        Action::FocusIn | Action::FocusOut => {}
+        Action::PasteStart | Action::PasteEnd => {}
         Action::Escape(_) => {
             // Unsupported sequences are ignored.
         }

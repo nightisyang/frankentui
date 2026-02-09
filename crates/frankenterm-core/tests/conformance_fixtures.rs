@@ -368,6 +368,21 @@ impl CoreTerminalHarness {
             }
             // Keypad mode changes tracked but not applied in conformance harness.
             Action::ApplicationKeypad | Action::NormalKeypad => {}
+            // Cursor shape changes tracked but not applied in conformance harness.
+            Action::SetCursorShape(_) => {}
+            Action::SoftReset => {
+                // DECSTR: reset modes, SGR, scroll region, cursor visibility.
+                // Unlike RIS, soft reset does NOT clear the screen or scrollback.
+                self.modes = Modes::new();
+                self.cursor.attrs = Default::default();
+                self.cursor.set_scroll_region(0, self.rows, self.rows);
+                self.cursor.pending_wrap = false;
+            }
+            // EraseScrollback clears scrollback buffer; no visible effect in grid.
+            Action::EraseScrollback => {}
+            // Focus/paste events are input-side; no grid effect.
+            Action::FocusIn | Action::FocusOut => {}
+            Action::PasteStart | Action::PasteEnd => {}
             Action::Escape(_) => {}
         }
     }

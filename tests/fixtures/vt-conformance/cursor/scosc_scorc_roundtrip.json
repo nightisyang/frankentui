@@ -1,0 +1,16 @@
+{
+  "name": "scosc_scorc_roundtrip",
+  "description": "SCOSC (CSI s) saves cursor; SCORC (CSI u) restores it after moving",
+  "initial_size": [10, 3],
+  "input_bytes_hex": "41421b5b731b5b333b3648581b5b7559",
+  "comment": "Print AB at (0,0)-(0,1), cursor at (0,2). CSI s save. CUP(3;6)=(2,5) print X at (2,5). CSI u restore to (0,2). Print Y at (0,2). Cursor at (0,3).",
+  "expected": {
+    "cursor": { "row": 0, "col": 3 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "A" },
+      { "row": 0, "col": 1, "char": "B" },
+      { "row": 0, "col": 2, "char": "Y" },
+      { "row": 2, "col": 5, "char": "X" }
+    ]
+  }
+}
