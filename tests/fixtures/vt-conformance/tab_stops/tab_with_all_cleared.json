@@ -1,0 +1,22 @@
+{
+  "name": "tab_with_all_cleared",
+  "description": "Tab with all tab stops cleared advances to end of line",
+  "initial_size": [
+    10,
+    3
+  ],
+  "input_bytes_hex": "411b5b33670942",
+  "expected": {
+    "cursor": {
+      "row": 0,
+      "col": 9
+    },
+    "cells": [
+      {
+        "row": 0,
+        "col": 0,
+        "char": "A"
+      }
+    ]
+  }
+}

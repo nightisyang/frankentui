@@ -1,0 +1,27 @@
+{
+  "name": "overwrite_wide_with_narrow",
+  "description": "Printing narrow char over lead of wide char clears continuation cell",
+  "initial_size": [
+    10,
+    3
+  ],
+  "input_bytes_hex": "e4b8961b5b313b314858",
+  "expected": {
+    "cursor": {
+      "row": 0,
+      "col": 1
+    },
+    "cells": [
+      {
+        "row": 0,
+        "col": 0,
+        "char": "X"
+      },
+      {
+        "row": 0,
+        "col": 1,
+        "char": " "
+      }
+    ]
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "cup_home_no_params",
+  "description": "CUP with no parameters homes cursor to (0,0)",
+  "initial_size": [
+    10,
+    3
+  ],
+  "input_bytes_hex": "58595a1b5b48",
+  "expected": {
+    "cursor": {
+      "row": 0,
+      "col": 0
+    },
+    "cells": [
+      {
+        "row": 0,
+        "col": 0,
+        "char": "X"
+      },
+      {
+        "row": 0,
+        "col": 1,
+        "char": "Y"
+      },
+      {
+        "row": 0,
+        "col": 2,
+        "char": "Z"
+      }
+    ]
+  }
+}

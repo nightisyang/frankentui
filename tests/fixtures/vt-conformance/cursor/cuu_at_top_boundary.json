@@ -1,0 +1,22 @@
+{
+  "name": "cuu_at_top_boundary",
+  "description": "CUU from row 0 stays at row 0 (clamped)",
+  "initial_size": [
+    10,
+    3
+  ],
+  "input_bytes_hex": "1b5b31304141",
+  "expected": {
+    "cursor": {
+      "row": 0,
+      "col": 1
+    },
+    "cells": [
+      {
+        "row": 0,
+        "col": 0,
+        "char": "A"
+      }
+    ]
+  }
+}
