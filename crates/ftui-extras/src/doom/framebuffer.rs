@@ -57,8 +57,11 @@ impl DoomFramebuffer {
         }
         let top = y_top.min(self.height);
         let bottom = y_bottom.min(self.height);
-        for y in top..bottom {
-            self.pixels[(y * self.width + x) as usize] = color;
+        let stride = self.width as usize;
+        let mut idx = top as usize * stride + x as usize;
+        for _ in top..bottom {
+            self.pixels[idx] = color;
+            idx += stride;
         }
     }
 
@@ -90,12 +93,15 @@ impl DoomFramebuffer {
         let base_r_f = base_r as f32;
         let base_g_f = base_g as f32;
         let base_b_f = base_b as f32;
+        let stride = self.width as usize;
+        let mut idx = top as usize * stride + x as usize;
         for y in top..bottom {
             let light = light_top + light_delta * ((y - top) as f32 * inv_height);
             let r = (base_r_f * light).min(255.0) as u8;
             let g = (base_g_f * light).min(255.0) as u8;
             let b = (base_b_f * light).min(255.0) as u8;
-            self.pixels[(y * self.width + x) as usize] = PackedRgba::rgb(r, g, b);
+            self.pixels[idx] = PackedRgba::rgb(r, g, b);
+            idx += stride;
         }
     }
 

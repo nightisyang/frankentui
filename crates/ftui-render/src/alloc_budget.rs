@@ -985,9 +985,9 @@ mod tests {
             frame: 7,
             value: 123.45,
             residual: -0.5678,
-            cusum_upper: 3.1415,
+            cusum_upper: 3.25,
             cusum_lower: 0.0,
-            e_value: 2.718281,
+            e_value: 2.75,
             mean_estimate: 120.00,
             sigma_estimate: 4.5678,
         };
@@ -995,7 +995,7 @@ mod tests {
         assert!(line.contains("\"frame\":7"));
         assert!(line.contains("\"value\":123.45"));
         assert!(line.contains("\"residual\":-0.5678"));
-        assert!(line.contains("\"cusum_upper\":3.1415"));
+        assert!(line.contains("\"cusum_upper\":3.2500"));
         assert!(line.contains("\"cusum_lower\":0.0000"));
         assert!(line.contains("\"mean\":120.00"));
         assert!(line.contains("\"sigma\":4.5678"));
