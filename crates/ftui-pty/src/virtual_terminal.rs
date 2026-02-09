@@ -115,6 +115,7 @@ impl Default for VCell {
 enum ParseState {
     Ground,
     Escape,
+    EscapeHash,
     Csi,
     Osc,
 }
@@ -461,6 +462,7 @@ impl VirtualTerminal {
         match self.parse_state {
             ParseState::Ground => self.ground(byte),
             ParseState::Escape => self.escape(byte),
+            ParseState::EscapeHash => self.escape_hash(byte),
             ParseState::Csi => self.csi(byte),
             ParseState::Osc => self.osc(byte),
         }
@@ -536,6 +538,12 @@ impl VirtualTerminal {
                 self.linefeed();
                 self.parse_state = ParseState::Ground;
             }
+            b'E' => {
+                // Next Line (NEL): CR + LF
+                self.cursor_x = 0;
+                self.linefeed();
+                self.parse_state = ParseState::Ground;
+            }
             b'M' => {
                 // Reverse index (scroll down)
                 if self.cursor_y == self.scroll_top {
@@ -544,6 +552,10 @@ impl VirtualTerminal {
                     self.cursor_y = self.cursor_y.saturating_sub(1);
                 }
                 self.parse_state = ParseState::Ground;
+            }
+            b'#' => {
+                // ESC # — enter hash sub-state for DECALN etc.
+                self.parse_state = ParseState::EscapeHash;
             }
             b'c' => {
                 // Full reset (RIS)
@@ -555,6 +567,23 @@ impl VirtualTerminal {
                 self.parse_state = ParseState::Ground;
             }
         }
+    }
+
+    fn escape_hash(&mut self, byte: u8) {
+        if byte == b'8' {
+            // DECALN: fill entire screen with 'E', reset scroll region, cursor to origin.
+            for cell in self.grid.iter_mut() {
+                *cell = VCell {
+                    ch: 'E',
+                    style: CellStyle::default(),
+                };
+            }
+            self.scroll_top = 0;
+            self.scroll_bottom = self.height.saturating_sub(1);
+            self.cursor_x = 0;
+            self.cursor_y = 0;
+        }
+        self.parse_state = ParseState::Ground;
     }
 
     fn csi(&mut self, byte: u8) {
@@ -1610,5 +1639,48 @@ mod tests {
         vt.feed(b"\x1b[91mX"); // Bright red fg
         let style = vt.style_at(0, 0).unwrap();
         assert_eq!(style.fg, Some(Color::new(255, 85, 85)));
+    }
+
+    #[test]
+    fn nel_next_line() {
+        let mut vt = VirtualTerminal::new(10, 3);
+        vt.feed(b"ABCDE\x1bEX");
+        // ESC E = CR + LF: cursor goes to col 0, next row
+        assert_eq!(vt.row_text(0), "ABCDE");
+        assert_eq!(vt.row_text(1), "X");
+        assert_eq!(vt.cursor(), (1, 1));
+    }
+
+    #[test]
+    fn nel_at_bottom_scrolls() {
+        let mut vt = VirtualTerminal::new(5, 3);
+        vt.feed(b"AAAAA\r\nBBBBB\r\nCCCCC");
+        vt.feed(b"\x1b[3;3H\x1bE"); // CUP(3,3) → (2,2), then NEL at bottom
+        assert_eq!(vt.row_text(0), "BBBBB");
+        assert_eq!(vt.row_text(1), "CCCCC");
+        assert_eq!(vt.row_text(2), "");
+        assert_eq!(vt.cursor(), (0, 2));
+    }
+
+    #[test]
+    fn decaln_fills_with_e() {
+        let mut vt = VirtualTerminal::new(5, 3);
+        vt.feed(b"ABC\x1b#8");
+        assert_eq!(vt.row_text(0), "EEEEE");
+        assert_eq!(vt.row_text(1), "EEEEE");
+        assert_eq!(vt.row_text(2), "EEEEE");
+        assert_eq!(vt.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn decaln_resets_scroll_region() {
+        let mut vt = VirtualTerminal::new(5, 3);
+        vt.feed(b"\x1b[2;3r"); // Set scroll region rows 2-3
+        vt.feed(b"\x1b#8"); // DECALN resets margins
+        // After DECALN, writing + scroll should affect full screen (region reset)
+        vt.feed(b"\x1b[3;1HZZZZZ\n"); // Write at bottom, LF → scroll
+        assert_eq!(vt.row_text(0), "EEEEE");
+        assert_eq!(vt.row_text(1), "ZZZZZ");
+        assert_eq!(vt.row_text(2), "");
     }
 }
