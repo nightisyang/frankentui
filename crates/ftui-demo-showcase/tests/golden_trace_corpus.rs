@@ -774,8 +774,7 @@ fn golden_web_demo_sweep_jsonl_deterministic() {
 /// Verifies:
 /// - deterministic signatures across repeated soak runs,
 /// - grapheme-pool usage stabilizes after warmup (no runaway growth trend).
-#[test]
-fn golden_web_demo_soak_pool_stability() {
+fn assert_web_demo_soak_pool_stability(cols: u16, rows: u16, dpr: f32) {
     const MIN_SOAK_SIMULATED_MS: u64 = 10 * 60 * 1_000;
     const SOAK_TICK_MS: u64 = 1_000;
 
@@ -790,32 +789,32 @@ fn golden_web_demo_soak_pool_stability() {
         .checked_mul(screens_per_cycle_usize)
         .expect("soak record count overflow");
 
-    let soak_a = run_web_sweep_soak(120, 40, 2.0, soak_cycles, SOAK_TICK_MS);
-    let soak_b = run_web_sweep_soak(120, 40, 2.0, soak_cycles, SOAK_TICK_MS);
-    assert_web_sweep_deterministic(&soak_a.records, &soak_b.records, 120, 40);
+    let soak_a = run_web_sweep_soak(cols, rows, dpr, soak_cycles, SOAK_TICK_MS);
+    let soak_b = run_web_sweep_soak(cols, rows, dpr, soak_cycles, SOAK_TICK_MS);
+    assert_web_sweep_deterministic(&soak_a.records, &soak_b.records, cols, rows);
     assert_eq!(
         soak_a.records.len(),
         expected_records,
-        "soak record count mismatch"
+        "soak record count mismatch for {cols}x{rows}@{dpr}"
     );
     assert_eq!(
         soak_b.records.len(),
         expected_records,
-        "soak record count mismatch"
+        "soak record count mismatch for {cols}x{rows}@{dpr}"
     );
 
     assert_eq!(soak_a.cycle_pool_lens.len(), soak_cycles);
     assert_eq!(
         soak_a.cycle_pool_lens, soak_b.cycle_pool_lens,
-        "soak pool profile must be deterministic"
+        "soak pool profile must be deterministic for {cols}x{rows}@{dpr}"
     );
     assert_eq!(
         soak_a.simulated_elapsed_ms, soak_b.simulated_elapsed_ms,
-        "simulated soak duration must be deterministic"
+        "simulated soak duration must be deterministic for {cols}x{rows}@{dpr}"
     );
     assert!(
         soak_a.simulated_elapsed_ms >= MIN_SOAK_SIMULATED_MS,
-        "soak simulated duration too short: got={}ms target={}ms",
+        "soak simulated duration too short for {cols}x{rows}@{dpr}: got={}ms target={}ms",
         soak_a.simulated_elapsed_ms,
         MIN_SOAK_SIMULATED_MS
     );
@@ -835,15 +834,21 @@ fn golden_web_demo_soak_pool_stability() {
         .expect("at least one pool sample");
     assert!(
         final_pool <= warmup_pool.saturating_add(128),
-        "pool drift too high after warmup: warmup={warmup_pool} final={final_pool} profile={:?}",
+        "pool drift too high after warmup for {cols}x{rows}@{dpr}: warmup={warmup_pool} final={final_pool} profile={:?}",
         soak_a.cycle_pool_lens
     );
 
     assert!(
         soak_a.max_pool_len <= final_pool.saturating_add(256),
-        "pool peak too far above steady-state: peak={} final={} profile={:?}",
+        "pool peak too far above steady-state for {cols}x{rows}@{dpr}: peak={} final={} profile={:?}",
         soak_a.max_pool_len,
         final_pool,
         soak_a.cycle_pool_lens
     );
+}
+
+#[test]
+fn golden_web_demo_soak_pool_stability() {
+    assert_web_demo_soak_pool_stability(80, 24, 1.0);
+    assert_web_demo_soak_pool_stability(120, 40, 2.0);
 }
