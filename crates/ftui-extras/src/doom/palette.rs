@@ -154,4 +154,234 @@ mod tests {
         let far = pal.light_factor(200, 1000.0);
         assert!(close > far);
     }
+
+    #[test]
+    fn color_lookup_returns_correct_rgb() {
+        let pal = DoomPalette::default();
+        // Default palette is grayscale: index N → [N, N, N]
+        assert_eq!(pal.color(0), [0, 0, 0]);
+        assert_eq!(pal.color(128), [128, 128, 128]);
+        assert_eq!(pal.color(255), [255, 255, 255]);
+    }
+
+    #[test]
+    fn from_wad_stores_custom_data() {
+        let colors = vec![[10, 20, 30]; 256];
+        let maps = vec![vec![0u8; 256]; 34];
+        let pal = DoomPalette::from_wad(colors.clone(), maps.clone());
+        assert_eq!(pal.colors.len(), 256);
+        assert_eq!(pal.colormaps.len(), 34);
+        assert_eq!(pal.color(0), [10, 20, 30]);
+    }
+
+    #[test]
+    fn lit_color_at_full_light_close_distance() {
+        let pal = DoomPalette::default();
+        // Full light (255) at zero distance → colormap index should be ~0 (brightest)
+        let color = pal.lit_color(128, 255, 0.0);
+        // Colormap 0 maps index to itself (identity), so result should be close to [128,128,128]
+        assert_eq!(color, [128, 128, 128]);
+    }
+
+    #[test]
+    fn lit_color_darkens_at_far_distance() {
+        let pal = DoomPalette::default();
+        let close = pal.lit_color(200, 200, 0.0);
+        let far = pal.lit_color(200, 200, 5000.0);
+        // Farther away should be darker
+        assert!(
+            close[0] >= far[0],
+            "close={close:?} should be brighter than far={far:?}"
+        );
+    }
+
+    #[test]
+    fn light_to_colormap_range_clamped() {
+        let pal = DoomPalette::default();
+        // Maximum light at zero distance → colormap 0
+        let bright = pal.light_to_colormap(255, 0.0);
+        assert_eq!(bright, 0);
+
+        // Zero light at max distance → colormap 31
+        let dark = pal.light_to_colormap(0, 100_000.0);
+        assert_eq!(dark, 31);
+    }
+
+    #[test]
+    fn wall_color_applies_light_and_distance() {
+        let pal = DoomPalette::default();
+        let close = pal.wall_color(200, 100, 50, 255, 0.0);
+        let far = pal.wall_color(200, 100, 50, 255, 5000.0);
+        // Closer should be brighter
+        assert!(close[0] >= far[0]);
+        assert!(close[1] >= far[1]);
+    }
+
+    #[test]
+    fn light_factor_zero_light_is_zero() {
+        let pal = DoomPalette::default();
+        let f = pal.light_factor(0, 0.0);
+        assert!(f.abs() < 0.01);
+    }
+
+    #[test]
+    fn light_factor_is_clamped_to_unit_range() {
+        let pal = DoomPalette::default();
+        // Even with extreme values, factor stays in [0, 1]
+        let f = pal.light_factor(255, 0.0);
+        assert!((0.0..=1.0).contains(&f));
+        let f2 = pal.light_factor(0, 100_000.0);
+        assert!((0.0..=1.0).contains(&f2));
+    }
+
+    #[test]
+    fn default_trait_matches_default_palette() {
+        let a = DoomPalette::default();
+        let b = DoomPalette::default_palette();
+        assert_eq!(a.colors, b.colors);
+        assert_eq!(a.colormaps.len(), b.colormaps.len());
+    }
+
+    #[test]
+    fn colormap_brightest_is_identity() {
+        let pal = DoomPalette::default();
+        // Colormap 0 (brightest) should map each index to itself
+        for i in 0..256u16 {
+            assert_eq!(
+                pal.colormaps[0][i as usize], i as u8,
+                "colormap 0 should be identity at index {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn colormap_darkest_is_near_zero() {
+        let pal = DoomPalette::default();
+        // Colormap 31 (darkest regular) should map most indices towards 0
+        for i in 0..256u16 {
+            assert!(
+                pal.colormaps[31][i as usize] <= (i as u8).saturating_add(1),
+                "colormap 31 at {i} should be very dark"
+            );
+        }
+    }
+
+    #[test]
+    fn special_colormaps_are_black() {
+        let pal = DoomPalette::default();
+        for level in [32usize, 33usize] {
+            assert_eq!(pal.colormaps[level].len(), 256);
+            assert!(
+                pal.colormaps[level].iter().all(|&v| v == 0),
+                "special colormap level {level} should map all indices to 0"
+            );
+        }
+    }
+
+    #[test]
+    fn lit_color_falls_back_when_colormap_missing() {
+        let colors = (0..=255u8).map(|i| [i, i, i]).collect::<Vec<_>>();
+        let pal = DoomPalette::from_wad(colors, vec![]);
+        assert_eq!(pal.lit_color(200, 255, 0.0), [200, 200, 200]);
+    }
+
+    #[test]
+    fn each_colormap_has_256_entries() {
+        let pal = DoomPalette::default();
+        for (level, map) in pal.colormaps.iter().enumerate() {
+            assert_eq!(map.len(), 256, "colormap {level} should have 256 entries");
+        }
+    }
+
+    #[test]
+    fn colormaps_monotonically_darken_with_level() {
+        let pal = DoomPalette::default();
+        for i in 1..256usize {
+            for level in 1..32 {
+                assert!(
+                    pal.colormaps[level][i] <= pal.colormaps[level - 1][i],
+                    "colormap[{level}][{i}]={} should be <= colormap[{}][{i}]={}",
+                    pal.colormaps[level][i],
+                    level - 1,
+                    pal.colormaps[level - 1][i]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn light_to_colormap_increases_with_distance() {
+        let pal = DoomPalette::default();
+        let close = pal.light_to_colormap(128, 0.0);
+        let mid = pal.light_to_colormap(128, 500.0);
+        let far = pal.light_to_colormap(128, 5000.0);
+        assert!(close <= mid, "close={close} should be <= mid={mid}");
+        assert!(mid <= far, "mid={mid} should be <= far={far}");
+    }
+
+    #[test]
+    fn light_to_colormap_decreases_with_light_level() {
+        let pal = DoomPalette::default();
+        let dark_sector = pal.light_to_colormap(50, 200.0);
+        let bright_sector = pal.light_to_colormap(200, 200.0);
+        assert!(
+            bright_sector <= dark_sector,
+            "brighter sector ({bright_sector}) should be <= darker ({dark_sector})"
+        );
+    }
+
+    #[test]
+    fn wall_color_zero_light_is_dark() {
+        let pal = DoomPalette::default();
+        let c = pal.wall_color(200, 150, 100, 0, 0.0);
+        assert_eq!(c, [0, 0, 0]);
+    }
+
+    #[test]
+    fn wall_color_full_light_zero_distance_near_base() {
+        let pal = DoomPalette::default();
+        let c = pal.wall_color(200, 150, 100, 255, 0.0);
+        assert_eq!(c[0], 200);
+        assert_eq!(c[1], 150);
+        assert_eq!(c[2], 100);
+    }
+
+    #[test]
+    fn from_wad_preserves_colormap_data() {
+        let mut maps = vec![vec![0u8; 256]; 34];
+        for (i, value) in maps[5].iter_mut().enumerate() {
+            *value = (255 - i) as u8;
+        }
+        let pal = DoomPalette::from_wad(vec![[0, 0, 0]; 256], maps);
+        assert_eq!(pal.colormaps[5][0], 255);
+        assert_eq!(pal.colormaps[5][255], 0);
+        assert_eq!(pal.colormaps[5][128], 127);
+    }
+
+    #[test]
+    fn default_palette_is_grayscale() {
+        let pal = DoomPalette::default();
+        for i in 0u8..=u8::MAX {
+            let c = pal.color(i);
+            assert_eq!(c, [i, i, i], "index {i} should be grayscale");
+        }
+    }
+
+    #[test]
+    fn light_factor_half_distance() {
+        let pal = DoomPalette::default();
+        // At half-distance (1000): dist_atten = 1/(1+1) = 0.5
+        // Full light: factor = (255/255) * 0.5 = 0.5
+        let f = pal.light_factor(255, 1000.0);
+        assert!((f - 0.5).abs() < 0.01, "expected ~0.5, got {f}");
+    }
+
+    #[test]
+    fn light_to_colormap_mid_light_zero_distance() {
+        let pal = DoomPalette::default();
+        // light_level=128, distance=0: base_level = (128/8) as i32 = 16
+        // result = (31 - 16 + 0).clamp(0, 31) = 15
+        let idx = pal.light_to_colormap(128, 0.0);
+        assert_eq!(idx, 15);
+    }
 }
