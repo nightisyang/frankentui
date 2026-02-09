@@ -154,6 +154,39 @@ def type_matches(value: Any, expected: Any) -> bool:
     return False
 
 
+def is_non_negative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def validate_frame_semantics(obj: Dict[str, Any]) -> List[str]:
+    errors: List[str] = []
+    integer_fields = (
+        "hovered_link_id",
+        "cursor_offset",
+        "cursor_style",
+        "selection_start",
+        "selection_end",
+    )
+    for field in integer_fields:
+        if field in obj and not is_non_negative_int(obj[field]):
+            errors.append(f"field {field} must be a non-negative integer")
+
+    has_selection_start = "selection_start" in obj
+    has_selection_end = "selection_end" in obj
+    if has_selection_start != has_selection_end:
+        errors.append("selection_start and selection_end must be provided together")
+    if has_selection_start and has_selection_end:
+        start = obj["selection_start"]
+        end = obj["selection_end"]
+        if is_non_negative_int(start) and is_non_negative_int(end) and start > end:
+            errors.append("selection_start must be <= selection_end")
+
+    if obj.get("selection_active") is True and not (has_selection_start and has_selection_end):
+        errors.append("selection_active=true requires selection_start and selection_end")
+
+    return errors
+
+
 def validate_event(schema: Schema, obj: Dict[str, Any]) -> List[str]:
     errors: List[str] = []
 
@@ -190,6 +223,9 @@ def validate_event(schema: Schema, obj: Dict[str, Any]) -> List[str]:
             errors.append(
                 f"field {field} has wrong type: expected {expected}, got {type(obj[field]).__name__}"
             )
+
+    if event_type == "frame":
+        errors.extend(validate_frame_semantics(obj))
 
     return errors
 
@@ -680,6 +716,28 @@ def run_self_tests(schema_path: str) -> int:
             bad["selection_active"] = "oops"
             failures = validate_jsonl(self.schema, [json.dumps(bad)])
             self.assertTrue(any("wrong type" in err for _, err in failures))
+
+        def test_frame_selection_active_requires_paired_bounds(self) -> None:
+            bad = example_events(schema.version)["frame"].copy()
+            bad.pop("selection_start")
+            bad.pop("selection_end")
+            failures = validate_jsonl(self.schema, [json.dumps(bad)])
+            self.assertTrue(
+                any("selection_active=true requires selection_start and selection_end" in err for _, err in failures)
+            )
+
+        def test_frame_selection_bounds_must_be_ordered(self) -> None:
+            bad = example_events(schema.version)["frame"].copy()
+            bad["selection_start"] = 11
+            bad["selection_end"] = 7
+            failures = validate_jsonl(self.schema, [json.dumps(bad)])
+            self.assertTrue(any("selection_start must be <= selection_end" in err for _, err in failures))
+
+        def test_frame_interaction_offsets_require_non_negative_integers(self) -> None:
+            bad = example_events(schema.version)["frame"].copy()
+            bad["cursor_offset"] = 4.5
+            failures = validate_jsonl(self.schema, [json.dumps(bad)])
+            self.assertTrue(any("cursor_offset must be a non-negative integer" in err for _, err in failures))
 
         def test_unknown_type(self) -> None:
             bad = example_events(schema.version)["env"].copy()
