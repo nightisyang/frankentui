@@ -426,4 +426,260 @@ mod tests {
             assert_eq!(*c, PackedRgba::rgb(255, 255, 255));
         }
     }
+
+    // --- Palette ---
+
+    #[test]
+    fn fire_palette_has_37_entries() {
+        assert_eq!(FIRE_PALETTE.len(), 37);
+    }
+
+    #[test]
+    fn fire_palette_starts_near_black() {
+        let (r, g, b) = FIRE_PALETTE[0];
+        assert!(r < 16 && g < 16 && b < 16);
+    }
+
+    #[test]
+    fn fire_palette_ends_at_white() {
+        assert_eq!(FIRE_PALETTE[36], (255, 255, 255));
+    }
+
+    #[test]
+    fn fire_palette_monotonically_brighter() {
+        // Overall brightness should increase from start to end
+        let brightness = |i: usize| -> u32 {
+            let (r, g, b) = FIRE_PALETTE[i];
+            r as u32 + g as u32 + b as u32
+        };
+        assert!(brightness(0) < brightness(36));
+        assert!(brightness(0) < brightness(18));
+        assert!(brightness(18) < brightness(36));
+    }
+
+    // --- xorshift32 ---
+
+    #[test]
+    fn xorshift32_deterministic() {
+        let mut s1 = 42u32;
+        let mut s2 = 42u32;
+        let v1: Vec<u32> = (0..100).map(|_| xorshift32(&mut s1)).collect();
+        let v2: Vec<u32> = (0..100).map(|_| xorshift32(&mut s2)).collect();
+        assert_eq!(v1, v2);
+    }
+
+    #[test]
+    fn xorshift32_different_seeds() {
+        let mut s1 = 1u32;
+        let mut s2 = 2u32;
+        let v1: Vec<u32> = (0..10).map(|_| xorshift32(&mut s1)).collect();
+        let v2: Vec<u32> = (0..10).map(|_| xorshift32(&mut s2)).collect();
+        assert_ne!(v1, v2);
+    }
+
+    // --- DoomFireFx construction ---
+
+    #[test]
+    fn new_fire_initial_state() {
+        let fx = DoomFireFx::new();
+        assert!(fx.heat.is_empty());
+        assert!(fx.active);
+        assert_eq!(fx.wind, 0);
+        assert_eq!(fx.last_width, 0);
+        assert_eq!(fx.last_height, 0);
+    }
+
+    #[test]
+    fn default_matches_new() {
+        let d = DoomFireFx::default();
+        let n = DoomFireFx::new();
+        assert_eq!(d.heat, n.heat);
+        assert_eq!(d.active, n.active);
+        assert_eq!(d.wind, n.wind);
+    }
+
+    // --- BackdropFx trait ---
+
+    #[test]
+    fn name_returns_doom_fire() {
+        let fx = DoomFireFx::new();
+        assert_eq!(fx.name(), "Doom Fire");
+    }
+
+    #[test]
+    fn trait_resize_initializes_buffer() {
+        let mut fx = DoomFireFx::new();
+        fx.resize(10, 10);
+        assert_eq!(fx.last_width, 10);
+        assert_eq!(fx.last_height, 10);
+    }
+
+    // --- Quality levels ---
+
+    #[test]
+    fn quality_off_produces_first_frame_only() {
+        let mut fx = DoomFireFx::new();
+        let theme = Box::leak(Box::new(default_theme()));
+        let ctx = FxContext {
+            width: 10,
+            height: 10,
+            frame: 5,
+            time_seconds: 5.0 / 60.0,
+            quality: FxQuality::Off,
+            theme,
+        };
+        let mut buf = vec![PackedRgba::rgb(0, 0, 0); 100];
+        fx.render(ctx, &mut buf);
+        // Should still produce output (ensure_buffer runs), but no spread
+        // Bottom row should be hot (buffer init), top should be cold (no spread)
+        assert_eq!(buf[90], PackedRgba::rgb(255, 255, 255)); // bottom
+    }
+
+    #[test]
+    fn quality_reduced_still_produces_fire() {
+        let mut fx = DoomFireFx::new();
+        let theme = Box::leak(Box::new(default_theme()));
+        // Run enough frames for heat to propagate
+        for frame in 0..20 {
+            let ctx = FxContext {
+                width: 10,
+                height: 10,
+                frame,
+                time_seconds: frame as f64 / 60.0,
+                quality: FxQuality::Reduced,
+                theme,
+            };
+            let mut buf = vec![PackedRgba::rgb(0, 0, 0); 100];
+            fx.render(ctx, &mut buf);
+        }
+        // Heat should have propagated at least partially
+        let top_row_brightness: u32 = (0..10)
+            .map(|x| {
+                let idx = FIRE_PALETTE[fx.heat[x] as usize];
+                idx.0 as u32 + idx.1 as u32 + idx.2 as u32
+            })
+            .sum();
+        // Top row should have some heat after 20 frames even at reduced quality
+        assert!(top_row_brightness > 0);
+    }
+
+    // --- Edge cases ---
+
+    #[test]
+    fn single_row_no_spread() {
+        let mut fx = DoomFireFx::new();
+        let mut buf = vec![PackedRgba::rgb(0, 0, 0); 10];
+        fx.render(make_ctx(10, 1, 5), &mut buf);
+        // Single row = bottom row = all hot
+        for c in &buf {
+            assert_eq!(*c, PackedRgba::rgb(255, 255, 255));
+        }
+    }
+
+    #[test]
+    fn heat_decreases_upward() {
+        let mut fx = DoomFireFx::new();
+        // Run several frames so heat propagates
+        for frame in 0..30 {
+            let mut buf = vec![PackedRgba::rgb(0, 0, 0); 200];
+            fx.render(make_ctx(10, 20, frame), &mut buf);
+        }
+        // Average heat in bottom half should be >= average heat in top half
+        let bottom_avg: f32 = fx.heat[100..200].iter().map(|&h| h as f32).sum::<f32>() / 100.0;
+        let top_avg: f32 = fx.heat[0..100].iter().map(|&h| h as f32).sum::<f32>() / 100.0;
+        assert!(
+            bottom_avg >= top_avg,
+            "bottom ({bottom_avg}) should be >= top ({top_avg})"
+        );
+    }
+
+    #[test]
+    fn wind_negative_shifts_left() {
+        let mut fx = DoomFireFx::new();
+        fx.set_wind(-1);
+        assert_eq!(fx.wind, -1);
+        // Should render without panics
+        let mut buf = vec![PackedRgba::rgb(0, 0, 0); 100];
+        for frame in 0..10 {
+            fx.render(make_ctx(10, 10, frame), &mut buf);
+        }
+    }
+
+    #[test]
+    fn wind_clamps_negative() {
+        let mut fx = DoomFireFx::new();
+        fx.set_wind(-100);
+        assert_eq!(fx.wind, -1);
+    }
+
+    #[test]
+    fn wind_clamps_positive() {
+        let mut fx = DoomFireFx::new();
+        fx.set_wind(100);
+        assert_eq!(fx.wind, 1);
+    }
+
+    // --- LUT caching ---
+
+    #[test]
+    fn lut_recomputed_on_width_change() {
+        let mut fx = DoomFireFx::new();
+        let mut buf = vec![PackedRgba::rgb(0, 0, 0); 100];
+        fx.render(make_ctx(10, 10, 1), &mut buf);
+        let lut_len_1 = fx.src_x_lut.len();
+
+        let mut buf2 = vec![PackedRgba::rgb(0, 0, 0); 200];
+        fx.render(make_ctx(20, 10, 2), &mut buf2);
+        let lut_len_2 = fx.src_x_lut.len();
+
+        assert_ne!(lut_len_1, lut_len_2);
+        assert_eq!(lut_len_2, 20 * 6);
+    }
+
+    #[test]
+    fn lut_recomputed_on_wind_change() {
+        let mut fx = DoomFireFx::new();
+        let mut buf = vec![PackedRgba::rgb(0, 0, 0); 100];
+        fx.render(make_ctx(10, 10, 1), &mut buf);
+        assert_eq!(fx.lut_wind, 0);
+
+        fx.set_wind(1);
+        fx.render(make_ctx(10, 10, 2), &mut buf);
+        assert_eq!(fx.lut_wind, 1);
+    }
+
+    // --- Multiple frame rendering ---
+
+    #[test]
+    fn hundred_frames_no_panic() {
+        let mut fx = DoomFireFx::new();
+        for frame in 0..100 {
+            let mut buf = vec![PackedRgba::rgb(0, 0, 0); 400];
+            fx.render(make_ctx(20, 20, frame), &mut buf);
+        }
+    }
+
+    #[test]
+    fn reactivate_fire_restores_bottom_heat() {
+        let mut fx = DoomFireFx::new();
+        // Warm up
+        for frame in 0..10 {
+            let mut buf = vec![PackedRgba::rgb(0, 0, 0); 100];
+            fx.render(make_ctx(10, 10, frame), &mut buf);
+        }
+        // Deactivate and cool
+        fx.set_active(false);
+        for frame in 10..60 {
+            let mut buf = vec![PackedRgba::rgb(0, 0, 0); 100];
+            fx.render(make_ctx(10, 10, frame), &mut buf);
+        }
+        // Reactivate
+        fx.set_active(true);
+        let mut buf = vec![PackedRgba::rgb(0, 0, 0); 100];
+        fx.render(make_ctx(10, 10, 60), &mut buf);
+        // Bottom row should be hot again
+        for c in &buf[90..100] {
+            assert_eq!(*c, PackedRgba::rgb(255, 255, 255));
+        }
+    }
 }

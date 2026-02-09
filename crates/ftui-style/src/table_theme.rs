@@ -165,6 +165,7 @@ impl Gradient {
     }
 
     /// Access the gradient stops (sorted by position).
+    #[inline]
     #[must_use]
     pub fn stops(&self) -> &[(f32, PackedRgba)] {
         &self.stops
