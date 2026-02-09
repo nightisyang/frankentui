@@ -15,6 +15,9 @@ arbitrary = { version = "1", features = ["derive"] }
 [dependencies.ftui-core]
 path = "../crates/ftui-core"
 
+[dependencies.frankenterm-core]
+path = "../crates/frankenterm-core"
+
 [[bin]]
 name = "fuzz_input_parser"
 path = "fuzz_targets/fuzz_input_parser.rs"
@@ -32,6 +35,20 @@ bench = false
 [[bin]]
 name = "fuzz_input_parser_long_seq"
 path = "fuzz_targets/fuzz_input_parser_long_seq.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_vt_parser"
+path = "fuzz_targets/fuzz_vt_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_grid_mutations"
+path = "fuzz_targets/fuzz_grid_mutations.rs"
 test = false
 doc = false
 bench = false
