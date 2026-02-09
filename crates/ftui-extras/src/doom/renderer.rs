@@ -405,6 +405,7 @@ impl DoomRenderer {
     /// Draw the sky and floor background.
     fn draw_background(&self, fb: &mut DoomFramebuffer) {
         let horizon = self.height / 2;
+        let row_width = self.width as usize;
 
         for y in 0..self.height {
             let color = if y < horizon {
@@ -423,9 +424,9 @@ impl DoomRenderer {
                 PackedRgba::rgb(r, g, b)
             };
 
-            for x in 0..self.width {
-                fb.set_pixel(x, y, color);
-            }
+            let row_start = y as usize * row_width;
+            let row_end = row_start + row_width;
+            fb.pixels[row_start..row_end].fill(color);
         }
     }
 }

@@ -399,11 +399,12 @@ impl QuakeRenderer {
             self.bg_cache_dims = (self.width, self.height);
         }
 
+        let row_width = self.width as usize;
         for y in 0..self.height {
             let color = self.bg_cache[y as usize];
-            for x in 0..self.width {
-                fb.set_pixel(x, y, color);
-            }
+            let row_start = y as usize * row_width;
+            let row_end = row_start + row_width;
+            fb.pixels[row_start..row_end].fill(color);
         }
     }
 }
