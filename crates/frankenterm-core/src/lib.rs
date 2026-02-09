@@ -24,6 +24,7 @@
 
 pub mod cell;
 pub mod cursor;
+pub mod flow_control;
 pub mod grid;
 pub mod modes;
 pub mod parser;
@@ -34,6 +35,11 @@ pub mod selection;
 
 pub use cell::{Cell, CellFlags, Color, HyperlinkId, HyperlinkRegistry, SgrAttrs, SgrFlags};
 pub use cursor::{Cursor, SavedCursor};
+pub use flow_control::{
+    ActionLoss, BackpressureAction, DecisionReason, FlowControlConfig, FlowControlDecision,
+    FlowControlPolicy, FlowControlSnapshot, InputEventClass, LatencyWindowMs, LossWeights,
+    QueueDepthBytes, RateWindowBps, jain_fairness_index,
+};
 pub use grid::Grid;
 pub use modes::{AnsiModes, DecModes, Modes};
 pub use parser::{Action, Parser};

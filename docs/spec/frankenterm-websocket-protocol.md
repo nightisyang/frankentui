@@ -557,6 +557,10 @@ Decision rule:
 This policy intentionally prefers throughput sacrifice before memory risk or
 interactive-latency collapse.
 
+Reference implementation target: `crates/frankenterm-core/src/flow_control.rs`
+(`FlowControlPolicy`), so bridge/server and browser paths share one
+deterministic evaluator.
+
 ### 4.3 Coalescing Policies
 
 To prevent flooding, the server and client MUST coalesce bursty events:
