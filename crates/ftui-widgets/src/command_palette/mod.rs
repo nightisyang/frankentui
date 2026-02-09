@@ -2158,12 +2158,13 @@ mod widget_tests {
             .with(capture)
             .with(Targets::new().with_target(TELEMETRY_TARGET, tracing::Level::INFO));
         let _guard = tracing::subscriber::set_default(subscriber);
-        // Force callsite interest re-evaluation so our thread-local subscriber
-        // is picked up even if a global subscriber was installed by another test.
-        tracing::callsite::rebuild_interest_cache();
 
+        // Rebuild interest cache before each step that emits tracing events.
+        // Parallel workspace tests can poison the global callsite interest
+        // cache between our operations, causing `info!` macros to short-circuit.
         let mut palette = CommandPalette::new();
         palette.register("Alpha", None, &[]);
+        tracing::callsite::rebuild_interest_cache();
         palette.open();
 
         let a = Event::Key(KeyEvent {
@@ -2171,6 +2172,7 @@ mod widget_tests {
             modifiers: Modifiers::empty(),
             kind: KeyEventKind::Press,
         });
+        tracing::callsite::rebuild_interest_cache();
         palette.handle_event(&a);
 
         let enter = Event::Key(KeyEvent {
@@ -2178,7 +2180,9 @@ mod widget_tests {
             modifiers: Modifiers::empty(),
             kind: KeyEventKind::Press,
         });
+        tracing::callsite::rebuild_interest_cache();
         let _ = palette.handle_event(&enter);
+        tracing::callsite::rebuild_interest_cache();
         palette.close();
 
         let events = events.lock().expect("lock telemetry events");
