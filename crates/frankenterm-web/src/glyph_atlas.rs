@@ -1564,7 +1564,6 @@ mod tests {
         let mut cache = GlyphAtlasCache::new(16, 16, 16 * 16);
         let key = GlyphKey::from_char('A', 16);
         // Use a recognizable pattern: row-index bytes.
-        let pixels_data = vec![0x10, 0x20, 0x30, 0x40, 0x50, 0x60];
         let placement = cache
             .get_or_insert_with(key, |_| GlyphRaster {
                 width: 3,
@@ -1609,40 +1608,29 @@ mod tests {
 
     #[test]
     fn best_fit_picks_smallest_fitting_free_slot() {
-        // Budget allows two slots; atlas is large.
-        let mut cache = GlyphAtlasCache::new(64, 64, 2 * 12 * 12);
+        // Budget fits exactly one slot. Insert large, then small (evicts large),
+        // then a glyph that fits in the evicted small slot.
+        let mut cache = GlyphAtlasCache::new(64, 64, 6 * 6);
         let k_large = GlyphKey::from_char('L', 16);
         let k_small = GlyphKey::from_char('S', 16);
-        let k_medium = GlyphKey::from_char('M', 16);
+
+        // Insert large (10x10 padded to 12x12).
+        let _ = cache
+            .get_or_insert_with(k_large, |_| raster_solid(10, 10, GlyphMetrics::default()))
+            .expect("large");
+        // Insert small (2x2 padded to 4x4) — evicts large due to budget.
+        let _ = cache
+            .get_or_insert_with(k_small, |_| raster_solid(2, 2, GlyphMetrics::default()))
+            .expect("small");
+        // Insert another small glyph — evicts k_small, should reuse a free slot.
         let k_reuse = GlyphKey::from_char('R', 16);
-
-        // Insert large (10x10 padded to 12x12) and small (2x2 padded to 4x4).
-        let p_large = cache
-            .get_or_insert_with(k_large, |_| raster_solid(10, 10, GlyphMetrics::default()))
-            .expect("large");
-        let p_small = cache
-            .get_or_insert_with(k_small, |_| raster_solid(2, 2, GlyphMetrics::default()))
-            .expect("small");
-
-        // Evict both by inserting medium under tight budget that forces all evictions.
-        let mut tight_cache = GlyphAtlasCache::new(64, 64, 6 * 6);
-        // Emulate: insert large, small, evict both, then insert something that fits the small slot.
-        let _ = tight_cache
-            .get_or_insert_with(k_large, |_| raster_solid(10, 10, GlyphMetrics::default()))
-            .expect("large");
-        let _ = tight_cache
-            .get_or_insert_with(k_small, |_| raster_solid(2, 2, GlyphMetrics::default()))
-            .expect("small");
-        // Now both are in the free list after budget eviction. k_large was evicted for k_small.
-        // Insert a 2x2 glyph: best-fit should pick the 4x4 free slot (from k_small's eviction),
-        // not the 12x12 free slot (from k_large's eviction).
-        let _ = tight_cache
+        let _ = cache
             .get_or_insert_with(k_reuse, |_| raster_solid(2, 2, GlyphMetrics::default()))
             .expect("reuse");
 
         // Verify allocation happened (stats show 3 misses, at least 2 evictions).
-        assert_eq!(tight_cache.stats().misses, 3);
-        assert!(tight_cache.stats().evictions >= 2);
+        assert_eq!(cache.stats().misses, 3);
+        assert!(cache.stats().evictions >= 2);
     }
 
     // ── Entry index reuse after eviction ─────────────────────────
@@ -1720,7 +1708,6 @@ mod tests {
         let mut cache = GlyphAtlasCache::new(64, 64, 12 * 12 + 6 * 6);
         let k_large = GlyphKey::from_char('L', 16);
         let k_small = GlyphKey::from_char('S', 16);
-        let k_reuse = GlyphKey::from_char('R', 16);
 
         // Insert large (10x10 -> 12x12 padded slot).
         let _ = cache
@@ -1746,13 +1733,14 @@ mod tests {
 
         // 4x4 gradient: each pixel has a unique value.
         let gradient: Vec<u8> = (0u8..16).collect();
-        let raster = GlyphRaster {
-            width: 4,
-            height: 4,
-            pixels: gradient.clone(),
-            metrics: GlyphMetrics::default(),
-        };
-        let placement = cache.get_or_insert_with(key, |_| raster).expect("insert");
+        let placement = cache
+            .get_or_insert_with(key, |_| GlyphRaster {
+                width: 4,
+                height: 4,
+                pixels: (0u8..16).collect(),
+                metrics: GlyphMetrics::default(),
+            })
+            .expect("insert");
 
         let atlas_w = 32usize;
         let dx = placement.draw.x as usize;
@@ -1804,7 +1792,10 @@ mod tests {
         assert!(cache.get(k2).is_none(), "k2 should be evicted (LRU)");
         assert!(cache.get(k1).is_some(), "k1 should survive (touched)");
         assert!(cache.get(k3).is_some(), "k3 should survive");
-        assert!(cache.get(k4).is_some(), "k4 should be present (just inserted)");
+        assert!(
+            cache.get(k4).is_some(),
+            "k4 should be present (just inserted)"
+        );
     }
 
     #[test]
@@ -1832,7 +1823,10 @@ mod tests {
             .get_or_insert_with(k3, |_| raster_solid(6, 6, GlyphMetrics::default()))
             .expect("k3");
 
-        assert!(cache.get(k1).is_some(), "frequently touched k1 should survive");
+        assert!(
+            cache.get(k1).is_some(),
+            "frequently touched k1 should survive"
+        );
         assert!(cache.get(k2).is_none(), "k2 should be evicted");
     }
 
@@ -1859,7 +1853,8 @@ mod tests {
         // But actually it can't fit at all (12 > 11), so it should fail.
         let mut cache = GlyphAtlasCache::new(11, 32, 11 * 32);
         let key = GlyphKey::from_char('X', 16);
-        let result = cache.get_or_insert_with(key, |_| raster_solid(10, 4, GlyphMetrics::default()));
+        let result =
+            cache.get_or_insert_with(key, |_| raster_solid(10, 4, GlyphMetrics::default()));
         assert!(matches!(result, Err(GlyphCacheError::GlyphTooLarge)));
     }
 

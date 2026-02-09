@@ -512,35 +512,49 @@ impl FrankenTermWeb {
     /// state so host-side logic (search/link lookup/evidence) remains usable.
     #[wasm_bindgen(js_name = applyPatch)]
     pub fn apply_patch(&mut self, patch: JsValue) -> Result<(), JsValue> {
-        let offset = get_u32(&patch, "offset")?;
-        let cells_val = Reflect::get(&patch, &JsValue::from_str("cells"))?;
-        if cells_val.is_null() || cells_val.is_undefined() {
-            return Err(JsValue::from_str("patch missing cells[]"));
+        let patch = parse_cell_patch(&patch)?;
+        self.apply_cell_patches(std::slice::from_ref(&patch));
+        Ok(())
+    }
+
+    /// Apply multiple cell patches (ftui-web mode).
+    ///
+    /// Accepts a JS array:
+    /// `[{ offset: number, cells: [{bg, fg, glyph, attrs}] }, ...]`.
+    ///
+    /// This is optimized for `ftui-web` patch runs so hosts can forward a
+    /// complete present step with one JS→WASM call.
+    #[wasm_bindgen(js_name = applyPatchBatch)]
+    pub fn apply_patch_batch(&mut self, patches: JsValue) -> Result<(), JsValue> {
+        if patches.is_null() || patches.is_undefined() {
+            return Err(JsValue::from_str("patch batch must be an array"));
+        }
+        if !Array::is_array(&patches) {
+            return Err(JsValue::from_str("patch batch must be an array"));
         }
 
-        let cells_arr = Array::from(&cells_val);
-        let mut cells = Vec::with_capacity(cells_arr.length() as usize);
-        for c in cells_arr.iter() {
-            let bg = get_u32(&c, "bg").unwrap_or(0x000000FF);
-            let fg = get_u32(&c, "fg").unwrap_or(0xFFFFFFFF);
-            let glyph = get_u32(&c, "glyph").unwrap_or(0);
-            let attrs = get_u32(&c, "attrs").unwrap_or(0);
-            cells.push(CellData {
-                bg_rgba: bg,
-                fg_rgba: fg,
-                glyph_id: glyph,
-                attrs,
-            });
+        let patches_arr = Array::from(&patches);
+        let mut parsed = Vec::with_capacity(patches_arr.length() as usize);
+        for patch in patches_arr.iter() {
+            parsed.push(parse_cell_patch(&patch)?);
         }
+        self.apply_cell_patches(&parsed);
+        Ok(())
+    }
 
+    fn apply_cell_patches(&mut self, patches: &[CellPatch]) {
         let max = usize::from(self.cols) * usize::from(self.rows);
         self.shadow_cells.resize(max, CellData::EMPTY);
         self.auto_link_ids.resize(max, 0);
-        let start = usize::try_from(offset).unwrap_or(max).min(max);
-        let count = cells.len().min(max.saturating_sub(start));
-        for (i, cell) in cells.iter().take(count).enumerate() {
-            self.shadow_cells[start + i] = *cell;
+
+        for patch in patches {
+            let start = usize::try_from(patch.offset).unwrap_or(max).min(max);
+            let count = patch.cells.len().min(max.saturating_sub(start));
+            for (i, cell) in patch.cells.iter().take(count).enumerate() {
+                self.shadow_cells[start + i] = *cell;
+            }
         }
+
         self.recompute_auto_links();
         self.refresh_search_after_buffer_change();
         if self.hovered_link_id != 0 && !self.link_id_present(self.hovered_link_id) {
@@ -549,9 +563,8 @@ impl FrankenTermWeb {
         }
 
         if let Some(renderer) = self.renderer.as_mut() {
-            renderer.apply_patches(&[CellPatch { offset, cells }]);
+            renderer.apply_patches(patches);
         }
-        Ok(())
     }
 
     /// Configure cursor overlay.
@@ -1820,6 +1833,31 @@ fn get_u32(obj: &JsValue, key: &str) -> Result<u32, JsValue> {
     u32::try_from(n_i64).map_err(|_| JsValue::from_str(&format!("field {key} out of range")))
 }
 
+fn parse_cell_patch(patch: &JsValue) -> Result<CellPatch, JsValue> {
+    let offset = get_u32(patch, "offset")?;
+    let cells_val = Reflect::get(patch, &JsValue::from_str("cells"))?;
+    if cells_val.is_null() || cells_val.is_undefined() {
+        return Err(JsValue::from_str("patch missing cells[]"));
+    }
+
+    let cells_arr = Array::from(&cells_val);
+    let mut cells = Vec::with_capacity(cells_arr.length() as usize);
+    for cell in cells_arr.iter() {
+        let bg = get_u32(&cell, "bg").unwrap_or(0x000000FF);
+        let fg = get_u32(&cell, "fg").unwrap_or(0xFFFFFFFF);
+        let glyph = get_u32(&cell, "glyph").unwrap_or(0);
+        let attrs = get_u32(&cell, "attrs").unwrap_or(0);
+        cells.push(CellData {
+            bg_rgba: bg,
+            fg_rgba: fg,
+            glyph_id: glyph,
+            attrs,
+        });
+    }
+
+    Ok(CellPatch { offset, cells })
+}
+
 fn get_u8_opt(obj: &JsValue, key: &str) -> Result<Option<u8>, JsValue> {
     let v = Reflect::get(obj, &JsValue::from_str(key))?;
     if v.is_null() || v.is_undefined() {
@@ -2551,6 +2589,14 @@ mod tests {
         patch.into()
     }
 
+    fn patch_batch_value(patches: &[(u32, &[CellData])]) -> JsValue {
+        let arr = Array::new();
+        for (offset, cells) in patches {
+            arr.push(&patch_value(*offset, cells));
+        }
+        arr.into()
+    }
+
     #[test]
     fn set_selection_range_normalizes_reverse_and_out_of_bounds() {
         let mut term = FrankenTermWeb::new();
@@ -2677,6 +2723,91 @@ mod tests {
         assert_eq!(term.shadow_cells[8].glyph_id, u32::from('🙂'));
         assert_eq!(term.shadow_cells[6], CellData::EMPTY);
         assert_eq!(term.shadow_cells[9], CellData::EMPTY);
+    }
+
+    #[test]
+    fn apply_patch_batch_without_renderer_respects_multiple_offsets() {
+        let mut term = FrankenTermWeb::new();
+        term.cols = 7;
+        term.rows = 2;
+        term.shadow_cells = vec![CellData::EMPTY; 14];
+
+        let alpha = text_row_cells("αβ");
+        let wide = text_row_cells("界🙂");
+        let patches = patch_batch_value(&[(0, &alpha), (9, &wide)]);
+        assert!(term.apply_patch_batch(patches).is_ok());
+
+        assert_eq!(term.shadow_cells[0].glyph_id, u32::from('α'));
+        assert_eq!(term.shadow_cells[1].glyph_id, u32::from('β'));
+        assert_eq!(term.shadow_cells[9].glyph_id, u32::from('界'));
+        assert_eq!(term.shadow_cells[10].glyph_id, u32::from('🙂'));
+        assert_eq!(term.shadow_cells[8], CellData::EMPTY);
+        assert_eq!(term.shadow_cells[11], CellData::EMPTY);
+    }
+
+    #[test]
+    fn apply_patch_batch_matches_sequential_patch_side_effects() {
+        let left = text_row_cells("α https://one.test ");
+        let right = text_row_cells("β https://two.test");
+        let right_offset = 1 + left.len() as u32;
+
+        let mut sequential = FrankenTermWeb::new();
+        sequential.cols = 40;
+        sequential.rows = 1;
+        assert!(sequential.set_search_query("https", None).is_ok());
+        assert!(sequential.apply_patch(patch_value(1, &left)).is_ok());
+        assert!(
+            sequential
+                .apply_patch(patch_value(right_offset, &right))
+                .is_ok()
+        );
+
+        let mut batched = FrankenTermWeb::new();
+        batched.cols = 40;
+        batched.rows = 1;
+        assert!(batched.set_search_query("https", None).is_ok());
+        let patches = patch_batch_value(&[(1, &left), (right_offset, &right)]);
+        assert!(batched.apply_patch_batch(patches).is_ok());
+
+        assert_eq!(batched.shadow_cells, sequential.shadow_cells);
+        assert_eq!(batched.auto_link_ids, sequential.auto_link_ids);
+        assert_eq!(batched.auto_link_urls, sequential.auto_link_urls);
+        assert_eq!(batched.search_index.len(), sequential.search_index.len());
+        assert_eq!(batched.search_active_match, sequential.search_active_match);
+        assert_eq!(
+            batched.search_highlight_range,
+            sequential.search_highlight_range
+        );
+    }
+
+    #[test]
+    fn apply_patch_batch_rejects_invalid_patch_without_mutation() {
+        let mut term = FrankenTermWeb::new();
+        term.cols = 4;
+        term.rows = 1;
+        term.shadow_cells = text_row_cells("base");
+        term.auto_link_ids = vec![7, 7, 7, 7];
+        let baseline_cells = term.shadow_cells.clone();
+        let baseline_link_ids = term.auto_link_ids.clone();
+        let baseline_urls = term.auto_link_urls.clone();
+
+        let valid_cells = text_row_cells("zz");
+        let valid = patch_value(0, &valid_cells);
+        let invalid = Object::new();
+        let _ = Reflect::set(
+            &invalid,
+            &JsValue::from_str("offset"),
+            &JsValue::from_f64(2.0),
+        );
+
+        let batch = Array::new();
+        batch.push(&valid);
+        batch.push(&invalid);
+
+        assert!(term.apply_patch_batch(batch.into()).is_err());
+        assert_eq!(term.shadow_cells, baseline_cells);
+        assert_eq!(term.auto_link_ids, baseline_link_ids);
+        assert_eq!(term.auto_link_urls, baseline_urls);
     }
 
     #[test]
