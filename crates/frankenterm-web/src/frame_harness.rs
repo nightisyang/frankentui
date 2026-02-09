@@ -328,6 +328,51 @@ pub fn stable_frame_hash(cells: &[CellData], geometry: GeometrySnapshot) -> Stri
     format!("{FRAME_HASH_ALGO}:{hash:016x}")
 }
 
+/// Overlay interaction state that affects visual rendering.
+///
+/// These fields mirror renderer interaction uniforms so tests can checksum
+/// cursor/selection/hyperlink overlays deterministically.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct InteractionSnapshot {
+    pub hovered_link_id: u32,
+    pub cursor_offset: u32,
+    pub cursor_style: u32,
+    pub selection_active: bool,
+    pub selection_start: u32,
+    pub selection_end: u32,
+}
+
+impl InteractionSnapshot {
+    #[must_use]
+    const fn selection_active_u32(self) -> u32 {
+        if self.selection_active { 1 } else { 0 }
+    }
+}
+
+/// Compute a deterministic frame hash over geometry + cells + interaction state.
+///
+/// This extends [`stable_frame_hash`] with overlay state so tests can lock
+/// cursor/selection/link-hover behavior using checksum assertions.
+#[must_use]
+pub fn stable_frame_hash_with_interaction(
+    cells: &[CellData],
+    geometry: GeometrySnapshot,
+    interaction: InteractionSnapshot,
+) -> String {
+    let mut hash = FNV64_OFFSET_BASIS;
+    hash = hash_geometry(hash, geometry);
+    for cell in cells {
+        hash = fnv1a64_extend(hash, &cell.to_bytes());
+    }
+    hash = fnv1a64_extend(hash, &interaction.hovered_link_id.to_le_bytes());
+    hash = fnv1a64_extend(hash, &interaction.cursor_offset.to_le_bytes());
+    hash = fnv1a64_extend(hash, &interaction.cursor_style.to_le_bytes());
+    hash = fnv1a64_extend(hash, &interaction.selection_active_u32().to_le_bytes());
+    hash = fnv1a64_extend(hash, &interaction.selection_start.to_le_bytes());
+    hash = fnv1a64_extend(hash, &interaction.selection_end.to_le_bytes());
+    format!("{FRAME_HASH_ALGO}:{hash:016x}")
+}
+
 /// Borrowed frame payload used for golden checksum verification.
 #[derive(Debug, Clone, Copy)]
 pub struct FrameGoldenActual<'a> {
@@ -846,6 +891,94 @@ mod tests {
         changed_geometry.zoom = 1.25;
         let changed_geom_hash = stable_frame_hash(&cells, changed_geometry);
         assert_ne!(base, changed_geom_hash);
+    }
+
+    #[test]
+    fn stable_frame_hash_with_interaction_is_deterministic() {
+        let geometry = GeometrySnapshot {
+            cols: 80,
+            rows: 24,
+            pixel_width: 640,
+            pixel_height: 384,
+            cell_width_px: 8.0,
+            cell_height_px: 16.0,
+            dpr: 1.0,
+            zoom: 1.0,
+        };
+        let cells = vec![
+            CellData::EMPTY,
+            CellData {
+                bg_rgba: 0x1122_33FF,
+                fg_rgba: 0xAABB_CCFF,
+                glyph_id: 42,
+                attrs: 0x0201, // style bit + link id
+            },
+        ];
+        let interaction = InteractionSnapshot {
+            hovered_link_id: 2,
+            cursor_offset: 1,
+            cursor_style: 1,
+            selection_active: true,
+            selection_start: 0,
+            selection_end: 2,
+        };
+        let a = stable_frame_hash_with_interaction(&cells, geometry, interaction);
+        let b = stable_frame_hash_with_interaction(&cells, geometry, interaction);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn stable_frame_hash_with_interaction_changes_when_overlay_changes() {
+        let geometry = GeometrySnapshot {
+            cols: 80,
+            rows: 24,
+            pixel_width: 640,
+            pixel_height: 384,
+            cell_width_px: 8.0,
+            cell_height_px: 16.0,
+            dpr: 1.0,
+            zoom: 1.0,
+        };
+        let cells = vec![
+            CellData::EMPTY,
+            CellData {
+                glyph_id: 11,
+                attrs: 0x0300, // link id = 3
+                ..CellData::EMPTY
+            },
+        ];
+        let none = InteractionSnapshot::default();
+        let hover = InteractionSnapshot {
+            hovered_link_id: 3,
+            ..none
+        };
+        let cursor_block = InteractionSnapshot {
+            cursor_offset: 1,
+            cursor_style: 1,
+            ..none
+        };
+        let cursor_bar = InteractionSnapshot {
+            cursor_offset: 1,
+            cursor_style: 2,
+            ..none
+        };
+        let selection = InteractionSnapshot {
+            selection_active: true,
+            selection_start: 0,
+            selection_end: 2,
+            ..none
+        };
+
+        let none_hash = stable_frame_hash_with_interaction(&cells, geometry, none);
+        let hover_hash = stable_frame_hash_with_interaction(&cells, geometry, hover);
+        let block_hash = stable_frame_hash_with_interaction(&cells, geometry, cursor_block);
+        let bar_hash = stable_frame_hash_with_interaction(&cells, geometry, cursor_bar);
+        let selection_hash = stable_frame_hash_with_interaction(&cells, geometry, selection);
+
+        assert_ne!(none_hash, hover_hash);
+        assert_ne!(none_hash, block_hash);
+        assert_ne!(block_hash, bar_hash);
+        assert_ne!(none_hash, selection_hash);
     }
 
     #[test]
