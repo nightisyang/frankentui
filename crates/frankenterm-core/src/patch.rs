@@ -40,11 +40,13 @@ impl DirtySpan {
     }
 
     /// Number of columns in this span.
+    #[inline]
     pub fn len(&self) -> u16 {
         self.end.saturating_sub(self.start)
     }
 
     /// Whether this span is empty.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.end <= self.start
     }
@@ -297,11 +299,13 @@ pub struct ChangeRun {
 
 impl ChangeRun {
     /// Number of cells in this run.
+    #[inline]
     pub fn len(&self) -> u16 {
         self.end_col.saturating_sub(self.start_col)
     }
 
     /// Whether this run is empty.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.end_col <= self.start_col
     }
@@ -348,12 +352,14 @@ impl Patch {
     }
 
     /// Whether the patch has no updates.
+    #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.updates.is_empty()
     }
 
     /// Number of changed cells.
+    #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
         self.updates.len()

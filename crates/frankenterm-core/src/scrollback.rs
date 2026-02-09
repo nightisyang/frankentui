@@ -47,24 +47,28 @@ pub struct ScrollbackWindow {
 
 impl ScrollbackWindow {
     /// Visible viewport range.
+    #[inline]
     #[must_use]
     pub fn viewport_range(self) -> Range<usize> {
         self.viewport_start..self.viewport_end
     }
 
     /// Render range including overscan.
+    #[inline]
     #[must_use]
     pub fn render_range(self) -> Range<usize> {
         self.render_start..self.render_end
     }
 
     /// Number of visible viewport lines.
+    #[inline]
     #[must_use]
     pub fn viewport_len(self) -> usize {
         self.viewport_end.saturating_sub(self.viewport_start)
     }
 
     /// Number of lines in the render range (viewport + overscan).
+    #[inline]
     #[must_use]
     pub fn render_len(self) -> usize {
         self.render_end.saturating_sub(self.render_start)
@@ -81,11 +85,13 @@ impl ScrollbackLine {
     }
 
     /// Number of cells in this line.
+    #[inline]
     pub fn len(&self) -> usize {
         self.cells.len()
     }
 
     /// Whether this line has zero cells.
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.cells.is_empty()
     }
@@ -114,6 +120,7 @@ impl Scrollback {
     }
 
     /// Maximum number of lines this scrollback can hold.
+    #[inline]
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.capacity
@@ -131,12 +138,14 @@ impl Scrollback {
     }
 
     /// Current number of stored lines.
+    #[inline]
     #[must_use]
     pub fn len(&self) -> usize {
         self.lines.len()
     }
 
     /// Whether the scrollback is empty.
+    #[inline]
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.lines.is_empty()
@@ -168,12 +177,14 @@ impl Scrollback {
     }
 
     /// Peek at the most recent (newest) line without removing it.
+    #[inline]
     #[must_use]
     pub fn peek_newest(&self) -> Option<&ScrollbackLine> {
         self.lines.back()
     }
 
     /// Get a line by index (0 = oldest).
+    #[inline]
     #[must_use]
     pub fn get(&self, index: usize) -> Option<&ScrollbackLine> {
         self.lines.get(index)
