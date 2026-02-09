@@ -307,16 +307,29 @@ class SessionRecorder:
         )
         self.frame_idx += 1
         ts_ms = int((now - self.start_monotonic) * 1000.0)
-        key = frame_hash_key("remote", self.current_cols, self.current_rows, self.seed)
+        effective_mode = "remote"
+        effective_cols = self.current_cols
+        effective_rows = self.current_rows
+        if frame_meta:
+            meta_mode = frame_meta.get("mode")
+            if isinstance(meta_mode, str):
+                effective_mode = meta_mode
+            meta_cols = frame_meta.get("cols")
+            if isinstance(meta_cols, int) and meta_cols > 0:
+                effective_cols = meta_cols
+            meta_rows = frame_meta.get("rows")
+            if isinstance(meta_rows, int) and meta_rows > 0:
+                effective_rows = meta_rows
+        derived_hash_key = frame_hash_key(effective_mode, effective_cols, effective_rows, self.seed)
         event = {
             "frame_idx": self.frame_idx,
             "hash_algo": "sha256",
             "frame_hash": f"sha256:{chunk_hash}",
             "ts_ms": ts_ms,
-            "mode": "remote",
-            "hash_key": key,
-            "cols": self.current_cols,
-            "rows": self.current_rows,
+            "mode": effective_mode,
+            "hash_key": derived_hash_key,
+            "cols": effective_cols,
+            "rows": effective_rows,
             "patch_hash": f"sha256:{chunk_hash}",
             "patch_bytes": len(data),
             # Binary stream proxies: exact cell/run counts are unavailable at this layer.
@@ -328,11 +341,10 @@ class SessionRecorder:
         }
         if frame_meta:
             event.update(frame_meta)
-            meta_cols = frame_meta.get("cols")
-            meta_rows = frame_meta.get("rows")
-            if isinstance(meta_cols, int) and isinstance(meta_rows, int) and meta_cols > 0 and meta_rows > 0:
-                self.current_cols = meta_cols
-                self.current_rows = meta_rows
+            if "hash_key" not in frame_meta:
+                event["hash_key"] = derived_hash_key
+        self.current_cols = effective_cols
+        self.current_rows = effective_rows
         self.emit("frame", event)
 
     def record_send(self, data: bytes):
@@ -695,8 +707,37 @@ def run_self_tests() -> int:
             self.assertEqual(frame["selection_end"], 2)
             self.assertEqual(frame["cols"], 100)
             self.assertEqual(frame["rows"], 50)
+            self.assertEqual(frame["hash_key"], frame_hash_key("remote", 100, 50, 0))
             self.assertEqual(recorder.current_cols, 100)
             self.assertEqual(recorder.current_rows, 50)
+
+        def test_record_output_derives_hash_key_from_mode_override(self) -> None:
+            recorder = SessionRecorder("run-1", "scenario", None, 80, 24)
+            recorder.record_output(
+                b"abc",
+                frame_meta={
+                    "mode": "inline",
+                    "cols": 120,
+                    "rows": 40,
+                },
+            )
+            frame = recorder.events[-1]
+            self.assertEqual(frame["mode"], "inline")
+            self.assertEqual(frame["hash_key"], frame_hash_key("inline", 120, 40, 0))
+
+        def test_record_output_keeps_explicit_hash_key_override(self) -> None:
+            recorder = SessionRecorder("run-1", "scenario", None, 80, 24)
+            recorder.record_output(
+                b"abc",
+                frame_meta={
+                    "mode": "inline",
+                    "cols": 120,
+                    "rows": 40,
+                    "hash_key": "explicit-key",
+                },
+            )
+            frame = recorder.events[-1]
+            self.assertEqual(frame["hash_key"], "explicit-key")
 
         def test_extract_frame_overrides_rejects_invalid_types(self) -> None:
             out = _extract_frame_overrides({
