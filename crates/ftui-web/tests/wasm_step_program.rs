@@ -174,6 +174,13 @@ fn wasm_step_program_event_flow_updates_model_and_buffer() {
             .expect("buffer should exist after render"),
     );
     assert!(line.starts_with("count=1"));
+    let outputs = program.outputs();
+    assert!(!outputs.last_patches.is_empty());
+    let stats = outputs
+        .last_patch_stats
+        .expect("patch stats should be captured");
+    assert!(stats.patch_count >= 1);
+    assert!(stats.dirty_cells >= 1);
 }
 
 #[wasm_bindgen_test]

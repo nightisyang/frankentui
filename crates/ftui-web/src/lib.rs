@@ -21,7 +21,13 @@ use ftui_backend::{Backend, BackendClock, BackendEventSource, BackendFeatures, B
 use ftui_core::event::Event;
 use ftui_core::terminal_capabilities::TerminalCapabilities;
 use ftui_render::buffer::Buffer;
+use ftui_render::cell::{Cell, CellContent};
 use ftui_render::diff::BufferDiff;
+
+const GRAPHEME_FALLBACK_CODEPOINT: u32 = '□' as u32;
+const ATTR_STYLE_MASK: u32 = 0xFF;
+const ATTR_LINK_ID_MAX: u32 = 0x00FF_FFFF;
+const WEB_PATCH_CELL_BYTES: u64 = 16;
 
 /// Web backend error type.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,8 +151,37 @@ pub struct WebOutputs {
     pub logs: Vec<String>,
     /// Last fully-rendered buffer presented.
     pub last_buffer: Option<Buffer>,
+    /// Last emitted incremental/full patch runs in row-major order.
+    pub last_patches: Vec<WebPatchRun>,
+    /// Aggregate patch upload accounting for the last present.
+    pub last_patch_stats: Option<WebPatchStats>,
     /// Whether the last present requested a full repaint.
     pub last_full_repaint_hint: bool,
+}
+
+/// One GPU patch cell payload (`bg`, `fg`, `glyph`, `attrs`) matching the
+/// `frankenterm-web` `applyPatch` schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebPatchCell {
+    pub bg: u32,
+    pub fg: u32,
+    pub glyph: u32,
+    pub attrs: u32,
+}
+
+/// One contiguous run of changed cells starting at linear `offset`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebPatchRun {
+    pub offset: u32,
+    pub cells: Vec<WebPatchCell>,
+}
+
+/// Aggregate patch-upload stats for host instrumentation and JSONL reporting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebPatchStats {
+    pub dirty_cells: u32,
+    pub patch_count: u32,
+    pub bytes_uploaded: u64,
 }
 
 /// WASM presenter that captures buffers and logs for the host.
@@ -207,11 +242,120 @@ impl BackendPresenter for WebPresenter {
         diff: Option<&BufferDiff>,
         full_repaint_hint: bool,
     ) -> Result<(), Self::Error> {
-        // For now we capture full buffers. A future optimization may store diffs.
-        let _ = diff;
+        let patches = build_patch_runs(buf, diff, full_repaint_hint);
+        let stats = patch_batch_stats(&patches);
         self.outputs.last_buffer = Some(buf.clone());
+        self.outputs.last_patches = patches;
+        self.outputs.last_patch_stats = Some(stats);
         self.outputs.last_full_repaint_hint = full_repaint_hint;
         Ok(())
+    }
+}
+
+#[must_use]
+fn cell_to_patch(cell: &Cell) -> WebPatchCell {
+    let glyph = match cell.content {
+        CellContent::EMPTY | CellContent::CONTINUATION => 0,
+        other if other.is_grapheme() => GRAPHEME_FALLBACK_CODEPOINT,
+        other => other.as_char().map_or(0, |c| c as u32),
+    };
+    let style_bits = u32::from(cell.attrs.flags().bits()) & ATTR_STYLE_MASK;
+    let link_id = cell.attrs.link_id().min(ATTR_LINK_ID_MAX);
+    WebPatchCell {
+        bg: cell.bg.0,
+        fg: cell.fg.0,
+        glyph,
+        attrs: style_bits | (link_id << 8),
+    }
+}
+
+#[must_use]
+fn full_buffer_patch(buffer: &Buffer) -> WebPatchRun {
+    let cols = buffer.width();
+    let rows = buffer.height();
+    let total = usize::from(cols) * usize::from(rows);
+    let mut cells = Vec::with_capacity(total);
+    for y in 0..rows {
+        for x in 0..cols {
+            cells.push(cell_to_patch(buffer.get_unchecked(x, y)));
+        }
+    }
+    WebPatchRun { offset: 0, cells }
+}
+
+#[must_use]
+fn diff_to_patches(buffer: &Buffer, diff: &BufferDiff) -> Vec<WebPatchRun> {
+    if diff.is_empty() {
+        return Vec::new();
+    }
+    let cols = u32::from(buffer.width());
+    let mut patches = Vec::new();
+    let mut span_start: u32 = 0;
+    let mut span_cells: Vec<WebPatchCell> = Vec::new();
+    let mut prev_offset: u32 = 0;
+    let mut has_span = false;
+
+    for &(x, y) in diff.changes() {
+        let offset = u32::from(y) * cols + u32::from(x);
+        if !has_span {
+            span_start = offset;
+            prev_offset = offset;
+            has_span = true;
+            span_cells.push(cell_to_patch(buffer.get_unchecked(x, y)));
+            continue;
+        }
+        if offset == prev_offset {
+            continue;
+        }
+        if offset == prev_offset + 1 {
+            span_cells.push(cell_to_patch(buffer.get_unchecked(x, y)));
+        } else {
+            patches.push(WebPatchRun {
+                offset: span_start,
+                cells: std::mem::take(&mut span_cells),
+            });
+            span_start = offset;
+            span_cells.push(cell_to_patch(buffer.get_unchecked(x, y)));
+        }
+        prev_offset = offset;
+    }
+    if !span_cells.is_empty() {
+        patches.push(WebPatchRun {
+            offset: span_start,
+            cells: span_cells,
+        });
+    }
+    patches
+}
+
+#[must_use]
+fn build_patch_runs(
+    buffer: &Buffer,
+    diff: Option<&BufferDiff>,
+    full_repaint_hint: bool,
+) -> Vec<WebPatchRun> {
+    if full_repaint_hint {
+        return vec![full_buffer_patch(buffer)];
+    }
+    match diff {
+        Some(dirty) => diff_to_patches(buffer, dirty),
+        None => vec![full_buffer_patch(buffer)],
+    }
+}
+
+#[must_use]
+fn patch_batch_stats(patches: &[WebPatchRun]) -> WebPatchStats {
+    let dirty_cells_u64 = patches
+        .iter()
+        .map(|patch| patch.cells.len() as u64)
+        .sum::<u64>();
+    let dirty_cells = dirty_cells_u64.min(u64::from(u32::MAX)) as u32;
+    let patch_count = patches.len().min(u32::MAX as usize) as u32;
+    let bytes_uploaded = dirty_cells_u64.saturating_mul(WEB_PATCH_CELL_BYTES);
+    WebPatchStats {
+        dirty_cells,
+        patch_count,
+        bytes_uploaded,
     }
 }
 
@@ -278,6 +422,7 @@ impl Backend for WebBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_render::cell::Cell;
 
     use pretty_assertions::assert_eq;
 
@@ -335,5 +480,36 @@ mod tests {
         assert_eq!(outputs.logs, vec!["hello", "world"]);
         assert_eq!(outputs.last_full_repaint_hint, true);
         assert_eq!(outputs.last_buffer.unwrap().width(), 2);
+        assert_eq!(outputs.last_patches.len(), 1);
+        let stats = outputs.last_patch_stats.expect("stats should be present");
+        assert_eq!(stats.patch_count, 1);
+        assert_eq!(stats.dirty_cells, 4);
+        assert_eq!(stats.bytes_uploaded, 64);
+    }
+
+    #[test]
+    fn presenter_emits_incremental_patch_runs_from_diff() {
+        let mut presenter = WebPresenter::new();
+        let old = Buffer::new(6, 2);
+        presenter.present_ui(&old, None, true).unwrap();
+
+        let mut next = Buffer::new(6, 2);
+        next.set_raw(2, 0, Cell::from_char('A'));
+        next.set_raw(3, 0, Cell::from_char('B'));
+        next.set_raw(0, 1, Cell::from_char('C'));
+        let diff = BufferDiff::compute(&old, &next);
+        presenter.present_ui(&next, Some(&diff), false).unwrap();
+
+        let outputs = presenter.take_outputs();
+        assert_eq!(outputs.last_full_repaint_hint, false);
+        assert_eq!(outputs.last_patches.len(), 2);
+        assert_eq!(outputs.last_patches[0].offset, 2);
+        assert_eq!(outputs.last_patches[0].cells.len(), 2);
+        assert_eq!(outputs.last_patches[1].offset, 6);
+        assert_eq!(outputs.last_patches[1].cells.len(), 1);
+        let stats = outputs.last_patch_stats.expect("stats should be present");
+        assert_eq!(stats.patch_count, 2);
+        assert_eq!(stats.dirty_cells, 3);
+        assert_eq!(stats.bytes_uploaded, 48);
     }
 }

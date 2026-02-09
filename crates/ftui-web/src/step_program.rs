@@ -494,6 +494,12 @@ mod tests {
         let outputs = prog.outputs();
         assert!(outputs.last_buffer.is_some());
         assert!(outputs.last_full_repaint_hint); // First frame is full repaint.
+        assert_eq!(outputs.last_patches.len(), 1);
+        let stats = outputs
+            .last_patch_stats
+            .expect("patch stats should be captured");
+        assert_eq!(stats.patch_count, 1);
+        assert_eq!(stats.dirty_cells, 80 * 24);
     }
 
     #[test]
@@ -724,6 +730,12 @@ mod tests {
 
         let outputs = prog.outputs();
         assert!(!outputs.last_full_repaint_hint);
+        assert!(!outputs.last_patches.is_empty());
+        let stats = outputs
+            .last_patch_stats
+            .expect("patch stats should be captured");
+        assert!(stats.patch_count >= 1);
+        assert!(stats.dirty_cells >= 1);
     }
 
     #[test]
