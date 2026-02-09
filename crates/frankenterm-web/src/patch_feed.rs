@@ -11,7 +11,7 @@
 
 use crate::renderer::{CellData, CellPatch};
 use ftui_render::buffer::Buffer;
-use ftui_render::cell::{Cell, CellContent};
+use ftui_render::cell::{Cell, CellAttrs, CellContent};
 use ftui_render::diff::BufferDiff;
 
 /// Convert a single ftui-render `Cell` to a GPU-ready `CellData`.
@@ -29,7 +29,7 @@ use ftui_render::diff::BufferDiff;
 /// Attributes: lower 8 bits store style flags; upper 24 bits store hyperlink ID.
 const GRAPHEME_FALLBACK_CODEPOINT: u32 = '□' as u32;
 const ATTR_STYLE_MASK: u32 = 0xFF;
-const ATTR_LINK_ID_MAX: u32 = 0x00FF_FFFF;
+const ATTR_LINK_ID_MAX: u32 = CellAttrs::LINK_ID_MAX;
 
 #[must_use]
 pub fn cell_from_render(cell: &Cell) -> CellData {
@@ -237,6 +237,22 @@ mod tests {
     }
 
     #[test]
+    fn cell_from_render_wide_unicode_scalar_passthrough() {
+        let ch = '界';
+        let cell = make_cell(ch, 0xF0F0F0FF, 0x000000FF, StyleFlags::empty());
+        let gpu = cell_from_render(&cell);
+        assert_eq!(gpu.glyph_id, ch as u32);
+    }
+
+    #[test]
+    fn cell_from_render_combining_scalar_passthrough() {
+        let ch = '\u{0301}'; // combining acute accent
+        let cell = make_cell(ch, 0xFFFFFFFF, 0x000000FF, StyleFlags::empty());
+        let gpu = cell_from_render(&cell);
+        assert_eq!(gpu.glyph_id, ch as u32);
+    }
+
+    #[test]
     fn cell_from_render_grapheme_uses_placeholder() {
         let cell = Cell {
             content: CellContent::from_grapheme(GraphemeId::new(7, 2)),
@@ -368,5 +384,19 @@ mod tests {
             stats.bytes_uploaded,
             3 * std::mem::size_of::<CellData>() as u64
         );
+    }
+
+    #[test]
+    fn cell_from_render_preserves_max_link_id() {
+        let link_id = ATTR_LINK_ID_MAX;
+        let flags = StyleFlags::UNDERLINE;
+        let cell = Cell::from_char('L')
+            .with_fg(PackedRgba::rgb(255, 255, 255))
+            .with_bg(PackedRgba::rgb(0, 0, 0))
+            .with_attrs(CellAttrs::new(flags, link_id));
+
+        let gpu = cell_from_render(&cell);
+        assert_eq!(gpu.attrs & ATTR_STYLE_MASK, flags.bits() as u32);
+        assert_eq!(gpu.attrs >> 8, ATTR_LINK_ID_MAX);
     }
 }
