@@ -119,6 +119,78 @@ Use this template for Visual Effects profiling passes (bd-3e1t.5.x).
 Score each candidate with **Impact × Confidence / Effort**. Track at least one
 “no‑code” idea (cache key, precompute, or lazy init) to keep risk low.
 
+### VFX Pass: 2026-02-09 (bd-3e1t.5.3)
+
+This pass re-ran deterministic PTY harness measurements for the heavy effects
+(`plasma`, `metaballs`) at `120x40` and `200x60` using:
+
+- `--vfx-harness --vfx-tick-ms=16 --vfx-frames=180 --vfx-perf --vfx-seed=12345`
+- crossterm-compat build for PTY compatibility
+- JSONL artifacts under `.scratch/vfx/`
+
+#### Hotspot / Opportunity Matrix (updated)
+
+| ID | Hotspot | Impact | Confidence | Effort | Score | Status |
+|----|---------|--------|------------|--------|-------|--------|
+| H1 | `Painter::braille_cell` per-subpixel bounds/index checks | 5 | 4 | 2 | **10.0** | Implemented (fast in-bounds path) |
+| H2 | `Painter::clear` full-buffer reset each frame | 4 | 4 | 2 | **8.0** | Implemented (generation-stamp O(1) clear) |
+| H3 | `MetaballsCanvasAdapter::fill` field accumulation loops | 5 | 3 | 3 | **5.0** | Pending |
+| H4 | `PlasmaCanvasAdapter::fill` per-pixel palette interpolation | 4 | 3 | 3 | **4.0** | Pending |
+| H5 | Presenter ANSI emission on high-churn frames | 3 | 3 | 3 | **3.0** | Pending |
+
+#### Measured deltas
+
+Baseline files:
+- `.scratch/vfx/bd-3e1t.5.3_plasma_120x40_crossterm.jsonl`
+- `.scratch/vfx/bd-3e1t.5.3_plasma_200x60_crossterm.jsonl`
+- `.scratch/vfx/bd-3e1t.5.3_metaballs_120x40_crossterm.jsonl`
+- `.scratch/vfx/bd-3e1t.5.3_metaballs_200x60_crossterm.jsonl`
+
+After `braille_cell` fast path:
+- `.scratch/vfx/bd-3e1t.5.3_post_canvas_plasma_120x40_crossterm.jsonl`
+- `.scratch/vfx/bd-3e1t.5.3_post_canvas_plasma_200x60_crossterm.jsonl`
+- `.scratch/vfx/bd-3e1t.5.3_post_canvas_metaballs_120x40_crossterm.jsonl`
+- `.scratch/vfx/bd-3e1t.5.3_post_canvas_metaballs_200x60_crossterm.jsonl`
+
+After `Painter` generation-stamp clear:
+- `.scratch/vfx/bd-3e1t.5.3_post_gen_plasma_120x40_crossterm.jsonl`
+- `.scratch/vfx/bd-3e1t.5.3_post_gen_plasma_200x60_crossterm.jsonl`
+- `.scratch/vfx/bd-3e1t.5.3_post_gen_metaballs_120x40_crossterm.jsonl`
+- `.scratch/vfx/bd-3e1t.5.3_post_gen_metaballs_200x60_crossterm.jsonl`
+
+`total_ms_p95` (base -> post_canvas -> post_gen):
+
+| Effect/Size | Base | Post Canvas | Post Gen | Net vs Base |
+|---|---:|---:|---:|---:|
+| plasma 120x40 | 3.461 | 2.989 | 3.166 | -8.52% |
+| plasma 200x60 | 6.821 | 6.677 | 6.692 | -1.89% |
+| metaballs 120x40 | 3.436 | 3.467 | 3.341 | -2.76% |
+| metaballs 200x60 | 7.256 | 6.823 | 7.226 | -0.41% |
+
+`render_ms_p95` (base -> post_canvas -> post_gen):
+
+| Effect/Size | Base | Post Canvas | Post Gen | Net vs Base |
+|---|---:|---:|---:|---:|
+| plasma 120x40 | 2.521 | 2.072 | 2.111 | -16.26% |
+| plasma 200x60 | 4.651 | 4.552 | 4.806 | +3.33% |
+| metaballs 120x40 | 2.574 | 2.500 | 2.249 | -12.63% |
+| metaballs 200x60 | 5.453 | 5.034 | 5.157 | -5.43% |
+
+Additional candidate heavy effects (base -> post_gen at 120x40):
+
+| Effect/Size | total_ms_p95 base | total_ms_p95 post_gen | Delta |
+|---|---:|---:|---:|
+| doom 120x40 | 1.386 | 1.262 | -8.95% |
+| quake 120x40 | 2.661 | 2.485 | -6.61% |
+
+#### Isomorphism notes
+
+- `braille_cell` fast path is algorithmically equivalent to the slow path:
+  identical dot-bit mapping and "first lit pixel color wins" ordering.
+- Generation-based clear preserves frame semantics:
+  a pixel is visible iff written in the current generation; uncolored writes
+  explicitly clear stale color at write-site (`point` sets `None`).
+
 ---
 
 ## Hotspots Identified

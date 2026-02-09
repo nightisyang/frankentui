@@ -90,8 +90,10 @@ pub struct Painter {
     width_usize: usize,
     /// Resolution mode.
     mode: Mode,
-    /// Pixel buffer (row-major, `true` = on).
-    pixels: Vec<bool>,
+    /// Pixel generation marks (row-major). A pixel is on when `pixels[idx] == generation`.
+    pixels: Vec<u32>,
+    /// Current clear generation for O(1) clears.
+    generation: u32,
     /// Color per pixel (only stored when set; default = foreground).
     colors: Vec<Option<PackedRgba>>,
 }
@@ -107,7 +109,8 @@ impl Painter {
             height_i32: height as i32,
             width_usize: width as usize,
             mode,
-            pixels: vec![false; len],
+            pixels: vec![0; len],
+            generation: 1,
             colors: vec![None; len],
         }
     }
@@ -131,7 +134,7 @@ impl Painter {
         self.width_usize = width as usize;
         let len = width as usize * height as usize;
         if len > self.pixels.len() {
-            self.pixels.resize(len, false);
+            self.pixels.resize(len, 0);
             self.colors.resize(len, None);
         }
     }
@@ -145,21 +148,28 @@ impl Painter {
 
     /// Clear all pixels.
     pub fn clear(&mut self) {
-        self.pixels.fill(false);
-        self.colors.fill(None);
+        if self.generation == u32::MAX {
+            // Rare wraparound path: reset marks to zero and restart generations.
+            self.pixels.fill(0);
+            self.generation = 1;
+        } else {
+            self.generation += 1;
+        }
     }
 
     /// Set a single pixel.
     pub fn point(&mut self, x: i32, y: i32) {
         if let Some(idx) = self.index(x, y) {
-            self.pixels[idx] = true;
+            self.pixels[idx] = self.generation;
+            // Uncolored points must not inherit stale color from older generations.
+            self.colors[idx] = None;
         }
     }
 
     /// Set a single pixel with color.
     pub fn point_colored(&mut self, x: i32, y: i32, color: PackedRgba) {
         if let Some(idx) = self.index(x, y) {
-            self.pixels[idx] = true;
+            self.pixels[idx] = self.generation;
             self.colors[idx] = Some(color);
         }
     }
@@ -172,7 +182,7 @@ impl Painter {
         debug_assert!(x < self.width_usize);
         debug_assert!(y < self.height as usize);
         let idx = y * self.width_usize + x;
-        self.pixels[idx] = true;
+        self.pixels[idx] = self.generation;
         self.colors[idx] = Some(color);
     }
 
@@ -416,7 +426,9 @@ impl Painter {
 
     /// Check if a pixel is set.
     pub fn get(&self, x: i32, y: i32) -> bool {
-        self.index(x, y).map(|i| self.pixels[i]).unwrap_or(false)
+        self.index(x, y)
+            .map(|i| self.pixels[i] == self.generation)
+            .unwrap_or(false)
     }
 
     #[inline]
@@ -501,7 +513,7 @@ impl Painter {
             for (col, col_bits) in DOT_BITS.iter().enumerate() {
                 for (row, bit) in col_bits.iter().enumerate() {
                     let idx = base + row * width + col;
-                    if self.pixels[idx] {
+                    if self.pixels[idx] == self.generation {
                         bits |= 1 << *bit;
                         if first_color.is_none() {
                             first_color = self.colors[idx];
@@ -516,7 +528,7 @@ impl Painter {
                     let x = px_x + col as i32;
                     let y = px_y + row as i32;
                     if let Some(idx) = self.index(x, y)
-                        && self.pixels[idx]
+                        && self.pixels[idx] == self.generation
                     {
                         bits |= 1 << *bit;
                         if first_color.is_none() {
@@ -1080,7 +1092,10 @@ mod tests {
 
             // At least the center should have color
             if let Some(idx) = painter.index(2, 2) {
-                assert!(painter.pixels[idx], "center should be set");
+                assert!(
+                    painter.pixels[idx] == painter.generation,
+                    "center should be set"
+                );
                 assert_eq!(
                     painter.colors[idx],
                     Some(expected_color),
