@@ -1,0 +1,57 @@
+{
+  "name": "sgr_color_persistence",
+  "description": "Named colors persist across characters until changed by another SGR",
+  "initial_size": [
+    10,
+    3
+  ],
+  "input_bytes_hex": "1b5b33316d41421b5b33326d4344",
+  "expected": {
+    "cursor": {
+      "row": 0,
+      "col": 4
+    },
+    "cells": [
+      {
+        "row": 0,
+        "col": 0,
+        "char": "A",
+        "attrs": {
+          "fg_color": {
+            "named": 1
+          }
+        }
+      },
+      {
+        "row": 0,
+        "col": 1,
+        "char": "B",
+        "attrs": {
+          "fg_color": {
+            "named": 1
+          }
+        }
+      },
+      {
+        "row": 0,
+        "col": 2,
+        "char": "C",
+        "attrs": {
+          "fg_color": {
+            "named": 2
+          }
+        }
+      },
+      {
+        "row": 0,
+        "col": 3,
+        "char": "D",
+        "attrs": {
+          "fg_color": {
+            "named": 2
+          }
+        }
+      }
+    ]
+  }
+}

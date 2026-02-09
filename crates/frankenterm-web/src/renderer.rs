@@ -28,9 +28,9 @@ use std::fmt;
 /// Size of one cell's GPU data in bytes (4 × u32 = 16 bytes).
 pub const CELL_DATA_BYTES: usize = 16;
 
-/// Size of the uniform buffer in bytes (2 × vec4 = 32 bytes).
+/// Size of the uniform buffer in bytes (4 × vec4 = 64 bytes).
 #[cfg(any(target_arch = "wasm32", test))]
-const UNIFORM_BYTES: usize = 32;
+const UNIFORM_BYTES: usize = 64;
 
 /// Size of one glyph metadata entry in bytes (8 × f32 = 32 bytes).
 #[cfg(any(target_arch = "wasm32", test))]
@@ -59,10 +59,54 @@ pub struct CellData {
     pub fg_rgba: u32,
     /// Glyph identifier (index into atlas metadata; 0 = empty/space).
     pub glyph_id: u32,
-    /// Packed attributes (StyleFlags bits):
-    /// bold(0), dim(1), italic(2), underline(3), blink(4), reverse(5),
-    /// strikethrough(6), hidden(7). Bits 8..31 reserved.
+    /// Packed attributes:
+    /// - bits 0..7: style flags
+    /// - bits 8..31: hyperlink ID
     pub attrs: u32,
+}
+
+/// Packed `CellData::attrs` low-bit mask for style flags.
+pub const CELL_ATTR_STYLE_MASK: u32 = 0xFF;
+/// Packed `CellData::attrs` shift for hyperlink IDs.
+pub const CELL_ATTR_LINK_SHIFT: u32 = 8;
+
+/// Decode style flags from packed `CellData::attrs`.
+#[must_use]
+pub const fn cell_attr_style_bits(attrs: u32) -> u32 {
+    attrs & CELL_ATTR_STYLE_MASK
+}
+
+/// Decode hyperlink ID from packed `CellData::attrs`.
+#[must_use]
+pub const fn cell_attr_link_id(attrs: u32) -> u32 {
+    attrs >> CELL_ATTR_LINK_SHIFT
+}
+
+/// Cursor rendering style used by the WebGPU fragment shader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum CursorStyle {
+    None = 0,
+    Block = 1,
+    Bar = 2,
+    Underline = 3,
+}
+
+impl CursorStyle {
+    #[must_use]
+    pub const fn from_u32(value: u32) -> Self {
+        match value {
+            1 => Self::Block,
+            2 => Self::Bar,
+            3 => Self::Underline,
+            _ => Self::None,
+        }
+    }
+
+    #[must_use]
+    pub const fn as_u32(self) -> u32 {
+        self as u32
+    }
 }
 
 impl CellData {
@@ -395,6 +439,10 @@ struct Uniforms {
     viewport: vec4<f32>,
     // (cols, rows, 0, 0)
     grid: vec4<u32>,
+    // (hovered_link_id, cursor_offset, cursor_style, selection_active)
+    interaction0: vec4<u32>,
+    // (selection_start, selection_end_exclusive, 0, 0)
+    interaction1: vec4<u32>,
 }
 
 struct CellData {
@@ -428,6 +476,7 @@ struct VertexOutput {
     @location(2) @interpolate(flat) fg_rgba: u32,
     @location(3) @interpolate(flat) attrs: u32,
     @location(4) @interpolate(flat) glyph_id: u32,
+    @location(5) @interpolate(flat) cell_index: u32,
 }
 
 const ATTR_BOLD: u32 = 1u << 0u;
@@ -482,41 +531,71 @@ fn vs_main(
     out.fg_rgba = cell.fg_rgba;
     out.attrs = cell.attrs;
     out.glyph_id = cell.glyph_id;
+    out.cell_index = instance_index;
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let style = in.attrs & 0xFFu;
+    let link_id = in.attrs >> 8u;
     var bg = unpack_rgba(in.bg_rgba);
     var fg = unpack_rgba(in.fg_rgba);
 
-    if ((in.attrs & ATTR_REVERSE) != 0u) {
+    if ((style & ATTR_REVERSE) != 0u) {
         let tmp = bg;
         bg = fg;
         fg = tmp;
     }
 
-    if ((in.attrs & ATTR_DIM) != 0u) {
+    let selection_active = uniforms.interaction0.w != 0u;
+    let selection_start = uniforms.interaction1.x;
+    let selection_end = uniforms.interaction1.y;
+    let selected = selection_active
+        && selection_start < selection_end
+        && in.cell_index >= selection_start
+        && in.cell_index < selection_end;
+    if (selected) {
+        let tmp = bg;
+        bg = fg;
+        fg = tmp;
+    }
+
+    let cursor_offset = uniforms.interaction0.y;
+    let cursor_style = uniforms.interaction0.z;
+    let cursor_here = cursor_style != 0u && in.cell_index == cursor_offset;
+    if (cursor_here && cursor_style == 1u) {
+        let tmp = bg;
+        bg = fg;
+        fg = tmp;
+    }
+
+    if ((style & ATTR_DIM) != 0u) {
         fg = vec4<f32>(fg.rgb * 0.6, fg.a);
     }
-    if ((in.attrs & ATTR_BOLD) != 0u) {
+    if ((style & ATTR_BOLD) != 0u) {
         fg = vec4<f32>(min(fg.rgb * 1.2, vec3<f32>(1.0, 1.0, 1.0)), fg.a);
     }
-    if ((in.attrs & ATTR_BLINK) != 0u) {
+    if ((style & ATTR_BLINK) != 0u) {
         fg = vec4<f32>(fg.rgb, fg.a * 0.85);
     }
-    if ((in.attrs & ATTR_HIDDEN) != 0u) {
+    if ((style & ATTR_HIDDEN) != 0u) {
         fg = vec4<f32>(fg.rgb, 0.0);
     }
 
     var uv = in.uv;
-    if ((in.attrs & ATTR_ITALIC) != 0u) {
+    if ((style & ATTR_ITALIC) != 0u) {
         uv.x = clamp(uv.x + (0.5 - uv.y) * 0.18, 0.0, 1.0);
     }
 
-    let underline = (in.attrs & ATTR_UNDERLINE) != 0u && in.uv.y >= 0.90;
-    let strike = (in.attrs & ATTR_STRIKETHROUGH) != 0u
+    let underline = (style & ATTR_UNDERLINE) != 0u && in.uv.y >= 0.90;
+    let strike = (style & ATTR_STRIKETHROUGH) != 0u
         && abs(in.uv.y - 0.55) <= 0.03;
+    let hover_underline = uniforms.interaction0.x != 0u
+        && link_id == uniforms.interaction0.x
+        && in.uv.y >= 0.90;
+    let cursor_bar = cursor_here && cursor_style == 2u && in.uv.x <= 0.12;
+    let cursor_underline = cursor_here && cursor_style == 3u && in.uv.y >= 0.90;
 
     var glyph_alpha = 0.0;
     if (in.glyph_id != 0u) {
@@ -536,7 +615,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    let decoration_alpha = select(0.0, 1.0, underline || strike);
+    let decoration_alpha = select(
+        0.0,
+        1.0,
+        underline || strike || hover_underline || cursor_bar || cursor_underline,
+    );
     let ink_alpha = max(glyph_alpha, decoration_alpha) * fg.a;
     let out_rgb = bg.rgb * (1.0 - ink_alpha) + fg.rgb * ink_alpha;
     let out_a = max(bg.a, ink_alpha);
@@ -592,6 +675,14 @@ mod gpu {
         patch_upload_scratch: Vec<u8>,
         /// Dirty cells uploaded since the previous render call.
         last_dirty_cells: u32,
+        /// Hyperlink ID currently hovered by the pointer (0 = none).
+        hovered_link_id: u32,
+        /// Cursor cell offset for overlay rendering.
+        cursor_offset: Option<u32>,
+        /// Cursor rendering style.
+        cursor_style: CursorStyle,
+        /// Selected cell range as `[start, end)` offsets.
+        selection_range: Option<(u32, u32)>,
     }
 
     impl WebGpuRenderer {
@@ -829,6 +920,14 @@ mod gpu {
                 cell_h_px,
                 cols as u32,
                 rows as u32,
+                InteractionUniforms {
+                    hovered_link_id: 0,
+                    cursor_offset: u32::MAX,
+                    cursor_style: CursorStyle::None.as_u32(),
+                    selection_active: 0,
+                    selection_start: 0,
+                    selection_end: 0,
+                },
             );
             let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("uniforms"),
@@ -894,6 +993,10 @@ mod gpu {
                 cells_cpu,
                 patch_upload_scratch: Vec::new(),
                 last_dirty_cells: 0,
+                hovered_link_id: 0,
+                cursor_offset: None,
+                cursor_style: CursorStyle::None,
+                selection_range: None,
             })
         }
 
@@ -913,8 +1016,6 @@ mod gpu {
                 self.dpr,
                 self.zoom,
             );
-            let cell_w_px = geometry.cell_width_px;
-            let cell_h_px = geometry.cell_height_px;
             let pixel_w = geometry.pixel_width;
             let pixel_h = geometry.pixel_height;
 
@@ -938,15 +1039,7 @@ mod gpu {
             }
 
             // Update uniforms.
-            let ub = uniforms_bytes(
-                pixel_w as f32,
-                pixel_h as f32,
-                cell_w_px,
-                cell_h_px,
-                cols as u32,
-                rows as u32,
-            );
-            self.queue.write_buffer(&self.uniform_buffer, 0, &ub);
+            self.write_uniforms_for_geometry(geometry);
 
             // Recreate bind group (cell_buffer changed).
             self.bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -987,6 +1080,85 @@ mod gpu {
             self.zoom
         }
 
+        fn grid_cell_capacity(&self) -> u32 {
+            u32::from(self.cols).saturating_mul(u32::from(self.rows))
+        }
+
+        fn clamp_cursor_offset(&self, offset: Option<u32>) -> Option<u32> {
+            let max = self.grid_cell_capacity();
+            offset.filter(|v| *v < max)
+        }
+
+        fn clamp_selection_range(&self, range: Option<(u32, u32)>) -> Option<(u32, u32)> {
+            let max = self.grid_cell_capacity();
+            let (a, b) = range?;
+            let start = a.min(max);
+            let end = b.min(max);
+            if start == end {
+                return None;
+            }
+            Some((start.min(end), start.max(end)))
+        }
+
+        fn write_uniforms_for_geometry(&mut self, geometry: GridGeometry) {
+            self.cursor_offset = self.clamp_cursor_offset(self.cursor_offset);
+            if self.cursor_offset.is_none() {
+                self.cursor_style = CursorStyle::None;
+            }
+            self.selection_range = self.clamp_selection_range(self.selection_range);
+
+            let (selection_active, selection_start, selection_end) =
+                if let Some((start, end)) = self.selection_range {
+                    (1u32, start, end)
+                } else {
+                    (0u32, 0u32, 0u32)
+                };
+
+            let ub = uniforms_bytes(
+                geometry.pixel_width as f32,
+                geometry.pixel_height as f32,
+                geometry.cell_width_px,
+                geometry.cell_height_px,
+                self.cols as u32,
+                self.rows as u32,
+                InteractionUniforms {
+                    hovered_link_id: self.hovered_link_id,
+                    cursor_offset: self.cursor_offset.unwrap_or(u32::MAX),
+                    cursor_style: self.cursor_style.as_u32(),
+                    selection_active,
+                    selection_start,
+                    selection_end,
+                },
+            );
+            self.queue.write_buffer(&self.uniform_buffer, 0, &ub);
+        }
+
+        /// Set currently hovered hyperlink ID (0 clears hover underline).
+        pub fn set_hovered_link_id(&mut self, link_id: u32) {
+            if self.hovered_link_id == link_id {
+                return;
+            }
+            self.hovered_link_id = link_id;
+            self.write_uniforms_for_geometry(self.current_geometry());
+        }
+
+        /// Configure cursor overlay state.
+        pub fn set_cursor(&mut self, offset: Option<u32>, style: CursorStyle) {
+            self.cursor_offset = self.clamp_cursor_offset(offset);
+            self.cursor_style = if self.cursor_offset.is_some() {
+                style
+            } else {
+                CursorStyle::None
+            };
+            self.write_uniforms_for_geometry(self.current_geometry());
+        }
+
+        /// Configure selection overlay as a `[start, end)` offset range.
+        pub fn set_selection_range(&mut self, range: Option<(u32, u32)>) {
+            self.selection_range = self.clamp_selection_range(range);
+            self.write_uniforms_for_geometry(self.current_geometry());
+        }
+
         /// Update DPR/zoom while keeping the current grid dimensions.
         pub fn set_scale(&mut self, dpr: f32, zoom: f32) {
             self.dpr = normalized_scale(dpr, 1.0, MIN_DPR, MAX_DPR);
@@ -1004,15 +1176,7 @@ mod gpu {
             self.surface_config.height = geometry.pixel_height.max(1);
             self.surface.configure(&self.device, &self.surface_config);
 
-            let ub = uniforms_bytes(
-                geometry.pixel_width as f32,
-                geometry.pixel_height as f32,
-                geometry.cell_width_px,
-                geometry.cell_height_px,
-                self.cols as u32,
-                self.rows as u32,
-            );
-            self.queue.write_buffer(&self.uniform_buffer, 0, &ub);
+            self.write_uniforms_for_geometry(geometry);
         }
 
         #[must_use]
@@ -1254,6 +1418,17 @@ fn cells_to_bytes(cells: &[CellData]) -> Vec<u8> {
 }
 
 #[cfg(any(target_arch = "wasm32", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct InteractionUniforms {
+    hovered_link_id: u32,
+    cursor_offset: u32,
+    cursor_style: u32,
+    selection_active: u32,
+    selection_start: u32,
+    selection_end: u32,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
 fn uniforms_bytes(
     viewport_w: f32,
     viewport_h: f32,
@@ -1261,6 +1436,7 @@ fn uniforms_bytes(
     cell_h: f32,
     cols: u32,
     rows: u32,
+    interaction: InteractionUniforms,
 ) -> [u8; UNIFORM_BYTES] {
     let mut buf = [0u8; UNIFORM_BYTES];
     buf[0..4].copy_from_slice(&viewport_w.to_le_bytes());
@@ -1269,7 +1445,12 @@ fn uniforms_bytes(
     buf[12..16].copy_from_slice(&cell_h.to_le_bytes());
     buf[16..20].copy_from_slice(&cols.to_le_bytes());
     buf[20..24].copy_from_slice(&rows.to_le_bytes());
-    // bytes 24..32 are padding (zeroed).
+    buf[32..36].copy_from_slice(&interaction.hovered_link_id.to_le_bytes());
+    buf[36..40].copy_from_slice(&interaction.cursor_offset.to_le_bytes());
+    buf[40..44].copy_from_slice(&interaction.cursor_style.to_le_bytes());
+    buf[44..48].copy_from_slice(&interaction.selection_active.to_le_bytes());
+    buf[48..52].copy_from_slice(&interaction.selection_start.to_le_bytes());
+    buf[52..56].copy_from_slice(&interaction.selection_end.to_le_bytes());
     buf
 }
 
@@ -1301,6 +1482,22 @@ mod tests {
     }
 
     #[test]
+    fn packed_attrs_decode_style_and_link() {
+        let attrs = 0x00AB_CDEFu32;
+        assert_eq!(cell_attr_style_bits(attrs), 0xEF);
+        assert_eq!(cell_attr_link_id(attrs), 0x0000_ABCD);
+    }
+
+    #[test]
+    fn cursor_style_roundtrip() {
+        assert_eq!(CursorStyle::from_u32(0), CursorStyle::None);
+        assert_eq!(CursorStyle::from_u32(1), CursorStyle::Block);
+        assert_eq!(CursorStyle::from_u32(2), CursorStyle::Bar);
+        assert_eq!(CursorStyle::from_u32(3), CursorStyle::Underline);
+        assert_eq!(CursorStyle::from_u32(99), CursorStyle::None);
+    }
+
+    #[test]
     fn cells_to_bytes_length() {
         let cells = vec![CellData::EMPTY; 10];
         let bytes = cells_to_bytes(&cells);
@@ -1309,7 +1506,22 @@ mod tests {
 
     #[test]
     fn uniforms_bytes_layout() {
-        let buf = uniforms_bytes(800.0, 600.0, 8.0, 16.0, 100, 37);
+        let buf = uniforms_bytes(
+            800.0,
+            600.0,
+            8.0,
+            16.0,
+            100,
+            37,
+            InteractionUniforms {
+                hovered_link_id: 123,
+                cursor_offset: 456,
+                cursor_style: CursorStyle::Bar.as_u32(),
+                selection_active: 1,
+                selection_start: 40,
+                selection_end: 88,
+            },
+        );
         assert_eq!(buf.len(), UNIFORM_BYTES);
         let vw = f32::from_le_bytes(buf[0..4].try_into().unwrap());
         let vh = f32::from_le_bytes(buf[4..8].try_into().unwrap());
@@ -1317,12 +1529,24 @@ mod tests {
         let ch = f32::from_le_bytes(buf[12..16].try_into().unwrap());
         let cols = u32::from_le_bytes(buf[16..20].try_into().unwrap());
         let rows = u32::from_le_bytes(buf[20..24].try_into().unwrap());
+        let hovered_link_id = u32::from_le_bytes(buf[32..36].try_into().unwrap());
+        let cursor_offset = u32::from_le_bytes(buf[36..40].try_into().unwrap());
+        let cursor_style = u32::from_le_bytes(buf[40..44].try_into().unwrap());
+        let selection_active = u32::from_le_bytes(buf[44..48].try_into().unwrap());
+        let selection_start = u32::from_le_bytes(buf[48..52].try_into().unwrap());
+        let selection_end = u32::from_le_bytes(buf[52..56].try_into().unwrap());
         assert_eq!(vw, 800.0);
         assert_eq!(vh, 600.0);
         assert_eq!(cw, 8.0);
         assert_eq!(ch, 16.0);
         assert_eq!(cols, 100);
         assert_eq!(rows, 37);
+        assert_eq!(hovered_link_id, 123);
+        assert_eq!(cursor_offset, 456);
+        assert_eq!(cursor_style, CursorStyle::Bar.as_u32());
+        assert_eq!(selection_active, 1);
+        assert_eq!(selection_start, 40);
+        assert_eq!(selection_end, 88);
     }
 
     #[test]

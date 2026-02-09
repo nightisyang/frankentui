@@ -1,0 +1,47 @@
+{
+  "name": "sgr_rgb_bg",
+  "description": "SGR 48;2;0;100;200 sets background to RGB(0,100,200), SGR 49 resets bg",
+  "initial_size": [
+    10,
+    3
+  ],
+  "input_bytes_hex": "411b5b34383b323b303b3130303b3230306d421b5b34396d43",
+  "expected": {
+    "cursor": {
+      "row": 0,
+      "col": 3
+    },
+    "cells": [
+      {
+        "row": 0,
+        "col": 0,
+        "char": "A",
+        "attrs": {
+          "bg_color": "default"
+        }
+      },
+      {
+        "row": 0,
+        "col": 1,
+        "char": "B",
+        "attrs": {
+          "bg_color": {
+            "rgb": [
+              0,
+              100,
+              200
+            ]
+          }
+        }
+      },
+      {
+        "row": 0,
+        "col": 2,
+        "char": "C",
+        "attrs": {
+          "bg_color": "default"
+        }
+      }
+    ]
+  }
+}

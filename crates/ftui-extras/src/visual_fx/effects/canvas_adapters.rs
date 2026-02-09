@@ -382,6 +382,8 @@ pub struct MetaballsCanvasAdapter {
     x_coords: Vec<f64>,
     /// Normalized y coordinates per row.
     y_coords: Vec<f64>,
+    /// Per-frame scratch buffer for dx^2 per column/ball (column-major).
+    dx2_cache: Vec<f64>,
     /// Per-row scratch buffer for dy^2 per ball.
     dy2_cache: Vec<f64>,
     /// Cached indices of active balls for reduced/minimal quality.
@@ -400,6 +402,7 @@ impl MetaballsCanvasAdapter {
             cache_height: 0,
             x_coords: Vec::new(),
             y_coords: Vec::new(),
+            dx2_cache: Vec::new(),
             dy2_cache: Vec::new(),
             active_indices: Vec::new(),
             active_step: 0,
@@ -416,6 +419,7 @@ impl MetaballsCanvasAdapter {
             cache_height: 0,
             x_coords: Vec::new(),
             y_coords: Vec::new(),
+            dx2_cache: Vec::new(),
             dy2_cache: Vec::new(),
             active_indices: Vec::new(),
             active_step: 0,
@@ -552,63 +556,67 @@ impl MetaballsCanvasAdapter {
 
         let w = width as usize;
         let h = height as usize;
-        self.dy2_cache.resize(balls_len, 0.0);
-        let balls = &self.ball_cache;
-        let dy2_cache = &mut self.dy2_cache;
         let x_coords = &self.x_coords;
         let y_coords = &self.y_coords;
-        const EPS: f64 = 1e-8;
+        let balls = &self.ball_cache;
+        self.dx2_cache.resize(w.saturating_mul(balls_len), 0.0);
+        self.dy2_cache.resize(balls_len, 0.0);
 
-        // Macro for the inner pixel accumulation + paint to avoid duplicating
-        // the glow/threshold/color logic across both branches.
-        macro_rules! paint_pixel {
-            ($idx:expr, $sum:expr, $weighted_hue:expr, $total_weight:expr) => {
-                if $sum > glow {
-                    let avg_hue = if $total_weight > EPS {
-                        $weighted_hue / $total_weight
-                    } else {
-                        0.0
-                    };
-                    let intensity = if $sum > threshold {
-                        1.0
-                    } else {
-                        ($sum - glow) / (threshold - glow)
-                    };
-                    let color = color_at_with_stops(&stops, avg_hue, intensity, theme);
-                    painter.point_colored_at_index_in_bounds($idx, color);
-                }
-            };
+        // Precompute dx^2 for each (x, ball) pair in column-major layout so the
+        // inner loop can read contiguous data while preserving accumulation order.
+        for (x, &nx) in x_coords.iter().enumerate().take(w) {
+            let col_start = x * balls_len;
+            let col_end = col_start + balls_len;
+            let dx2_col = &mut self.dx2_cache[col_start..col_end];
+            for (i, ball) in balls.iter().enumerate() {
+                let dx = nx - ball.x;
+                dx2_col[i] = dx * dx;
+            }
         }
 
-        // Hoist step==1 branching outside the hot pixel loop so we don't
-        // check it on every row and every pixel.
+        let dx2_cache = &self.dx2_cache;
+        let dy2_cache = &mut self.dy2_cache;
+        const EPS: f64 = 1e-8;
+
+        // Hoist step==1 branching outside the hot pixel loop so we don't check
+        // it on every row and every pixel.
         if step == 1 {
             for (y, &ny) in y_coords.iter().enumerate().take(h) {
                 for (i, ball) in balls.iter().enumerate() {
                     let dy = ny - ball.y;
                     dy2_cache[i] = dy * dy;
                 }
-                let dy2_ref = &dy2_cache[..];
+
                 let row_offset = y * w;
-                for (x, &nx) in x_coords.iter().enumerate().take(w) {
+                for x in 0..w {
+                    let dx_col_start = x * balls_len;
+                    let dx_col_end = dx_col_start + balls_len;
+                    let dx2_col = &dx2_cache[dx_col_start..dx_col_end];
+
                     let mut sum = 0.0;
                     let mut weighted_hue = 0.0;
-                    let mut total_weight = 0.0;
                     for (i, ball) in balls.iter().enumerate() {
-                        let dx = nx - ball.x;
-                        let dist_sq = dx * dx + dy2_ref[i];
+                        let dist_sq = dx2_col[i] + dy2_cache[i];
                         if dist_sq > EPS {
                             let contrib = ball.r2 / dist_sq;
                             sum += contrib;
                             weighted_hue += ball.hue * contrib;
-                            total_weight += contrib;
                         } else {
                             sum += 100.0;
                             weighted_hue += ball.hue * 100.0;
-                            total_weight += 100.0;
                         }
                     }
-                    paint_pixel!(row_offset + x, sum, weighted_hue, total_weight);
+
+                    if sum > glow {
+                        let avg_hue = weighted_hue / sum;
+                        let intensity = if sum > threshold {
+                            1.0
+                        } else {
+                            (sum - glow) / (threshold - glow)
+                        };
+                        let color = color_at_with_stops(&stops, avg_hue, intensity, theme);
+                        painter.point_colored_at_index_in_bounds(row_offset + x, color);
+                    }
                 }
             }
         } else {
@@ -618,28 +626,35 @@ impl MetaballsCanvasAdapter {
                     let dy = ny - balls[i].y;
                     dy2_cache[i] = dy * dy;
                 }
-                let dy2_ref = &dy2_cache[..];
+
                 let row_offset = y * w;
-                for (x, &nx) in x_coords.iter().enumerate().take(w) {
+                for x in 0..w {
+                    let dx_col_start = x * balls_len;
                     let mut sum = 0.0;
                     let mut weighted_hue = 0.0;
-                    let mut total_weight = 0.0;
                     for &i in active_indices {
                         let ball = &balls[i];
-                        let dx = nx - ball.x;
-                        let dist_sq = dx * dx + dy2_ref[i];
+                        let dist_sq = dx2_cache[dx_col_start + i] + dy2_cache[i];
                         if dist_sq > EPS {
                             let contrib = ball.r2 / dist_sq;
                             sum += contrib;
                             weighted_hue += ball.hue * contrib;
-                            total_weight += contrib;
                         } else {
                             sum += 100.0;
                             weighted_hue += ball.hue * 100.0;
-                            total_weight += 100.0;
                         }
                     }
-                    paint_pixel!(row_offset + x, sum, weighted_hue, total_weight);
+
+                    if sum > glow {
+                        let avg_hue = weighted_hue / sum;
+                        let intensity = if sum > threshold {
+                            1.0
+                        } else {
+                            (sum - glow) / (threshold - glow)
+                        };
+                        let color = color_at_with_stops(&stops, avg_hue, intensity, theme);
+                        painter.point_colored_at_index_in_bounds(row_offset + x, color);
+                    }
                 }
             }
         }

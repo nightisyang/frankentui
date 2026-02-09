@@ -26,8 +26,10 @@ use ftui_render::diff::BufferDiff;
 /// because the web patch feed does not yet carry grapheme-pool payloads.
 /// This is a graceful fallback until full cluster support lands.
 ///
-/// Attributes: `StyleFlags` bits are passed through as-is.
+/// Attributes: lower 8 bits store style flags; upper 24 bits store hyperlink ID.
 const GRAPHEME_FALLBACK_CODEPOINT: u32 = '□' as u32;
+const ATTR_STYLE_MASK: u32 = 0xFF;
+const ATTR_LINK_ID_MAX: u32 = 0x00FF_FFFF;
 
 #[must_use]
 pub fn cell_from_render(cell: &Cell) -> CellData {
@@ -41,8 +43,15 @@ pub fn cell_from_render(cell: &Cell) -> CellData {
         bg_rgba: cell.bg.0,
         fg_rgba: cell.fg.0,
         glyph_id,
-        attrs: cell.attrs.flags().bits() as u32,
+        attrs: pack_cell_attrs(cell),
     }
+}
+
+#[must_use]
+fn pack_cell_attrs(cell: &Cell) -> u32 {
+    let style_bits = u32::from(cell.attrs.flags().bits()) & ATTR_STYLE_MASK;
+    let link_id = cell.attrs.link_id().min(ATTR_LINK_ID_MAX);
+    style_bits | (link_id << 8)
 }
 
 /// Convert a `BufferDiff` into contiguous `CellPatch` spans for GPU upload.
@@ -194,8 +203,23 @@ mod tests {
         let flags = StyleFlags::BOLD | StyleFlags::UNDERLINE;
         let cell = make_cell('X', 0xFF0000FF, 0x00FF00FF, flags);
         let gpu = cell_from_render(&cell);
-        assert_eq!(gpu.attrs, flags.bits() as u32);
+        assert_eq!(gpu.attrs & ATTR_STYLE_MASK, flags.bits() as u32);
+        assert_eq!(gpu.attrs >> 8, 0);
         assert_ne!(gpu.attrs, 0);
+    }
+
+    #[test]
+    fn cell_from_render_packs_style_and_link_id() {
+        let flags = StyleFlags::ITALIC | StyleFlags::UNDERLINE;
+        let link_id = 0x000A_BCDE;
+        let cell = Cell::from_char('L')
+            .with_fg(PackedRgba::rgb(255, 255, 255))
+            .with_bg(PackedRgba::rgb(0, 0, 0))
+            .with_attrs(CellAttrs::new(flags, link_id));
+
+        let gpu = cell_from_render(&cell);
+        assert_eq!(gpu.attrs & ATTR_STYLE_MASK, flags.bits() as u32);
+        assert_eq!(gpu.attrs >> 8, link_id);
     }
 
     #[test]
