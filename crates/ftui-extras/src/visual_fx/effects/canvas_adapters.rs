@@ -433,6 +433,14 @@ impl Default for PlasmaCanvasAdapter {
 /// `BallState` structs.  The `dx2_cache` is ball-major — `dx2_cache[ball * w + col]`
 /// — so that consecutive-pixel dx² reads are contiguous, enabling prefetching and
 /// auto-vectorization when pixels are processed in 4-wide blocks.
+///
+/// ## Row-Level Spatial Culling
+///
+/// Before processing each row, a cheap comparison-only check determines whether
+/// any pixel in the row could exceed the glow threshold.  The bound exploits the
+/// inequality `sum(r²_i / dist²_i) ≤ sum(r²_i) / min(dy²_i)`: if the nearest
+/// ball is far enough vertically, the entire row is provably dark and skipped.
+/// Cost: one `min` reduction over `balls_len` per row with zero divisions.
 #[derive(Debug, Clone)]
 pub struct MetaballsCanvasAdapter {
     /// Parameters controlling metaball behavior.
@@ -660,6 +668,12 @@ impl MetaballsCanvasAdapter {
         let hue_cache = &self.hue_cache;
         const EPS: f64 = 1e-8;
 
+        // Row-level spatial culling threshold: precompute once before the row
+        // loop.  For any row, sum(r²_i / dy²_i) ≤ sum(r²_i) / min(dy²_i).
+        // If min(dy²_i) > sum(r²_i) / glow, the row is provably dark.
+        let sum_r2: f64 = r2_cache.iter().copied().sum();
+        let row_skip_dy2 = if glow > 0.0 { sum_r2 / glow } else { f64::MAX };
+
         // Hoist step==1 branching outside the hot pixel loop.
         if step == 1 {
             for (y, &ny) in y_coords.iter().enumerate().take(h) {
@@ -668,15 +682,16 @@ impl MetaballsCanvasAdapter {
                     dy2_cache[i] = dy * dy;
                 }
 
-                // Row-level spatial culling: compute conservative upper bound on
-                // the field sum for any pixel in this row.  Since dx² ≥ 0, we have
-                // dist² = dx² + dy² ≥ dy², hence r²/dist² ≤ r²/dy².  If the sum
-                // of those bounds is below `glow`, no pixel can be lit → skip row.
-                let mut max_row_sum = 0.0_f64;
-                for i in 0..balls_len {
-                    max_row_sum += r2_cache[i] / dy2_cache[i].max(EPS);
+                // Cheap row-skip: if the closest ball is too far vertically
+                // for the aggregate field to reach `glow`, skip the row.
+                // Cost: balls_len comparisons.  No divisions.
+                let mut min_dy2 = f64::MAX;
+                for &d in dy2_cache.iter().take(balls_len) {
+                    if d < min_dy2 {
+                        min_dy2 = d;
+                    }
                 }
-                if max_row_sum <= glow {
+                if min_dy2 > row_skip_dy2 {
                     continue;
                 }
 
@@ -796,12 +811,14 @@ impl MetaballsCanvasAdapter {
                     dy2_cache[i] = dy * dy;
                 }
 
-                // Row-level spatial culling (same bound as step==1 path).
-                let mut max_row_sum = 0.0_f64;
+                // Cheap row-skip (same threshold as step==1 path).
+                let mut min_dy2 = f64::MAX;
                 for &i in active_indices {
-                    max_row_sum += r2_cache[i] / dy2_cache[i].max(EPS);
+                    if dy2_cache[i] < min_dy2 {
+                        min_dy2 = dy2_cache[i];
+                    }
                 }
-                if max_row_sum <= glow {
+                if min_dy2 > row_skip_dy2 {
                     continue;
                 }
 
