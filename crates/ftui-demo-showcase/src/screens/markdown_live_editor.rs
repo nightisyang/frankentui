@@ -702,6 +702,10 @@ impl Screen for MarkdownLiveEditor {
         self.render_preview_panel(frame, cols[1]);
     }
 
+    fn consumes_text_input(&self) -> bool {
+        matches!(self.focus, Focus::Editor | Focus::Search)
+    }
+
     fn keybindings(&self) -> Vec<HelpEntry> {
         vec![
             HelpEntry {

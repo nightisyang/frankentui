@@ -771,6 +771,8 @@ pub enum ScreenId {
     HyperlinkPlayground,
     /// Drag-drop Kanban board (bd-iuvb.12).
     KanbanBoard,
+    /// Live Markdown editor with split preview (bd-iuvb.13).
+    MarkdownLiveEditor,
 }
 
 impl ScreenId {
@@ -844,6 +846,7 @@ impl ScreenId {
             Self::DeterminismLab => "DeterminismLab",
             Self::HyperlinkPlayground => "HyperlinkPlayground",
             Self::KanbanBoard => "KanbanBoard",
+            Self::MarkdownLiveEditor => "MarkdownLiveEditor",
         }
     }
 
@@ -986,6 +989,8 @@ pub struct ScreenStates {
     pub hyperlink_playground: screens::hyperlink_playground::HyperlinkPlayground,
     /// Kanban board screen state (bd-iuvb.12).
     pub kanban_board: screens::kanban_board::KanbanBoard,
+    /// Live Markdown editor screen state (bd-iuvb.13).
+    pub markdown_live_editor: screens::markdown_live_editor::MarkdownLiveEditor,
     /// Tracks whether each screen has errored during rendering.
     /// Indexed by `ScreenId::index()`.
     screen_errors: Vec<Option<String>>,
@@ -1037,6 +1042,7 @@ impl Default for ScreenStates {
             determinism_lab: Default::default(),
             hyperlink_playground: Default::default(),
             kanban_board: Default::default(),
+            markdown_live_editor: Default::default(),
             screen_errors: vec![None; screens::screen_registry().len()],
             visual_effects_deterministic_tick_ms: None,
         }
@@ -1259,6 +1265,9 @@ impl ScreenStates {
             ScreenId::KanbanBoard => {
                 self.kanban_board.update(event);
             }
+            ScreenId::MarkdownLiveEditor => {
+                self.markdown_live_editor.update(event);
+            }
         }
     }
 
@@ -1270,6 +1279,7 @@ impl ScreenStates {
             ScreenId::AdvancedTextEditor => self.advanced_text_editor.consumes_text_input(),
             ScreenId::VirtualizedSearch => self.virtualized_search.consumes_text_input(),
             ScreenId::LogSearch => self.log_search.consumes_text_input(),
+            ScreenId::MarkdownLiveEditor => self.markdown_live_editor.consumes_text_input(),
             _ => false,
         }
     }
@@ -1337,6 +1347,7 @@ impl ScreenStates {
             ScreenId::DeterminismLab => self.determinism_lab.tick(tick_count),
             ScreenId::HyperlinkPlayground => self.hyperlink_playground.tick(tick_count),
             ScreenId::KanbanBoard => self.kanban_board.tick(tick_count),
+            ScreenId::MarkdownLiveEditor => self.markdown_live_editor.tick(tick_count),
         }
     }
 
@@ -1352,6 +1363,7 @@ impl ScreenStates {
         self.shakespeare.apply_theme();
         self.markdown_rich_text.apply_theme();
         self.advanced_text_editor.apply_theme();
+        self.markdown_live_editor.apply_theme();
     }
 
     /// Render the screen identified by `id` into the given area.
@@ -1417,6 +1429,7 @@ impl ScreenStates {
                 ScreenId::DeterminismLab => self.determinism_lab.view(frame, area),
                 ScreenId::HyperlinkPlayground => self.hyperlink_playground.view(frame, area),
                 ScreenId::KanbanBoard => self.kanban_board.view(frame, area),
+                ScreenId::MarkdownLiveEditor => self.markdown_live_editor.view(frame, area),
             }
         }));
 
@@ -4003,6 +4016,7 @@ impl AppModel {
             ScreenId::DeterminismLab => self.screens.determinism_lab.keybindings(),
             ScreenId::HyperlinkPlayground => self.screens.hyperlink_playground.keybindings(),
             ScreenId::KanbanBoard => self.screens.kanban_board.keybindings(),
+            ScreenId::MarkdownLiveEditor => self.screens.markdown_live_editor.keybindings(),
         };
         if self.tour.is_active() {
             entries.push(screens::HelpEntry {
@@ -6199,7 +6213,7 @@ mod tests {
     /// Verify all screens have the expected count.
     #[test]
     fn all_screens_count() {
-        assert_eq!(screens::screen_registry().len(), 42);
+        assert_eq!(screens::screen_registry().len(), 43);
     }
 
     // -----------------------------------------------------------------------

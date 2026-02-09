@@ -1332,6 +1332,7 @@ pub fn accent_for(id: ScreenId) -> theme::ColorToken {
         ScreenId::KanbanBoard => theme::screen_accent::ADVANCED,
         ScreenId::MermaidShowcase => theme::screen_accent::DATA_VIZ,
         ScreenId::MermaidMegaShowcase => theme::screen_accent::DATA_VIZ,
+        ScreenId::MarkdownLiveEditor => theme::screen_accent::MARKDOWN,
     }
 }
 

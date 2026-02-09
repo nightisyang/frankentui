@@ -554,6 +554,16 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
         default_hotkey: None,
         tour_step_hint: None,
     },
+    ScreenMeta {
+        id: ScreenId::MarkdownLiveEditor,
+        title: "Live Markdown Editor",
+        short_label: "MD Live",
+        category: ScreenCategory::Text,
+        palette_tags: &["editor", "preview", "markdown", "search", "diff"],
+        blurb: "Split-pane editor with live Markdown preview, search, and diff mode.",
+        default_hotkey: None,
+        tour_step_hint: None,
+    },
 ];
 
 /// Return the full registry (ordered).

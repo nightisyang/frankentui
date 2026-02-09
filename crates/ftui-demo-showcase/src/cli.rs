@@ -83,6 +83,7 @@ SCREENS:
    40  Determinism Lab    Checksum equivalence + determinism proofs
    41  Links              OSC-8 hyperlink playground + hit regions
    42  Kanban Board       Interactive Kanban board with drag-drop
+   43  MD Live Editor     Split-pane editor with live Markdown preview
 
 KEYBINDINGS:
     1-9, 0                Switch to screens 1-10 by number

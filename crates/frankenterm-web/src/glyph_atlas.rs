@@ -890,6 +890,147 @@ mod tests {
     }
 
     #[test]
+    fn golden_fixture_representative_charset_coords_are_stable() {
+        // Representative monospace-first charset fixture:
+        // ASCII + box drawing + common symbols.
+        let mut cache = GlyphAtlasCache::new(40, 24, 40 * 24);
+
+        #[derive(Clone, Copy)]
+        struct Fixture {
+            key: GlyphKey,
+            raster_w: u16,
+            raster_h: u16,
+            metrics: GlyphMetrics,
+            expected_slot: AtlasRect,
+        }
+
+        let fixtures = [
+            Fixture {
+                key: GlyphKey::from_char('A', 16),
+                raster_w: 4,
+                raster_h: 6,
+                metrics: GlyphMetrics {
+                    advance_x: 4,
+                    bearing_x: 0,
+                    bearing_y: 5,
+                },
+                expected_slot: AtlasRect {
+                    x: 0,
+                    y: 0,
+                    w: 6,
+                    h: 8,
+                },
+            },
+            Fixture {
+                key: GlyphKey::from_char('│', 16),
+                raster_w: 2,
+                raster_h: 8,
+                metrics: GlyphMetrics {
+                    advance_x: 2,
+                    bearing_x: 0,
+                    bearing_y: 7,
+                },
+                expected_slot: AtlasRect {
+                    x: 6,
+                    y: 0,
+                    w: 4,
+                    h: 10,
+                },
+            },
+            Fixture {
+                key: GlyphKey::from_char('─', 16),
+                raster_w: 8,
+                raster_h: 2,
+                metrics: GlyphMetrics {
+                    advance_x: 8,
+                    bearing_x: 0,
+                    bearing_y: 1,
+                },
+                expected_slot: AtlasRect {
+                    x: 10,
+                    y: 0,
+                    w: 10,
+                    h: 4,
+                },
+            },
+            Fixture {
+                key: GlyphKey::from_char('◆', 16),
+                raster_w: 6,
+                raster_h: 6,
+                metrics: GlyphMetrics {
+                    advance_x: 6,
+                    bearing_x: 0,
+                    bearing_y: 5,
+                },
+                expected_slot: AtlasRect {
+                    x: 20,
+                    y: 0,
+                    w: 8,
+                    h: 8,
+                },
+            },
+            Fixture {
+                key: GlyphKey::from_char('→', 16),
+                raster_w: 9,
+                raster_h: 3,
+                metrics: GlyphMetrics {
+                    advance_x: 9,
+                    bearing_x: 0,
+                    bearing_y: 2,
+                },
+                expected_slot: AtlasRect {
+                    x: 28,
+                    y: 0,
+                    w: 11,
+                    h: 5,
+                },
+            },
+            Fixture {
+                // Forces a row break from x=39 with a 7px-wide slot.
+                key: GlyphKey::from_char('✓', 16),
+                raster_w: 5,
+                raster_h: 6,
+                metrics: GlyphMetrics {
+                    advance_x: 5,
+                    bearing_x: 0,
+                    bearing_y: 5,
+                },
+                expected_slot: AtlasRect {
+                    x: 0,
+                    y: 10,
+                    w: 7,
+                    h: 8,
+                },
+            },
+        ];
+
+        let mut expected_dirty = Vec::with_capacity(fixtures.len());
+        for f in fixtures {
+            let placement = cache
+                .get_or_insert_with(f.key, |_| raster_solid(f.raster_w, f.raster_h, f.metrics))
+                .expect("fixture insert");
+
+            let expected_draw = AtlasRect {
+                x: f.expected_slot.x + 1,
+                y: f.expected_slot.y + 1,
+                w: f.raster_w,
+                h: f.raster_h,
+            };
+            assert_eq!(placement.id, glyph_id(f.key));
+            assert_eq!(placement.metrics, f.metrics);
+            assert_eq!(placement.slot, f.expected_slot);
+            assert_eq!(placement.draw, expected_draw);
+            expected_dirty.push(expected_draw);
+        }
+
+        assert_eq!(cache.take_dirty_rects(), expected_dirty);
+        for f in fixtures {
+            let placement = cache.get(f.key).expect("hit");
+            assert_eq!(placement.slot, f.expected_slot);
+        }
+    }
+
+    #[test]
     fn lru_touch_keeps_recent_entry_hot() {
         // Each 6x6 raster occupies an 8x8 padded slot under current settings.
         // Budget allows exactly two slots; third insert should evict true LRU.

@@ -2428,6 +2428,150 @@ fn kanban_board_title() {
 }
 
 // ============================================================================
+// Live Markdown Editor
+// ============================================================================
+
+#[test]
+fn markdown_live_editor_initial_80x24() {
+    let screen = ftui_demo_showcase::screens::markdown_live_editor::MarkdownLiveEditor::default();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("markdown_live_editor_initial_80x24", &frame.buffer);
+}
+
+#[test]
+fn markdown_live_editor_initial_120x40() {
+    let screen = ftui_demo_showcase::screens::markdown_live_editor::MarkdownLiveEditor::default();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(120, 40, &mut pool);
+    let area = Rect::new(0, 0, 120, 40);
+    screen.view(&mut frame, area);
+    assert_snapshot!("markdown_live_editor_initial_120x40", &frame.buffer);
+}
+
+#[test]
+fn markdown_live_editor_diff_mode_80x24() {
+    let mut screen =
+        ftui_demo_showcase::screens::markdown_live_editor::MarkdownLiveEditor::default();
+    // Ctrl+D toggles diff mode
+    screen.update(&ctrl_press(KeyCode::Char('d')));
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("markdown_live_editor_diff_mode_80x24", &frame.buffer);
+}
+
+#[test]
+fn markdown_live_editor_search_focus_80x24() {
+    let mut screen =
+        ftui_demo_showcase::screens::markdown_live_editor::MarkdownLiveEditor::default();
+    // Ctrl+F focuses search
+    screen.update(&ctrl_press(KeyCode::Char('f')));
+    // Type "render"
+    for ch in "render".chars() {
+        screen.update(&press(KeyCode::Char(ch)));
+    }
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    let area = Rect::new(0, 0, 80, 24);
+    screen.view(&mut frame, area);
+    assert_snapshot!("markdown_live_editor_search_focus_80x24", &frame.buffer);
+}
+
+#[test]
+fn markdown_live_editor_zero_area() {
+    let screen = ftui_demo_showcase::screens::markdown_live_editor::MarkdownLiveEditor::default();
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(1, 1, &mut pool);
+    let area = Rect::new(0, 0, 0, 0);
+    screen.view(&mut frame, area);
+    // No panic = success
+}
+
+#[test]
+fn markdown_live_editor_title() {
+    let screen = ftui_demo_showcase::screens::markdown_live_editor::MarkdownLiveEditor::default();
+    assert_eq!(screen.title(), "Live Markdown");
+    assert_eq!(screen.tab_label(), "MD Live");
+}
+
+#[test]
+fn markdown_live_editor_tab_toggles_focus() {
+    let mut screen =
+        ftui_demo_showcase::screens::markdown_live_editor::MarkdownLiveEditor::default();
+    // Default focus is Editor; Tab toggles to Search
+    assert!(screen.consumes_text_input()); // Editor
+    screen.update(&press(KeyCode::Tab));
+    assert!(screen.consumes_text_input()); // Search
+    screen.update(&press(KeyCode::Tab));
+    assert!(screen.consumes_text_input()); // Back to Editor
+}
+
+#[test]
+fn markdown_live_editor_ctrl_d_toggles_diff() {
+    let mut screen =
+        ftui_demo_showcase::screens::markdown_live_editor::MarkdownLiveEditor::default();
+    // Diff mode starts off; first render should say "Preview"
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    screen.view(&mut frame, Rect::new(0, 0, 80, 24));
+    let text = buffer_to_text(&frame.buffer);
+    assert!(!text.contains("Preview (Diff Mode)"));
+
+    // Toggle diff on
+    screen.update(&ctrl_press(KeyCode::Char('d')));
+    let mut pool2 = GraphemePool::new();
+    let mut frame2 = Frame::new(80, 24, &mut pool2);
+    screen.view(&mut frame2, Rect::new(0, 0, 80, 24));
+    let text2 = buffer_to_text(&frame2.buffer);
+    assert!(text2.contains("Preview (Diff Mode)"));
+}
+
+#[test]
+fn markdown_live_editor_search_and_navigate() {
+    let mut screen =
+        ftui_demo_showcase::screens::markdown_live_editor::MarkdownLiveEditor::default();
+    // Ctrl+F to search
+    screen.update(&ctrl_press(KeyCode::Char('f')));
+    // Type "mode"
+    for ch in "mode".chars() {
+        screen.update(&press(KeyCode::Char(ch)));
+    }
+    // Render once to verify it doesn't panic
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    screen.view(&mut frame, Rect::new(0, 0, 80, 24));
+    let text = buffer_to_text(&frame.buffer);
+    // "mode" appears in the sample markdown
+    assert!(text.contains("matches"));
+
+    // Navigate next/prev
+    screen.update(&ctrl_press(KeyCode::Char('n')));
+    screen.update(&ctrl_press(KeyCode::Char('p')));
+    // No panic, renders normally
+    let mut pool2 = GraphemePool::new();
+    let mut frame2 = Frame::new(80, 24, &mut pool2);
+    screen.view(&mut frame2, Rect::new(0, 0, 80, 24));
+}
+
+#[test]
+fn markdown_live_editor_preview_scroll() {
+    let mut screen =
+        ftui_demo_showcase::screens::markdown_live_editor::MarkdownLiveEditor::default();
+    // Ctrl+Down to scroll preview
+    screen.update(&ctrl_press(KeyCode::Down));
+    screen.update(&ctrl_press(KeyCode::Down));
+    screen.update(&ctrl_press(KeyCode::Up));
+    // No panic, renders normally
+    let mut pool = GraphemePool::new();
+    let mut frame = Frame::new(80, 24, &mut pool);
+    screen.view(&mut frame, Rect::new(0, 0, 80, 24));
+}
+
+// ============================================================================
 // Accessibility Panel
 // ============================================================================
 
