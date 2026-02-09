@@ -1,0 +1,18 @@
+{
+  "name": "autowrap_at_region_bottom",
+  "description": "Auto-wrap at bottom of scroll region triggers scroll within region only; rows outside are untouched",
+  "initial_size": [5, 5],
+  "input_bytes_hex": "411b5b3248421b5b3348431b5b3448441b5b354845 1b5b323b3572 1b5b353b3148 313233343558",
+  "comment": "Fill A-E in rows 0-4. DECSTBM(2,5) → region rows 1-4. CUP(5,1) → (4,0). Write '12345' fills row 4, pending_wrap. Write 'X' triggers wrap → scroll region up. Row 0=A untouched, row 1←C, row 2←D, row 3←12345, row 4=X.",
+  "expected": {
+    "cursor": { "row": 4, "col": 1 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "A" },
+      { "row": 1, "col": 0, "char": "C" },
+      { "row": 2, "col": 0, "char": "D" },
+      { "row": 3, "col": 0, "char": "1" },
+      { "row": 3, "col": 4, "char": "5" },
+      { "row": 4, "col": 0, "char": "X" }
+    ]
+  }
+}
