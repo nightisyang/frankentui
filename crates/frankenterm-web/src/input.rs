@@ -1266,6 +1266,29 @@ mod tests {
     }
 
     #[test]
+    fn accessibility_input_is_noop_only_when_all_fields_are_absent() {
+        let none = AccessibilityInput {
+            screen_reader: None,
+            high_contrast: None,
+            reduced_motion: None,
+            announce: None,
+        };
+        assert!(none.is_noop());
+
+        let with_announce = AccessibilityInput {
+            announce: Some("hello".into()),
+            ..none.clone()
+        };
+        assert!(!with_announce.is_noop());
+
+        let with_toggle = AccessibilityInput {
+            reduced_motion: Some(true),
+            ..none
+        };
+        assert!(!with_toggle.is_noop());
+    }
+
+    #[test]
     fn vt_encoder_ignores_accessibility_event() {
         let ev = InputEvent::Accessibility(AccessibilityInput {
             screen_reader: Some(true),

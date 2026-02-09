@@ -178,6 +178,75 @@ fn scrollback_memory_bench(c: &mut Criterion) {
     group.finish();
 }
 
+fn scrollback_virtualization_bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("scrollback_virtualization");
+
+    let line_count = 100_000usize;
+    let cols = 120u16;
+    let viewport_lines = 40usize;
+    let overscan_lines = 8usize;
+    let scrollback = build_scrollback(line_count, cols);
+    let offsets = [
+        0usize,
+        64usize,
+        512usize,
+        line_count / 4,
+        line_count / 2,
+        line_count.saturating_sub(viewport_lines),
+    ];
+
+    let sample_window = scrollback.virtualized_window(offsets[3], viewport_lines, overscan_lines);
+    eprintln!(
+        "{{\"event\":\"scrollback_virtualization\",\"lines\":{},\"cols\":{},\"viewport_lines\":{},\"overscan_lines\":{},\"render_lines\":{},\"max_scroll_offset\":{}}}",
+        line_count,
+        cols,
+        viewport_lines,
+        overscan_lines,
+        sample_window.render_len(),
+        sample_window.max_scroll_offset
+    );
+
+    group.throughput(Throughput::Elements(sample_window.render_len() as u64));
+    group.bench_function(BenchmarkId::from_parameter("window_compute"), |b| {
+        b.iter(|| {
+            let mut checksum = 0usize;
+            for &offset in &offsets {
+                let window = scrollback.virtualized_window(offset, viewport_lines, overscan_lines);
+                checksum ^= window.viewport_start;
+                checksum ^= window.render_end;
+            }
+            black_box(checksum);
+        });
+    });
+
+    group.bench_function(
+        BenchmarkId::from_parameter("iter_virtualized_window"),
+        |b| {
+            b.iter(|| {
+                let window =
+                    scrollback.virtualized_window(line_count / 2, viewport_lines, overscan_lines);
+                let mut cells = 0usize;
+                for line in scrollback.iter_range(window.render_range()) {
+                    cells = cells.saturating_add(line.cells.len());
+                }
+                black_box(cells);
+            });
+        },
+    );
+
+    group.bench_function(BenchmarkId::from_parameter("iter_full_history"), |b| {
+        b.iter(|| {
+            let mut cells = 0usize;
+            for line in scrollback.iter() {
+                cells = cells.saturating_add(line.cells.len());
+            }
+            black_box(cells);
+        });
+    });
+
+    group.finish();
+}
+
 fn seed_grid(grid: &mut Grid) {
     for row in 0..grid.rows() {
         for col in 0..grid.cols() {
@@ -616,6 +685,7 @@ criterion_group!(
     benches,
     parser_throughput_bench,
     scrollback_memory_bench,
+    scrollback_virtualization_bench,
     resize_storm_bench,
     parser_throughput_large_bench,
     full_pipeline_bench,

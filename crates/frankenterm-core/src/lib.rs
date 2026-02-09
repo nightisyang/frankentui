@@ -48,5 +48,5 @@ pub use reply::{
     ReplyContext, ReplyEngine, TerminalQuery, parse_terminal_query, reply_for_query,
     reply_for_query_bytes,
 };
-pub use scrollback::{Scrollback, ScrollbackLine};
+pub use scrollback::{Scrollback, ScrollbackLine, ScrollbackWindow};
 pub use selection::{BufferPos, Selection};

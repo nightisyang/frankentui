@@ -379,6 +379,101 @@ fn bench_first_frame(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// Scrollback viewport virtualization (bd-lff4p.2.14)
+// ---------------------------------------------------------------------------
+
+fn bench_scroll_viewport(c: &mut Criterion) {
+    use frankenterm_web::input::{Modifiers, WheelInput};
+    use frankenterm_web::scroll::{ScrollFrameStats, ScrollState, WheelCoalescer};
+
+    let mut group = c.benchmark_group("web/scroll_viewport");
+
+    // Simulate scroll viewport computation on 100k-line scrollback.
+    for scrollback_size in [1_000usize, 10_000, 100_000] {
+        group.bench_with_input(
+            BenchmarkId::new("viewport_compute", scrollback_size),
+            &scrollback_size,
+            |b, &size| {
+                let mut state = ScrollState::with_defaults();
+                state.set_offset(size / 2);
+                b.iter(|| {
+                    let snap = state.viewport(size, 24);
+                    black_box(snap);
+                })
+            },
+        );
+    }
+
+    // Benchmark wheel coalescing (10 events/frame).
+    group.bench_function("coalesce_10_events", |b| {
+        let events: Vec<WheelInput> = (0..10)
+            .map(|i| WheelInput {
+                x: 40,
+                y: 12,
+                dx: 0,
+                dy: if i % 3 == 0 { -1 } else { 1 },
+                mods: Modifiers::empty(),
+            })
+            .collect();
+
+        b.iter(|| {
+            let mut coalescer = WheelCoalescer::new();
+            for ev in &events {
+                coalescer.push(ev);
+            }
+            let (dy, count) = coalescer.drain();
+            black_box((dy, count));
+        })
+    });
+
+    // Full frame cycle: coalesce → apply_wheel → tick → viewport → stats.
+    group.bench_with_input(
+        BenchmarkId::new("full_frame_cycle", 100_000),
+        &100_000usize,
+        |b, &scrollback_size| {
+            let wheel = WheelInput {
+                x: 40,
+                y: 12,
+                dx: 0,
+                dy: 1,
+                mods: Modifiers::empty(),
+            };
+            b.iter(|| {
+                let mut coalescer = WheelCoalescer::new();
+                let mut state = ScrollState::with_defaults();
+                state.set_offset(scrollback_size / 2);
+
+                coalescer.push(&wheel);
+                let (dy, count) = coalescer.drain();
+
+                let max_off = scrollback_size.saturating_sub(24);
+                state.apply_wheel(dy, max_off);
+                state.tick(max_off);
+
+                let snap = state.viewport(scrollback_size, 24);
+                let stats = ScrollFrameStats::from_snapshot(&snap, count);
+                black_box(stats);
+            })
+        },
+    );
+
+    // Inertia convergence: measure how many ticks until animation stops.
+    group.bench_function("inertia_convergence", |b| {
+        b.iter(|| {
+            let mut state = ScrollState::with_defaults();
+            state.apply_wheel(3, 100_000);
+            let mut ticks = 0u32;
+            while state.tick(100_000) {
+                ticks += 1;
+            }
+            black_box(ticks);
+        })
+    });
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
 // Criterion groups
 // ---------------------------------------------------------------------------
 
@@ -394,6 +489,7 @@ criterion_group! {
         bench_frame_harness_stats,
         bench_glyph_atlas_cache,
         bench_first_frame,
+        bench_scroll_viewport,
 }
 
 criterion_main!(benches);
