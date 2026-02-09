@@ -653,4 +653,285 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(state.selected, Some(PathBuf::from("/tmp/README.md")));
     }
+
+    // ── DirEntry edge cases ───────────────────────────────────────
+
+    #[test]
+    fn dir_entry_equality() {
+        let a = DirEntry::dir("src", "/src");
+        let b = DirEntry::dir("src", "/src");
+        assert_eq!(a, b);
+
+        let c = DirEntry::file("src", "/src");
+        assert_ne!(a, c, "dir vs file should differ");
+    }
+
+    #[test]
+    fn dir_entry_clone() {
+        let orig = DirEntry::file("main.rs", "/main.rs");
+        let cloned = orig.clone();
+        assert_eq!(orig, cloned);
+    }
+
+    #[test]
+    fn dir_entry_debug_format() {
+        let e = DirEntry::dir("test", "/test");
+        let dbg = format!("{e:?}");
+        assert!(dbg.contains("test"));
+        assert!(dbg.contains("is_dir: true"));
+    }
+
+    // ── FilePickerState construction ──────────────────────────────
+
+    #[test]
+    fn state_new_defaults() {
+        let state = FilePickerState::new(PathBuf::from("/home"), vec![]);
+        assert_eq!(state.current_dir, PathBuf::from("/home"));
+        assert_eq!(state.cursor, 0);
+        assert_eq!(state.offset, 0);
+        assert!(state.selected.is_none());
+        assert!(state.root.is_none());
+        assert!(state.entries.is_empty());
+    }
+
+    #[test]
+    fn state_with_root_sets_root() {
+        let state = FilePickerState::new(PathBuf::from("/home/user"), vec![]).with_root("/home");
+        assert_eq!(state.root, Some(PathBuf::from("/home")));
+    }
+
+    // ── Cursor on single entry ────────────────────────────────────
+
+    #[test]
+    fn cursor_movement_single_entry() {
+        let entries = vec![DirEntry::file("only.txt", "/only.txt")];
+        let mut state = FilePickerState::new(PathBuf::from("/"), entries);
+
+        assert_eq!(state.cursor, 0);
+        state.cursor_down();
+        assert_eq!(state.cursor, 0, "can't go past single entry");
+        state.cursor_up();
+        assert_eq!(state.cursor, 0);
+        state.cursor_end();
+        assert_eq!(state.cursor, 0);
+        state.cursor_home();
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn page_down_clamps_to_last() {
+        let entries: Vec<DirEntry> = (0..5)
+            .map(|i| DirEntry::file(format!("f{i}"), format!("/f{i}")))
+            .collect();
+        let mut state = FilePickerState::new(PathBuf::from("/"), entries);
+
+        state.page_down(100);
+        assert_eq!(state.cursor, 4);
+    }
+
+    #[test]
+    fn page_up_clamps_to_zero() {
+        let entries: Vec<DirEntry> = (0..5)
+            .map(|i| DirEntry::file(format!("f{i}"), format!("/f{i}")))
+            .collect();
+        let mut state = FilePickerState::new(PathBuf::from("/"), entries);
+        state.cursor = 3;
+
+        state.page_up(100);
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn page_operations_on_empty_entries() {
+        let mut state = FilePickerState::new(PathBuf::from("/"), vec![]);
+        state.page_down(10);
+        assert_eq!(state.cursor, 0);
+        state.page_up(10);
+        assert_eq!(state.cursor, 0);
+    }
+
+    // ── enter() edge cases ────────────────────────────────────────
+
+    #[test]
+    fn enter_on_empty_entries_returns_false() {
+        let mut state = FilePickerState::new(PathBuf::from("/"), vec![]);
+        let result = state.enter();
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+        assert!(state.selected.is_none());
+    }
+
+    #[test]
+    fn enter_on_file_sets_selected_without_navigation() {
+        let entries = vec![
+            DirEntry::dir("sub", "/sub"),
+            DirEntry::file("readme.txt", "/readme.txt"),
+        ];
+        let mut state = FilePickerState::new(PathBuf::from("/"), entries);
+        state.cursor = 1;
+
+        let result = state.enter().unwrap();
+        assert!(!result, "enter on file returns false (no navigation)");
+        assert_eq!(state.selected, Some(PathBuf::from("/readme.txt")));
+        // Current directory unchanged.
+        assert_eq!(state.current_dir, PathBuf::from("/"));
+    }
+
+    // ── adjust_scroll edge cases ──────────────────────────────────
+
+    #[test]
+    fn adjust_scroll_zero_visible_rows_is_noop() {
+        let entries: Vec<DirEntry> = (0..10)
+            .map(|i| DirEntry::file(format!("f{i}"), format!("/f{i}")))
+            .collect();
+        let mut state = FilePickerState::new(PathBuf::from("/"), entries);
+        state.cursor = 5;
+        state.offset = 0;
+
+        state.adjust_scroll(0);
+        assert_eq!(
+            state.offset, 0,
+            "zero visible rows should not change offset"
+        );
+    }
+
+    #[test]
+    fn adjust_scroll_cursor_above_viewport() {
+        let entries: Vec<DirEntry> = (0..20)
+            .map(|i| DirEntry::file(format!("f{i}"), format!("/f{i}")))
+            .collect();
+        let mut state = FilePickerState::new(PathBuf::from("/"), entries);
+        state.offset = 10;
+        state.cursor = 5;
+
+        state.adjust_scroll(5);
+        assert_eq!(state.offset, 5, "offset should snap to cursor");
+    }
+
+    #[test]
+    fn adjust_scroll_cursor_below_viewport() {
+        let entries: Vec<DirEntry> = (0..20)
+            .map(|i| DirEntry::file(format!("f{i}"), format!("/f{i}")))
+            .collect();
+        let mut state = FilePickerState::new(PathBuf::from("/"), entries);
+        state.offset = 0;
+        state.cursor = 10;
+
+        state.adjust_scroll(5);
+        // cursor=10 should be the last visible row: offset + 5 > 10 → offset = 6
+        assert_eq!(state.offset, 6);
+    }
+
+    // ── FilePicker builder ────────────────────────────────────────
+
+    #[test]
+    fn file_picker_default_values() {
+        let picker = FilePicker::default();
+        assert!(picker.show_header);
+        assert_eq!(picker.dir_prefix, "📁 ");
+        assert_eq!(picker.file_prefix, "  ");
+    }
+
+    #[test]
+    fn file_picker_builder_chain() {
+        let picker = FilePicker::new()
+            .dir_style(Style::default())
+            .file_style(Style::default())
+            .cursor_style(Style::default())
+            .header_style(Style::default())
+            .show_header(false);
+        assert!(!picker.show_header);
+    }
+
+    #[test]
+    fn file_picker_debug_format() {
+        let picker = FilePicker::new();
+        let dbg = format!("{picker:?}");
+        assert!(dbg.contains("FilePicker"));
+    }
+
+    // ── Render edge cases ─────────────────────────────────────────
+
+    #[test]
+    fn render_zero_area_is_noop() {
+        let picker = FilePicker::new();
+        let mut state = make_state();
+
+        let area = Rect::new(0, 0, 0, 0);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 5, &mut pool);
+
+        picker.render(area, &mut frame, &mut state);
+        // No crash, buffer untouched.
+        let lines = buf_to_lines(&frame.buffer);
+        assert!(lines[0].trim().is_empty());
+    }
+
+    #[test]
+    fn render_height_one_shows_only_header() {
+        let picker = FilePicker::new().show_header(true);
+        let mut state = make_state();
+
+        let area = Rect::new(0, 0, 30, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 5, &mut pool);
+
+        picker.render(area, &mut frame, &mut state);
+        let lines = buf_to_lines(&frame.buffer);
+        // Only the header row should have content.
+        assert!(lines[0].starts_with("/tmp"));
+        // Row 1 should be empty (no room for entries).
+        assert!(lines[1].trim().is_empty());
+    }
+
+    #[test]
+    fn render_no_header_uses_full_area_for_entries() {
+        let picker = FilePicker::new().show_header(false);
+        let mut state = make_state();
+
+        let area = Rect::new(0, 0, 30, 4);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 4, &mut pool);
+
+        picker.render(area, &mut frame, &mut state);
+        let lines = buf_to_lines(&frame.buffer);
+        // First line should be an entry (cursor on first entry), not a header.
+        assert!(lines[0].starts_with("> "));
+    }
+
+    #[test]
+    fn render_cursor_on_last_entry() {
+        let picker = FilePicker::new().show_header(false);
+        let mut state = make_state();
+        state.cursor = 3; // last entry: main.rs
+
+        let area = Rect::new(0, 0, 30, 5);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 5, &mut pool);
+
+        picker.render(area, &mut frame, &mut state);
+        let lines = buf_to_lines(&frame.buffer);
+        // The cursor row should contain "main.rs".
+        let cursor_line = lines.iter().find(|l| l.starts_with("> ")).unwrap();
+        assert!(cursor_line.contains("main.rs"));
+    }
+
+    #[test]
+    fn render_area_offset() {
+        // Render into a sub-area of a larger buffer.
+        let picker = FilePicker::new().show_header(false);
+        let mut state = make_state();
+
+        let area = Rect::new(5, 2, 20, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 10, &mut pool);
+
+        picker.render(area, &mut frame, &mut state);
+        let lines = buf_to_lines(&frame.buffer);
+        // Rows 0 and 1 should be empty (area starts at y=2).
+        assert!(lines[0].trim().is_empty());
+        assert!(lines[1].trim().is_empty());
+        // Row 2 should have content starting at x=5.
+        assert!(lines[2].len() >= 7);
+    }
 }

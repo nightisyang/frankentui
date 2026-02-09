@@ -225,8 +225,14 @@ mod tests {
             .with_context("key1", "value1")
             .with_context("key2", "value2");
         assert_eq!(logger.context.len(), 2);
-        assert_eq!(logger.context[0], ("key1".to_string(), "value1".to_string()));
-        assert_eq!(logger.context[1], ("key2".to_string(), "value2".to_string()));
+        assert_eq!(
+            logger.context[0],
+            ("key1".to_string(), "value1".to_string())
+        );
+        assert_eq!(
+            logger.context[1],
+            ("key2".to_string(), "value2".to_string())
+        );
     }
 
     #[test]
