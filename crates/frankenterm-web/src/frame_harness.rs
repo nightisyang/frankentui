@@ -269,9 +269,23 @@ struct ResizeStormFrameJsonlRecord<'a> {
     frame_idx: u64,
     hash_algo: &'static str,
     frame_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interaction_hash: Option<String>,
     cols: u16,
     rows: u16,
     geometry: GeometrySnapshot,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hovered_link_id: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor_offset: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor_style: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selection_active: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selection_start: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selection_end: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -567,7 +581,49 @@ pub fn resize_storm_frame_jsonl(
     geometry: GeometrySnapshot,
     cells: &[CellData],
 ) -> String {
+    resize_storm_frame_jsonl_with_interaction(
+        run_id, seed, timestamp, frame_idx, geometry, cells, None,
+    )
+}
+
+/// Build one JSONL `frame` record and include optional interaction overlay state.
+///
+/// When `interaction` is present, this additionally emits:
+/// - `interaction_hash` (geometry + cells + overlay state)
+/// - raw overlay fields (`hovered_link_id`, `cursor_*`, `selection_*`)
+#[must_use]
+pub fn resize_storm_frame_jsonl_with_interaction(
+    run_id: &str,
+    seed: u64,
+    timestamp: &str,
+    frame_idx: u64,
+    geometry: GeometrySnapshot,
+    cells: &[CellData],
+    interaction: Option<InteractionSnapshot>,
+) -> String {
     let frame_hash = stable_frame_hash(cells, geometry);
+    let (
+        interaction_hash,
+        hovered_link_id,
+        cursor_offset,
+        cursor_style,
+        selection_active,
+        selection_start,
+        selection_end,
+    ) = if let Some(state) = interaction {
+        (
+            Some(stable_frame_hash_with_interaction(cells, geometry, state)),
+            Some(state.hovered_link_id),
+            Some(state.cursor_offset),
+            Some(state.cursor_style),
+            Some(state.selection_active),
+            Some(state.selection_start),
+            Some(state.selection_end),
+        )
+    } else {
+        (None, None, None, None, None, None, None)
+    };
+
     let row = ResizeStormFrameJsonlRecord {
         schema_version: E2E_JSONL_SCHEMA_VERSION,
         record_type: "frame",
@@ -577,9 +633,16 @@ pub fn resize_storm_frame_jsonl(
         frame_idx,
         hash_algo: FRAME_HASH_ALGO,
         frame_hash,
+        interaction_hash,
         cols: geometry.cols,
         rows: geometry.rows,
         geometry,
+        hovered_link_id,
+        cursor_offset,
+        cursor_style,
+        selection_active,
+        selection_start,
+        selection_end,
     };
     serde_json::to_string(&row).unwrap_or_else(|_| "{}".to_string())
 }
@@ -1012,6 +1075,66 @@ mod tests {
         );
         assert_eq!(parsed["geometry"]["pixel_width"], 1200);
         assert_eq!(parsed["geometry"]["pixel_height"], 800);
+    }
+
+    #[test]
+    fn resize_storm_frame_jsonl_with_interaction_includes_overlay_fields() {
+        let geometry = GeometrySnapshot {
+            cols: 4,
+            rows: 1,
+            pixel_width: 40,
+            pixel_height: 10,
+            cell_width_px: 10.0,
+            cell_height_px: 10.0,
+            dpr: 1.0,
+            zoom: 1.0,
+        };
+        let cells = vec![
+            CellData::EMPTY,
+            CellData {
+                glyph_id: u32::from('A'),
+                attrs: 0x0300, // link id = 3
+                ..CellData::EMPTY
+            },
+            CellData::EMPTY,
+            CellData::EMPTY,
+        ];
+        let interaction = InteractionSnapshot {
+            hovered_link_id: 3,
+            cursor_offset: 1,
+            cursor_style: 2,
+            selection_active: true,
+            selection_start: 1,
+            selection_end: 3,
+        };
+
+        let base = resize_storm_frame_jsonl("run-2", 7, "T000002", 4, geometry, &cells);
+        let with = resize_storm_frame_jsonl_with_interaction(
+            "run-2",
+            7,
+            "T000002",
+            4,
+            geometry,
+            &cells,
+            Some(interaction),
+        );
+        let base_parsed: serde_json::Value = serde_json::from_str(&base).unwrap();
+        let with_parsed: serde_json::Value = serde_json::from_str(&with).unwrap();
+
+        assert!(base_parsed.get("interaction_hash").is_none());
+        assert!(
+            with_parsed["interaction_hash"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("fnv1a64:")
+        );
+        assert_ne!(with_parsed["frame_hash"], with_parsed["interaction_hash"]);
+        assert_eq!(with_parsed["hovered_link_id"], 3);
+        assert_eq!(with_parsed["cursor_offset"], 1);
+        assert_eq!(with_parsed["cursor_style"], 2);
+        assert_eq!(with_parsed["selection_active"], true);
+        assert_eq!(with_parsed["selection_start"], 1);
+        assert_eq!(with_parsed["selection_end"], 3);
     }
 
     #[test]

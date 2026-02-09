@@ -1,10 +1,12 @@
 #![forbid(unsafe_code)]
 
-use crate::frame_harness::{GeometrySnapshot, resize_storm_frame_jsonl};
+use crate::frame_harness::{
+    GeometrySnapshot, InteractionSnapshot, resize_storm_frame_jsonl_with_interaction,
+};
 use crate::input::{
     AccessibilityInput, CompositionInput, CompositionPhase, CompositionState, FocusInput,
     InputEvent, KeyInput, KeyPhase, ModifierTracker, Modifiers, MouseButton, MouseInput,
-    MousePhase, TouchInput, TouchPhase, TouchPoint, VtInputEncoderFeatures, WheelInput,
+    MousePhase, PasteInput, TouchInput, TouchPhase, TouchPoint, VtInputEncoderFeatures, WheelInput,
     encode_vt_input_event, normalize_dom_key_code,
 };
 use crate::renderer::{
@@ -19,6 +21,8 @@ use web_sys::HtmlCanvasElement;
 /// Synthetic link-id range reserved for auto-detected plaintext URLs.
 const AUTO_LINK_ID_BASE: u32 = 0x00F0_0001;
 const AUTO_LINK_ID_MAX: u32 = 0x00FF_FFFE;
+/// Max decoded clipboard paste payload (matches websocket-protocol limits).
+const MAX_PASTE_BYTES: usize = 768 * 1024;
 
 /// Web/WASM terminal surface.
 ///
@@ -297,13 +301,14 @@ impl FrankenTermWeb {
         };
 
         let geometry = GeometrySnapshot::from(renderer.current_geometry());
-        Ok(resize_storm_frame_jsonl(
+        Ok(resize_storm_frame_jsonl_with_interaction(
             run_id,
             u64::from(seed),
             timestamp,
             u64::from(frame_idx),
             geometry,
             &self.shadow_cells,
+            self.resize_storm_interaction_snapshot(),
         ))
     }
 
@@ -319,28 +324,7 @@ impl FrankenTermWeb {
         let rewrite = self.composition.rewrite(ev);
 
         for ev in rewrite.into_events() {
-            // Guarantee no "stuck modifiers" after focus loss by treating focus
-            // loss as an explicit modifier reset point.
-            if let InputEvent::Focus(focus) = &ev {
-                self.set_focus_internal(focus.focused);
-            } else {
-                self.mods.reconcile(event_mods(&ev));
-            }
-
-            if let InputEvent::Accessibility(a11y) = &ev {
-                self.apply_accessibility_input(a11y);
-            }
-            self.handle_interaction_event(&ev);
-
-            let json = ev
-                .to_json_string()
-                .map_err(|err| JsValue::from_str(&err.to_string()))?;
-            self.encoded_inputs.push(json);
-
-            let vt = encode_vt_input_event(&ev, self.encoder_features);
-            if !vt.is_empty() {
-                self.encoded_input_bytes.push(vt);
-            }
+            self.queue_input_event(ev)?;
         }
         Ok(())
     }
@@ -364,6 +348,23 @@ impl FrankenTermWeb {
             arr.push(&chunk.into());
         }
         arr
+    }
+
+    /// Queue pasted text as terminal input bytes.
+    ///
+    /// Browser clipboard APIs require trusted user gestures; hosts should read
+    /// clipboard content in JS and pass the text here for deterministic VT encoding.
+    #[wasm_bindgen(js_name = pasteText)]
+    pub fn paste_text(&mut self, text: &str) -> Result<(), JsValue> {
+        if text.is_empty() {
+            return Ok(());
+        }
+        if text.len() > MAX_PASTE_BYTES {
+            return Err(JsValue::from_str(
+                "paste payload too large (max 786432 UTF-8 bytes)",
+            ));
+        }
+        self.queue_input_event(InputEvent::Paste(PasteInput { data: text.into() }))
     }
 
     /// Feed a VT/ANSI byte stream (remote mode).
@@ -557,6 +558,15 @@ impl FrankenTermWeb {
         out
     }
 
+    /// Return selected text for host-managed clipboard writes.
+    ///
+    /// Returns `None` when there is no active non-empty selection.
+    #[wasm_bindgen(js_name = copySelection)]
+    pub fn copy_selection(&self) -> Option<String> {
+        let text = self.extract_selection_text();
+        if text.is_empty() { None } else { Some(text) }
+    }
+
     /// Update accessibility preferences from a JS object.
     ///
     /// Supported keys:
@@ -693,6 +703,32 @@ impl FrankenTermWeb {
 }
 
 impl FrankenTermWeb {
+    fn queue_input_event(&mut self, ev: InputEvent) -> Result<(), JsValue> {
+        // Guarantee no "stuck modifiers" after focus loss by treating focus
+        // loss as an explicit modifier reset point.
+        if let InputEvent::Focus(focus) = &ev {
+            self.set_focus_internal(focus.focused);
+        } else {
+            self.mods.reconcile(event_mods(&ev));
+        }
+
+        if let InputEvent::Accessibility(a11y) = &ev {
+            self.apply_accessibility_input(a11y);
+        }
+        self.handle_interaction_event(&ev);
+
+        let json = ev
+            .to_json_string()
+            .map_err(|err| JsValue::from_str(&err.to_string()))?;
+        self.encoded_inputs.push(json);
+
+        let vt = encode_vt_input_event(&ev, self.encoder_features);
+        if !vt.is_empty() {
+            self.encoded_input_bytes.push(vt);
+        }
+        Ok(())
+    }
+
     fn set_focus_internal(&mut self, focused: bool) {
         self.focused = focused;
         self.mods.handle_focus(focused);
@@ -729,6 +765,26 @@ impl FrankenTermWeb {
             selection_start,
             selection_end,
         }
+    }
+
+    fn resize_storm_interaction_snapshot(&self) -> Option<InteractionSnapshot> {
+        let has_overlay = self.hovered_link_id != 0
+            || self.cursor_offset.is_some()
+            || self.selection_range.is_some();
+        if !has_overlay {
+            return None;
+        }
+        let (selection_active, selection_start, selection_end) = self
+            .selection_range
+            .map_or((false, 0, 0), |(start, end)| (true, start, end));
+        Some(InteractionSnapshot {
+            hovered_link_id: self.hovered_link_id,
+            cursor_offset: self.cursor_offset.unwrap_or(0),
+            cursor_style: self.cursor_style.as_u32(),
+            selection_active,
+            selection_start,
+            selection_end,
+        })
     }
 
     fn grid_capacity(&self) -> u32 {
@@ -1064,9 +1120,10 @@ fn event_mods(ev: &InputEvent) -> Modifiers {
         InputEvent::Mouse(m) => m.mods,
         InputEvent::Wheel(w) => w.mods,
         InputEvent::Touch(t) => t.mods,
-        InputEvent::Composition(_) | InputEvent::Focus(_) | InputEvent::Accessibility(_) => {
-            Modifiers::empty()
-        }
+        InputEvent::Composition(_)
+        | InputEvent::Paste(_)
+        | InputEvent::Focus(_)
+        | InputEvent::Accessibility(_) => Modifiers::empty(),
     }
 }
 
@@ -1078,6 +1135,7 @@ fn parse_input_event(event: &JsValue) -> Result<InputEvent, JsValue> {
         "wheel" => parse_wheel_event(event),
         "touch" => parse_touch_event(event),
         "composition" => parse_composition_event(event),
+        "paste" => parse_paste_event(event),
         "focus" => parse_focus_event(event),
         "accessibility" => parse_accessibility_event(event),
         other => Err(JsValue::from_str(&format!("unknown input kind: {other}"))),
@@ -1155,6 +1213,16 @@ fn parse_composition_event(event: &JsValue) -> Result<InputEvent, JsValue> {
     let phase = parse_composition_phase(event)?;
     let data = get_string_opt(event, "data")?.map(Into::into);
     Ok(InputEvent::Composition(CompositionInput { phase, data }))
+}
+
+fn parse_paste_event(event: &JsValue) -> Result<InputEvent, JsValue> {
+    let data = get_string(event, "data")?;
+    if data.len() > MAX_PASTE_BYTES {
+        return Err(JsValue::from_str(
+            "paste payload too large (max 786432 UTF-8 bytes)",
+        ));
+    }
+    Ok(InputEvent::Paste(PasteInput { data: data.into() }))
 }
 
 fn parse_focus_event(event: &JsValue) -> Result<InputEvent, JsValue> {
@@ -1646,6 +1714,54 @@ mod tests {
         assert!(snapshot.validate().is_ok());
         assert!(snapshot.value.is_empty());
         assert_eq!(snapshot.aria_live, "off");
+    }
+
+    #[test]
+    fn resize_storm_interaction_snapshot_is_none_when_no_overlays() {
+        let term = FrankenTermWeb::new();
+        assert_eq!(term.resize_storm_interaction_snapshot(), None);
+    }
+
+    #[test]
+    fn resize_storm_interaction_snapshot_maps_overlay_state() {
+        let mut term = FrankenTermWeb::new();
+        term.hovered_link_id = 7;
+        term.cursor_offset = Some(5);
+        term.cursor_style = CursorStyle::Underline;
+        term.selection_range = Some((2, 9));
+
+        assert_eq!(
+            term.resize_storm_interaction_snapshot(),
+            Some(InteractionSnapshot {
+                hovered_link_id: 7,
+                cursor_offset: 5,
+                cursor_style: CursorStyle::Underline.as_u32(),
+                selection_active: true,
+                selection_start: 2,
+                selection_end: 9,
+            })
+        );
+    }
+
+    #[test]
+    fn resize_storm_interaction_snapshot_keeps_defaults_for_missing_ranges() {
+        let mut term = FrankenTermWeb::new();
+        term.hovered_link_id = 11;
+        term.cursor_offset = None;
+        term.cursor_style = CursorStyle::None;
+        term.selection_range = None;
+
+        assert_eq!(
+            term.resize_storm_interaction_snapshot(),
+            Some(InteractionSnapshot {
+                hovered_link_id: 11,
+                cursor_offset: 0,
+                cursor_style: CursorStyle::None.as_u32(),
+                selection_active: false,
+                selection_start: 0,
+                selection_end: 0,
+            })
+        );
     }
 
     fn text_row_cells(text: &str) -> Vec<CellData> {

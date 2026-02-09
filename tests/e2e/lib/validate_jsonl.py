@@ -514,6 +514,13 @@ def example_events(schema_version: str) -> Dict[str, Dict[str, Any]]:
             "present_ms": 0.8,
             "present_bytes": 65536,
             "checksum_chain": "00ff00ff",
+            "interaction_hash": "fnv1a64:1234abcd5678ef90",
+            "hovered_link_id": 7,
+            "cursor_offset": 42,
+            "cursor_style": 2,
+            "selection_active": True,
+            "selection_start": 40,
+            "selection_end": 64,
         },
         "step_end": {
             "schema_version": schema_version,
@@ -665,6 +672,12 @@ def run_self_tests(schema_path: str) -> int:
         def test_wrong_type(self) -> None:
             bad = example_events(schema.version)["env"].copy()
             bad["seed"] = "oops"
+            failures = validate_jsonl(self.schema, [json.dumps(bad)])
+            self.assertTrue(any("wrong type" in err for _, err in failures))
+
+        def test_wrong_type_optional_frame_interaction_field(self) -> None:
+            bad = example_events(schema.version)["frame"].copy()
+            bad["selection_active"] = "oops"
             failures = validate_jsonl(self.schema, [json.dumps(bad)])
             self.assertTrue(any("wrong type" in err for _, err in failures))
 

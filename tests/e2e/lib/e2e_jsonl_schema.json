@@ -286,7 +286,14 @@
         "render_ms",
         "present_ms",
         "present_bytes",
-        "checksum_chain"
+        "checksum_chain",
+        "interaction_hash",
+        "hovered_link_id",
+        "cursor_offset",
+        "cursor_style",
+        "selection_active",
+        "selection_start",
+        "selection_end"
       ],
       "types": {
         "frame_idx": "number",
@@ -304,7 +311,14 @@
         "render_ms": "number",
         "present_ms": "number",
         "present_bytes": "number",
-        "checksum_chain": "string"
+        "checksum_chain": "string",
+        "interaction_hash": "string",
+        "hovered_link_id": "number",
+        "cursor_offset": "number",
+        "cursor_style": "number",
+        "selection_active": "boolean",
+        "selection_start": "number",
+        "selection_end": "number"
       }
     },
     "error": {
