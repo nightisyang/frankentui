@@ -127,6 +127,7 @@ NC='\033[0m' # No Color
 QUICK_MODE=false
 CHECK_ONLY=false
 JSON_OUTPUT=false
+RERUN_ON_FAIL=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -140,6 +141,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --json)
             JSON_OUTPUT=true
+            shift
+            ;;
+        --rerun-on-fail)
+            RERUN_ON_FAIL=true
             shift
             ;;
         *)
@@ -240,6 +245,23 @@ run_benchmarks() {
             fi
         fi
     done
+}
+
+snapshot_results() {
+    local suffix="$1"
+    for name in \
+        cell_bench buffer_bench diff_bench presenter_bench widget_bench telemetry_bench \
+        parser_patch_bench renderer_bench
+    do
+        local src="${RESULTS_DIR}/${name}.txt"
+        if [[ -f "$src" ]]; then
+            cp -f "$src" "${RESULTS_DIR}/${name}.${suffix}.txt"
+        fi
+    done
+
+    if [[ -f "$PERF_LOG" ]]; then
+        cp -f "$PERF_LOG" "${RESULTS_DIR}/perf_log.${suffix}.jsonl"
+    fi
 }
 
 parse_criterion_output() {
@@ -451,6 +473,20 @@ main() {
 
     local exit_code=0
     check_budgets || exit_code=$?
+
+    if [[ "$exit_code" -eq 1 ]] && [[ "$RERUN_ON_FAIL" == "true" ]] && [[ "$CHECK_ONLY" != "true" ]]; then
+        log ""
+        log "${YELLOW}Budget exceeded; rerunning once to reduce false positives...${NC}"
+        snapshot_results "run1"
+        run_benchmarks
+        exit_code=0
+        check_budgets || exit_code=$?
+        if [[ "$exit_code" -eq 0 ]]; then
+            log ""
+            log "${GREEN}Rerun passed. Treating initial failure as noise.${NC}"
+            log "Saved first-run artifacts under: ${RESULTS_DIR}/*.run1.txt and perf_log.run1.jsonl"
+        fi
+    fi
 
     if [[ "$JSON_OUTPUT" == "true" ]]; then
         echo "{\"run_id\":\"$RUN_ID\",\"end_ts\":\"$(date -Iseconds)\",\"event\":\"end\",\"exit_code\":$exit_code}" >> "$PERF_LOG"

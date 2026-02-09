@@ -104,6 +104,78 @@ fn measure_diff_stats_dirty(
     )
 }
 
+fn measure_diff_stats_dense_gate(
+    iters: u64,
+    old: &Buffer,
+    new: &Buffer,
+    diff: &mut BufferDiff,
+) -> (DiffStats, DiffStats, Option<TileDiffStats>) {
+    // Interleave full vs dirty measurements to reduce drift (turbo/thermal/load)
+    // from causing flaky ratio assertions in short-run CI benches.
+    let mut full_times = Vec::with_capacity(iters as usize);
+    let mut dirty_times = Vec::with_capacity(iters as usize);
+    let mut full_total_us: u128 = 0;
+    let mut dirty_total_us: u128 = 0;
+    let mut last_tile_stats = None;
+
+    for i in 0..iters {
+        let full_first = (i & 1) == 0;
+
+        if full_first {
+            let start = Instant::now();
+            let full = BufferDiff::compute(old, new);
+            black_box(full.len());
+            let elapsed = start.elapsed().as_micros() as u64;
+            full_total_us += elapsed as u128;
+            full_times.push(elapsed);
+
+            let start = Instant::now();
+            diff.compute_dirty_into(old, new);
+            black_box(diff.len());
+            let elapsed = start.elapsed().as_micros() as u64;
+            dirty_total_us += elapsed as u128;
+            dirty_times.push(elapsed);
+            last_tile_stats = diff.last_tile_stats();
+        } else {
+            let start = Instant::now();
+            diff.compute_dirty_into(old, new);
+            black_box(diff.len());
+            let elapsed = start.elapsed().as_micros() as u64;
+            dirty_total_us += elapsed as u128;
+            dirty_times.push(elapsed);
+            last_tile_stats = diff.last_tile_stats();
+
+            let start = Instant::now();
+            let full = BufferDiff::compute(old, new);
+            black_box(full.len());
+            let elapsed = start.elapsed().as_micros() as u64;
+            full_total_us += elapsed as u128;
+            full_times.push(elapsed);
+        }
+    }
+
+    full_times.sort_unstable();
+    dirty_times.sort_unstable();
+
+    let len = full_times.len().max(1);
+    let p50_idx = len / 2;
+    let p95_idx = ((len as f64 * 0.95) as usize).min(len.saturating_sub(1));
+
+    (
+        DiffStats {
+            p50_us: full_times[p50_idx],
+            p95_us: full_times[p95_idx],
+            total_us: full_total_us,
+        },
+        DiffStats {
+            p50_us: dirty_times[p50_idx],
+            p95_us: dirty_times[p95_idx],
+            total_us: dirty_total_us,
+        },
+        last_tile_stats,
+    )
+}
+
 fn bench_diff_identical(c: &mut Criterion) {
     let mut group = c.benchmark_group("diff/identical");
 
@@ -556,9 +628,9 @@ fn bench_diff_tile_dense_regression(c: &mut Criterion) {
             &(&old, &new),
             |b, (old, new)| {
                 b.iter_custom(|iters| {
-                    let full_stats = measure_diff_stats(iters, old, new, BufferDiff::compute);
                     let mut diff = BufferDiff::new();
-                    let (dirty_stats, tile_stats) = measure_diff_stats_dirty(iters, old, new, &mut diff);
+                    let (full_stats, dirty_stats, tile_stats) =
+                        measure_diff_stats_dense_gate(iters, old, new, &mut diff);
 
                     let denom = full_stats.p50_us.max(1) as f64;
                     let ratio = dirty_stats.p50_us as f64 / denom;
