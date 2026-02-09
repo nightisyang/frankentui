@@ -759,8 +759,8 @@ mod tests {
         let mut data = Vec::new();
         data.extend_from_slice(b"IWAD");
         data.extend_from_slice(&2i32.to_le_bytes()); // 2 lumps
-        let dir_offset = 12 + 8; // after 2 × 4 bytes of lump data
-        data.extend_from_slice(&(dir_offset as i32).to_le_bytes());
+        let dir_offset: i32 = 12 + 8; // after 2 × 4 bytes of lump data
+        data.extend_from_slice(&dir_offset.to_le_bytes());
 
         // Lump 0 data
         data.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]);

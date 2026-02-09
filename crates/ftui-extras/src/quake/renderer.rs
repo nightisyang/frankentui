@@ -86,9 +86,8 @@ impl QuakeRenderer {
     /// Render a frame into the framebuffer.
     pub fn render(&mut self, fb: &mut QuakeFramebuffer, map: &QuakeMap, player: &Player) {
         self.stats = RenderStats::default();
-        fb.clear();
 
-        // Draw sky/floor background using cached gradient.
+        // Draw sky/floor background using cached gradient (overwrites every pixel, no clear needed).
         self.draw_background(fb);
 
         // Build view matrix from player

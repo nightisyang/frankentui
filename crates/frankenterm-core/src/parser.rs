@@ -981,8 +981,14 @@ mod tests {
     #[test]
     fn decset_sync_output() {
         let mut p = Parser::new();
-        assert_eq!(p.feed(b"\x1b[?2026h"), vec![Action::DecSet(smallvec![2026])]);
-        assert_eq!(p.feed(b"\x1b[?2026l"), vec![Action::DecRst(smallvec![2026])]);
+        assert_eq!(
+            p.feed(b"\x1b[?2026h"),
+            vec![Action::DecSet(smallvec![2026])]
+        );
+        assert_eq!(
+            p.feed(b"\x1b[?2026l"),
+            vec![Action::DecRst(smallvec![2026])]
+        );
     }
 
     #[test]

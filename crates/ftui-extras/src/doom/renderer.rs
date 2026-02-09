@@ -133,9 +133,8 @@ impl DoomRenderer {
     ) {
         // Reset state
         self.reset();
-        fb.clear();
 
-        // Draw sky and floor background
+        // Draw sky and floor background (overwrites every pixel, no clear needed)
         self.draw_background(fb);
 
         // BSP front-to-back traversal
@@ -240,6 +239,25 @@ impl DoomRenderer {
                 let x_start = col_start.max(0) as u32;
                 let x_end = (col_end + 1).min(width as i32) as u32;
 
+                // Hoist loop-invariant computations (constant per seg)
+                let ceil_h = front.ceiling_height - player_view_z;
+                let floor_h = front.floor_height - player_view_z;
+                let pitch_offset = player_pitch * projection;
+                let sx_span = sx2 - sx1;
+                let sx_narrow = sx_span.abs() <= 0.01;
+                let vx_span = vx2 - vx1;
+                let (back_ceil, back_floor, has_upper, has_lower) = if let Some(back) = back_sector
+                {
+                    (
+                        back.ceiling_height - player_view_z,
+                        back.floor_height - player_view_z,
+                        back.ceiling_height < front.ceiling_height,
+                        back.floor_height > front.floor_height,
+                    )
+                } else {
+                    (0.0, 0.0, false, false)
+                };
+
                 for x in x_start..x_end {
                     // Copy clip values to avoid borrow conflicts
                     let clip_top = column_clips[x as usize].top;
@@ -251,12 +269,12 @@ impl DoomRenderer {
                     }
 
                     // Interpolate depth across the wall
-                    let t = if (sx2 - sx1).abs() > 0.01 {
-                        (x as f32 - sx1) / (sx2 - sx1)
-                    } else {
+                    let t = if sx_narrow {
                         0.5
+                    } else {
+                        (x as f32 - sx1) / sx_span
                     };
-                    let depth = vx1 + t * (vx2 - vx1);
+                    let depth = vx1 + t * vx_span;
                     if depth <= 0.1 {
                         continue;
                     }
@@ -264,10 +282,6 @@ impl DoomRenderer {
                     let inv_depth = projection / depth;
 
                     // Calculate wall top and bottom on screen
-                    let ceil_h = front.ceiling_height - player_view_z;
-                    let floor_h = front.floor_height - player_view_z;
-
-                    let pitch_offset = player_pitch * projection;
                     let wall_top = half_height - ceil_h * inv_depth + pitch_offset;
                     let wall_bottom = half_height - floor_h * inv_depth + pitch_offset;
 
@@ -329,14 +343,12 @@ impl DoomRenderer {
 
                         column_clips[x as usize].solid = true;
                         *solid_count += 1;
-                    } else if let Some(back) = back_sector {
+                    } else if back_sector.is_some() {
                         // Two-sided: only draw upper/lower wall portions,
                         // leave middle open so the back sector is visible.
-                        let back_ceil = back.ceiling_height - player_view_z;
-                        let back_floor = back.floor_height - player_view_z;
 
                         // Upper wall (if back ceiling is lower than front ceiling)
-                        if back.ceiling_height < front.ceiling_height {
+                        if has_upper {
                             let upper_bottom = half_height - back_ceil * inv_depth + pitch_offset;
                             let ub = (upper_bottom as i32).max(clip_top).min(clip_bottom);
 
@@ -356,7 +368,7 @@ impl DoomRenderer {
                         }
 
                         // Lower wall (if back floor is higher than front floor)
-                        if back.floor_height > front.floor_height {
+                        if has_lower {
                             let lower_top = half_height - back_floor * inv_depth + pitch_offset;
                             let lt = (lower_top as i32).max(clip_top).min(clip_bottom);
 

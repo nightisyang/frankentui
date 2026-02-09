@@ -1378,7 +1378,14 @@ mod gpu {
 
                 for i in 0..count {
                     let mut gpu_cell = patch.cells[i];
-                    gpu_cell.glyph_id = self.ensure_glyph_slot(gpu_cell.glyph_id);
+                    // Fast-path: skip the glyph atlas lookup for empty/space
+                    // cells (~60-80% of typical terminal content).
+                    let cp = gpu_cell.glyph_id;
+                    gpu_cell.glyph_id = if cp == 0 || cp == b' ' as u32 {
+                        0
+                    } else {
+                        self.ensure_glyph_slot(cp)
+                    };
                     self.cells_cpu[(start as usize) + i] = gpu_cell;
                     self.patch_upload_scratch
                         .extend_from_slice(&gpu_cell.to_bytes());
