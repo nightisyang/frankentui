@@ -134,10 +134,11 @@ This pass re-ran deterministic PTY harness measurements for the heavy effects
 |----|---------|--------|------------|--------|-------|--------|
 | H1 | `Painter::braille_cell` per-subpixel bounds/index checks | 5 | 4 | 2 | **10.0** | Implemented (fast in-bounds path) |
 | H2 | `Painter::clear` full-buffer reset each frame | 4 | 4 | 2 | **8.0** | Implemented (generation-stamp O(1) clear) |
-| H3 | `MetaballsCanvasAdapter::fill` field accumulation loops | 5 | 3 | 3 | **5.0** | In progress (`bd-3e1t.5.3.1`, MistyCliff) |
+| H3 | `MetaballsCanvasAdapter::fill` field accumulation loops | 5 | 3 | 3 | **5.0** | Implemented (`bd-3e1t.5.3.1`, row-level spatial culling) |
 | H4 | `PlasmaCanvasAdapter::fill` per-pixel palette interpolation | 4 | 3 | 3 | **4.0** | Implemented (`bd-3e1t.5.9`) |
-| H5 | Presenter ANSI emission on high-churn frames | 3 | 3 | 3 | **3.0** | Pending |
+| H5 | Presenter ANSI emission on high-churn frames | 3 | 3 | 3 | **3.0** | Trial reverted (`bd-3e1t.5.3.3`) |
 | H6 | `Painter::point_colored_at_index_in_bounds` branch-elision trial | 4 | 3 | 2 | **6.0** | Trial reverted (regressed plasma/metaballs) |
+| H7 | `PlasmaSampler::sample_full` `v5` distance term (`powi` -> mul form) | 3 | 4 | 2 | **6.0** | Implemented (`bd-3e1t.5.3.4`) |
 
 #### Measured deltas
 
@@ -239,6 +240,28 @@ V2 (`current -> presenterfastv2`, heavy effects):
 | metaballs | +2.66% | +0.17% | +15.03% |
 
 Determinism remained identical for all runs (frame-hash stream SHA256 unchanged per effect), but heavy-effect performance regressed, so this lever is marked as a dead end for the current pass.
+
+#### Consolidated sweep after child merges (clean `HEAD`)
+
+To avoid dirty-worktree noise from concurrent local edits, this sweep was run in detached worktree:
+
+- Commit: `b2d8ef7c`
+- Worktree: `/tmp/ftui_vfx_headclean_b2d8ef7c`
+- Artifacts: `/tmp/vfx_bd3e1t53_headclean_{plasma,metaballs,doom,quake}_120x40.jsonl`
+- Harness args: `--vfx-harness --vfx-cols=120 --vfx-rows=40 --vfx-tick-ms=16 --vfx-frames=180 --vfx-seed=12345 --vfx-perf`
+
+`total_ms_p95` / `render_ms_p95` / `present_ms_p95` (base -> headclean):
+
+| Effect | Base total | Headclean total | Delta | Base render | Headclean render | Delta | Base present | Headclean present | Delta |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| plasma | 3.461 | 2.737 | -20.92% | 2.521 | 1.681 | -33.32% | 1.227 | 1.218 | -0.73% |
+| metaballs | 3.436 | 3.442 | +0.17% | 2.574 | 2.608 | +1.32% | 1.064 | 1.191 | +11.94% |
+| doom | 1.386 | 1.198 | -13.56% | 1.358 | 1.164 | -14.29% | 0.155 | 0.156 | +0.65% |
+| quake | 2.661 | 2.465 | -7.37% | 2.634 | 2.443 | -7.25% | 0.063 | 0.062 | -1.59% |
+
+Note on dirty snapshot:
+
+- `/tmp/vfx_bd3e1t53_current2_*` was captured on the live multi-agent working tree and showed unstable outliers (notably quake +80% total vs baseline). It is retained for audit, but clean-worktree `headclean` numbers are used for decision-making.
 
 #### Detached-worktree A/B (bd-3e1t.5.9 plasma commit pair)
 

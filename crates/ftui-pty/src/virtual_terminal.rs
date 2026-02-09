@@ -574,7 +574,8 @@ impl VirtualTerminal {
             0x1b => {
                 self.parse_state = ParseState::Escape;
             }
-            b'\n' => {
+            b'\n' | b'\x0b' | b'\x0c' => {
+                // LF, VT, FF — all treated as line feed
                 self.linefeed();
             }
             b'\r' => {
