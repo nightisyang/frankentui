@@ -545,7 +545,21 @@ impl BackendEventSource for TtyEventSource {
     }
 
     fn read_event(&mut self) -> Result<Option<Event>, Self::Error> {
-        Ok(self.event_queue.pop_front())
+        if let Some(event) = self.event_queue.pop_front() {
+            return Ok(Some(event));
+        }
+
+        // Opportunistically drain any newly-arrived bytes when the reader is nonblocking.
+        //
+        // This reduces poll(2) syscalls in bursty workloads by allowing the consumer's
+        // `while let Some(e) = read_event()` drain loop to pick up additional input
+        // without requiring another `poll_event()` round-trip.
+        if self.reader_nonblocking && self.tty_reader.is_some() {
+            self.drain_available_bytes()?;
+            return Ok(self.event_queue.pop_front());
+        }
+
+        Ok(None)
     }
 }
 
