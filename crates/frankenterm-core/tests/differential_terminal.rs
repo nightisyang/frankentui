@@ -168,17 +168,25 @@ impl CoreTerminalHarness {
                 }
             }
             Action::Sgr(params) => self.cursor.attrs.apply_sgr_params(&params),
-            Action::DecSet(mode) => {
-                self.modes.set_dec_mode(mode, true);
+            Action::DecSet(params) => {
+                for &p in &params {
+                    self.modes.set_dec_mode(p, true);
+                }
             }
-            Action::DecRst(mode) => {
-                self.modes.set_dec_mode(mode, false);
+            Action::DecRst(params) => {
+                for &p in &params {
+                    self.modes.set_dec_mode(p, false);
+                }
             }
-            Action::AnsiSet(mode) => {
-                self.modes.set_ansi_mode(mode, true);
+            Action::AnsiSet(params) => {
+                for &p in &params {
+                    self.modes.set_ansi_mode(p, true);
+                }
             }
-            Action::AnsiRst(mode) => {
-                self.modes.set_ansi_mode(mode, false);
+            Action::AnsiRst(params) => {
+                for &p in &params {
+                    self.modes.set_ansi_mode(p, false);
+                }
             }
             Action::SaveCursor | Action::RestoreCursor => {
                 // Cursor save/restore not applied in the baseline harness.
