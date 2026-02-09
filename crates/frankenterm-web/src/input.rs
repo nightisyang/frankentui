@@ -1543,6 +1543,953 @@ mod tests {
         );
     }
 
+    // ---- encode_wheel_input ----
+
+    #[test]
+    fn wheel_scroll_down_emits_sgr_code_64() {
+        let wheel = InputEvent::Wheel(WheelInput {
+            x: 5,
+            y: 10,
+            dx: 0,
+            dy: -3,
+            mods: Modifiers::empty(),
+        });
+        let features = VtInputEncoderFeatures {
+            sgr_mouse: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        let encoded = encode_vt_input_event(&wheel, features);
+        // dy < 0 → base_code 64, repeated 3 times
+        let single = b"\x1b[<64;6;11M";
+        assert_eq!(encoded.len(), single.len() * 3);
+        assert_eq!(&encoded[..single.len()], single.as_slice());
+    }
+
+    #[test]
+    fn wheel_scroll_up_emits_sgr_code_65() {
+        let wheel = InputEvent::Wheel(WheelInput {
+            x: 0,
+            y: 0,
+            dx: 0,
+            dy: 1,
+            mods: Modifiers::empty(),
+        });
+        let features = VtInputEncoderFeatures {
+            sgr_mouse: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        let encoded = encode_vt_input_event(&wheel, features);
+        assert_eq!(encoded, b"\x1b[<65;1;1M".to_vec());
+    }
+
+    #[test]
+    fn wheel_horizontal_scroll_right_code_67_left_code_66() {
+        let features = VtInputEncoderFeatures {
+            sgr_mouse: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        let right = InputEvent::Wheel(WheelInput {
+            x: 0,
+            y: 0,
+            dx: 1,
+            dy: 0,
+            mods: Modifiers::empty(),
+        });
+        assert_eq!(
+            encode_vt_input_event(&right, features),
+            b"\x1b[<67;1;1M".to_vec()
+        );
+        let left = InputEvent::Wheel(WheelInput {
+            x: 0,
+            y: 0,
+            dx: -1,
+            dy: 0,
+            mods: Modifiers::empty(),
+        });
+        assert_eq!(
+            encode_vt_input_event(&left, features),
+            b"\x1b[<66;1;1M".to_vec()
+        );
+    }
+
+    #[test]
+    fn wheel_zero_delta_produces_empty() {
+        let features = VtInputEncoderFeatures {
+            sgr_mouse: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        let wheel = InputEvent::Wheel(WheelInput {
+            x: 5,
+            y: 5,
+            dx: 0,
+            dy: 0,
+            mods: Modifiers::empty(),
+        });
+        assert!(encode_vt_input_event(&wheel, features).is_empty());
+    }
+
+    #[test]
+    fn wheel_steps_clamped_to_16() {
+        let features = VtInputEncoderFeatures {
+            sgr_mouse: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        let wheel = InputEvent::Wheel(WheelInput {
+            x: 0,
+            y: 0,
+            dx: 100,
+            dy: 0,
+            mods: Modifiers::empty(),
+        });
+        let encoded = encode_vt_input_event(&wheel, features);
+        let single = b"\x1b[<67;1;1M";
+        // steps should clamp to 16
+        assert_eq!(encoded.len(), single.len() * 16);
+    }
+
+    #[test]
+    fn wheel_with_modifiers_ored_into_code() {
+        let features = VtInputEncoderFeatures {
+            sgr_mouse: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        let wheel = InputEvent::Wheel(WheelInput {
+            x: 0,
+            y: 0,
+            dx: 0,
+            dy: 1,
+            mods: Modifiers::CTRL,
+        });
+        // base 65 | ctrl(16) = 81
+        assert_eq!(
+            encode_vt_input_event(&wheel, features),
+            b"\x1b[<81;1;1M".to_vec()
+        );
+    }
+
+    #[test]
+    fn wheel_disabled_when_sgr_mouse_off() {
+        let wheel = InputEvent::Wheel(WheelInput {
+            x: 0,
+            y: 0,
+            dx: 0,
+            dy: 5,
+            mods: Modifiers::empty(),
+        });
+        assert!(encode_vt_input_event(&wheel, VtInputEncoderFeatures::default()).is_empty());
+    }
+
+    // ---- encode_mouse_input phases ----
+
+    #[test]
+    fn mouse_up_emits_lowercase_m() {
+        let features = VtInputEncoderFeatures {
+            sgr_mouse: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        let mouse = InputEvent::Mouse(MouseInput {
+            phase: MousePhase::Up,
+            button: Some(MouseButton::Left),
+            x: 0,
+            y: 0,
+            mods: Modifiers::empty(),
+        });
+        assert_eq!(
+            encode_vt_input_event(&mouse, features),
+            b"\x1b[<0;1;1m".to_vec()
+        );
+    }
+
+    #[test]
+    fn mouse_move_emits_code_35() {
+        let features = VtInputEncoderFeatures {
+            sgr_mouse: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        let mouse = InputEvent::Mouse(MouseInput {
+            phase: MousePhase::Move,
+            button: None,
+            x: 3,
+            y: 7,
+            mods: Modifiers::empty(),
+        });
+        // 32 + 3 = 35
+        assert_eq!(
+            encode_vt_input_event(&mouse, features),
+            b"\x1b[<35;4;8M".to_vec()
+        );
+    }
+
+    #[test]
+    fn mouse_drag_adds_32_to_button_code() {
+        let features = VtInputEncoderFeatures {
+            sgr_mouse: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        let mouse = InputEvent::Mouse(MouseInput {
+            phase: MousePhase::Drag,
+            button: Some(MouseButton::Right),
+            x: 0,
+            y: 0,
+            mods: Modifiers::empty(),
+        });
+        // 32 | 2 = 34
+        assert_eq!(
+            encode_vt_input_event(&mouse, features),
+            b"\x1b[<34;1;1M".to_vec()
+        );
+    }
+
+    #[test]
+    fn mouse_all_button_codes() {
+        let features = VtInputEncoderFeatures {
+            sgr_mouse: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        for (button, expected_code) in [
+            (Some(MouseButton::Left), 0),
+            (Some(MouseButton::Middle), 1),
+            (Some(MouseButton::Right), 2),
+            (Some(MouseButton::Other(5)), 1), // 5 & 0b11 = 1
+            (None, 0),
+        ] {
+            let mouse = InputEvent::Mouse(MouseInput {
+                phase: MousePhase::Down,
+                button,
+                x: 0,
+                y: 0,
+                mods: Modifiers::empty(),
+            });
+            let expected = format!("\x1b[<{expected_code};1;1M");
+            assert_eq!(
+                encode_vt_input_event(&mouse, features),
+                expected.into_bytes(),
+                "button={button:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mouse_modifier_bits_shift4_alt8_ctrl16() {
+        let features = VtInputEncoderFeatures {
+            sgr_mouse: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        let mouse = InputEvent::Mouse(MouseInput {
+            phase: MousePhase::Down,
+            button: Some(MouseButton::Left),
+            x: 0,
+            y: 0,
+            mods: Modifiers::SHIFT | Modifiers::ALT | Modifiers::CTRL,
+        });
+        // 0 (left) | 4 (shift) | 8 (alt) | 16 (ctrl) = 28
+        assert_eq!(
+            encode_vt_input_event(&mouse, features),
+            b"\x1b[<28;1;1M".to_vec()
+        );
+    }
+
+    // ---- composition state edge cases ----
+
+    #[test]
+    fn composition_start_while_active_emits_cancel_then_start() {
+        let mut state = CompositionState::default();
+        let start = InputEvent::Composition(CompositionInput {
+            phase: CompositionPhase::Start,
+            data: None,
+        });
+        // First start - no synthetic
+        let out: Vec<InputEvent> = state.rewrite(start.clone()).into_events().collect();
+        assert_eq!(out, vec![start.clone()]);
+        assert!(state.is_active());
+
+        // Second start while active - synthetic Cancel emitted
+        let out: Vec<InputEvent> = state.rewrite(start.clone()).into_events().collect();
+        assert_eq!(out.len(), 2);
+        assert_eq!(
+            out[0],
+            InputEvent::Composition(CompositionInput {
+                phase: CompositionPhase::Cancel,
+                data: None,
+            })
+        );
+        assert_eq!(out[1], start);
+        assert!(state.is_active());
+    }
+
+    #[test]
+    fn composition_end_without_start_synthesizes_start() {
+        let mut state = CompositionState::default();
+        assert!(!state.is_active());
+        let end = InputEvent::Composition(CompositionInput {
+            phase: CompositionPhase::End,
+            data: Some("日本語".into()),
+        });
+        let out: Vec<InputEvent> = state.rewrite(end.clone()).into_events().collect();
+        assert_eq!(out.len(), 2);
+        assert_eq!(
+            out[0],
+            InputEvent::Composition(CompositionInput {
+                phase: CompositionPhase::Start,
+                data: None,
+            })
+        );
+        assert_eq!(out[1], end);
+        assert!(!state.is_active());
+    }
+
+    #[test]
+    fn composition_cancel_without_active_passes_through() {
+        let mut state = CompositionState::default();
+        let cancel = InputEvent::Composition(CompositionInput {
+            phase: CompositionPhase::Cancel,
+            data: None,
+        });
+        let out: Vec<InputEvent> = state.rewrite(cancel.clone()).into_events().collect();
+        assert_eq!(out, vec![cancel]);
+        assert!(!state.is_active());
+    }
+
+    #[test]
+    fn composition_non_key_events_pass_through_while_active() {
+        let mut state = CompositionState::default();
+        let _ = state.rewrite(InputEvent::Composition(CompositionInput {
+            phase: CompositionPhase::Start,
+            data: None,
+        }));
+        assert!(state.is_active());
+
+        // Mouse passes through
+        let mouse = InputEvent::Mouse(MouseInput {
+            phase: MousePhase::Down,
+            button: Some(MouseButton::Left),
+            x: 0,
+            y: 0,
+            mods: Modifiers::empty(),
+        });
+        let out: Vec<InputEvent> = state.rewrite(mouse.clone()).into_events().collect();
+        assert_eq!(out, vec![mouse]);
+
+        // Focus(true) passes through
+        let focus = InputEvent::Focus(FocusInput { focused: true });
+        let out: Vec<InputEvent> = state.rewrite(focus.clone()).into_events().collect();
+        assert_eq!(out, vec![focus]);
+        assert!(state.is_active());
+    }
+
+    #[test]
+    fn composition_multiple_updates_synthesize_start_only_once() {
+        let mut state = CompositionState::default();
+        let update1 = InputEvent::Composition(CompositionInput {
+            phase: CompositionPhase::Update,
+            data: Some("に".into()),
+        });
+        let out: Vec<InputEvent> = state.rewrite(update1.clone()).into_events().collect();
+        assert_eq!(out.len(), 2); // synthetic Start + Update
+
+        let update2 = InputEvent::Composition(CompositionInput {
+            phase: CompositionPhase::Update,
+            data: Some("にほ".into()),
+        });
+        let out: Vec<InputEvent> = state.rewrite(update2.clone()).into_events().collect();
+        assert_eq!(out.len(), 1); // only Update, no Start
+        assert_eq!(out[0], update2);
+    }
+
+    // ---- JSON roundtrips for Mouse/Wheel/Touch ----
+
+    #[test]
+    fn mouse_event_json_roundtrip() {
+        let ev = InputEvent::Mouse(MouseInput {
+            phase: MousePhase::Drag,
+            button: Some(MouseButton::Middle),
+            x: 42,
+            y: 99,
+            mods: Modifiers::CTRL | Modifiers::SHIFT,
+        });
+        let json = ev.to_json_string().expect("serialize");
+        let back = InputEvent::from_json_str(&json).expect("deserialize");
+        assert_eq!(ev, back);
+    }
+
+    #[test]
+    fn wheel_event_json_roundtrip() {
+        let ev = InputEvent::Wheel(WheelInput {
+            x: 10,
+            y: 20,
+            dx: -5,
+            dy: 3,
+            mods: Modifiers::ALT,
+        });
+        let json = ev.to_json_string().expect("serialize");
+        let back = InputEvent::from_json_str(&json).expect("deserialize");
+        assert_eq!(ev, back);
+    }
+
+    #[test]
+    fn touch_event_json_roundtrip() {
+        let ev = InputEvent::Touch(TouchInput {
+            phase: TouchPhase::Move,
+            touches: vec![
+                TouchPoint { id: 0, x: 1, y: 2 },
+                TouchPoint {
+                    id: 1,
+                    x: 50,
+                    y: 60,
+                },
+                TouchPoint {
+                    id: 2,
+                    x: 100,
+                    y: 200,
+                },
+            ],
+            mods: Modifiers::SHIFT | Modifiers::ALT,
+        });
+        let json = ev.to_json_string().expect("serialize");
+        let back = InputEvent::from_json_str(&json).expect("deserialize");
+        assert_eq!(ev, back);
+    }
+
+    #[test]
+    fn focus_event_json_roundtrip() {
+        for focused in [true, false] {
+            let ev = InputEvent::Focus(FocusInput { focused });
+            let json = ev.to_json_string().expect("serialize");
+            let back = InputEvent::from_json_str(&json).expect("deserialize");
+            assert_eq!(ev, back);
+        }
+    }
+
+    #[test]
+    fn unidentified_key_json_roundtrip_preserves_raw() {
+        let ev = InputEvent::Key(KeyInput {
+            phase: KeyPhase::Down,
+            code: KeyCode::Unidentified {
+                key: "Zenkaku".into(),
+                code: "IntlRo".into(),
+            },
+            mods: Modifiers::empty(),
+            repeat: false,
+        });
+        let json = ev.to_json_string().expect("serialize");
+        assert!(json.contains("Unidentified"));
+        assert!(json.contains("Zenkaku"));
+        assert!(json.contains("IntlRo"));
+        let back = InputEvent::from_json_str(&json).expect("deserialize");
+        assert_eq!(ev, back);
+    }
+
+    // ---- push_json_string escaping ----
+
+    #[test]
+    fn json_string_escapes_special_characters() {
+        let ev = InputEvent::Paste(PasteInput {
+            data: "he said \"hello\"\npath\\to\\file\ttab\r\n".into(),
+        });
+        let json = ev.to_json_string().expect("serialize");
+        assert!(json.contains(r#"\"hello\""#));
+        assert!(json.contains(r"\\to\\"));
+        assert!(json.contains(r"\t"));
+        assert!(json.contains(r"\r"));
+        assert!(json.contains(r"\n"));
+        // roundtrip
+        let back = InputEvent::from_json_str(&json).expect("deserialize");
+        assert_eq!(ev, back);
+    }
+
+    #[test]
+    fn json_string_escapes_control_characters() {
+        let data = "null\x00bell\x07bs\x08ff\x0c";
+        let ev = InputEvent::Paste(PasteInput { data: data.into() });
+        let json = ev.to_json_string().expect("serialize");
+        assert!(json.contains(r"\u0000"));
+        assert!(json.contains(r"\u0007"));
+        assert!(json.contains(r"\b"));
+        assert!(json.contains(r"\f"));
+        let back = InputEvent::from_json_str(&json).expect("deserialize");
+        assert_eq!(ev, back);
+    }
+
+    #[test]
+    fn json_string_passes_unicode_through() {
+        let ev = InputEvent::Paste(PasteInput {
+            data: "日本語 emoji 🎉 café".into(),
+        });
+        let json = ev.to_json_string().expect("serialize");
+        assert!(json.contains("日本語"));
+        assert!(json.contains("🎉"));
+        let back = InputEvent::from_json_str(&json).expect("deserialize");
+        assert_eq!(ev, back);
+    }
+
+    // ---- encode_key_legacy: special keys with modifiers ----
+
+    #[test]
+    fn alt_enter_emits_esc_cr() {
+        let key = InputEvent::Key(KeyInput {
+            phase: KeyPhase::Down,
+            code: KeyCode::Enter,
+            mods: Modifiers::ALT,
+            repeat: false,
+        });
+        assert_eq!(
+            encode_vt_input_event(&key, VtInputEncoderFeatures::default()),
+            b"\x1b\r".to_vec()
+        );
+    }
+
+    #[test]
+    fn alt_backspace_emits_esc_del() {
+        let key = InputEvent::Key(KeyInput {
+            phase: KeyPhase::Down,
+            code: KeyCode::Backspace,
+            mods: Modifiers::ALT,
+            repeat: false,
+        });
+        assert_eq!(
+            encode_vt_input_event(&key, VtInputEncoderFeatures::default()),
+            b"\x1b\x7f".to_vec()
+        );
+    }
+
+    #[test]
+    fn delete_with_ctrl_emits_csi_modifier_tilde() {
+        let key = InputEvent::Key(KeyInput {
+            phase: KeyPhase::Down,
+            code: KeyCode::Delete,
+            mods: Modifiers::CTRL,
+            repeat: false,
+        });
+        assert_eq!(
+            encode_vt_input_event(&key, VtInputEncoderFeatures::default()),
+            b"\x1b[3;5~".to_vec()
+        );
+    }
+
+    #[test]
+    fn page_up_with_shift_emits_csi_modifier_tilde() {
+        let key = InputEvent::Key(KeyInput {
+            phase: KeyPhase::Down,
+            code: KeyCode::PageUp,
+            mods: Modifiers::SHIFT,
+            repeat: false,
+        });
+        assert_eq!(
+            encode_vt_input_event(&key, VtInputEncoderFeatures::default()),
+            b"\x1b[5;2~".to_vec()
+        );
+    }
+
+    #[test]
+    fn home_with_shift_emits_csi_modifier_form() {
+        let key = InputEvent::Key(KeyInput {
+            phase: KeyPhase::Down,
+            code: KeyCode::Home,
+            mods: Modifiers::SHIFT,
+            repeat: false,
+        });
+        assert_eq!(
+            encode_vt_input_event(&key, VtInputEncoderFeatures::default()),
+            b"\x1b[1;2H".to_vec()
+        );
+    }
+
+    // ---- legacy function keys ----
+
+    #[test]
+    fn f1_through_f4_emit_ss3_without_modifiers() {
+        let features = VtInputEncoderFeatures::default();
+        for (n, byte) in [(1, b'P'), (2, b'Q'), (3, b'R'), (4, b'S')] {
+            let key = InputEvent::Key(KeyInput {
+                phase: KeyPhase::Down,
+                code: KeyCode::F(n),
+                mods: Modifiers::empty(),
+                repeat: false,
+            });
+            assert_eq!(
+                encode_vt_input_event(&key, features),
+                vec![0x1b, b'O', byte],
+                "F{n}"
+            );
+        }
+    }
+
+    #[test]
+    fn f1_with_modifier_returns_empty() {
+        let key = InputEvent::Key(KeyInput {
+            phase: KeyPhase::Down,
+            code: KeyCode::F(1),
+            mods: Modifiers::SHIFT,
+            repeat: false,
+        });
+        assert!(encode_vt_input_event(&key, VtInputEncoderFeatures::default()).is_empty());
+    }
+
+    #[test]
+    fn f5_through_f12_emit_csi_tilde_codes() {
+        let features = VtInputEncoderFeatures::default();
+        let expected_codes = [
+            (5, 15),
+            (6, 17),
+            (7, 18),
+            (8, 19),
+            (9, 20),
+            (10, 21),
+            (11, 23),
+            (12, 24),
+        ];
+        for (n, csi_code) in expected_codes {
+            let key = InputEvent::Key(KeyInput {
+                phase: KeyPhase::Down,
+                code: KeyCode::F(n),
+                mods: Modifiers::empty(),
+                repeat: false,
+            });
+            let expected = format!("\x1b[{csi_code}~");
+            assert_eq!(
+                encode_vt_input_event(&key, features),
+                expected.into_bytes(),
+                "F{n}"
+            );
+        }
+    }
+
+    #[test]
+    fn f13_and_above_return_empty_in_legacy() {
+        let features = VtInputEncoderFeatures::default();
+        for n in [13, 24] {
+            let key = InputEvent::Key(KeyInput {
+                phase: KeyPhase::Down,
+                code: KeyCode::F(n),
+                mods: Modifiers::empty(),
+                repeat: false,
+            });
+            assert!(
+                encode_vt_input_event(&key, features).is_empty(),
+                "F{n} should be empty in legacy encoding"
+            );
+        }
+    }
+
+    // ---- kitty keyboard protocol ----
+
+    #[test]
+    fn kitty_char_normal_press_no_colon() {
+        let key = InputEvent::Key(KeyInput {
+            phase: KeyPhase::Down,
+            code: KeyCode::Char('a'),
+            mods: Modifiers::empty(),
+            repeat: false,
+        });
+        let features = VtInputEncoderFeatures {
+            kitty_keyboard: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        // 'a' = 97, mods=1 (empty+1), kind=1 → no colon
+        assert_eq!(
+            encode_vt_input_event(&key, features),
+            b"\x1b[97;1u".to_vec()
+        );
+    }
+
+    #[test]
+    fn kitty_repeat_key_uses_colon_kind_2() {
+        let key = InputEvent::Key(KeyInput {
+            phase: KeyPhase::Down,
+            code: KeyCode::Char('x'),
+            mods: Modifiers::empty(),
+            repeat: true,
+        });
+        let features = VtInputEncoderFeatures {
+            kitty_keyboard: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        // 'x' = 120, mods=1, kind=2
+        assert_eq!(
+            encode_vt_input_event(&key, features),
+            b"\x1b[120;1:2u".to_vec()
+        );
+    }
+
+    #[test]
+    fn kitty_modifier_value_shift2_alt3_ctrl5_super9() {
+        let features = VtInputEncoderFeatures {
+            kitty_keyboard: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        for (mods, mod_value) in [
+            (Modifiers::SHIFT, 2),
+            (Modifiers::ALT, 3),
+            (Modifiers::CTRL, 5),
+            (Modifiers::SUPER, 9),
+            (Modifiers::SHIFT | Modifiers::CTRL, 6),
+        ] {
+            let key = InputEvent::Key(KeyInput {
+                phase: KeyPhase::Down,
+                code: KeyCode::Char('a'),
+                mods,
+                repeat: false,
+            });
+            let expected = format!("\x1b[97;{mod_value}u");
+            assert_eq!(
+                encode_vt_input_event(&key, features),
+                expected.into_bytes(),
+                "mods={mods:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn kitty_unidentified_key_returns_empty() {
+        let key = InputEvent::Key(KeyInput {
+            phase: KeyPhase::Down,
+            code: KeyCode::Unidentified {
+                key: "Unknown".into(),
+                code: "".into(),
+            },
+            mods: Modifiers::empty(),
+            repeat: false,
+        });
+        let features = VtInputEncoderFeatures {
+            kitty_keyboard: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        assert!(encode_vt_input_event(&key, features).is_empty());
+    }
+
+    // ---- key-up ignored in legacy mode ----
+
+    #[test]
+    fn legacy_key_up_returns_empty() {
+        let key = InputEvent::Key(KeyInput {
+            phase: KeyPhase::Up,
+            code: KeyCode::Char('a'),
+            mods: Modifiers::empty(),
+            repeat: false,
+        });
+        assert!(encode_vt_input_event(&key, VtInputEncoderFeatures::default()).is_empty());
+    }
+
+    // ---- ctrl char encoding ----
+
+    #[test]
+    fn ctrl_a_through_z_produces_correct_bytes() {
+        let features = VtInputEncoderFeatures::default();
+        for (ch, expected_byte) in [('a', 1u8), ('c', 3), ('z', 26)] {
+            let key = InputEvent::Key(KeyInput {
+                phase: KeyPhase::Down,
+                code: KeyCode::Char(ch),
+                mods: Modifiers::CTRL,
+                repeat: false,
+            });
+            assert_eq!(
+                encode_vt_input_event(&key, features),
+                vec![expected_byte],
+                "Ctrl+{ch}"
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_alt_char_emits_esc_prefix_then_ctrl_byte() {
+        let key = InputEvent::Key(KeyInput {
+            phase: KeyPhase::Down,
+            code: KeyCode::Char('c'),
+            mods: Modifiers::CTRL | Modifiers::ALT,
+            repeat: false,
+        });
+        assert_eq!(
+            encode_vt_input_event(&key, VtInputEncoderFeatures::default()),
+            vec![0x1b, 0x03]
+        );
+    }
+
+    #[test]
+    fn alt_char_emits_esc_prefix() {
+        let key = InputEvent::Key(KeyInput {
+            phase: KeyPhase::Down,
+            code: KeyCode::Char('a'),
+            mods: Modifiers::ALT,
+            repeat: false,
+        });
+        assert_eq!(
+            encode_vt_input_event(&key, VtInputEncoderFeatures::default()),
+            b"\x1ba".to_vec()
+        );
+    }
+
+    // ---- DOM key normalization ----
+
+    #[test]
+    fn normalize_dom_key_esc_alias() {
+        assert_eq!(
+            normalize_dom_key_code("Esc", "Escape", Modifiers::empty()),
+            KeyCode::Escape
+        );
+    }
+
+    #[test]
+    fn normalize_dom_key_spacebar() {
+        assert_eq!(
+            normalize_dom_key_code("Spacebar", "Space", Modifiers::empty()),
+            KeyCode::Char(' ')
+        );
+    }
+
+    #[test]
+    fn normalize_dom_key_printable_unicode() {
+        assert_eq!(
+            normalize_dom_key_code("é", "KeyE", Modifiers::empty()),
+            KeyCode::Char('é')
+        );
+    }
+
+    #[test]
+    fn normalize_dom_key_multichar_is_unidentified() {
+        match normalize_dom_key_code("Compose", "Compose", Modifiers::empty()) {
+            KeyCode::Unidentified { .. } => {}
+            other => panic!("expected Unidentified, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn normalize_dom_key_numpad_enter_via_code_fallback() {
+        // dom_key is multi-char "NumpadEnter" → not a special match, not single-char
+        // falls through to key_code_from_dom_code which handles "NumpadEnter"
+        assert_eq!(
+            normalize_dom_key_code("NumpadEnter", "NumpadEnter", Modifiers::empty()),
+            KeyCode::Enter
+        );
+    }
+
+    // ---- parse_function_key edge cases ----
+
+    #[test]
+    fn parse_function_key_f0_and_f25_invalid() {
+        assert_eq!(
+            normalize_dom_key_code("F0", "F0", Modifiers::empty()),
+            KeyCode::Unidentified {
+                key: "F0".into(),
+                code: "F0".into(),
+            }
+        );
+        assert_eq!(
+            normalize_dom_key_code("F25", "F25", Modifiers::empty()),
+            KeyCode::Unidentified {
+                key: "F25".into(),
+                code: "F25".into(),
+            }
+        );
+    }
+
+    // ---- KeyCode roundtrip ----
+
+    #[test]
+    fn keycode_to_from_code_string_roundtrip() {
+        let variants = vec![
+            KeyCode::Char('x'),
+            KeyCode::Enter,
+            KeyCode::Escape,
+            KeyCode::Backspace,
+            KeyCode::Tab,
+            KeyCode::BackTab,
+            KeyCode::Delete,
+            KeyCode::Insert,
+            KeyCode::Home,
+            KeyCode::End,
+            KeyCode::PageUp,
+            KeyCode::PageDown,
+            KeyCode::Up,
+            KeyCode::Down,
+            KeyCode::Left,
+            KeyCode::Right,
+            KeyCode::F(1),
+            KeyCode::F(12),
+            KeyCode::F(24),
+        ];
+        for code in variants {
+            let s = code.to_code_string();
+            let back = KeyCode::from_code_string(&s, None, None);
+            assert_eq!(code, back, "roundtrip failed for {s}");
+        }
+    }
+
+    #[test]
+    fn keycode_from_empty_string_is_unidentified() {
+        match KeyCode::from_code_string("", None, None) {
+            KeyCode::Unidentified { .. } => {}
+            other => panic!("expected Unidentified, got {other:?}"),
+        }
+    }
+
+    // ---- MouseButton conversions ----
+
+    #[test]
+    fn mouse_button_u8_roundtrip() {
+        for n in 0..=5u8 {
+            let btn = MouseButton::from_u8(n);
+            assert_eq!(btn.to_u8(), n);
+        }
+    }
+
+    // ---- composition encoding ----
+
+    #[test]
+    fn composition_non_end_phases_emit_nothing() {
+        let features = VtInputEncoderFeatures::default();
+        for phase in [
+            CompositionPhase::Start,
+            CompositionPhase::Update,
+            CompositionPhase::Cancel,
+        ] {
+            let ev = InputEvent::Composition(CompositionInput {
+                phase,
+                data: Some("test".into()),
+            });
+            assert!(
+                encode_vt_input_event(&ev, features).is_empty(),
+                "phase {phase:?} should emit nothing"
+            );
+        }
+    }
+
+    #[test]
+    fn composition_end_without_data_emits_nothing() {
+        let ev = InputEvent::Composition(CompositionInput {
+            phase: CompositionPhase::End,
+            data: None,
+        });
+        assert!(encode_vt_input_event(&ev, VtInputEncoderFeatures::default()).is_empty());
+    }
+
+    // ---- focus encoding ----
+
+    #[test]
+    fn focus_out_emits_csi_o() {
+        let ev = InputEvent::Focus(FocusInput { focused: false });
+        let features = VtInputEncoderFeatures {
+            focus_events: true,
+            ..VtInputEncoderFeatures::default()
+        };
+        assert_eq!(encode_vt_input_event(&ev, features), b"\x1b[O".to_vec());
+    }
+
+    // ---- BackTab encoding ----
+
+    #[test]
+    fn backtab_plain_emits_csi_z() {
+        let key = InputEvent::Key(KeyInput {
+            phase: KeyPhase::Down,
+            code: KeyCode::BackTab,
+            mods: Modifiers::empty(),
+            repeat: false,
+        });
+        assert_eq!(
+            encode_vt_input_event(&key, VtInputEncoderFeatures::default()),
+            b"\x1b[Z".to_vec()
+        );
+    }
+
     proptest! {
         #[test]
         fn modifier_tracker_focus_loss_is_idempotent(events in prop::collection::vec(any::<u8>(), 1..200)) {
