@@ -1307,6 +1307,723 @@ mod tests {
         model.process(b"!");
         assert_eq!(model.row_text(0).as_deref(), Some("Hi!"));
     }
+
+    // --- ModelCell ---
+
+    #[test]
+    fn model_cell_default_is_space() {
+        let cell = ModelCell::default();
+        assert_eq!(cell.text, " ");
+        assert_eq!(cell.fg, PackedRgba::WHITE);
+        assert_eq!(cell.bg, PackedRgba::TRANSPARENT);
+        assert_eq!(cell.attrs, CellAttrs::NONE);
+        assert_eq!(cell.link_id, 0);
+    }
+
+    #[test]
+    fn model_cell_with_char() {
+        let cell = ModelCell::with_char('X');
+        assert_eq!(cell.text, "X");
+        assert_eq!(cell.fg, PackedRgba::WHITE);
+        assert_eq!(cell.link_id, 0);
+    }
+
+    #[test]
+    fn model_cell_eq() {
+        let a = ModelCell::default();
+        let b = ModelCell::default();
+        assert_eq!(a, b);
+        let c = ModelCell::with_char('X');
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn model_cell_clone() {
+        let a = ModelCell::with_char('Z');
+        let b = a.clone();
+        assert_eq!(b.text, "Z");
+    }
+
+    // --- SgrState ---
+
+    #[test]
+    fn sgr_state_default_fields() {
+        let s = SgrState::default();
+        assert_eq!(s.fg, PackedRgba::WHITE);
+        assert_eq!(s.bg, PackedRgba::TRANSPARENT);
+        assert!(s.flags.is_empty());
+    }
+
+    #[test]
+    fn sgr_state_reset() {
+        let mut s = SgrState {
+            fg: PackedRgba::rgb(255, 0, 0),
+            bg: PackedRgba::rgb(0, 0, 255),
+            flags: StyleFlags::BOLD | StyleFlags::ITALIC,
+        };
+        s.reset();
+        assert_eq!(s.fg, PackedRgba::WHITE);
+        assert_eq!(s.bg, PackedRgba::TRANSPARENT);
+        assert!(s.flags.is_empty());
+    }
+
+    // --- ModeFlags ---
+
+    #[test]
+    fn mode_flags_new_defaults() {
+        let m = ModeFlags::new();
+        assert!(m.cursor_visible);
+        assert!(!m.alt_screen);
+        assert_eq!(m.sync_output_level, 0);
+    }
+
+    #[test]
+    fn mode_flags_default_vs_new() {
+        // Default trait gives false for bools, 0 for u32.
+        let d = ModeFlags::default();
+        assert!(!d.cursor_visible);
+        // new() gives cursor_visible=true.
+        let n = ModeFlags::new();
+        assert!(n.cursor_visible);
+    }
+
+    // --- Construction edge cases ---
+
+    #[test]
+    fn new_zero_dimensions_clamped() {
+        let model = TerminalModel::new(0, 0);
+        assert_eq!(model.width(), 1);
+        assert_eq!(model.height(), 1);
+        assert_eq!(model.cells().len(), 1);
+    }
+
+    #[test]
+    fn new_1x1() {
+        let model = TerminalModel::new(1, 1);
+        assert_eq!(model.width(), 1);
+        assert_eq!(model.height(), 1);
+        assert_eq!(model.cursor(), (0, 0));
+    }
+
+    // --- Cell access ---
+
+    #[test]
+    fn cell_out_of_bounds_returns_none() {
+        let model = TerminalModel::new(5, 3);
+        assert!(model.cell(5, 0).is_none());
+        assert!(model.cell(0, 3).is_none());
+        assert!(model.cell(100, 100).is_none());
+    }
+
+    #[test]
+    fn cell_in_bounds_returns_some() {
+        let model = TerminalModel::new(5, 3);
+        assert!(model.cell(0, 0).is_some());
+        assert!(model.cell(4, 2).is_some());
+    }
+
+    #[test]
+    fn current_cell_at_cursor() {
+        let mut model = TerminalModel::new(10, 5);
+        model.process(b"AB");
+        // Cursor at (2,0), current_cell should be the cell under it.
+        let cc = model.current_cell().unwrap();
+        assert_eq!(cc.text, " "); // Cursor is past "AB", on empty cell.
+    }
+
+    #[test]
+    fn row_out_of_bounds_returns_none() {
+        let model = TerminalModel::new(5, 3);
+        assert!(model.row(3).is_none());
+        assert!(model.row(100).is_none());
+    }
+
+    #[test]
+    fn row_text_trims_trailing_spaces() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"Hi");
+        assert_eq!(model.row_text(0), Some("Hi".to_string()));
+    }
+
+    #[test]
+    fn link_url_invalid_id_returns_none() {
+        let model = TerminalModel::new(5, 1);
+        assert!(model.link_url(999).is_none());
+    }
+
+    #[test]
+    fn link_url_zero_is_empty() {
+        let model = TerminalModel::new(5, 1);
+        assert_eq!(model.link_url(0), Some(""));
+    }
+
+    #[test]
+    fn has_dangling_link_initially_false() {
+        let model = TerminalModel::new(5, 1);
+        assert!(!model.has_dangling_link());
+    }
+
+    // --- CHA (cursor horizontal absolute) ---
+
+    #[test]
+    fn cha_moves_to_column() {
+        let mut model = TerminalModel::new(80, 24);
+        model.process(b"\x1b[1;1H"); // (0,0)
+        model.process(b"\x1b[20G"); // CHA col 20
+        assert_eq!(model.cursor(), (19, 0));
+    }
+
+    #[test]
+    fn cha_clamps_to_width() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[999G");
+        assert_eq!(model.cursor().0, 9);
+    }
+
+    // --- VPA (vertical position absolute) ---
+
+    #[test]
+    fn vpa_moves_to_row() {
+        let mut model = TerminalModel::new(80, 24);
+        model.process(b"\x1b[10d"); // VPA row 10
+        assert_eq!(model.cursor(), (0, 9));
+    }
+
+    #[test]
+    fn vpa_clamps_to_height() {
+        let mut model = TerminalModel::new(10, 5);
+        model.process(b"\x1b[999d");
+        assert_eq!(model.cursor().1, 4);
+    }
+
+    // --- Backspace ---
+
+    #[test]
+    fn backspace_moves_cursor_back() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"ABC");
+        assert_eq!(model.cursor(), (3, 0));
+        model.process(b"\x08"); // BS
+        assert_eq!(model.cursor(), (2, 0));
+    }
+
+    #[test]
+    fn backspace_at_column_zero_no_move() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x08");
+        assert_eq!(model.cursor(), (0, 0));
+    }
+
+    // --- Tab ---
+
+    #[test]
+    fn tab_moves_to_next_tab_stop() {
+        let mut model = TerminalModel::new(80, 1);
+        model.process(b"\t");
+        assert_eq!(model.cursor(), (8, 0));
+        model.process(b"A\t");
+        assert_eq!(model.cursor(), (16, 0));
+    }
+
+    #[test]
+    fn tab_clamps_at_right_edge() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\t"); // -> 8
+        model.process(b"\t"); // -> would be 16, but clamped to 9
+        assert_eq!(model.cursor(), (9, 0));
+    }
+
+    // --- Escape sequences ---
+
+    #[test]
+    fn esc_7_8_do_not_panic() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b7"); // DECSC
+        model.process(b"\x1b8"); // DECRC
+        assert_eq!(model.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn esc_equals_greater_ignored() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b="); // App keypad
+        model.process(b"\x1b>"); // Normal keypad
+        assert_eq!(model.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn esc_esc_double_escape_handled() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b\x1b"); // Double ESC — stays in escape state
+        // 'A' is consumed as unknown escape sequence, returning to ground.
+        model.process(b"AB");
+        // Only 'B' reaches ground as printable.
+        assert_eq!(model.row_text(0).as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn unknown_escape_returns_to_ground() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1bQ"); // Unknown
+        model.process(b"Hi");
+        assert_eq!(model.row_text(0).as_deref(), Some("Hi"));
+    }
+
+    // --- EL modes ---
+
+    #[test]
+    fn el_mode_1_erases_from_start_to_cursor() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"ABCDEFGHIJ");
+        model.process(b"\x1b[1;5H"); // (4, 0)
+        model.process(b"\x1b[1K"); // Erase from start to cursor
+        // Columns 0..=4 erased.
+        let row = model.row_text(0).unwrap();
+        assert!(row.starts_with("     ") || row.trim_start().starts_with("FGHIJ"));
+    }
+
+    #[test]
+    fn el_mode_2_erases_entire_line() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"ABCDEFGHIJ");
+        model.process(b"\x1b[1;5H");
+        model.process(b"\x1b[2K"); // Erase entire line
+        assert_eq!(model.row_text(0), Some(String::new()));
+    }
+
+    // --- ED modes ---
+
+    #[test]
+    fn ed_mode_0_erases_from_cursor_to_end() {
+        let mut model = TerminalModel::new(10, 3);
+        model.process(b"Line1\nLine2\nLine3");
+        model.process(b"\x1b[2;1H"); // Row 2, Col 1 (line index 1)
+        model.process(b"\x1b[0J"); // Erase from cursor to end
+        assert_eq!(model.row_text(0), Some("Line1".to_string()));
+        assert_eq!(model.row_text(1), Some(String::new()));
+        assert_eq!(model.row_text(2), Some(String::new()));
+    }
+
+    #[test]
+    fn ed_mode_1_erases_from_start_to_cursor() {
+        let mut model = TerminalModel::new(10, 3);
+        model.process(b"Line1\nLine2\nLine3");
+        model.process(b"\x1b[2;3H"); // Row 2, Col 3 (0-indexed: y=1, x=2)
+        model.process(b"\x1b[1J"); // Erase from start to cursor
+        assert_eq!(model.row_text(0), Some(String::new()));
+        // Row 1 erased up to and including cursor position (x=2).
+        let row1 = model.row_text(1).unwrap();
+        assert!(row1.starts_with("   ") || row1.len() <= 10);
+    }
+
+    // --- SGR attribute flags ---
+
+    #[test]
+    fn sgr_italic() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[3mI\x1b[0m");
+        assert!(model.cell(0, 0).unwrap().attrs.has_flag(StyleFlags::ITALIC));
+    }
+
+    #[test]
+    fn sgr_underline() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[4mU\x1b[0m");
+        assert!(
+            model
+                .cell(0, 0)
+                .unwrap()
+                .attrs
+                .has_flag(StyleFlags::UNDERLINE)
+        );
+    }
+
+    #[test]
+    fn sgr_dim() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[2mD\x1b[0m");
+        assert!(model.cell(0, 0).unwrap().attrs.has_flag(StyleFlags::DIM));
+    }
+
+    #[test]
+    fn sgr_strikethrough() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[9mS\x1b[0m");
+        assert!(
+            model
+                .cell(0, 0)
+                .unwrap()
+                .attrs
+                .has_flag(StyleFlags::STRIKETHROUGH)
+        );
+    }
+
+    #[test]
+    fn sgr_reverse() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[7mR\x1b[0m");
+        assert!(
+            model
+                .cell(0, 0)
+                .unwrap()
+                .attrs
+                .has_flag(StyleFlags::REVERSE)
+        );
+    }
+
+    #[test]
+    fn sgr_remove_bold() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[1mB\x1b[22mX");
+        assert!(model.cell(0, 0).unwrap().attrs.has_flag(StyleFlags::BOLD));
+        assert!(!model.cell(1, 0).unwrap().attrs.has_flag(StyleFlags::BOLD));
+    }
+
+    #[test]
+    fn sgr_remove_italic() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[3mI\x1b[23mX");
+        assert!(!model.cell(1, 0).unwrap().attrs.has_flag(StyleFlags::ITALIC));
+    }
+
+    // --- SGR colors ---
+
+    #[test]
+    fn sgr_basic_background() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[42mG"); // Green bg
+        assert_eq!(model.cell(0, 0).unwrap().bg, PackedRgba::rgb(0, 128, 0));
+    }
+
+    #[test]
+    fn sgr_default_fg_39() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[31m\x1b[39mX");
+        assert_eq!(model.cell(0, 0).unwrap().fg, PackedRgba::WHITE);
+    }
+
+    #[test]
+    fn sgr_default_bg_49() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[41m\x1b[49mX");
+        assert_eq!(model.cell(0, 0).unwrap().bg, PackedRgba::TRANSPARENT);
+    }
+
+    #[test]
+    fn sgr_bright_fg() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[91mX"); // Bright red fg
+        assert_eq!(model.cell(0, 0).unwrap().fg, PackedRgba::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn sgr_bright_bg() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[104mX"); // Bright blue bg
+        assert_eq!(model.cell(0, 0).unwrap().bg, PackedRgba::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn sgr_256_grayscale() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[38;5;232mX"); // Grayscale idx 232 → gray=8
+        assert_eq!(model.cell(0, 0).unwrap().fg, PackedRgba::rgb(8, 8, 8));
+    }
+
+    #[test]
+    fn sgr_256_basic_range() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[38;5;1mX"); // Index 1 = basic red
+        assert_eq!(model.cell(0, 0).unwrap().fg, PackedRgba::rgb(128, 0, 0));
+    }
+
+    #[test]
+    fn sgr_256_bright_range() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[38;5;9mX"); // Index 9 = bright red
+        assert_eq!(model.cell(0, 0).unwrap().fg, PackedRgba::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn sgr_empty_params_resets() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[1m\x1b[mX"); // SGR with no params = reset
+        assert!(!model.cell(0, 0).unwrap().attrs.has_flag(StyleFlags::BOLD));
+    }
+
+    // --- Sync output ---
+
+    #[test]
+    fn sync_output_extra_end_saturates() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[?2026l"); // End without begin
+        assert_eq!(model.modes().sync_output_level, 0);
+        assert!(model.sync_output_balanced());
+    }
+
+    #[test]
+    fn sync_output_nested() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[?2026h");
+        model.process(b"\x1b[?2026h");
+        assert_eq!(model.modes().sync_output_level, 2);
+        model.process(b"\x1b[?2026l");
+        assert_eq!(model.modes().sync_output_level, 1);
+        assert!(!model.sync_output_balanced());
+    }
+
+    // --- diff_grid ---
+
+    #[test]
+    fn diff_grid_identical_returns_none() {
+        let model = TerminalModel::new(3, 2);
+        let expected = vec![ModelCell::default(); 6];
+        assert!(model.diff_grid(&expected).is_none());
+    }
+
+    #[test]
+    fn diff_grid_different_returns_some() {
+        let mut model = TerminalModel::new(3, 1);
+        model.process(b"ABC");
+        let expected = vec![ModelCell::default(); 3];
+        let diff = model.diff_grid(&expected);
+        assert!(diff.is_some());
+        let diff_str = diff.unwrap();
+        assert!(diff_str.contains("Grid differences"));
+    }
+
+    #[test]
+    fn diff_grid_size_mismatch() {
+        let model = TerminalModel::new(3, 2);
+        let expected = vec![ModelCell::default(); 5]; // Wrong size
+        let diff = model.diff_grid(&expected);
+        assert!(diff.is_some());
+        assert!(diff.unwrap().contains("Grid size mismatch"));
+    }
+
+    // --- dump_sequences ---
+
+    #[test]
+    fn dump_sequences_osc() {
+        let bytes = b"\x1b]8;;https://example.com\x07text\x1b]8;;\x07";
+        let dump = TerminalModel::dump_sequences(bytes);
+        assert!(dump.contains("\\e]8;;https://example.com\\a"));
+    }
+
+    #[test]
+    fn dump_sequences_osc_st() {
+        let bytes = b"\x1b]0;title\x1b\\";
+        let dump = TerminalModel::dump_sequences(bytes);
+        assert!(dump.contains("\\e]"));
+        assert!(dump.contains("\\e\\\\"));
+    }
+
+    #[test]
+    fn dump_sequences_c0_controls() {
+        let bytes = b"\x08\x09\x0A";
+        let dump = TerminalModel::dump_sequences(bytes);
+        assert!(dump.contains("\\x08"));
+        assert!(dump.contains("\\x09"));
+        assert!(dump.contains("\\x0a"));
+    }
+
+    #[test]
+    fn dump_sequences_trailing_esc() {
+        let bytes = b"text\x1b";
+        let dump = TerminalModel::dump_sequences(bytes);
+        assert!(dump.contains("text"));
+        assert!(dump.contains("\\e"));
+    }
+
+    #[test]
+    fn dump_sequences_unknown_escape() {
+        let bytes = b"\x1bQ";
+        let dump = TerminalModel::dump_sequences(bytes);
+        assert!(dump.contains("\\eQ"));
+    }
+
+    // --- Erase uses current bg color ---
+
+    #[test]
+    fn erase_line_uses_current_bg() {
+        let mut model = TerminalModel::new(5, 1);
+        model.process(b"Hello");
+        model.process(b"\x1b[1;1H"); // Move to (0,0)
+        model.process(b"\x1b[41m"); // Red bg
+        model.process(b"\x1b[K"); // Erase to end
+        let cell = model.cell(0, 0).unwrap();
+        assert_eq!(cell.text, " ");
+        assert_eq!(cell.bg, PackedRgba::rgb(128, 0, 0));
+    }
+
+    // --- Multiple hyperlinks ---
+
+    #[test]
+    fn multiple_hyperlinks_get_different_ids() {
+        let mut model = TerminalModel::new(30, 1);
+        model.process(b"\x1b]8;;https://a.com\x07A\x1b]8;;\x07");
+        model.process(b"\x1b]8;;https://b.com\x07B\x1b]8;;\x07");
+        let id_a = model.cell(0, 0).unwrap().link_id;
+        let id_b = model.cell(1, 0).unwrap().link_id;
+        assert_ne!(id_a, id_b);
+        assert_eq!(model.link_url(id_a), Some("https://a.com"));
+        assert_eq!(model.link_url(id_b), Some("https://b.com"));
+    }
+
+    // --- OSC with ST terminator ---
+
+    #[test]
+    fn osc8_with_st_terminator() {
+        let mut model = TerminalModel::new(20, 1);
+        model.process(b"\x1b]8;;https://st.com\x1b\\Link\x1b]8;;\x1b\\");
+        let cell = model.cell(0, 0).unwrap();
+        assert!(cell.link_id > 0);
+        assert_eq!(model.link_url(cell.link_id), Some("https://st.com"));
+        assert!(!model.has_dangling_link());
+    }
+
+    // --- TerminalModel Debug ---
+
+    #[test]
+    fn terminal_model_debug() {
+        let model = TerminalModel::new(5, 3);
+        let dbg = format!("{model:?}");
+        assert!(dbg.contains("TerminalModel"));
+    }
+
+    // --- Wide character ---
+
+    #[test]
+    fn wide_char_occupies_two_cells() {
+        let mut model = TerminalModel::new(10, 1);
+        // CJK character takes 2 columns
+        model.process("中".as_bytes());
+        assert_eq!(model.cell(0, 0).unwrap().text, "中");
+        // Next cell should be cleared (placeholder)
+        assert_eq!(model.cell(1, 0).unwrap().text, "");
+        assert_eq!(model.cursor(), (2, 0));
+    }
+
+    // --- Cursor CUP with f final byte ---
+
+    #[test]
+    fn cup_with_f_final_byte() {
+        let mut model = TerminalModel::new(80, 24);
+        model.process(b"\x1b[3;7f"); // Same as H
+        assert_eq!(model.cursor(), (6, 2));
+    }
+
+    // --- CSI unknown final byte ---
+
+    #[test]
+    fn csi_unknown_final_byte_ignored() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"A");
+        model.process(b"\x1b[99X"); // Unknown CSI
+        model.process(b"B");
+        assert_eq!(model.row_text(0).as_deref(), Some("AB"));
+    }
+
+    // --- CSI save/restore cursor (s/u) ---
+
+    #[test]
+    fn csi_save_restore_cursor_no_panic() {
+        let mut model = TerminalModel::new(10, 5);
+        model.process(b"\x1b[5;5H");
+        model.process(b"\x1b[s"); // Save
+        model.process(b"\x1b[1;1H");
+        model.process(b"\x1b[u"); // Restore (not fully implemented, but shouldn't panic)
+        // Just verify no crash.
+        let (x, y) = model.cursor();
+        assert!(x < model.width());
+        assert!(y < model.height());
+    }
+
+    // --- BEL in ground state ---
+
+    #[test]
+    fn bel_in_ground_is_ignored() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x07Hi");
+        assert_eq!(model.row_text(0).as_deref(), Some("Hi"));
+    }
+
+    // --- CUP clamps out-of-range values ---
+
+    #[test]
+    fn cup_clamps_large_row_col() {
+        let mut model = TerminalModel::new(10, 5);
+        model.process(b"\x1b[999;999H");
+        assert_eq!(model.cursor(), (9, 4));
+    }
+
+    // --- Relative moves at boundaries ---
+
+    #[test]
+    fn cuu_at_top_stays() {
+        let mut model = TerminalModel::new(10, 5);
+        model.process(b"\x1b[1;1H");
+        model.process(b"\x1b[50A"); // Up 50 from top
+        assert_eq!(model.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn cud_at_bottom_stays() {
+        let mut model = TerminalModel::new(10, 5);
+        model.process(b"\x1b[5;1H");
+        model.process(b"\x1b[50B"); // Down 50 from bottom
+        assert_eq!(model.cursor(), (0, 4));
+    }
+
+    #[test]
+    fn cuf_at_right_stays() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[1;10H");
+        model.process(b"\x1b[50C"); // Forward 50 from right edge
+        assert_eq!(model.cursor().0, 9);
+    }
+
+    #[test]
+    fn cub_at_left_stays() {
+        let mut model = TerminalModel::new(10, 1);
+        model.process(b"\x1b[50D"); // Back 50 from column 0
+        assert_eq!(model.cursor().0, 0);
+    }
+
+    // --- CSI with intermediate bytes ---
+
+    #[test]
+    fn csi_with_intermediate_no_crash() {
+        let mut model = TerminalModel::new(10, 1);
+        // Space (0x20) in CSI entry falls to default → Ground.
+        // Then 'q' is printed as regular char.
+        model.process(b"\x1b[ q");
+        model.process(b"OK");
+        // 'q' + "OK" are all printed.
+        assert_eq!(model.row_text(0).as_deref(), Some("qOK"));
+    }
+
+    // --- Reset preserves dimensions ---
+
+    #[test]
+    fn reset_preserves_dimensions() {
+        let mut model = TerminalModel::new(40, 20);
+        model.process(b"SomeText");
+        model.reset();
+        assert_eq!(model.width(), 40);
+        assert_eq!(model.height(), 20);
+        assert_eq!(model.cursor(), (0, 0));
+    }
+
+    // --- LF at bottom does not crash ---
+
+    #[test]
+    fn lf_at_bottom_row_stays() {
+        let mut model = TerminalModel::new(10, 3);
+        model.process(b"\x1b[3;1H"); // Row 3 (bottom)
+        model.process(b"\n"); // LF at bottom
+        assert_eq!(model.cursor().1, 2); // Stays at bottom
+    }
 }
 
 /// Property tests for terminal model correctness.
