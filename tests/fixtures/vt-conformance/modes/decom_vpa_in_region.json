@@ -1,0 +1,13 @@
+{
+  "name": "decom_vpa_in_region",
+  "description": "DECOM (origin mode) makes VPA (CSI d) addressing relative to scroll region",
+  "initial_size": [10, 6],
+  "input_bytes_hex": "1b5b323b35721b5b3f36681b5b34471b5b326459",
+  "comment": "CSI 2;5 r (region rows 1-4, 0-based), CSI ? 6 h (DECOM on), CSI 4 G (CHA col 3), CSI 2 d (VPA row=1 relative → abs row 2), print Y at (2,3); cursor at (2,4)",
+  "expected": {
+    "cursor": { "row": 2, "col": 4 },
+    "cells": [
+      { "row": 2, "col": 3, "char": "Y" }
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "scroll_region_reset",
+  "description": "CSI r with no params resets scroll region to full screen",
+  "initial_size": [5, 5],
+  "input_bytes_hex": "1b5b323b33721b5b323b314841421b5b333b314843441b5b721b5b484546",
+  "comment": "Set region rows 2-3 (0-indexed 1-2); CUP(2,1) → (1,0), print AB; CUP(3,1) → (2,0), print CD; CSI r reset to full screen; CUP home; print EF at (0,0-1); cursor at (0,2)",
+  "expected": {
+    "cursor": { "row": 0, "col": 2 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "E" },
+      { "row": 0, "col": 1, "char": "F" },
+      { "row": 1, "col": 0, "char": "A" },
+      { "row": 1, "col": 1, "char": "B" },
+      { "row": 2, "col": 0, "char": "C" },
+      { "row": 2, "col": 1, "char": "D" }
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "cnl_cpl_combined",
+  "description": "CNL moves cursor N lines down to col 0; CPL moves N lines up to col 0",
+  "initial_size": [5, 5],
+  "input_bytes_hex": "1b5b333b3348411b5b3245421b5b334643",
+  "comment": "CUP(3,3) → (2,2), print A; CNL(2) → (4,0), print B; CPL(3) → (1,0), print C; cursor at (1,1)",
+  "expected": {
+    "cursor": { "row": 1, "col": 1 },
+    "cells": [
+      { "row": 2, "col": 2, "char": "A" },
+      { "row": 4, "col": 0, "char": "B" },
+      { "row": 1, "col": 0, "char": "C" }
+    ]
+  }
+}

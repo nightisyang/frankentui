@@ -1,0 +1,13 @@
+{
+  "name": "back_tab_at_origin",
+  "description": "CBT (back tab) from column 0 stays at column 0",
+  "initial_size": [20, 3],
+  "input_bytes_hex": "1b5b5a41",
+  "comment": "CBT(1) from col 0 → stays at col 0 (no prior tab stop); print A at (0,0); cursor at (0,1)",
+  "expected": {
+    "cursor": { "row": 0, "col": 1 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "A" }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "delete_chars_mid_row",
+  "description": "DCH in middle of row shifts remaining content left, blanks at end",
+  "initial_size": [5, 3],
+  "input_bytes_hex": "41424344451b5b313b32481b5b3250",
+  "comment": "Print ABCDE; CUP(1,2) → (0,1); DCH(2) deletes B,C; D,E shift left to cols 1-2; blanks at cols 3-4; cursor at (0,1)",
+  "expected": {
+    "cursor": { "row": 0, "col": 1 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "A" },
+      { "row": 0, "col": 1, "char": "D" },
+      { "row": 0, "col": 2, "char": "E" },
+      { "row": 0, "col": 3, "char": " " },
+      { "row": 0, "col": 4, "char": " " }
+    ]
+  }
+}

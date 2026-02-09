@@ -1,0 +1,13 @@
+{
+  "name": "vpa_cha_combo",
+  "description": "VPA (cursor row) and CHA (cursor column) used together for absolute positioning",
+  "initial_size": [10, 5],
+  "input_bytes_hex": "1b5b33641b5b344758",
+  "comment": "VPA(3) → row 2; CHA(4) → col 3; print X at (2,3); cursor at (2,4)",
+  "expected": {
+    "cursor": { "row": 2, "col": 4 },
+    "cells": [
+      { "row": 2, "col": 3, "char": "X" }
+    ]
+  }
+}
