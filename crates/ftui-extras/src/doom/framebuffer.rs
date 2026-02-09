@@ -138,6 +138,10 @@ impl DoomFramebuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::canvas::Mode;
+    use ftui_core::geometry::Rect;
+    use ftui_render::buffer::Buffer;
+    use ftui_style::Style;
 
     #[test]
     fn new_framebuffer_is_black() {
@@ -490,5 +494,73 @@ mod tests {
         assert_eq!(p.r(), 0);
         assert_eq!(p.g(), 0);
         assert_eq!(p.b(), 100);
+    }
+
+    // --- blit_to_painter ---
+
+    #[test]
+    fn blit_to_painter_halfblock_maps_fg_and_bg() {
+        let mut fb = DoomFramebuffer::new(1, 2);
+        let top = PackedRgba::RED;
+        let bottom = PackedRgba::BLUE;
+        fb.set_pixel(0, 0, top);
+        fb.set_pixel(0, 1, bottom);
+
+        let mut painter = Painter::new(1, 2, Mode::HalfBlock);
+        fb.blit_to_painter(&mut painter, 1);
+
+        let mut buf = Buffer::new(1, 1);
+        painter.render_to_buffer(Rect::new(0, 0, 1, 1), &mut buf, Style::default());
+
+        let cell = buf.get(0, 0).expect("rendered cell");
+        assert_eq!(cell.content.as_char(), Some('▀'));
+        assert_eq!(cell.fg, top);
+        assert_eq!(cell.bg, bottom);
+    }
+
+    #[test]
+    fn blit_to_painter_respects_stride() {
+        let mut fb = DoomFramebuffer::new(2, 2);
+        fb.set_pixel(0, 0, PackedRgba::RED);
+        fb.set_pixel(1, 0, PackedRgba::GREEN);
+        fb.set_pixel(0, 1, PackedRgba::BLUE);
+        fb.set_pixel(1, 1, PackedRgba::WHITE);
+
+        let mut painter = Painter::new(2, 2, Mode::HalfBlock);
+        // stride=2 on a 2x2 painter should only sample the top-left pixel.
+        fb.blit_to_painter(&mut painter, 2);
+
+        assert!(painter.get(0, 0));
+        assert!(!painter.get(1, 0));
+        assert!(!painter.get(0, 1));
+        assert!(!painter.get(1, 1));
+    }
+
+    #[test]
+    fn blit_to_painter_scales_x_nearest_neighbor() {
+        let mut fb = DoomFramebuffer::new(2, 2);
+        fb.set_pixel(0, 0, PackedRgba::RED);
+        fb.set_pixel(1, 0, PackedRgba::GREEN);
+        fb.set_pixel(0, 1, PackedRgba::BLUE);
+        fb.set_pixel(1, 1, PackedRgba::WHITE);
+
+        // Upscale from 2->4 columns; left half should map to fb_x=0, right half to fb_x=1.
+        let mut painter = Painter::new(4, 2, Mode::HalfBlock);
+        fb.blit_to_painter(&mut painter, 1);
+
+        let mut buf = Buffer::new(4, 1);
+        painter.render_to_buffer(Rect::new(0, 0, 4, 1), &mut buf, Style::default());
+
+        for x in 0..4u16 {
+            let cell = buf.get(x, 0).expect("rendered cell");
+            assert_eq!(cell.content.as_char(), Some('▀'), "x={x}");
+            if x < 2 {
+                assert_eq!(cell.fg, PackedRgba::RED, "x={x} fg");
+                assert_eq!(cell.bg, PackedRgba::BLUE, "x={x} bg");
+            } else {
+                assert_eq!(cell.fg, PackedRgba::GREEN, "x={x} fg");
+                assert_eq!(cell.bg, PackedRgba::WHITE, "x={x} bg");
+            }
+        }
     }
 }

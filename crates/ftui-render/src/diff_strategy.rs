@@ -1162,4 +1162,490 @@ mod tests {
             assert!(selector.posterior_variance() >= 0.0);
         }
     }
+
+    // --- DiffStrategy enum ---
+
+    #[test]
+    fn diff_strategy_display() {
+        assert_eq!(format!("{}", DiffStrategy::Full), "Full");
+        assert_eq!(format!("{}", DiffStrategy::DirtyRows), "DirtyRows");
+        assert_eq!(format!("{}", DiffStrategy::FullRedraw), "FullRedraw");
+    }
+
+    #[test]
+    fn diff_strategy_debug() {
+        let dbg = format!("{:?}", DiffStrategy::Full);
+        assert!(dbg.contains("Full"));
+    }
+
+    #[test]
+    fn diff_strategy_clone_and_eq() {
+        let a = DiffStrategy::DirtyRows;
+        let b = a;
+        assert_eq!(a, b);
+        assert_ne!(a, DiffStrategy::Full);
+    }
+
+    // --- StrategyEvidence ---
+
+    #[test]
+    fn strategy_evidence_display_contains_all_sections() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        selector.select(80, 24, 5);
+        let ev = selector.last_evidence().unwrap();
+        let display = format!("{ev}");
+        assert!(display.contains("Strategy:"));
+        assert!(display.contains("Costs:"));
+        assert!(display.contains("Posterior:"));
+        assert!(display.contains("Dirty:"));
+        assert!(display.contains("Guard:"));
+        assert!(display.contains("Hysteresis:"));
+    }
+
+    #[test]
+    fn strategy_evidence_clone() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        selector.select(80, 24, 3);
+        let ev = selector.last_evidence().unwrap().clone();
+        assert_eq!(ev.dirty_rows, 3);
+        assert_eq!(ev.total_rows, 24);
+        assert_eq!(ev.total_cells, 80 * 24);
+    }
+
+    #[test]
+    fn strategy_evidence_debug() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        selector.select(80, 24, 2);
+        let ev = selector.last_evidence().unwrap();
+        let dbg = format!("{ev:?}");
+        assert!(dbg.contains("StrategyEvidence"));
+        assert!(dbg.contains("cost_full"));
+    }
+
+    // --- Config ---
+
+    #[test]
+    fn config_default_all_fields() {
+        let c = DiffStrategyConfig::default();
+        assert!((c.c_row - 0.1).abs() < 1e-9);
+        assert!((c.decay - 0.95).abs() < 1e-9);
+        assert!(!c.conservative);
+        assert!((c.conservative_quantile - 0.95).abs() < 1e-9);
+    }
+
+    #[test]
+    fn config_clone_and_debug() {
+        let c = DiffStrategyConfig::default();
+        let c2 = c.clone();
+        assert!((c2.c_scan - c.c_scan).abs() < 1e-9);
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("DiffStrategyConfig"));
+        assert!(dbg.contains("c_scan"));
+    }
+
+    // --- Selector construction ---
+
+    #[test]
+    fn selector_default_equals_with_defaults() {
+        let s1 = DiffStrategySelector::default();
+        let s2 = DiffStrategySelector::with_defaults();
+        assert!((s1.posterior_mean() - s2.posterior_mean()).abs() < 1e-12);
+        assert_eq!(s1.frame_count(), s2.frame_count());
+    }
+
+    #[test]
+    fn selector_config_accessor() {
+        let config = DiffStrategyConfig {
+            c_scan: 2.0,
+            ..Default::default()
+        };
+        let selector = DiffStrategySelector::new(config);
+        assert!((selector.config().c_scan - 2.0).abs() < 1e-9);
+    }
+
+    // --- frame_count ---
+
+    #[test]
+    fn frame_count_increments_per_select() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        assert_eq!(selector.frame_count(), 0);
+        selector.select(80, 24, 1);
+        assert_eq!(selector.frame_count(), 1);
+        selector.select(80, 24, 1);
+        assert_eq!(selector.frame_count(), 2);
+        for _ in 0..10 {
+            selector.select(80, 24, 1);
+        }
+        assert_eq!(selector.frame_count(), 12);
+    }
+
+    #[test]
+    fn frame_count_not_affected_by_observe() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        selector.observe(100, 10);
+        assert_eq!(selector.frame_count(), 0);
+    }
+
+    // --- override_last_strategy ---
+
+    #[test]
+    fn override_last_strategy_changes_evidence() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        selector.select(80, 24, 2);
+        let original = selector.last_evidence().unwrap().strategy;
+
+        let override_to = if original == DiffStrategy::Full {
+            DiffStrategy::FullRedraw
+        } else {
+            DiffStrategy::Full
+        };
+        selector.override_last_strategy(override_to, "test_override");
+
+        let ev = selector.last_evidence().unwrap();
+        assert_eq!(ev.strategy, override_to);
+        assert_eq!(ev.guard_reason, "test_override");
+        assert!(!ev.hysteresis_applied);
+    }
+
+    #[test]
+    fn override_last_strategy_noop_when_no_evidence() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        // No select() called yet, so no evidence.
+        selector.override_last_strategy(DiffStrategy::Full, "noop");
+        assert!(selector.last_evidence().is_none());
+    }
+
+    // --- select_with_scan_estimate ---
+
+    #[test]
+    fn select_with_scan_estimate_custom_cells() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        // Provide a very small scan estimate to make DirtyRows cheaper.
+        let strategy = selector.select_with_scan_estimate(80, 24, 10, 10);
+        assert_eq!(strategy, DiffStrategy::DirtyRows);
+    }
+
+    #[test]
+    fn select_with_scan_estimate_clamped_to_total() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        // Provide scan_cells > total cells — should be clamped.
+        let strategy = selector.select_with_scan_estimate(80, 24, 5, 1_000_000);
+        // Should not panic, strategy is valid.
+        assert!(matches!(
+            strategy,
+            DiffStrategy::Full | DiffStrategy::DirtyRows | DiffStrategy::FullRedraw
+        ));
+    }
+
+    // --- Estimator ---
+
+    #[test]
+    fn estimator_reset_restores_priors() {
+        let mut est = ChangeRateEstimator::new(2.0, 8.0, 0.9, 0);
+        est.observe(100, 50);
+        assert!((est.mean() - 0.2).abs() > 0.01, "Mean should have changed");
+
+        est.reset();
+        let (alpha, beta) = est.posterior_params();
+        assert!((alpha - 2.0).abs() < 1e-9);
+        assert!((beta - 8.0).abs() < 1e-9);
+        assert!((est.mean() - 0.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn estimator_clone() {
+        let est1 = ChangeRateEstimator::new(1.0, 9.0, 0.95, 0);
+        let est2 = est1.clone();
+        assert!((est2.mean() - est1.mean()).abs() < 1e-12);
+    }
+
+    #[test]
+    fn estimator_debug() {
+        let est = ChangeRateEstimator::new(1.0, 19.0, 0.95, 0);
+        let dbg = format!("{est:?}");
+        assert!(dbg.contains("ChangeRateEstimator"));
+    }
+
+    #[test]
+    fn estimator_min_observation_cells_filters() {
+        let mut est = ChangeRateEstimator::new(1.0, 19.0, 0.95, 50);
+        let initial_mean = est.mean();
+        // Observe fewer than min_observation_cells — should be no-op.
+        est.observe(49, 25);
+        assert!(
+            (est.mean() - initial_mean).abs() < 1e-12,
+            "Observation below min should be ignored"
+        );
+        // Observe exactly min_observation_cells — should update.
+        est.observe(50, 25);
+        assert!(
+            (est.mean() - initial_mean).abs() > 0.01,
+            "Observation at min should be accepted"
+        );
+    }
+
+    #[test]
+    fn estimator_changed_exceeds_scanned_is_clamped() {
+        let mut est = ChangeRateEstimator::new(1.0, 19.0, 0.95, 0);
+        // changed > scanned should be clamped to scanned.
+        est.observe(10, 100);
+        let mean = est.mean();
+        // With all cells changed, mean should be high.
+        assert!(mean > 0.3, "Mean should be high when all cells changed");
+    }
+
+    #[test]
+    fn estimator_variance_decreases_with_data() {
+        let mut est = ChangeRateEstimator::new(1.0, 19.0, 1.0, 0);
+        let v0 = est.variance();
+        for _ in 0..50 {
+            est.observe(100, 5);
+        }
+        let v1 = est.variance();
+        assert!(
+            v1 < v0,
+            "Variance should decrease with more data: before={v0:.6}, after={v1:.6}"
+        );
+    }
+
+    #[test]
+    fn estimator_upper_quantile_at_50_pct_near_mean() {
+        let est = ChangeRateEstimator::new(1.0, 19.0, 1.0, 0);
+        let mean = est.mean();
+        let q50 = est.upper_quantile(0.5);
+        assert!(
+            (q50 - mean).abs() < 0.05,
+            "50th percentile should be near mean: q50={q50:.4}, mean={mean:.4}"
+        );
+    }
+
+    #[test]
+    fn estimator_upper_quantile_monotonic() {
+        let est = ChangeRateEstimator::new(5.0, 15.0, 1.0, 0);
+        let q25 = est.upper_quantile(0.25);
+        let q50 = est.upper_quantile(0.5);
+        let q75 = est.upper_quantile(0.75);
+        let q95 = est.upper_quantile(0.95);
+        assert!(q25 <= q50, "q25={q25:.4} should <= q50={q50:.4}");
+        assert!(q50 <= q75, "q50={q50:.4} should <= q75={q75:.4}");
+        assert!(q75 <= q95, "q75={q75:.4} should <= q95={q95:.4}");
+    }
+
+    // --- Normalization helpers ---
+
+    #[test]
+    fn normalize_positive_rejects_zero_and_negative() {
+        assert!((normalize_positive(0.0, 5.0) - 5.0).abs() < 1e-9);
+        assert!((normalize_positive(-1.0, 5.0) - 5.0).abs() < 1e-9);
+        assert!((normalize_positive(f64::NAN, 5.0) - 5.0).abs() < 1e-9);
+        assert!((normalize_positive(3.0, 5.0) - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn normalize_cost_accepts_zero() {
+        assert!((normalize_cost(0.0, 5.0) - 0.0).abs() < 1e-9);
+        assert!((normalize_cost(-1.0, 5.0) - 5.0).abs() < 1e-9);
+        assert!((normalize_cost(f64::NAN, 5.0) - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn normalize_decay_clamps_to_one() {
+        assert!((normalize_decay(1.5) - 1.0).abs() < 1e-9);
+        assert!((normalize_decay(0.5) - 0.5).abs() < 1e-9);
+        assert!((normalize_decay(-1.0) - 1.0).abs() < 1e-9);
+        assert!((normalize_decay(0.0) - 1.0).abs() < 1e-9);
+        assert!((normalize_decay(f64::NAN) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn normalize_ratio_clamps_to_unit() {
+        assert!((normalize_ratio(0.5, 0.1) - 0.5).abs() < 1e-9);
+        assert!((normalize_ratio(-1.0, 0.1) - 0.0).abs() < 1e-9);
+        assert!((normalize_ratio(2.0, 0.1) - 1.0).abs() < 1e-9);
+        assert!((normalize_ratio(f64::NAN, 0.1) - 0.1).abs() < 1e-9);
+    }
+
+    // --- cost_for_strategy helper ---
+
+    #[test]
+    fn cost_for_strategy_returns_correct_values() {
+        assert!((cost_for_strategy(DiffStrategy::Full, 1.0, 2.0, 3.0) - 1.0).abs() < 1e-9);
+        assert!((cost_for_strategy(DiffStrategy::DirtyRows, 1.0, 2.0, 3.0) - 2.0).abs() < 1e-9);
+        assert!((cost_for_strategy(DiffStrategy::FullRedraw, 1.0, 2.0, 3.0) - 3.0).abs() < 1e-9);
+    }
+
+    // --- Small / edge-case buffers ---
+
+    #[test]
+    fn select_1x1_buffer() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        let strategy = selector.select(1, 1, 1);
+        assert!(matches!(
+            strategy,
+            DiffStrategy::Full | DiffStrategy::DirtyRows | DiffStrategy::FullRedraw
+        ));
+    }
+
+    #[test]
+    fn select_zero_width() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        let strategy = selector.select(0, 24, 0);
+        // Zero-width buffer → zero cells → DirtyRows should be cheapest.
+        assert!(matches!(
+            strategy,
+            DiffStrategy::Full | DiffStrategy::DirtyRows | DiffStrategy::FullRedraw
+        ));
+    }
+
+    #[test]
+    fn select_zero_height() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        let strategy = selector.select(80, 0, 0);
+        assert!(matches!(
+            strategy,
+            DiffStrategy::Full | DiffStrategy::DirtyRows | DiffStrategy::FullRedraw
+        ));
+    }
+
+    // --- All-dirty vs no-dirty ---
+
+    #[test]
+    fn all_dirty_vs_no_dirty_different_evidence() {
+        let mut sel1 = DiffStrategySelector::with_defaults();
+        let mut sel2 = DiffStrategySelector::with_defaults();
+
+        sel1.select(80, 24, 0);
+        sel2.select(80, 24, 24);
+
+        let ev1 = sel1.last_evidence().unwrap();
+        let ev2 = sel2.last_evidence().unwrap();
+
+        assert_eq!(ev1.dirty_rows, 0);
+        assert_eq!(ev2.dirty_rows, 24);
+        // No-dirty should have zero p estimate.
+        assert!(
+            ev1.cost_dirty <= ev1.cost_full,
+            "DirtyRows should be cheap with no dirty rows"
+        );
+    }
+
+    // --- Decay = 1.0 (no decay) ---
+
+    #[test]
+    fn no_decay_accumulates_all_evidence() {
+        let config = DiffStrategyConfig {
+            decay: 1.0,
+            ..Default::default()
+        };
+        let mut selector = DiffStrategySelector::new(config);
+
+        // Observe 100% change rate many times.
+        for _ in 0..100 {
+            selector.observe(100, 100);
+        }
+        let mean = selector.posterior_mean();
+        // With no decay and all-changed, mean should be near 1.0.
+        assert!(
+            mean > 0.9,
+            "No-decay all-changed mean should be near 1.0: {mean:.4}"
+        );
+    }
+
+    // --- Evidence costs are finite ---
+
+    #[test]
+    fn evidence_costs_always_finite() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        for dirty in [0, 1, 12, 24] {
+            selector.select(80, 24, dirty);
+            let ev = selector.last_evidence().unwrap();
+            assert!(ev.cost_full.is_finite(), "cost_full should be finite");
+            assert!(ev.cost_dirty.is_finite(), "cost_dirty should be finite");
+            assert!(ev.cost_redraw.is_finite(), "cost_redraw should be finite");
+        }
+    }
+
+    // --- Evidence posterior matches selector ---
+
+    #[test]
+    fn evidence_posterior_matches_selector() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        selector.observe(100, 10);
+        selector.select(80, 24, 5);
+        let ev = selector.last_evidence().unwrap();
+        assert!((ev.posterior_mean - selector.posterior_mean()).abs() < 1e-12);
+        assert!((ev.posterior_variance - selector.posterior_variance()).abs() < 1e-12);
+        let (alpha, beta) = selector.posterior_params();
+        assert!((ev.alpha - alpha).abs() < 1e-12);
+        assert!((ev.beta - beta).abs() < 1e-12);
+    }
+
+    // --- Selector clone ---
+
+    #[test]
+    fn selector_clone() {
+        let mut selector = DiffStrategySelector::with_defaults();
+        selector.observe(100, 10);
+        selector.select(80, 24, 5);
+        let clone = selector.clone();
+        assert!((clone.posterior_mean() - selector.posterior_mean()).abs() < 1e-12);
+        assert_eq!(clone.frame_count(), selector.frame_count());
+    }
+
+    // --- Selector debug ---
+
+    #[test]
+    fn selector_debug() {
+        let selector = DiffStrategySelector::with_defaults();
+        let dbg = format!("{selector:?}");
+        assert!(dbg.contains("DiffStrategySelector"));
+        assert!(dbg.contains("frame_count"));
+    }
+
+    // --- Hysteresis not applied on first select ---
+
+    #[test]
+    fn hysteresis_not_applied_on_first_select() {
+        let config = DiffStrategyConfig {
+            hysteresis_ratio: 1.0,
+            ..Default::default()
+        };
+        let mut selector = DiffStrategySelector::new(config);
+        selector.select(80, 24, 5);
+        let ev = selector.last_evidence().unwrap();
+        assert!(
+            !ev.hysteresis_applied,
+            "First select should not apply hysteresis"
+        );
+    }
+
+    // --- Conservative mode uses upper quantile ---
+
+    #[test]
+    fn conservative_mode_higher_p_estimate() {
+        let mut conservative = DiffStrategySelector::new(DiffStrategyConfig {
+            conservative: true,
+            ..Default::default()
+        });
+        let mut normal = DiffStrategySelector::with_defaults();
+
+        // Same observations.
+        for _ in 0..20 {
+            conservative.observe(100, 5);
+            normal.observe(100, 5);
+        }
+
+        conservative.select(80, 24, 12);
+        normal.select(80, 24, 12);
+
+        let ev_cons = conservative.last_evidence().unwrap();
+        let ev_norm = normal.last_evidence().unwrap();
+
+        // Conservative mode uses upper quantile of p, so cost_dirty (which
+        // includes p * N * c_emit) should be >= normal mode's cost_dirty.
+        assert!(
+            ev_cons.cost_dirty >= ev_norm.cost_dirty - 1e-6,
+            "Conservative costs should be >= normal costs"
+        );
+    }
 }
