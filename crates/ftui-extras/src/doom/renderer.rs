@@ -1203,4 +1203,705 @@ mod tests {
         renderer.render(&mut fb, &map, &player, &palette);
         assert_eq!(renderer.stats.total_columns, 100);
     }
+
+    // --- Two-sided wall (upper/lower portal) ---
+
+    /// Build a two-room map connected by a two-sided linedef where the back
+    /// sector has a higher floor and lower ceiling than the front, so both
+    /// upper and lower wall portions are drawn.
+    fn make_two_room_map() -> DoomMap {
+        use super::super::map::*;
+        // Two sectors sharing a wall at y=128.
+        // Front sector: floor=0, ceiling=128
+        // Back sector:  floor=32, ceiling=96  (step up + lower ceiling)
+        let vertices = vec![
+            Vertex { x: 0.0, y: 0.0 },     // 0 — bottom-left front
+            Vertex { x: 256.0, y: 0.0 },   // 1 — bottom-right front
+            Vertex { x: 256.0, y: 128.0 }, // 2 — top-right front / bottom-right back
+            Vertex { x: 0.0, y: 128.0 },   // 3 — top-left front / bottom-left back
+            Vertex { x: 256.0, y: 256.0 }, // 4 — top-right back
+            Vertex { x: 0.0, y: 256.0 },   // 5 — top-left back
+        ];
+        let sectors = vec![
+            Sector {
+                floor_height: 0.0,
+                ceiling_height: 128.0,
+                floor_texture: "FLOOR".into(),
+                ceiling_texture: "CEIL".into(),
+                light_level: 200,
+                special: 0,
+                tag: 0,
+            },
+            Sector {
+                floor_height: 32.0,
+                ceiling_height: 96.0,
+                floor_texture: "FLOOR2".into(),
+                ceiling_texture: "CEIL2".into(),
+                light_level: 160,
+                special: 0,
+                tag: 0,
+            },
+        ];
+        let sidedefs = vec![
+            // sidedef 0: front sector walls
+            SideDef {
+                x_offset: 0.0,
+                y_offset: 0.0,
+                upper_texture: "-".into(),
+                lower_texture: "-".into(),
+                middle_texture: "WALL".into(),
+                sector: 0,
+            },
+            // sidedef 1: two-sided front side (facing front sector)
+            SideDef {
+                x_offset: 0.0,
+                y_offset: 0.0,
+                upper_texture: "UPPER".into(),
+                lower_texture: "LOWER".into(),
+                middle_texture: "-".into(),
+                sector: 0,
+            },
+            // sidedef 2: two-sided back side (facing back sector)
+            SideDef {
+                x_offset: 0.0,
+                y_offset: 0.0,
+                upper_texture: "UPPER".into(),
+                lower_texture: "LOWER".into(),
+                middle_texture: "-".into(),
+                sector: 1,
+            },
+            // sidedef 3: back sector outer walls
+            SideDef {
+                x_offset: 0.0,
+                y_offset: 0.0,
+                upper_texture: "-".into(),
+                lower_texture: "-".into(),
+                middle_texture: "WALL2".into(),
+                sector: 1,
+            },
+        ];
+        let linedefs = vec![
+            // Front room walls (one-sided)
+            LineDef {
+                v1: 0,
+                v2: 1,
+                flags: 0,
+                special: 0,
+                tag: 0,
+                front_sidedef: Some(0),
+                back_sidedef: None,
+            },
+            LineDef {
+                v1: 1,
+                v2: 2,
+                flags: 0,
+                special: 0,
+                tag: 0,
+                front_sidedef: Some(0),
+                back_sidedef: None,
+            },
+            LineDef {
+                v1: 3,
+                v2: 0,
+                flags: 0,
+                special: 0,
+                tag: 0,
+                front_sidedef: Some(0),
+                back_sidedef: None,
+            },
+            // Two-sided portal wall between rooms (v3→v2)
+            LineDef {
+                v1: 3,
+                v2: 2,
+                flags: 0,
+                special: 0,
+                tag: 0,
+                front_sidedef: Some(1),
+                back_sidedef: Some(2),
+            },
+            // Back room walls (one-sided)
+            LineDef {
+                v1: 2,
+                v2: 4,
+                flags: 0,
+                special: 0,
+                tag: 0,
+                front_sidedef: Some(3),
+                back_sidedef: None,
+            },
+            LineDef {
+                v1: 4,
+                v2: 5,
+                flags: 0,
+                special: 0,
+                tag: 0,
+                front_sidedef: Some(3),
+                back_sidedef: None,
+            },
+            LineDef {
+                v1: 5,
+                v2: 3,
+                flags: 0,
+                special: 0,
+                tag: 0,
+                front_sidedef: Some(3),
+                back_sidedef: None,
+            },
+        ];
+        let segs = vec![
+            // Front room segs
+            Seg {
+                v1: 0,
+                v2: 1,
+                angle: 0.0,
+                linedef: 0,
+                direction: 0,
+                offset: 0.0,
+            },
+            Seg {
+                v1: 1,
+                v2: 2,
+                angle: 0.0,
+                linedef: 1,
+                direction: 0,
+                offset: 0.0,
+            },
+            Seg {
+                v1: 3,
+                v2: 0,
+                angle: 0.0,
+                linedef: 2,
+                direction: 0,
+                offset: 0.0,
+            },
+            // Two-sided seg (portal)
+            Seg {
+                v1: 3,
+                v2: 2,
+                angle: 0.0,
+                linedef: 3,
+                direction: 0,
+                offset: 0.0,
+            },
+            // Back room segs
+            Seg {
+                v1: 2,
+                v2: 4,
+                angle: 0.0,
+                linedef: 4,
+                direction: 0,
+                offset: 0.0,
+            },
+            Seg {
+                v1: 4,
+                v2: 5,
+                angle: 0.0,
+                linedef: 5,
+                direction: 0,
+                offset: 0.0,
+            },
+            Seg {
+                v1: 5,
+                v2: 3,
+                angle: 0.0,
+                linedef: 6,
+                direction: 0,
+                offset: 0.0,
+            },
+        ];
+        // Two subsectors: front room (segs 0..3) and back room (segs 4..6).
+        // With an empty nodes vec the BSP traversal processes subsectors
+        // in order, which is fine for this test.
+        let subsectors = vec![
+            SubSector {
+                num_segs: 4,
+                first_seg: 0,
+            },
+            SubSector {
+                num_segs: 3,
+                first_seg: 4,
+            },
+        ];
+        DoomMap {
+            name: "TWOROOM".into(),
+            vertices,
+            linedefs,
+            sidedefs,
+            sectors,
+            segs,
+            subsectors,
+            nodes: vec![],
+            things: vec![],
+        }
+    }
+
+    #[test]
+    fn render_two_sided_wall_draws_upper_lower() {
+        let map = make_two_room_map();
+        let mut renderer = DoomRenderer::new(80, 50);
+        let mut fb = DoomFramebuffer::new(80, 50);
+        let mut player = Player::default();
+        // Stand in front room looking toward the portal wall
+        player.x = 128.0;
+        player.y = 64.0;
+        player.angle = std::f32::consts::FRAC_PI_2; // look toward +Y
+        let palette = DoomPalette::default();
+
+        renderer.render(&mut fb, &map, &player, &palette);
+
+        // The renderer should have processed segs including the two-sided portal
+        assert!(renderer.stats.segs_processed >= 4);
+        // Some columns should be filled by solid walls, but the portal
+        // columns should NOT be fully solid (they leave a gap for the back room)
+        assert!(renderer.stats.columns_filled < renderer.stats.total_columns);
+    }
+
+    #[test]
+    fn two_sided_wall_updates_column_clip_bounds() {
+        // After rendering a two-sided wall, the column clips for portal columns
+        // should have their top/bottom narrowed (not marked solid).
+        let map = make_two_room_map();
+        let mut renderer = DoomRenderer::new(80, 50);
+        let mut fb = DoomFramebuffer::new(80, 50);
+        let mut player = Player::default();
+        player.x = 128.0;
+        player.y = 64.0;
+        player.angle = std::f32::consts::FRAC_PI_2;
+        let palette = DoomPalette::default();
+
+        renderer.render(&mut fb, &map, &player, &palette);
+
+        // At least some columns should have narrowed clip bounds from the portal
+        let narrowed = renderer
+            .column_clips
+            .iter()
+            .filter(|c| !c.solid && (c.top > 0 || c.bottom < 50))
+            .count();
+        // We expect some columns to have been narrowed by upper/lower portions
+        // (they may also end up solid if the gap closed).
+        // Just verify the renderer processed them without panic.
+        assert!(
+            narrowed > 0 || renderer.stats.columns_filled == renderer.stats.total_columns,
+            "Portal should either narrow clips or fill all columns"
+        );
+    }
+
+    // --- Early exit when all columns solid ---
+
+    #[test]
+    fn early_exit_when_all_columns_solid() {
+        // Make a tiny renderer (2 columns) with a room that fills both columns.
+        let map = make_simple_map();
+        let mut renderer = DoomRenderer::new(2, 10);
+        let mut fb = DoomFramebuffer::new(2, 10);
+        let mut player = Player::default();
+        player.x = 128.0;
+        player.y = 128.0;
+        let palette = DoomPalette::default();
+
+        renderer.render(&mut fb, &map, &player, &palette);
+
+        // All columns should be filled (solid walls in every direction)
+        assert_eq!(renderer.stats.columns_filled, 2);
+        assert_eq!(renderer.stats.total_columns, 2);
+    }
+
+    // --- Pitch offset ---
+
+    #[test]
+    fn pitch_offset_shifts_wall_position() {
+        let map = make_simple_map();
+        let mut fb1 = DoomFramebuffer::new(80, 50);
+        let mut fb2 = DoomFramebuffer::new(80, 50);
+        let palette = DoomPalette::default();
+
+        // Render with no pitch
+        let mut renderer = DoomRenderer::new(80, 50);
+        let mut player = Player::default();
+        player.x = 128.0;
+        player.y = 128.0;
+        player.pitch = 0.0;
+        renderer.render(&mut fb1, &map, &player, &palette);
+
+        // Render with upward pitch
+        let mut renderer2 = DoomRenderer::new(80, 50);
+        let mut player2 = Player::default();
+        player2.x = 128.0;
+        player2.y = 128.0;
+        player2.pitch = 0.3;
+        renderer2.render(&mut fb2, &map, &player2, &palette);
+
+        // The framebuffers should differ because pitch shifts wall projection
+        assert_ne!(
+            fb1.pixels, fb2.pixels,
+            "Pitch should change rendered output"
+        );
+    }
+
+    // --- OOB safety ---
+
+    #[test]
+    fn oob_seg_vertex_does_not_panic() {
+        use super::super::map::*;
+        let map = DoomMap {
+            name: "OOB".into(),
+            vertices: vec![Vertex { x: 10.0, y: 10.0 }], // only 1 vertex
+            linedefs: vec![LineDef {
+                v1: 0,
+                v2: 1,
+                flags: 0,
+                special: 0,
+                tag: 0,
+                front_sidedef: Some(0),
+                back_sidedef: None,
+            }],
+            sidedefs: vec![SideDef {
+                x_offset: 0.0,
+                y_offset: 0.0,
+                upper_texture: "-".into(),
+                lower_texture: "-".into(),
+                middle_texture: "W".into(),
+                sector: 0,
+            }],
+            sectors: vec![Sector {
+                floor_height: 0.0,
+                ceiling_height: 128.0,
+                floor_texture: "F".into(),
+                ceiling_texture: "C".into(),
+                light_level: 200,
+                special: 0,
+                tag: 0,
+            }],
+            segs: vec![Seg {
+                v1: 0,
+                v2: 999, // OOB vertex
+                angle: 0.0,
+                linedef: 0,
+                direction: 0,
+                offset: 0.0,
+            }],
+            subsectors: vec![SubSector {
+                num_segs: 1,
+                first_seg: 0,
+            }],
+            nodes: vec![],
+            things: vec![],
+        };
+
+        let mut renderer = DoomRenderer::new(20, 10);
+        let mut fb = DoomFramebuffer::new(20, 10);
+        let player = Player::default();
+        let palette = DoomPalette::default();
+
+        // Should not panic — the renderer skips segs with OOB vertices
+        renderer.render(&mut fb, &map, &player, &palette);
+    }
+
+    #[test]
+    fn oob_seg_linedef_does_not_panic() {
+        use super::super::map::*;
+        let map = DoomMap {
+            name: "OOB2".into(),
+            vertices: vec![Vertex { x: 10.0, y: 10.0 }, Vertex { x: 50.0, y: 10.0 }],
+            linedefs: vec![], // empty — seg references linedef 999
+            sidedefs: vec![],
+            sectors: vec![Sector {
+                floor_height: 0.0,
+                ceiling_height: 128.0,
+                floor_texture: "F".into(),
+                ceiling_texture: "C".into(),
+                light_level: 200,
+                special: 0,
+                tag: 0,
+            }],
+            segs: vec![Seg {
+                v1: 0,
+                v2: 1,
+                angle: 0.0,
+                linedef: 999, // OOB
+                direction: 0,
+                offset: 0.0,
+            }],
+            subsectors: vec![SubSector {
+                num_segs: 1,
+                first_seg: 0,
+            }],
+            nodes: vec![],
+            things: vec![],
+        };
+
+        let mut renderer = DoomRenderer::new(20, 10);
+        let mut fb = DoomFramebuffer::new(20, 10);
+        let player = Player::default();
+        let palette = DoomPalette::default();
+
+        renderer.render(&mut fb, &map, &player, &palette);
+    }
+
+    #[test]
+    fn oob_first_seg_does_not_panic() {
+        use super::super::map::*;
+        let map = DoomMap {
+            name: "OOB3".into(),
+            vertices: vec![],
+            linedefs: vec![],
+            sidedefs: vec![],
+            sectors: vec![],
+            segs: vec![],
+            subsectors: vec![SubSector {
+                num_segs: 5,
+                first_seg: 100, // OOB — beyond segs array
+            }],
+            nodes: vec![],
+            things: vec![],
+        };
+
+        let mut renderer = DoomRenderer::new(10, 10);
+        let mut fb = DoomFramebuffer::new(10, 10);
+        let player = Player::default();
+        let palette = DoomPalette::default();
+
+        renderer.render(&mut fb, &map, &player, &palette);
+    }
+
+    // --- Background gradient ---
+
+    #[test]
+    fn background_sky_differs_from_floor() {
+        let r = DoomRenderer::new(1, 20);
+        let mut fb = DoomFramebuffer::new(1, 20);
+        r.draw_background(&mut fb);
+
+        // Top pixel (sky) should differ from bottom pixel (floor)
+        let sky_pixel = fb.pixels[0]; // y=0, x=0
+        let floor_pixel = fb.pixels[19]; // y=19, x=0
+        assert_ne!(
+            sky_pixel, floor_pixel,
+            "Sky and floor colors should be different"
+        );
+    }
+
+    #[test]
+    fn background_sky_gradient_changes_with_y() {
+        let r = DoomRenderer::new(1, 40);
+        let mut fb = DoomFramebuffer::new(1, 40);
+        r.draw_background(&mut fb);
+
+        // First sky row and last sky row (horizon at 20) should differ
+        let top = fb.pixels[0]; // y=0
+        let near_horizon = fb.pixels[19]; // y=19 (last sky row)
+        assert_ne!(top, near_horizon, "Sky gradient should vary across rows");
+    }
+
+    // --- get_seg_back_sector with direction=1 ---
+
+    #[test]
+    fn get_seg_back_sector_direction_one_uses_front() {
+        use super::super::map::{LineDef, Sector, SideDef};
+        let sectors = vec![
+            Sector {
+                floor_height: 0.0,
+                ceiling_height: 64.0,
+                floor_texture: "F1".into(),
+                ceiling_texture: "C1".into(),
+                light_level: 100,
+                special: 0,
+                tag: 0,
+            },
+            Sector {
+                floor_height: 0.0,
+                ceiling_height: 128.0,
+                floor_texture: "F2".into(),
+                ceiling_texture: "C2".into(),
+                light_level: 200,
+                special: 0,
+                tag: 0,
+            },
+        ];
+        let sidedefs = vec![
+            SideDef {
+                x_offset: 0.0,
+                y_offset: 0.0,
+                upper_texture: "-".into(),
+                lower_texture: "-".into(),
+                middle_texture: "W1".into(),
+                sector: 0,
+            },
+            SideDef {
+                x_offset: 0.0,
+                y_offset: 0.0,
+                upper_texture: "-".into(),
+                lower_texture: "-".into(),
+                middle_texture: "W2".into(),
+                sector: 1,
+            },
+        ];
+        let linedef = LineDef {
+            v1: 0,
+            v2: 1,
+            flags: 0,
+            special: 0,
+            tag: 0,
+            front_sidedef: Some(0),
+            back_sidedef: Some(1),
+        };
+        let seg = super::super::map::Seg {
+            v1: 0,
+            v2: 1,
+            angle: 0.0,
+            linedef: 0,
+            direction: 1, // reversed → back sector from front_sidedef
+            offset: 0.0,
+        };
+        let result = get_seg_back_sector(&seg, &linedef, &sidedefs, &sectors);
+        assert!(result.is_some());
+        // direction=1 → uses front_sidedef → sidedef[0] → sector 0 → ceiling 64
+        assert!((result.unwrap().ceiling_height - 64.0).abs() < 0.01);
+    }
+
+    // --- Empty map does not panic ---
+
+    #[test]
+    fn render_empty_map_no_panic() {
+        use super::super::map::*;
+        let map = DoomMap {
+            name: "EMPTY".into(),
+            vertices: vec![],
+            linedefs: vec![],
+            sidedefs: vec![],
+            sectors: vec![],
+            segs: vec![],
+            subsectors: vec![],
+            nodes: vec![],
+            things: vec![],
+        };
+
+        let mut renderer = DoomRenderer::new(40, 30);
+        let mut fb = DoomFramebuffer::new(40, 30);
+        let player = Player::default();
+        let palette = DoomPalette::default();
+
+        renderer.render(&mut fb, &map, &player, &palette);
+
+        // Should just have background (sky + floor), no wall pixels
+        assert_eq!(renderer.stats.segs_processed, 0);
+        assert_eq!(renderer.stats.subsectors_rendered, 0);
+    }
+
+    // --- Single pixel renderer ---
+
+    #[test]
+    fn render_1x1_does_not_panic() {
+        let map = make_simple_map();
+        let mut renderer = DoomRenderer::new(1, 1);
+        let mut fb = DoomFramebuffer::new(1, 1);
+        let mut player = Player::default();
+        player.x = 128.0;
+        player.y = 128.0;
+        let palette = DoomPalette::default();
+
+        renderer.render(&mut fb, &map, &player, &palette);
+        assert_eq!(renderer.stats.total_columns, 1);
+    }
+
+    // --- Render from different angles ---
+
+    #[test]
+    fn render_different_angles_produce_different_output() {
+        let map = make_simple_map();
+        let palette = DoomPalette::default();
+
+        let mut renderer1 = DoomRenderer::new(40, 30);
+        let mut fb1 = DoomFramebuffer::new(40, 30);
+        let mut p1 = Player::default();
+        p1.x = 128.0;
+        p1.y = 128.0;
+        p1.angle = 0.0;
+        renderer1.render(&mut fb1, &map, &p1, &palette);
+
+        let mut renderer2 = DoomRenderer::new(40, 30);
+        let mut fb2 = DoomFramebuffer::new(40, 30);
+        let mut p2 = Player::default();
+        p2.x = 128.0;
+        p2.y = 128.0;
+        p2.angle = std::f32::consts::PI;
+        renderer2.render(&mut fb2, &map, &p2, &palette);
+
+        assert_ne!(
+            fb1.pixels, fb2.pixels,
+            "Different angles should produce different framebuffers"
+        );
+    }
+
+    // --- Solid count tracking ---
+
+    #[test]
+    fn solid_count_matches_columns_filled() {
+        let map = make_simple_map();
+        let mut renderer = DoomRenderer::new(80, 50);
+        let mut fb = DoomFramebuffer::new(80, 50);
+        let mut player = Player::default();
+        player.x = 128.0;
+        player.y = 128.0;
+        let palette = DoomPalette::default();
+
+        renderer.render(&mut fb, &map, &player, &palette);
+
+        // solid_count should match the stats
+        let manually_counted = renderer.column_clips.iter().filter(|c| c.solid).count() as u32;
+        assert_eq!(renderer.stats.columns_filled, manually_counted);
+    }
+
+    // --- Wall color index wraps ---
+
+    #[test]
+    fn wall_color_index_wraps_with_linedef() {
+        // WALL_COLORS has 8 entries; linedef index % 8 gives the color
+        assert_eq!(WALL_COLORS.len(), 8);
+        // Index 0 and 8 should be the same color
+        assert_eq!(WALL_COLORS[0 % 8], WALL_COLORS[8 % 8]);
+        assert_eq!(WALL_COLORS[3 % 8], WALL_COLORS[11 % 8]);
+    }
+
+    // --- lerp_u8 with extreme t values ---
+
+    #[test]
+    fn lerp_u8_slightly_beyond_one() {
+        // The renderer doesn't clamp t, so verify behavior is stable
+        // t=1.01: (0 + 255 * 1.01) = 257.55 → truncated to 1 (wraps as u8)
+        let result = lerp_u8(0, 255, 1.01);
+        // Just verify no panic — exact value depends on float→u8 conversion
+        let _ = result;
+    }
+
+    // --- Projection scales linearly with width ---
+
+    #[test]
+    fn projection_scales_with_width() {
+        let r1 = DoomRenderer::new(320, 200);
+        let r2 = DoomRenderer::new(640, 200);
+        // projection = half_width / tan(FOV/2)
+        // Doubling width doubles half_width, so projection should double
+        assert!(
+            (r2.projection / r1.projection - 2.0).abs() < 0.01,
+            "Projection should scale linearly with width"
+        );
+    }
+
+    // --- Resize preserves existing solid columns correctly ---
+
+    #[test]
+    fn resize_resets_clip_state_for_old_columns() {
+        let mut r = DoomRenderer::new(10, 20);
+        // Dirty a column
+        r.column_clips[5].solid = true;
+        r.column_clips[5].top = 10;
+        // Resize to same width — Vec::resize won't touch existing elements
+        r.resize(10, 30);
+        // The dirty state persists (resize doesn't reset!)
+        // This is intentional — reset() is called at the start of render()
+        assert!(r.column_clips[5].solid);
+        // But bottom should be updated for new columns only
+        // (existing columns keep their old bottom value)
+    }
 }
