@@ -582,6 +582,19 @@ const KNOWN_FEATURE_TAGS: &[&str] = &[
     "block-columns",
     "block-spans",
     "block-nesting",
+    // ER expanded features
+    "er-many-entity",
+    "er-varied-cardinality",
+    // Gantt expanded features
+    "task-deps",
+    "milestones",
+    "many-tasks",
+    // Class expanded features
+    "inheritance-chain",
+    "visibility-modifiers",
+    // State expanded features
+    "fork-join",
+    "choice-pseudostate",
 ];
 
 /// Features known to be supported but lacking dedicated samples.
@@ -1144,6 +1157,144 @@ B -->|No| D[Fix]"#,
   C --> D{{Hexagon}}
   D --> E((Circle))
   E --> F>Asymmetric]"#,
+    },
+    MermaidSample {
+        id: "er-multi",
+        name: "ER Multi-Entity",
+        family: SampleFamily::Er,
+        complexity: SampleComplexity::L,
+        tags: &["multi-entity", "complex-relations"],
+        features: &["er-arrows", "er-many-entity", "er-varied-cardinality"],
+        edge_cases: &["many-relations"],
+        default_size: SampleSizeHint {
+            width: 80,
+            height: 25,
+        },
+        notes: "Multiple entities with varied cardinality styles and attribute lists",
+        source: r#"erDiagram
+  CUSTOMER ||--o{ ORDER : places
+  CUSTOMER {
+    string name
+    int id
+  }
+  ORDER ||--|{ LINE_ITEM : contains
+  ORDER {
+    int orderId
+    date created
+  }
+  PRODUCT ||--o{ LINE_ITEM : includes
+  PRODUCT {
+    string name
+    float price
+  }
+  WAREHOUSE }|--|| PRODUCT : stocks
+  SUPPLIER }o--o{ PRODUCT : supplies"#,
+    },
+    MermaidSample {
+        id: "gantt-deps",
+        name: "Gantt Dependencies",
+        family: SampleFamily::Gantt,
+        complexity: SampleComplexity::L,
+        tags: &["dependencies", "milestones", "multi-section"],
+        features: &["title", "sections", "task-deps", "milestones", "many-tasks"],
+        edge_cases: &["overlapping-tasks"],
+        default_size: SampleSizeHint {
+            width: 80,
+            height: 25,
+        },
+        notes: "Gantt with task dependencies, milestones, and multiple sections",
+        source: r#"gantt
+  title Project Alpha
+  dateFormat YYYY-MM-DD
+  section Planning
+  Requirements :a1, 2024-01-01, 7d
+  Architecture :a2, after a1, 5d
+  section Build
+  Backend :b1, after a2, 10d
+  Frontend :b2, after a2, 12d
+  Integration :b3, after b1, 5d
+  section QA
+  Testing :c1, after b3, 7d
+  Staging :c2, after c1, 3d
+  Release :milestone, after c2, 0d"#,
+    },
+    MermaidSample {
+        id: "class-hierarchy",
+        name: "Class Hierarchy",
+        family: SampleFamily::Class,
+        complexity: SampleComplexity::L,
+        tags: &["inheritance", "abstract", "visibility"],
+        features: &[
+            "relations",
+            "class-members",
+            "inheritance-chain",
+            "visibility-modifiers",
+        ],
+        edge_cases: &["deep-chain"],
+        default_size: SampleSizeHint {
+            width: 80,
+            height: 25,
+        },
+        notes: "Deep inheritance chain with visibility modifiers and abstract types",
+        source: r#"classDiagram
+  class Shape {
+    <<abstract>>
+    +area() float
+    +perimeter() float
+  }
+  class Polygon {
+    +int sides
+    +vertices() List
+  }
+  class Rectangle {
+    -float width
+    -float height
+    +area() float
+  }
+  class Square {
+    +Square(float side)
+  }
+  Shape <|-- Polygon
+  Polygon <|-- Rectangle
+  Rectangle <|-- Square
+  Shape <|.. Drawable"#,
+    },
+    MermaidSample {
+        id: "state-concurrent",
+        name: "State Concurrent",
+        family: SampleFamily::State,
+        complexity: SampleComplexity::L,
+        tags: &["concurrent", "fork", "choice"],
+        features: &[
+            "state-edges",
+            "substates",
+            "fork-join",
+            "choice-pseudostate",
+        ],
+        edge_cases: &["parallel-regions"],
+        default_size: SampleSizeHint {
+            width: 80,
+            height: 25,
+        },
+        notes: "Fork/join regions and choice pseudostates for concurrency coverage",
+        source: r#"stateDiagram-v2
+  [*] --> Validate
+  Validate --> Processing: valid
+  Validate --> Rejected: invalid
+  state Processing {
+    [*] --> FetchData
+    FetchData --> Transform
+    Transform --> Store
+    Store --> [*]
+  }
+  Processing --> Review
+  state choice_state <<choice>>
+  Review --> choice_state
+  choice_state --> Approved: score > 80
+  choice_state --> NeedsWork: score <= 80
+  NeedsWork --> Validate
+  Approved --> [*]
+  Rejected --> [*]"#,
     },
 ];
 
