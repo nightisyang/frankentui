@@ -153,6 +153,22 @@ impl SessionTrace {
         let mut expected_frame_idx: u64 = 0;
         let mut frame_count: u64 = 0;
         let mut last_checksum_chain: u64 = 0;
+        let mut last_ts_ns: Option<u64> = None;
+
+        let mut validate_ts =
+            |ts_ns: u64, record_index: usize| -> Result<(), TraceValidationError> {
+                if let Some(previous) = last_ts_ns
+                    && ts_ns < previous
+                {
+                    return Err(TraceValidationError::TimestampRegression {
+                        previous,
+                        current: ts_ns,
+                        record_index,
+                    });
+                }
+                last_ts_ns = Some(ts_ns);
+                Ok(())
+            };
 
         for (idx, record) in self.records.iter().enumerate() {
             match record {
@@ -176,9 +192,11 @@ impl SessionTrace {
                 }
                 TraceRecord::Frame {
                     frame_idx,
+                    ts_ns,
                     checksum_chain,
                     ..
                 } => {
+                    validate_ts(*ts_ns, idx)?;
                     if summary.is_some() {
                         let summary_idx = summary.map(|(i, _, _)| i).unwrap_or_default();
                         return Err(TraceValidationError::SummaryNotLast {
@@ -195,9 +213,26 @@ impl SessionTrace {
                     frame_count = frame_count.saturating_add(1);
                     last_checksum_chain = *checksum_chain;
                 }
-                TraceRecord::Input { .. }
-                | TraceRecord::Resize { .. }
-                | TraceRecord::Tick { .. } => {
+                TraceRecord::Input { ts_ns, .. } => {
+                    validate_ts(*ts_ns, idx)?;
+                    if summary.is_some() {
+                        let summary_idx = summary.map(|(i, _, _)| i).unwrap_or_default();
+                        return Err(TraceValidationError::SummaryNotLast {
+                            summary_index: summary_idx,
+                        });
+                    }
+                }
+                TraceRecord::Resize { ts_ns, .. } => {
+                    validate_ts(*ts_ns, idx)?;
+                    if summary.is_some() {
+                        let summary_idx = summary.map(|(i, _, _)| i).unwrap_or_default();
+                        return Err(TraceValidationError::SummaryNotLast {
+                            summary_index: summary_idx,
+                        });
+                    }
+                }
+                TraceRecord::Tick { ts_ns } => {
+                    validate_ts(*ts_ns, idx)?;
                     if summary.is_some() {
                         let summary_idx = summary.map(|(i, _, _)| i).unwrap_or_default();
                         return Err(TraceValidationError::SummaryNotLast {
@@ -741,10 +776,26 @@ pub enum TraceValidationError {
     MultipleHeaders,
     MissingSummary,
     MultipleSummaries,
-    SummaryNotLast { summary_index: usize },
-    FrameIndexMismatch { expected: u64, actual: u64 },
-    SummaryFrameCountMismatch { expected: u64, actual: u64 },
-    SummaryChecksumChainMismatch { expected: u64, actual: u64 },
+    SummaryNotLast {
+        summary_index: usize,
+    },
+    TimestampRegression {
+        previous: u64,
+        current: u64,
+        record_index: usize,
+    },
+    FrameIndexMismatch {
+        expected: u64,
+        actual: u64,
+    },
+    SummaryFrameCountMismatch {
+        expected: u64,
+        actual: u64,
+    },
+    SummaryChecksumChainMismatch {
+        expected: u64,
+        actual: u64,
+    },
 }
 
 impl core::fmt::Display for TraceValidationError {
@@ -760,6 +811,15 @@ impl core::fmt::Display for TraceValidationError {
                 f,
                 "trace summary at index {} is not the final record",
                 summary_index
+            ),
+            Self::TimestampRegression {
+                previous,
+                current,
+                record_index,
+            } => write!(
+                f,
+                "timestamp regression at record {}: current ts_ns={} is less than previous ts_ns={}",
+                record_index, current, previous
             ),
             Self::FrameIndexMismatch { expected, actual } => {
                 write!(
@@ -1658,6 +1718,35 @@ mod tests {
             Err(TraceValidationError::FrameIndexMismatch {
                 expected: 0,
                 actual: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn trace_validate_timestamp_regression_returns_typed_error() {
+        let trace = SessionTrace {
+            records: vec![
+                TraceRecord::Header {
+                    seed: 0,
+                    cols: 80,
+                    rows: 24,
+                    profile: "modern".to_string(),
+                },
+                TraceRecord::Tick { ts_ns: 20 },
+                TraceRecord::Tick { ts_ns: 10 },
+                TraceRecord::Summary {
+                    total_frames: 0,
+                    final_checksum_chain: 0,
+                },
+            ],
+        };
+        let result = trace.validate();
+        assert_eq!(
+            result,
+            Err(TraceValidationError::TimestampRegression {
+                previous: 20,
+                current: 10,
+                record_index: 2,
             })
         );
     }

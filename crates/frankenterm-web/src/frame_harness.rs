@@ -944,7 +944,8 @@ mod tests {
             bytes_uploaded: 80,
         });
         let json = c.report().to_json();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("report_json_is_valid should emit parseable JSON");
         assert_eq!(parsed["run_id"], "test");
         assert_eq!(parsed["cols"], 80);
         assert_eq!(parsed["rows"], 24);
@@ -1038,7 +1039,8 @@ mod tests {
         let jsonl = c.to_jsonl();
         let lines: Vec<&str> = jsonl.lines().collect();
         assert_eq!(lines.len(), 1);
-        let parsed: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(lines[0])
+            .expect("jsonl_escapes_run_id should emit parseable JSONL");
         assert_eq!(parsed["run_id"], "bench\"alpha\nbeta");
     }
 
@@ -1137,8 +1139,11 @@ mod tests {
             &cells,
             Some(interaction),
         );
-        let parsed_a: serde_json::Value = serde_json::from_str(&line_a).unwrap();
-        let parsed_b: serde_json::Value = serde_json::from_str(&line_b).unwrap();
+        let parsed_a: serde_json::Value = serde_json::from_str(&line_a)
+            .expect("hash_interaction_fields test should emit parseable JSON for first frame line");
+        let parsed_b: serde_json::Value = serde_json::from_str(&line_b).expect(
+            "hash_interaction_fields test should emit parseable JSON for second frame line",
+        );
 
         assert_eq!(parsed_a["frame_hash"], parsed_b["frame_hash"]);
         assert_eq!(parsed_a["interaction_hash"], parsed_b["interaction_hash"]);
@@ -1339,7 +1344,8 @@ mod tests {
         };
         let cells = vec![CellData::EMPTY; 4];
         let line = resize_storm_frame_jsonl("run-1", 42, "T000001", 3, geometry, &cells);
-        let parsed: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&line)
+            .expect("resize_storm_frame_jsonl test should emit parseable JSON");
         assert_eq!(parsed["schema_version"], "e2e-jsonl-v1");
         assert_eq!(parsed["type"], "frame");
         assert_eq!(parsed["run_id"], "run-1");
@@ -1405,8 +1411,10 @@ mod tests {
             &cells,
             Some(interaction),
         );
-        let base_parsed: serde_json::Value = serde_json::from_str(&base).unwrap();
-        let with_parsed: serde_json::Value = serde_json::from_str(&with).unwrap();
+        let base_parsed: serde_json::Value = serde_json::from_str(&base)
+            .expect("base resize_storm frame line should be parseable JSON");
+        let with_parsed: serde_json::Value = serde_json::from_str(&with)
+            .expect("interaction resize_storm frame line should be parseable JSON");
 
         assert!(base_parsed.get("interaction_hash").is_none());
         assert!(
@@ -1448,7 +1456,8 @@ mod tests {
             window,
             Duration::from_micros(2314),
         );
-        let parsed: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&line)
+            .expect("scrollback_virtualization_frame_jsonl should emit parseable JSON");
 
         assert_eq!(parsed["schema_version"], "e2e-jsonl-v1");
         assert_eq!(parsed["type"], "scrollback_frame");
@@ -1478,7 +1487,8 @@ mod tests {
             open_reason: None,
         };
         let line = link_click_jsonl("run-link", 7, "T000321", 4, &click);
-        let parsed: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&line).expect("link_click_jsonl should emit parseable JSON");
 
         assert_eq!(parsed["schema_version"], "e2e-jsonl-v1");
         assert_eq!(parsed["type"], "link_click");
@@ -1607,7 +1617,8 @@ mod tests {
         assert_eq!(mismatch.region_summary.active_min_row, Some(0));
         assert_eq!(mismatch.region_summary.active_max_row, Some(0));
         let json = mismatch.to_json();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("mismatch JSON payload should be parseable");
         assert_eq!(parsed["frame_idx"], 1);
         assert_eq!(parsed["reproduction_trace_id"], "run-mismatch#frame-1");
     }
