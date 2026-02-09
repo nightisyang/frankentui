@@ -2210,4 +2210,331 @@ mod tests {
         assert_eq!(f32::from_le_bytes(bytes[24..28].try_into().unwrap()), 1.2);
         assert_eq!(f32::from_le_bytes(bytes[28..32].try_into().unwrap()), 1.1);
     }
+
+    // ── normalized_scale edge cases ────────────────────────────────────
+
+    #[test]
+    fn normalized_scale_clamps_below_min() {
+        assert_eq!(normalized_scale(0.1, 1.0, 0.25, 8.0), 0.25);
+    }
+
+    #[test]
+    fn normalized_scale_clamps_above_max() {
+        assert_eq!(normalized_scale(100.0, 1.0, 0.25, 8.0), 8.0);
+    }
+
+    #[test]
+    fn normalized_scale_nan_returns_fallback() {
+        assert_eq!(normalized_scale(f32::NAN, 1.0, 0.25, 8.0), 1.0);
+    }
+
+    #[test]
+    fn normalized_scale_infinity_returns_fallback() {
+        assert_eq!(normalized_scale(f32::INFINITY, 1.0, 0.25, 8.0), 1.0);
+    }
+
+    #[test]
+    fn normalized_scale_neg_infinity_returns_fallback() {
+        assert_eq!(normalized_scale(f32::NEG_INFINITY, 1.0, 0.25, 8.0), 1.0);
+    }
+
+    #[test]
+    fn normalized_scale_zero_returns_fallback() {
+        assert_eq!(normalized_scale(0.0, 1.0, 0.25, 8.0), 1.0);
+    }
+
+    #[test]
+    fn normalized_scale_negative_returns_fallback() {
+        assert_eq!(normalized_scale(-1.0, 1.0, 0.25, 8.0), 1.0);
+    }
+
+    #[test]
+    fn normalized_scale_at_min_boundary() {
+        assert_eq!(normalized_scale(0.25, 1.0, 0.25, 8.0), 0.25);
+    }
+
+    #[test]
+    fn normalized_scale_at_max_boundary() {
+        assert_eq!(normalized_scale(8.0, 1.0, 0.25, 8.0), 8.0);
+    }
+
+    // ── grid_geometry edge cases ───────────────────────────────────────
+
+    #[test]
+    fn grid_geometry_zero_cols_yields_zero_width() {
+        let g = grid_geometry(0, 24, 8, 16, 1.0, 1.0);
+        assert_eq!(g.cols, 0);
+        assert_eq!(g.pixel_width, 0);
+        assert!(g.pixel_height > 0);
+    }
+
+    #[test]
+    fn grid_geometry_zero_rows_yields_zero_height() {
+        let g = grid_geometry(80, 0, 8, 16, 1.0, 1.0);
+        assert_eq!(g.rows, 0);
+        assert!(g.pixel_width > 0);
+        assert_eq!(g.pixel_height, 0);
+    }
+
+    #[test]
+    fn grid_geometry_zero_cell_width_clamps_to_one() {
+        let g = grid_geometry(80, 24, 0, 16, 1.0, 1.0);
+        assert!(g.cell_width_px >= 1.0);
+        assert!(g.pixel_width >= 80);
+    }
+
+    #[test]
+    fn grid_geometry_zero_cell_height_clamps_to_one() {
+        let g = grid_geometry(80, 24, 8, 0, 1.0, 1.0);
+        assert!(g.cell_height_px >= 1.0);
+        assert!(g.pixel_height >= 24);
+    }
+
+    #[test]
+    fn grid_geometry_high_dpr_scales_pixel_dimensions() {
+        let g1 = grid_geometry(80, 24, 8, 16, 1.0, 1.0);
+        let g2 = grid_geometry(80, 24, 8, 16, 2.0, 1.0);
+        assert!(g2.pixel_width > g1.pixel_width);
+        assert!(g2.pixel_height > g1.pixel_height);
+    }
+
+    #[test]
+    fn grid_geometry_nan_dpr_treated_as_1() {
+        let g = grid_geometry(80, 24, 8, 16, f32::NAN, 1.0);
+        assert_eq!(g.dpr, 1.0);
+        assert_eq!(g.pixel_width, 640);
+        assert_eq!(g.pixel_height, 384);
+    }
+
+    #[test]
+    fn grid_geometry_nan_zoom_treated_as_1() {
+        let g = grid_geometry(80, 24, 8, 16, 1.0, f32::NAN);
+        assert_eq!(g.zoom, 1.0);
+    }
+
+    #[test]
+    fn grid_geometry_extreme_dpr_clamped() {
+        let g = grid_geometry(80, 24, 8, 16, 100.0, 1.0);
+        assert_eq!(g.dpr, 8.0); // MAX_DPR
+    }
+
+    #[test]
+    fn grid_geometry_extreme_zoom_clamped() {
+        let g = grid_geometry(80, 24, 8, 16, 1.0, 100.0);
+        assert_eq!(g.zoom, 4.0); // MAX_ZOOM
+    }
+
+    // ── fit_grid_to_container edge cases ───────────────────────────────
+
+    #[test]
+    fn fit_grid_to_container_tiny_container_yields_1x1() {
+        let g = fit_grid_to_container(1, 1, 8, 16, 1.0, 1.0);
+        assert_eq!(g.cols, 1);
+        assert_eq!(g.rows, 1);
+    }
+
+    #[test]
+    fn fit_grid_to_container_exact_multiple() {
+        let g = fit_grid_to_container(640, 384, 8, 16, 1.0, 1.0);
+        assert_eq!(g.cols, 80);
+        assert_eq!(g.rows, 24);
+        assert_eq!(g.pixel_width, 640);
+        assert_eq!(g.pixel_height, 384);
+    }
+
+    #[test]
+    fn fit_grid_to_container_nan_dpr_uses_fallback() {
+        let g = fit_grid_to_container(800, 600, 8, 16, f32::NAN, 1.0);
+        assert_eq!(g.dpr, 1.0);
+        assert!(g.cols >= 1);
+        assert!(g.rows >= 1);
+    }
+
+    #[test]
+    fn fit_grid_to_container_high_zoom_reduces_grid() {
+        let base = fit_grid_to_container(800, 600, 8, 16, 1.0, 1.0);
+        let max_zoom = fit_grid_to_container(800, 600, 8, 16, 1.0, 4.0);
+        assert!(max_zoom.cols < base.cols);
+        assert!(max_zoom.rows < base.rows);
+    }
+
+    // ── RendererConfig defaults ────────────────────────────────────────
+
+    #[test]
+    fn renderer_config_defaults() {
+        let cfg = RendererConfig::default();
+        assert_eq!(cfg.cell_width, 8);
+        assert_eq!(cfg.cell_height, 16);
+        assert_eq!(cfg.dpr, 1.0);
+        assert_eq!(cfg.zoom, 1.0);
+    }
+
+    // ── RendererError Display ──────────────────────────────────────────
+
+    #[test]
+    fn renderer_error_display_no_adapter() {
+        let err = RendererError::NoAdapter;
+        assert_eq!(err.to_string(), "WebGPU adapter not available");
+    }
+
+    #[test]
+    fn renderer_error_display_device_error() {
+        let err = RendererError::DeviceError("out of memory".into());
+        assert_eq!(err.to_string(), "WebGPU device error: out of memory");
+    }
+
+    #[test]
+    fn renderer_error_display_surface_error() {
+        let err = RendererError::SurfaceError("lost".into());
+        assert_eq!(err.to_string(), "WebGPU surface error: lost");
+    }
+
+    #[test]
+    fn renderer_error_is_std_error() {
+        let err: Box<dyn std::error::Error> = Box::new(RendererError::DeviceError("test".into()));
+        assert!(err.to_string().contains("test"));
+    }
+
+    // ── CellData attribute encoding ────────────────────────────────────
+
+    #[test]
+    fn cell_attr_style_bits_extracts_low_byte() {
+        assert_eq!(cell_attr_style_bits(0x0000_00FF), 0xFF);
+        assert_eq!(cell_attr_style_bits(0xFFFF_FF00), 0x00);
+        assert_eq!(cell_attr_style_bits(0x1234_5678), 0x78);
+    }
+
+    #[test]
+    fn cell_attr_link_id_extracts_shifted_upper() {
+        assert_eq!(cell_attr_link_id(0x00AB_CD00), 0x0000_ABCD);
+        assert_eq!(cell_attr_link_id(0x0000_00FF), 0x0000_0000);
+        assert_eq!(cell_attr_link_id(0xFFFF_FF00), 0x00FF_FFFF);
+    }
+
+    #[test]
+    fn cell_data_empty_has_expected_defaults() {
+        let empty = CellData::EMPTY;
+        assert_eq!(empty.glyph_id, 0);
+        assert_eq!(empty.attrs, 0);
+        assert_eq!(cell_attr_style_bits(empty.attrs), 0);
+        assert_eq!(cell_attr_link_id(empty.attrs), 0);
+    }
+
+    // ── CellPatch / cells_to_bytes ─────────────────────────────────────
+
+    #[test]
+    fn cells_to_bytes_empty_slice() {
+        let bytes = cells_to_bytes(&[]);
+        assert!(bytes.is_empty());
+    }
+
+    #[test]
+    fn cell_patch_with_single_cell() {
+        let patch = CellPatch {
+            offset: 42,
+            cells: vec![CellData {
+                bg_rgba: 0xAABBCCDD,
+                fg_rgba: 0x11223344,
+                glyph_id: 7,
+                attrs: 0,
+            }],
+        };
+        assert_eq!(patch.offset, 42);
+        assert_eq!(patch.cells.len(), 1);
+        let bytes = cells_to_bytes(&patch.cells);
+        assert_eq!(bytes.len(), CELL_DATA_BYTES);
+    }
+
+    #[test]
+    fn cell_patch_multi_cell_byte_length() {
+        let patch = CellPatch {
+            offset: 0,
+            cells: vec![CellData::EMPTY; 5],
+        };
+        let bytes = cells_to_bytes(&patch.cells);
+        assert_eq!(bytes.len(), 5 * CELL_DATA_BYTES);
+    }
+
+    // ── CursorStyle exhaustive ─────────────────────────────────────────
+
+    #[test]
+    fn cursor_style_roundtrip_all_variants() {
+        for val in 0..=3 {
+            let style = CursorStyle::from_u32(val);
+            assert_eq!(style.as_u32(), val);
+        }
+    }
+
+    #[test]
+    fn cursor_style_out_of_range_maps_to_none() {
+        for val in [4, 100, u32::MAX] {
+            assert_eq!(CursorStyle::from_u32(val), CursorStyle::None);
+        }
+    }
+
+    // ── InteractionUniforms in uniform buffer ──────────────────────────
+
+    #[test]
+    fn uniforms_bytes_zero_interaction_state() {
+        let buf = uniforms_bytes(
+            100.0,
+            100.0,
+            8.0,
+            16.0,
+            10,
+            10,
+            InteractionUniforms {
+                hovered_link_id: 0,
+                cursor_offset: 0,
+                cursor_style: CursorStyle::None.as_u32(),
+                selection_active: 0,
+                selection_start: 0,
+                selection_end: 0,
+            },
+        );
+        assert_eq!(buf.len(), UNIFORM_BYTES);
+        // Interaction fields are at offset 32..56
+        for i in (32..56).step_by(4) {
+            assert_eq!(
+                u32::from_le_bytes(buf[i..i + 4].try_into().unwrap()),
+                0,
+                "interaction uniform at offset {i} should be zero"
+            );
+        }
+    }
+
+    #[test]
+    fn uniforms_bytes_preserves_viewport_and_grid() {
+        let buf = uniforms_bytes(
+            1920.0,
+            1080.0,
+            10.0,
+            20.0,
+            192,
+            54,
+            InteractionUniforms {
+                hovered_link_id: 0,
+                cursor_offset: 0,
+                cursor_style: 0,
+                selection_active: 0,
+                selection_start: 0,
+                selection_end: 0,
+            },
+        );
+        assert_eq!(f32::from_le_bytes(buf[0..4].try_into().unwrap()), 1920.0);
+        assert_eq!(f32::from_le_bytes(buf[4..8].try_into().unwrap()), 1080.0);
+        assert_eq!(f32::from_le_bytes(buf[8..12].try_into().unwrap()), 10.0);
+        assert_eq!(f32::from_le_bytes(buf[12..16].try_into().unwrap()), 20.0);
+        assert_eq!(u32::from_le_bytes(buf[16..20].try_into().unwrap()), 192);
+        assert_eq!(u32::from_le_bytes(buf[20..24].try_into().unwrap()), 54);
+    }
+
+    // ── FrameStats ─────────────────────────────────────────────────────
+
+    #[test]
+    fn frame_stats_default_is_zero() {
+        let stats = FrameStats::default();
+        assert_eq!(stats.instance_count, 0);
+        assert_eq!(stats.dirty_cells, 0);
+    }
 }
