@@ -1,0 +1,13 @@
+{
+  "name": "el_left",
+  "description": "CSI 1 K erases from start of line to cursor inclusive",
+  "initial_size": [10, 3],
+  "input_bytes_hex": "41424344451b5b313b34481b5b314b",
+  "comment": "Print ABCDE at (0,0)-(0,4), CUP(1,4) to (0,3), EL(1) erases cols 0..3 inclusive. Only E remains.",
+  "expected": {
+    "cursor": { "row": 0, "col": 3 },
+    "cells": [
+      { "row": 0, "col": 4, "char": "E" }
+    ]
+  }
+}

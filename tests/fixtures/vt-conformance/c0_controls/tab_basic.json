@@ -1,0 +1,15 @@
+{
+  "name": "tab_basic",
+  "description": "HT (0x09) advances cursor to next tab stop at column 8",
+  "initial_size": [20, 3],
+  "input_bytes_hex": "41420958",
+  "comment": "Print AB at (0,0)-(0,1), TAB to col 8, print X at (0,8). Cursor at (0,9).",
+  "expected": {
+    "cursor": { "row": 0, "col": 9 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "A" },
+      { "row": 0, "col": 1, "char": "B" },
+      { "row": 0, "col": 8, "char": "X" }
+    ]
+  }
+}

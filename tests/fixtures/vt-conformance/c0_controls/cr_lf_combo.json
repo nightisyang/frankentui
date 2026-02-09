@@ -1,0 +1,18 @@
+{
+  "name": "cr_lf_combo",
+  "description": "CR (0x0D) returns to col 0, LF (0x0A) moves down one row",
+  "initial_size": [10, 3],
+  "input_bytes_hex": "414243440d0a5859",
+  "comment": "Print ABCD at (0,0)-(0,3), CR to (0,0), LF to (1,0), print XY at (1,0)-(1,1). Cursor at (1,2).",
+  "expected": {
+    "cursor": { "row": 1, "col": 2 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "A" },
+      { "row": 0, "col": 1, "char": "B" },
+      { "row": 0, "col": 2, "char": "C" },
+      { "row": 0, "col": 3, "char": "D" },
+      { "row": 1, "col": 0, "char": "X" },
+      { "row": 1, "col": 1, "char": "Y" }
+    ]
+  }
+}

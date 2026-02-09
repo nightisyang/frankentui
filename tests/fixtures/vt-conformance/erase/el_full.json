@@ -1,0 +1,16 @@
+{
+  "name": "el_full",
+  "description": "CSI 2 K erases entire line",
+  "initial_size": [10, 3],
+  "input_bytes_hex": "414243441b5b32481b5b324b1b5b314858",
+  "comment": "Print ABCD at (0,0)-(0,3), CUP(2) to (1,0), EL(2) erases entire row 1 (already blank, no visible effect), CUP(1) to (0,0), print X at (0,0). Row 0 now has X B C D.",
+  "expected": {
+    "cursor": { "row": 0, "col": 1 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "X" },
+      { "row": 0, "col": 1, "char": "B" },
+      { "row": 0, "col": 2, "char": "C" },
+      { "row": 0, "col": 3, "char": "D" }
+    ]
+  }
+}

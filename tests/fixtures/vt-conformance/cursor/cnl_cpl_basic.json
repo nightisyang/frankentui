@@ -1,0 +1,16 @@
+{
+  "name": "cnl_cpl_basic",
+  "description": "CSI E (CNL) moves to next line start, CSI F (CPL) moves to prev line start",
+  "initial_size": [10, 5],
+  "input_bytes_hex": "41421b5b3245591b5b31461b5b364358",
+  "comment": "Print AB at (0,0)-(0,1), CNL(2) to (2,0), print Y at (2,0), CPL(1) to (1,0), CUF(6) to (1,6), print X at (1,6).",
+  "expected": {
+    "cursor": { "row": 1, "col": 7 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "A" },
+      { "row": 0, "col": 1, "char": "B" },
+      { "row": 2, "col": 0, "char": "Y" },
+      { "row": 1, "col": 6, "char": "X" }
+    ]
+  }
+}
