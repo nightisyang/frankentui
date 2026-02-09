@@ -329,4 +329,259 @@ mod tests {
         m.set_sync_output(true);
         assert!(m.sync_output());
     }
+
+    // --- Default trait vs new() ---
+
+    #[test]
+    fn default_has_all_modes_off() {
+        let m = Modes::default();
+        assert!(!m.autowrap());
+        assert!(!m.cursor_visible());
+        assert!(!m.origin_mode());
+        assert!(!m.alt_screen());
+        assert!(!m.insert_mode());
+        assert!(!m.bracketed_paste());
+        assert!(!m.focus_events());
+        assert!(!m.sync_output());
+    }
+
+    #[test]
+    fn new_differs_from_default() {
+        let d = Modes::default();
+        let n = Modes::new();
+        assert_ne!(d, n);
+        assert!(n.autowrap());
+        assert!(n.cursor_visible());
+        assert!(!d.autowrap());
+        assert!(!d.cursor_visible());
+    }
+
+    // --- All DEC modes by number ---
+
+    #[test]
+    fn dec_mode_all_recognized_numbers() {
+        let recognized = [1, 6, 7, 25, 1000, 1002, 1003, 1004, 1006, 1049, 2004, 2026];
+        let mut m = Modes::default();
+        for &mode in &recognized {
+            assert!(
+                m.set_dec_mode(mode, true),
+                "mode {mode} should be recognized"
+            );
+            assert_eq!(m.dec_mode(mode), Some(true), "mode {mode} should be set");
+        }
+    }
+
+    #[test]
+    fn dec_mode_unrecognized_numbers() {
+        let mut m = Modes::new();
+        for mode in [
+            0,
+            2,
+            5,
+            8,
+            999,
+            1001,
+            1005,
+            1050,
+            2005,
+            2025,
+            2027,
+            u16::MAX,
+        ] {
+            assert!(!m.set_dec_mode(mode, true), "mode {mode} should be unknown");
+            assert_eq!(m.dec_mode(mode), None, "mode {mode} query should be None");
+        }
+    }
+
+    // --- All ANSI modes by number ---
+
+    #[test]
+    fn ansi_mode_all_recognized() {
+        let mut m = Modes::default();
+        assert!(m.set_ansi_mode(4, true));
+        assert!(m.insert_mode());
+        assert!(m.set_ansi_mode(20, true));
+        assert!(m.ansi.contains(AnsiModes::LINEFEED_NEWLINE));
+    }
+
+    #[test]
+    fn ansi_mode_unrecognized() {
+        let mut m = Modes::new();
+        assert!(!m.set_ansi_mode(0, true));
+        assert!(!m.set_ansi_mode(1, true));
+        assert!(!m.set_ansi_mode(21, true));
+        assert!(!m.set_ansi_mode(u16::MAX, true));
+    }
+
+    // --- Accessor coverage ---
+
+    #[test]
+    fn focus_events_toggle() {
+        let mut m = Modes::new();
+        assert!(!m.focus_events());
+        m.set_focus_events(true);
+        assert!(m.focus_events());
+        m.set_focus_events(false);
+        assert!(!m.focus_events());
+    }
+
+    #[test]
+    fn dec_flags_accessor() {
+        let m = Modes::new();
+        let flags = m.dec_flags();
+        assert!(flags.contains(DecModes::AUTOWRAP));
+        assert!(flags.contains(DecModes::CURSOR_VISIBLE));
+        assert!(!flags.contains(DecModes::ORIGIN));
+    }
+
+    #[test]
+    fn autowrap_toggle() {
+        let mut m = Modes::new();
+        assert!(m.autowrap());
+        m.set_autowrap(false);
+        assert!(!m.autowrap());
+        m.set_autowrap(true);
+        assert!(m.autowrap());
+    }
+
+    #[test]
+    fn cursor_visible_toggle() {
+        let mut m = Modes::new();
+        assert!(m.cursor_visible());
+        m.set_cursor_visible(false);
+        assert!(!m.cursor_visible());
+        m.set_cursor_visible(true);
+        assert!(m.cursor_visible());
+    }
+
+    #[test]
+    fn bracketed_paste_toggle() {
+        let mut m = Modes::new();
+        assert!(!m.bracketed_paste());
+        m.set_bracketed_paste(true);
+        assert!(m.bracketed_paste());
+        m.set_bracketed_paste(false);
+        assert!(!m.bracketed_paste());
+    }
+
+    #[test]
+    fn sync_output_toggle() {
+        let mut m = Modes::new();
+        assert!(!m.sync_output());
+        m.set_sync_output(true);
+        assert!(m.sync_output());
+        m.set_sync_output(false);
+        assert!(!m.sync_output());
+    }
+
+    // --- Idempotency ---
+
+    #[test]
+    fn double_set_is_idempotent() {
+        let mut m = Modes::new();
+        m.set_origin_mode(true);
+        m.set_origin_mode(true);
+        assert!(m.origin_mode());
+    }
+
+    #[test]
+    fn double_clear_is_idempotent() {
+        let mut m = Modes::new();
+        m.set_origin_mode(false);
+        m.set_origin_mode(false);
+        assert!(!m.origin_mode());
+    }
+
+    // --- Orthogonality ---
+
+    #[test]
+    fn setting_one_dec_mode_does_not_affect_others() {
+        let mut m = Modes::new();
+        let before = m.dec;
+        m.set_focus_events(true);
+        // Only FOCUS_EVENTS bit should have changed
+        let diff = m.dec ^ before;
+        assert_eq!(diff, DecModes::FOCUS_EVENTS);
+    }
+
+    #[test]
+    fn setting_ansi_mode_does_not_affect_dec() {
+        let mut m = Modes::new();
+        let dec_before = m.dec;
+        m.set_insert_mode(true);
+        assert_eq!(m.dec, dec_before);
+    }
+
+    #[test]
+    fn setting_dec_mode_does_not_affect_ansi() {
+        let mut m = Modes::new();
+        let ansi_before = m.ansi;
+        m.set_alt_screen(true);
+        assert_eq!(m.ansi, ansi_before);
+    }
+
+    // --- Multiple modes simultaneous ---
+
+    #[test]
+    fn all_dec_modes_enabled_simultaneously() {
+        let mut m = Modes::default();
+        for &mode in &[1, 6, 7, 25, 1000, 1002, 1003, 1004, 1006, 1049, 2004, 2026] {
+            m.set_dec_mode(mode, true);
+        }
+        // Every recognized mode should be set
+        for &mode in &[1, 6, 7, 25, 1000, 1002, 1003, 1004, 1006, 1049, 2004, 2026] {
+            assert_eq!(m.dec_mode(mode), Some(true), "mode {mode} should be on");
+        }
+    }
+
+    #[test]
+    fn all_ansi_modes_enabled() {
+        let mut m = Modes::default();
+        m.set_ansi_mode(4, true);
+        m.set_ansi_mode(20, true);
+        assert!(m.insert_mode());
+        assert!(m.ansi.contains(AnsiModes::LINEFEED_NEWLINE));
+    }
+
+    // --- Mouse mode mutual exclusivity check ---
+
+    #[test]
+    fn mouse_modes_are_independent_bits() {
+        let mut m = Modes::new();
+        m.set_dec_mode(1000, true);
+        m.set_dec_mode(1002, true);
+        m.set_dec_mode(1003, true);
+        assert!(m.dec.contains(DecModes::MOUSE_BUTTON));
+        assert!(m.dec.contains(DecModes::MOUSE_CELL_MOTION));
+        assert!(m.dec.contains(DecModes::MOUSE_ALL_MOTION));
+        // Disabling one doesn't affect others
+        m.set_dec_mode(1002, false);
+        assert!(m.dec.contains(DecModes::MOUSE_BUTTON));
+        assert!(!m.dec.contains(DecModes::MOUSE_CELL_MOTION));
+        assert!(m.dec.contains(DecModes::MOUSE_ALL_MOTION));
+    }
+
+    #[test]
+    fn reset_from_all_modes_enabled() {
+        let mut m = Modes::default();
+        for &mode in &[1, 6, 7, 25, 1000, 1002, 1003, 1004, 1006, 1049, 2004, 2026] {
+            m.set_dec_mode(mode, true);
+        }
+        m.set_ansi_mode(4, true);
+        m.set_ansi_mode(20, true);
+        m.reset();
+        // Should be back to new() defaults
+        assert_eq!(m, Modes::new());
+    }
+
+    // --- Application cursor ---
+
+    #[test]
+    fn application_cursor_via_dec_mode() {
+        let mut m = Modes::new();
+        assert_eq!(m.dec_mode(1), Some(false));
+        m.set_dec_mode(1, true);
+        assert!(m.dec.contains(DecModes::APPLICATION_CURSOR));
+        assert_eq!(m.dec_mode(1), Some(true));
+    }
 }
