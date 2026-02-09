@@ -180,6 +180,7 @@ impl Rect {
     }
 
     /// Create a new rectangle inside the current one with the given margin.
+    #[inline]
     pub fn inner(&self, margin: Sides) -> Rect {
         let x = self.x.saturating_add(margin.left);
         let y = self.y.saturating_add(margin.top);
@@ -203,6 +204,7 @@ impl Rect {
     /// Create a new rectangle that is the union of this rectangle and another.
     ///
     /// The result is the smallest rectangle that contains both.
+    #[inline]
     pub fn union(&self, other: &Rect) -> Rect {
         let x = self.x.min(other.x);
         let y = self.y.min(other.y);
