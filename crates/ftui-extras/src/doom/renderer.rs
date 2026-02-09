@@ -252,6 +252,10 @@ impl DoomRenderer {
                 let sx_span = sx2 - sx1;
                 let sx_narrow = sx_span.abs() <= 0.01;
                 let vx_span = vx2 - vx1;
+                let base_r_f = base_r as f32;
+                let base_g_f = base_g as f32;
+                let base_b_f = base_b as f32;
+                let is_sky_ceiling = front.is_sky_ceiling();
                 let (back_ceil, back_floor, has_upper, has_lower) = if let Some(back) = back_sector
                 {
                     (
@@ -305,12 +309,12 @@ impl DoomRenderer {
                     // Apply lighting
                     let light_factor = palette.light_factor(light, depth);
 
-                    let r = (base_r as f32 * light_factor) as u8;
-                    let g = (base_g as f32 * light_factor) as u8;
-                    let b = (base_b as f32 * light_factor) as u8;
+                    let r = (base_r_f * light_factor) as u8;
+                    let g = (base_g_f * light_factor) as u8;
+                    let b = (base_b_f * light_factor) as u8;
 
                     // Draw ceiling above wall (if not sky)
-                    if draw_top > clip_top && !front.is_sky_ceiling() {
+                    if draw_top > clip_top && !is_sky_ceiling {
                         let ceil_light = light_factor * 0.85;
                         let cr = (CEILING_COLOR[0] as f32 * ceil_light) as u8;
                         let cg = (CEILING_COLOR[1] as f32 * ceil_light) as u8;
@@ -359,9 +363,9 @@ impl DoomRenderer {
                             let ub = (upper_bottom as i32).max(clip_top).min(clip_bottom);
 
                             if draw_top < ub {
-                                let ur = (base_r as f32 * light_factor * 0.85) as u8;
-                                let ug = (base_g as f32 * light_factor * 0.85) as u8;
-                                let ubr = (base_b as f32 * light_factor * 0.85) as u8;
+                                let ur = (base_r_f * light_factor * 0.85) as u8;
+                                let ug = (base_g_f * light_factor * 0.85) as u8;
+                                let ubr = (base_b_f * light_factor * 0.85) as u8;
                                 fb.draw_column(
                                     x,
                                     draw_top as u32,
@@ -379,9 +383,9 @@ impl DoomRenderer {
                             let lt = (lower_top as i32).max(clip_top).min(clip_bottom);
 
                             if lt < draw_bottom {
-                                let lr = (base_r as f32 * light_factor * 0.7) as u8;
-                                let lg = (base_g as f32 * light_factor * 0.7) as u8;
-                                let lb = (base_b as f32 * light_factor * 0.7) as u8;
+                                let lr = (base_r_f * light_factor * 0.7) as u8;
+                                let lg = (base_g_f * light_factor * 0.7) as u8;
+                                let lb = (base_b_f * light_factor * 0.7) as u8;
                                 fb.draw_column(
                                     x,
                                     lt as u32,
