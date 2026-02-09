@@ -126,6 +126,15 @@ impl CoreTerminalHarness {
                 );
                 self.cursor.pending_wrap = false;
             }
+            Action::EraseChars(count) => {
+                self.grid.erase_chars(
+                    self.cursor.row,
+                    self.cursor.col,
+                    count,
+                    self.cursor.attrs.bg,
+                );
+                self.cursor.pending_wrap = false;
+            }
             Action::CursorPosition { row, col } => {
                 self.cursor.move_to(row, col, self.rows, self.cols);
             }
@@ -153,6 +162,26 @@ impl CoreTerminalHarness {
             }
             Action::Sgr(params) => self.cursor.attrs.apply_sgr_params(&params),
             Action::SetTitle(_) | Action::HyperlinkStart(_) | Action::HyperlinkEnd => {}
+            Action::SetTabStop => {
+                self.cursor.set_tab_stop();
+                self.cursor.pending_wrap = false;
+            }
+            Action::ClearTabStop(mode) => {
+                match mode {
+                    0 => self.cursor.clear_tab_stop(),
+                    3 | 5 => self.cursor.clear_all_tab_stops(),
+                    _ => {}
+                }
+                self.cursor.pending_wrap = false;
+            }
+            Action::BackTab(count) => {
+                for _ in 0..count {
+                    self.cursor.col = self.cursor.prev_tab_stop();
+                }
+                self.cursor.pending_wrap = false;
+            }
+            // Keypad mode toggles do not affect baseline grid snapshot output.
+            Action::ApplicationKeypad | Action::NormalKeypad => {}
             Action::Escape(_) => {}
             Action::DecSet(_) | Action::DecRst(_) => {}
             Action::AnsiSet(_) | Action::AnsiRst(_) => {}

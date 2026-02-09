@@ -121,6 +121,10 @@ fn apply_action(action: Action, grid: &mut Grid, cursor: &mut Cursor, scrollback
             grid.delete_chars(cursor.row, cursor.col, count, cursor.attrs.bg);
             cursor.pending_wrap = false;
         }
+        Action::EraseChars(count) => {
+            grid.erase_chars(cursor.row, cursor.col, count, cursor.attrs.bg);
+            cursor.pending_wrap = false;
+        }
         Action::CursorPosition { row, col } => {
             cursor.move_to(row, col, rows, cols);
         }
@@ -179,6 +183,25 @@ fn apply_action(action: Action, grid: &mut Grid, cursor: &mut Cursor, scrollback
             *scrollback = Scrollback::new(512);
         }
         Action::SetTitle(_) | Action::HyperlinkStart(_) | Action::HyperlinkEnd => {}
+        Action::SetTabStop => {
+            cursor.set_tab_stop();
+            cursor.pending_wrap = false;
+        }
+        Action::ClearTabStop(mode) => {
+            match mode {
+                0 => cursor.clear_tab_stop(),
+                3 | 5 => cursor.clear_all_tab_stops(),
+                _ => {}
+            }
+            cursor.pending_wrap = false;
+        }
+        Action::BackTab(count) => {
+            for _ in 0..count {
+                cursor.col = cursor.prev_tab_stop();
+            }
+            cursor.pending_wrap = false;
+        }
+        Action::ApplicationKeypad | Action::NormalKeypad => {}
         Action::Escape(_) => {
             // Unsupported sequences are ignored.
         }

@@ -174,6 +174,36 @@ impl Modes {
     /// Set a DEC private mode by its ECMA-48 number.
     /// Returns `true` if the mode is recognized.
     pub fn set_dec_mode(&mut self, mode: u16, enabled: bool) -> bool {
+        let Some(flag) = Self::dec_flag_for_mode(mode) else {
+            return false;
+        };
+        self.dec.set(flag, enabled);
+        true
+    }
+
+    /// Query a DEC private mode by number.
+    ///
+    /// Returns:
+    /// - `Some(true)` if the mode is recognized and set,
+    /// - `Some(false)` if the mode is recognized and reset,
+    /// - `None` if the mode number is unknown.
+    #[must_use]
+    pub fn dec_mode(&self, mode: u16) -> Option<bool> {
+        let flag = Self::dec_flag_for_mode(mode)?;
+        Some(self.dec.contains(flag))
+    }
+
+    /// Set an ANSI standard mode by its number.
+    /// Returns `true` if the mode is recognized.
+    pub fn set_ansi_mode(&mut self, mode: u16, enabled: bool) -> bool {
+        let Some(flag) = Self::ansi_flag_for_mode(mode) else {
+            return false;
+        };
+        self.ansi.set(flag, enabled);
+        true
+    }
+
+    fn dec_flag_for_mode(mode: u16) -> Option<DecModes> {
         let flag = match mode {
             1 => DecModes::APPLICATION_CURSOR,
             6 => DecModes::ORIGIN,
@@ -187,22 +217,18 @@ impl Modes {
             1049 => DecModes::ALT_SCREEN,
             2004 => DecModes::BRACKETED_PASTE,
             2026 => DecModes::SYNC_OUTPUT,
-            _ => return false,
+            _ => return None,
         };
-        self.dec.set(flag, enabled);
-        true
+        Some(flag)
     }
 
-    /// Set an ANSI standard mode by its number.
-    /// Returns `true` if the mode is recognized.
-    pub fn set_ansi_mode(&mut self, mode: u16, enabled: bool) -> bool {
+    fn ansi_flag_for_mode(mode: u16) -> Option<AnsiModes> {
         let flag = match mode {
             4 => AnsiModes::INSERT,
             20 => AnsiModes::LINEFEED_NEWLINE,
-            _ => return false,
+            _ => return None,
         };
-        self.ansi.set(flag, enabled);
-        true
+        Some(flag)
     }
 }
 
@@ -257,6 +283,16 @@ mod tests {
     fn set_dec_mode_unknown_returns_false() {
         let mut m = Modes::new();
         assert!(!m.set_dec_mode(9999, true));
+    }
+
+    #[test]
+    fn dec_mode_by_number_reports_state() {
+        let mut m = Modes::new();
+        assert_eq!(m.dec_mode(7), Some(true));
+        assert_eq!(m.dec_mode(1004), Some(false));
+        assert_eq!(m.dec_mode(9999), None);
+        assert!(m.set_dec_mode(1004, true));
+        assert_eq!(m.dec_mode(1004), Some(true));
     }
 
     #[test]

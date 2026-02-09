@@ -5,11 +5,13 @@
 //! - Diff → Patch coalescing at various change rates
 //! - Full-buffer patch generation
 //! - End-to-end: Buffer pair → Diff → Patches → serialized bytes
+//! - Glyph atlas cache hot-path, miss-path, and eviction pressure behavior
 //!
 //! Run with: cargo bench -p frankenterm-web --bench renderer_bench
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use frankenterm_web::frame_harness::{FrameRecord, FrameTimeCollector};
+use frankenterm_web::glyph_atlas::{GlyphAtlasCache, GlyphKey, GlyphRaster};
 use frankenterm_web::patch_feed::{cell_from_render, diff_to_patches, full_buffer_patch};
 use frankenterm_web::renderer::{CELL_DATA_BYTES, CellData};
 use ftui_render::buffer::Buffer;
@@ -51,6 +53,16 @@ fn styled_cell() -> Cell {
         .with_fg(PackedRgba::rgb(0, 255, 0))
         .with_bg(PackedRgba::rgb(0, 0, 0))
         .with_attrs(CellAttrs::new(StyleFlags::BOLD | StyleFlags::ITALIC, 0))
+}
+
+fn solid_glyph_raster(width: u16, height: u16) -> GlyphRaster {
+    let len = usize::from(width) * usize::from(height);
+    GlyphRaster {
+        width,
+        height,
+        pixels: vec![255; len],
+        metrics: Default::default(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +270,68 @@ fn bench_frame_harness_stats(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// Glyph atlas cache benchmarks
+// ---------------------------------------------------------------------------
+
+fn bench_glyph_atlas_cache(c: &mut Criterion) {
+    let mut group = c.benchmark_group("web/glyph_atlas_cache");
+
+    let key = GlyphKey::from_char('A', 16);
+    group.throughput(Throughput::Elements(1));
+
+    group.bench_function("miss_insert_single", |b| {
+        b.iter_batched(
+            || GlyphAtlasCache::new(128, 128, 128 * 128),
+            |mut cache| {
+                let placement = cache
+                    .get_or_insert_with(key, |_| solid_glyph_raster(8, 16))
+                    .expect("single insert should fit in atlas");
+                black_box(placement);
+                black_box(cache.stats());
+                black_box(cache.objective());
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    let mut hot_cache = GlyphAtlasCache::new(128, 128, 128 * 128);
+    hot_cache
+        .get_or_insert_with(key, |_| solid_glyph_raster(8, 16))
+        .expect("seed glyph should fit in atlas");
+    group.bench_function("hit_hot_path", |b| {
+        b.iter(|| {
+            let placement = hot_cache.get(key).expect("seeded key should stay cached");
+            black_box(placement);
+            black_box(hot_cache.stats());
+        })
+    });
+
+    // With this budget and slot size (~180 bytes per 8x16 glyph including padding),
+    // cycling three keys forces frequent LRU eviction/reinsert behavior.
+    let mut eviction_cache = GlyphAtlasCache::new(64, 64, 2 * 180);
+    let eviction_keys = [
+        GlyphKey::from_char('A', 16),
+        GlyphKey::from_char('B', 16),
+        GlyphKey::from_char('C', 16),
+    ];
+    let mut idx = 0usize;
+    group.bench_function("eviction_cycle_3keys_budget2", |b| {
+        b.iter(|| {
+            let key = eviction_keys[idx % eviction_keys.len()];
+            idx = idx.wrapping_add(1);
+            let placement = eviction_cache
+                .get_or_insert_with(key, |_| solid_glyph_raster(8, 16))
+                .expect("eviction cycle inserts should fit in atlas");
+            black_box(placement);
+            black_box(eviction_cache.stats());
+            black_box(eviction_cache.objective());
+        })
+    });
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
 // First-frame (full repaint) latency
 // ---------------------------------------------------------------------------
 
@@ -315,6 +389,7 @@ criterion_group! {
         bench_full_buffer_patch,
         bench_e2e_pipeline,
         bench_frame_harness_stats,
+        bench_glyph_atlas_cache,
         bench_first_frame,
 }
 
