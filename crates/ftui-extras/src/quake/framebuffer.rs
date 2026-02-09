@@ -532,4 +532,53 @@ mod tests {
         let bottom = fb.get_pixel(0, 9);
         assert!(top.r() > bottom.r());
     }
+
+    // --- clear_depth ---
+
+    #[test]
+    fn clear_depth_resets_z_buffer_only() {
+        let mut fb = QuakeFramebuffer::new(3, 3);
+        let color = PackedRgba::rgb(200, 100, 50);
+        fb.set_pixel_depth(1, 1, 5.0, color);
+        assert_eq!(fb.get_pixel(1, 1), color);
+
+        fb.clear_depth();
+        // Pixel color should still be intact after clear_depth
+        assert_eq!(fb.get_pixel(1, 1), color);
+        // Depth should be reset to MAX, allowing any z to pass
+        fb.set_pixel_depth(1, 1, 999.0, PackedRgba::GREEN);
+        assert_eq!(fb.get_pixel(1, 1), PackedRgba::GREEN);
+    }
+
+    #[test]
+    fn clear_depth_allows_closer_write_after_far_write() {
+        let mut fb = QuakeFramebuffer::new(2, 2);
+        fb.set_pixel_depth(0, 0, 1.0, PackedRgba::RED);
+        // Far write blocked by closer existing depth
+        fb.set_pixel_depth(0, 0, 10.0, PackedRgba::BLUE);
+        assert_eq!(fb.get_pixel(0, 0), PackedRgba::RED);
+
+        // After clear_depth, any z should succeed
+        fb.clear_depth();
+        fb.set_pixel_depth(0, 0, 10.0, PackedRgba::BLUE);
+        assert_eq!(fb.get_pixel(0, 0), PackedRgba::BLUE);
+    }
+
+    #[test]
+    fn clear_depth_on_empty_framebuffer_is_noop() {
+        let mut fb = QuakeFramebuffer::new(0, 0);
+        fb.clear_depth(); // Should not panic
+    }
+
+    #[test]
+    fn clear_depth_does_not_affect_full_clear_behavior() {
+        let mut fb = QuakeFramebuffer::new(2, 2);
+        fb.set_pixel(0, 0, PackedRgba::RED);
+        fb.clear_depth();
+        // Pixel still has color
+        assert_eq!(fb.get_pixel(0, 0), PackedRgba::RED);
+        // Full clear resets both
+        fb.clear();
+        assert_eq!(fb.get_pixel(0, 0), PackedRgba::BLACK);
+    }
 }

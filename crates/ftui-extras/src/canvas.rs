@@ -1107,6 +1107,16 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "assertion failed")]
+    fn colored_point_in_bounds_panics_on_out_of_bounds() {
+        let mut p = Painter::new(2, 4, Mode::Braille);
+        let blue = PackedRgba::rgb(0, 0, 255);
+
+        // This helper assumes callers already validated bounds.
+        p.point_colored_in_bounds(2, 0, blue);
+    }
+
+    #[test]
     fn colored_line() {
         let mut p = Painter::new(10, 1, Mode::Braille);
         let blue = PackedRgba::rgb(0, 0, 255);

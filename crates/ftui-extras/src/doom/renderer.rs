@@ -1962,4 +1962,104 @@ mod tests {
         // But bottom should be updated for new columns only
         // (existing columns keep their old bottom value)
     }
+
+    // --- draw_background / bg_cache ---
+
+    #[test]
+    fn draw_background_populates_bg_cache() {
+        let mut r = DoomRenderer::new(10, 20);
+        let mut fb = DoomFramebuffer::new(10, 20);
+        r.draw_background(&mut fb);
+        assert_eq!(r.bg_cache.len(), 20);
+        assert_eq!(r.bg_cache_dims, (10, 20));
+    }
+
+    #[test]
+    fn draw_background_cache_reused_on_same_dims() {
+        let mut r = DoomRenderer::new(10, 20);
+        let mut fb = DoomFramebuffer::new(10, 20);
+        r.draw_background(&mut fb);
+        let first_cache = r.bg_cache.clone();
+
+        // Draw again with same dimensions — cache should be reused
+        r.draw_background(&mut fb);
+        assert_eq!(r.bg_cache, first_cache);
+    }
+
+    #[test]
+    fn draw_background_cache_invalidated_on_resize() {
+        let mut r = DoomRenderer::new(10, 20);
+        let mut fb = DoomFramebuffer::new(10, 20);
+        r.draw_background(&mut fb);
+        assert_eq!(r.bg_cache.len(), 20);
+
+        // Resize to different height
+        r.resize(10, 30);
+        let mut fb2 = DoomFramebuffer::new(10, 30);
+        r.draw_background(&mut fb2);
+        assert_eq!(r.bg_cache.len(), 30);
+        assert_eq!(r.bg_cache_dims, (10, 30));
+    }
+
+    #[test]
+    fn draw_background_sky_top_matches_constants() {
+        let mut r = DoomRenderer::new(10, 20);
+        let mut fb = DoomFramebuffer::new(10, 20);
+        r.draw_background(&mut fb);
+
+        // Row 0 (top of sky) should use SKY_TOP lerped with t=0
+        let top_color = r.bg_cache[0];
+        assert_eq!(top_color.r(), SKY_TOP[0]);
+        assert_eq!(top_color.g(), SKY_TOP[1]);
+        assert_eq!(top_color.b(), SKY_TOP[2]);
+    }
+
+    #[test]
+    fn draw_background_fills_framebuffer_rows() {
+        let mut r = DoomRenderer::new(4, 6);
+        let mut fb = DoomFramebuffer::new(4, 6);
+        r.draw_background(&mut fb);
+
+        // Every pixel in a row should have the same color
+        for y in 0..6u32 {
+            let expected = fb.get_pixel(0, y);
+            for x in 1..4u32 {
+                assert_eq!(fb.get_pixel(x, y), expected, "row {y} should be uniform");
+            }
+        }
+    }
+
+    #[test]
+    fn draw_background_sky_above_floor() {
+        let mut r = DoomRenderer::new(10, 20);
+        let mut fb = DoomFramebuffer::new(10, 20);
+        r.draw_background(&mut fb);
+
+        // Sky rows (0..10) should have higher blue channel than floor rows (10..20)
+        let sky_b = r.bg_cache[0].b();
+        let floor_b = r.bg_cache[19].b();
+        assert!(
+            sky_b > floor_b,
+            "sky blue={sky_b} should be > floor blue={floor_b}"
+        );
+    }
+
+    // --- reset ---
+
+    #[test]
+    fn reset_clears_solid_count_and_clips() {
+        let mut r = DoomRenderer::new(5, 10);
+        r.column_clips[0].solid = true;
+        r.column_clips[0].top = 5;
+        r.column_clips[0].bottom = 3;
+        r.solid_count = 1;
+        r.stats.nodes_visited = 42;
+
+        r.reset();
+        assert_eq!(r.solid_count, 0);
+        assert!(!r.column_clips[0].solid);
+        assert_eq!(r.column_clips[0].top, 0);
+        assert_eq!(r.column_clips[0].bottom, 10); // height as i32
+        assert_eq!(r.stats.nodes_visited, 0);
+    }
 }
