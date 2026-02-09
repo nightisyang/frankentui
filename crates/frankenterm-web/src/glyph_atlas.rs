@@ -1642,7 +1642,7 @@ mod tests {
 
         // Insert 10 glyphs; each evicts the previous. Free indices should be reused.
         for i in 0u32..10 {
-            let ch = char::from_u32('a' as u32 + i).unwrap();
+            let ch = char::from_u32('a' as u32 + i).expect("generated ASCII scalar is valid");
             let _ = cache
                 .get_or_insert_with(GlyphKey::from_char(ch, 16), |_| {
                     raster_solid(6, 6, GlyphMetrics::default())
