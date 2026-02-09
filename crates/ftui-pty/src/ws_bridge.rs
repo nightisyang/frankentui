@@ -770,6 +770,402 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 
+    // --- WsPtyBridgeConfig ---
+
+    #[test]
+    fn config_default_fields() {
+        let c = WsPtyBridgeConfig::default();
+        assert_eq!(c.bind_addr, SocketAddr::from(([127, 0, 0, 1], 9231)));
+        assert!(c.args.is_empty());
+        assert_eq!(c.term, "xterm-256color");
+        assert!(c.env.is_empty());
+        assert_eq!(c.cols, 120);
+        assert_eq!(c.rows, 40);
+        assert!(c.allowed_origins.is_empty());
+        assert!(c.auth_token.is_none());
+        assert!(c.telemetry_path.is_none());
+        assert_eq!(c.max_message_bytes, 256 * 1024);
+        assert_eq!(c.idle_sleep, Duration::from_millis(5));
+        assert!(c.accept_once);
+    }
+
+    #[test]
+    fn config_clone() {
+        let c1 = WsPtyBridgeConfig::default();
+        let c2 = c1.clone();
+        assert_eq!(c2.cols, c1.cols);
+        assert_eq!(c2.rows, c1.rows);
+        assert_eq!(c2.term, c1.term);
+    }
+
+    #[test]
+    fn config_debug() {
+        let c = WsPtyBridgeConfig::default();
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("WsPtyBridgeConfig"));
+        assert!(dbg.contains("bind_addr"));
+    }
+
+    // --- BridgeSummary ---
+
+    #[test]
+    fn bridge_summary_as_json_contains_all_fields() {
+        let summary = BridgeSummary {
+            session_id: "test-123".to_string(),
+            ws_in_bytes: 100,
+            ws_out_bytes: 200,
+            pty_in_bytes: 50,
+            pty_out_bytes: 150,
+            resize_events: 3,
+            exit_code: Some(0),
+            exit_signal: None,
+        };
+        let json = summary.as_json();
+        assert_eq!(json["session_id"], "test-123");
+        assert_eq!(json["ws_in_bytes"], 100);
+        assert_eq!(json["ws_out_bytes"], 200);
+        assert_eq!(json["pty_in_bytes"], 50);
+        assert_eq!(json["pty_out_bytes"], 150);
+        assert_eq!(json["resize_events"], 3);
+        assert_eq!(json["exit_code"], 0);
+        assert!(json["exit_signal"].is_null());
+    }
+
+    #[test]
+    fn bridge_summary_as_json_with_signal() {
+        let summary = BridgeSummary {
+            session_id: "s".to_string(),
+            ws_in_bytes: 0,
+            ws_out_bytes: 0,
+            pty_in_bytes: 0,
+            pty_out_bytes: 0,
+            resize_events: 0,
+            exit_code: None,
+            exit_signal: Some("SIGKILL".to_string()),
+        };
+        let json = summary.as_json();
+        assert!(json["exit_code"].is_null());
+        assert_eq!(json["exit_signal"], "SIGKILL");
+    }
+
+    #[test]
+    fn bridge_summary_clone_and_eq() {
+        let s1 = BridgeSummary {
+            session_id: "a".to_string(),
+            ws_in_bytes: 1,
+            ws_out_bytes: 2,
+            pty_in_bytes: 3,
+            pty_out_bytes: 4,
+            resize_events: 5,
+            exit_code: Some(42),
+            exit_signal: None,
+        };
+        let s2 = s1.clone();
+        assert_eq!(s1, s2);
+    }
+
+    #[test]
+    fn bridge_summary_debug() {
+        let s = BridgeSummary {
+            session_id: "x".to_string(),
+            ws_in_bytes: 0,
+            ws_out_bytes: 0,
+            pty_in_bytes: 0,
+            pty_out_bytes: 0,
+            resize_events: 0,
+            exit_code: None,
+            exit_signal: None,
+        };
+        let dbg = format!("{s:?}");
+        assert!(dbg.contains("BridgeSummary"));
+        assert!(dbg.contains("session_id"));
+    }
+
+    // --- ControlMessage ---
+
+    #[test]
+    fn control_message_close() {
+        assert_eq!(
+            parse_control_message(r#"{"type":"close"}"#).expect("parse"),
+            Some(ControlMessage::Close)
+        );
+    }
+
+    #[test]
+    fn control_message_debug_clone_eq() {
+        let m = ControlMessage::Resize { cols: 80, rows: 24 };
+        let m2 = m;
+        assert_eq!(m, m2);
+        let dbg = format!("{m:?}");
+        assert!(dbg.contains("Resize"));
+        assert!(dbg.contains("80"));
+    }
+
+    // --- parse_control_message edge cases ---
+
+    #[test]
+    fn parse_control_message_invalid_json() {
+        let err = parse_control_message("not json").expect_err("should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn parse_control_message_missing_type() {
+        let err = parse_control_message(r#"{"cols":80}"#).expect_err("should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn parse_control_message_resize_missing_cols() {
+        let err = parse_control_message(r#"{"type":"resize","rows":40}"#).expect_err("should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn parse_control_message_resize_missing_rows() {
+        let err = parse_control_message(r#"{"type":"resize","cols":80}"#).expect_err("should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn parse_control_message_resize_zero_rows() {
+        let err = parse_control_message(r#"{"type":"resize","cols":80,"rows":0}"#)
+            .expect_err("should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn parse_control_message_resize_zero_cols() {
+        let err = parse_control_message(r#"{"type":"resize","cols":0,"rows":24}"#)
+            .expect_err("should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn parse_control_message_resize_large_values() {
+        // u16::MAX = 65535 is valid
+        let result =
+            parse_control_message(r#"{"type":"resize","cols":65535,"rows":65535}"#).expect("parse");
+        assert_eq!(
+            result,
+            Some(ControlMessage::Resize {
+                cols: 65535,
+                rows: 65535
+            })
+        );
+    }
+
+    #[test]
+    fn parse_control_message_resize_overflow_u16() {
+        let err = parse_control_message(r#"{"type":"resize","cols":70000,"rows":40}"#)
+            .expect_err("should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    // --- read_u16_field ---
+
+    #[test]
+    fn read_u16_field_valid() {
+        let v: Value = serde_json::from_str(r#"{"x": 42}"#).unwrap();
+        assert_eq!(read_u16_field(&v, "x").unwrap(), 42);
+    }
+
+    #[test]
+    fn read_u16_field_missing() {
+        let v: Value = serde_json::from_str(r#"{"x": 42}"#).unwrap();
+        let err = read_u16_field(&v, "y").expect_err("should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn read_u16_field_not_numeric() {
+        let v: Value = serde_json::from_str(r#"{"x": "hello"}"#).unwrap();
+        let err = read_u16_field(&v, "x").expect_err("should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn read_u16_field_overflow() {
+        let v: Value = serde_json::from_str(r#"{"x": 100000}"#).unwrap();
+        let err = read_u16_field(&v, "x").expect_err("should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    // --- query_param edge cases ---
+
+    #[test]
+    fn query_param_empty_string() {
+        assert_eq!(query_param("", "token"), None);
+    }
+
+    #[test]
+    fn query_param_missing_value() {
+        assert_eq!(query_param("token", "token"), Some(""));
+    }
+
+    #[test]
+    fn query_param_first_of_duplicates() {
+        assert_eq!(
+            query_param("token=first&token=second", "token"),
+            Some("first")
+        );
+    }
+
+    #[test]
+    fn query_param_value_with_equals() {
+        assert_eq!(query_param("token=a=b", "token"), Some("a=b"));
+    }
+
+    // --- validate_upgrade_request edge cases ---
+
+    #[test]
+    fn validate_no_origin_required_no_token_required() {
+        let req = request("/ws", None);
+        let result = validate_upgrade_request(&req, &[], None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_origin_required_but_header_missing() {
+        let req = request("/ws", None);
+        let result =
+            validate_upgrade_request(&req, &[String::from("https://allowed.example")], None);
+        let rejection = result.expect_err("should reject");
+        assert_eq!(rejection.status, StatusCode::FORBIDDEN);
+        assert!(rejection.body.contains("Origin"));
+    }
+
+    #[test]
+    fn validate_token_required_but_no_query_string() {
+        let req = request("/ws", None);
+        let result = validate_upgrade_request(&req, &[], Some("secret"));
+        let rejection = result.expect_err("should reject");
+        assert_eq!(rejection.status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn validate_token_required_but_missing_from_query() {
+        let req = request("/ws?other=value", None);
+        let result = validate_upgrade_request(&req, &[], Some("secret"));
+        let rejection = result.expect_err("should reject");
+        assert_eq!(rejection.status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn validate_correct_token_no_origin_restriction() {
+        let req = request("/ws?token=mysecret", None);
+        let result = validate_upgrade_request(&req, &[], Some("mysecret"));
+        assert!(result.is_ok());
+    }
+
+    // --- HandshakeRejection ---
+
+    #[test]
+    fn handshake_rejection_into_response() {
+        let rejection = HandshakeRejection {
+            status: StatusCode::FORBIDDEN,
+            body: "test body".to_string(),
+        };
+        let response = rejection.into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn handshake_rejection_debug_clone_eq() {
+        let r1 = HandshakeRejection {
+            status: StatusCode::UNAUTHORIZED,
+            body: "bad".to_string(),
+        };
+        let r2 = r1.clone();
+        assert_eq!(r1, r2);
+        let dbg = format!("{r1:?}");
+        assert!(dbg.contains("HandshakeRejection"));
+    }
+
+    // --- Counters ---
+
+    #[test]
+    fn counters_default() {
+        let c = Counters::default();
+        assert_eq!(c.ws_in_bytes, 0);
+        assert_eq!(c.ws_out_bytes, 0);
+        assert_eq!(c.pty_in_bytes, 0);
+        assert_eq!(c.pty_out_bytes, 0);
+        assert_eq!(c.resize_events, 0);
+    }
+
+    #[test]
+    fn counters_debug() {
+        let c = Counters::default();
+        let dbg = format!("{c:?}");
+        assert!(dbg.contains("Counters"));
+    }
+
+    // --- make_session_id ---
+
+    #[test]
+    fn make_session_id_format() {
+        let id = make_session_id();
+        assert!(id.starts_with("ws-bridge-"));
+        assert!(id.len() > 15);
+    }
+
+    #[test]
+    fn make_session_id_unique() {
+        let id1 = make_session_id();
+        thread::sleep(Duration::from_millis(1));
+        let id2 = make_session_id();
+        assert_ne!(id1, id2);
+    }
+
+    // --- now_iso8601 ---
+
+    #[test]
+    fn now_iso8601_format() {
+        let ts = now_iso8601();
+        assert!(ts.contains('T'));
+        assert!(ts.contains('-'));
+        assert!(ts.len() >= 20);
+    }
+
+    // --- TelemetrySink ---
+
+    #[test]
+    fn telemetry_sink_no_path_write_is_noop() {
+        let mut sink = TelemetrySink::new(None, "test").expect("create sink");
+        // Writing without a file returns early — seq stays at 0.
+        sink.write("event", json!({"key": "value"})).expect("write");
+        assert_eq!(sink.seq, 0);
+    }
+
+    #[test]
+    fn telemetry_sink_with_path_writes_jsonl() {
+        let dir = std::env::temp_dir().join("ftui-test-telemetry");
+        std::fs::create_dir_all(&dir).expect("create dir");
+        let path = dir.join("test_telemetry.jsonl");
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let mut sink = TelemetrySink::new(Some(&path), "sess-1").expect("create sink");
+            sink.write("start", json!({"x": 1})).expect("write 1");
+            sink.write("end", json!({"x": 2})).expect("write 2");
+            assert_eq!(sink.seq, 2);
+        }
+
+        let content = std::fs::read_to_string(&path).expect("read file");
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2);
+        for line in &lines {
+            let v: Value = serde_json::from_str(line).expect("parse JSON");
+            assert_eq!(v["session_id"], "sess-1");
+            assert!(v["ts"].is_string());
+            assert!(v["event"].is_string());
+        }
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
     #[cfg(unix)]
     #[test]
     fn bridge_smoke_echoes_bytes_through_pty() {
