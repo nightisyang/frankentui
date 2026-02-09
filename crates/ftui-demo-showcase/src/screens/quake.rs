@@ -512,6 +512,11 @@ impl QuakeE1M1State {
         }
     }
 
+    #[cfg(test)]
+    pub fn player(&self) -> &QuakePlayer {
+        &self.player
+    }
+
     pub fn render(
         &mut self,
         painter: &mut Painter,
@@ -740,5 +745,416 @@ impl QuakeE1M1State {
         painter.line_colored(cx, cy - 4, cx, cy - 2, Some(cross));
         painter.line_colored(cx, cy + 2, cx, cy + 4, Some(cross));
         painter.point_colored(cx, cy, PackedRgba::rgb(255, 50, 50));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPS: f32 = 1e-5;
+
+    // ── Vec3 math tests ──────────────────────────────────────────────
+
+    #[test]
+    fn vec3_new_and_fields() {
+        let v = Vec3::new(1.0, 2.0, 3.0);
+        assert_eq!(v.x, 1.0);
+        assert_eq!(v.y, 2.0);
+        assert_eq!(v.z, 3.0);
+    }
+
+    #[test]
+    fn vec3_add() {
+        let a = Vec3::new(1.0, 2.0, 3.0);
+        let b = Vec3::new(4.0, 5.0, 6.0);
+        let c = a + b;
+        assert!((c.x - 5.0).abs() < EPS);
+        assert!((c.y - 7.0).abs() < EPS);
+        assert!((c.z - 9.0).abs() < EPS);
+    }
+
+    #[test]
+    fn vec3_sub() {
+        let a = Vec3::new(5.0, 7.0, 9.0);
+        let b = Vec3::new(1.0, 2.0, 3.0);
+        let c = a - b;
+        assert!((c.x - 4.0).abs() < EPS);
+        assert!((c.y - 5.0).abs() < EPS);
+        assert!((c.z - 6.0).abs() < EPS);
+    }
+
+    #[test]
+    fn vec3_mul_scalar() {
+        let v = Vec3::new(1.0, 2.0, 3.0);
+        let s = v * 2.0;
+        assert!((s.x - 2.0).abs() < EPS);
+        assert!((s.y - 4.0).abs() < EPS);
+        assert!((s.z - 6.0).abs() < EPS);
+    }
+
+    #[test]
+    fn vec3_dot() {
+        let a = Vec3::new(1.0, 0.0, 0.0);
+        let b = Vec3::new(0.0, 1.0, 0.0);
+        assert!(
+            (a.dot(b)).abs() < EPS,
+            "orthogonal vectors dot product should be 0"
+        );
+        assert!(
+            (a.dot(a) - 1.0).abs() < EPS,
+            "unit vector dot self should be 1"
+        );
+    }
+
+    #[test]
+    fn vec3_dot_general() {
+        let a = Vec3::new(1.0, 2.0, 3.0);
+        let b = Vec3::new(4.0, 5.0, 6.0);
+        // 1*4 + 2*5 + 3*6 = 32
+        assert!((a.dot(b) - 32.0).abs() < EPS);
+    }
+
+    #[test]
+    fn vec3_cross_basis() {
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let y = Vec3::new(0.0, 1.0, 0.0);
+        let z = x.cross(y);
+        assert!((z.x).abs() < EPS);
+        assert!((z.y).abs() < EPS);
+        assert!((z.z - 1.0).abs() < EPS, "x cross y should be z");
+    }
+
+    #[test]
+    fn vec3_cross_anticommutative() {
+        let a = Vec3::new(1.0, 2.0, 3.0);
+        let b = Vec3::new(4.0, 5.0, 6.0);
+        let ab = a.cross(b);
+        let ba = b.cross(a);
+        assert!((ab.x + ba.x).abs() < EPS);
+        assert!((ab.y + ba.y).abs() < EPS);
+        assert!((ab.z + ba.z).abs() < EPS);
+    }
+
+    #[test]
+    fn vec3_len() {
+        let v = Vec3::new(3.0, 4.0, 0.0);
+        assert!((v.len() - 5.0).abs() < EPS);
+    }
+
+    #[test]
+    fn vec3_len_zero() {
+        let v = Vec3::new(0.0, 0.0, 0.0);
+        assert!(v.len().abs() < EPS);
+    }
+
+    #[test]
+    fn vec3_normalized_unit() {
+        let v = Vec3::new(3.0, 4.0, 0.0);
+        let n = v.normalized();
+        assert!(
+            (n.len() - 1.0).abs() < EPS,
+            "normalized should have length 1"
+        );
+        assert!((n.x - 0.6).abs() < EPS);
+        assert!((n.y - 0.8).abs() < EPS);
+    }
+
+    #[test]
+    fn vec3_normalized_zero_returns_self() {
+        let v = Vec3::new(0.0, 0.0, 0.0);
+        let n = v.normalized();
+        assert!(n.x.abs() < EPS);
+        assert!(n.y.abs() < EPS);
+        assert!(n.z.abs() < EPS);
+    }
+
+    // ── cross2 tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn cross2_zero_for_parallel() {
+        assert!((cross2(1.0, 0.0, 2.0, 0.0)).abs() < EPS);
+    }
+
+    #[test]
+    fn cross2_positive_ccw() {
+        // x-axis cross y-axis should be positive (CCW)
+        assert!(cross2(1.0, 0.0, 0.0, 1.0) > 0.0);
+    }
+
+    #[test]
+    fn cross2_negative_cw() {
+        assert!(cross2(0.0, 1.0, 1.0, 0.0) < 0.0);
+    }
+
+    // ── point_segment_distance_sq tests ──────────────────────────────
+
+    #[test]
+    fn distance_to_segment_at_endpoint() {
+        // Point is closest to the start of a segment
+        let dist = point_segment_distance_sq(0.0, 0.0, 1.0, 0.0, 2.0, 0.0);
+        assert!((dist - 1.0).abs() < EPS, "distance to start should be 1.0");
+    }
+
+    #[test]
+    fn distance_to_segment_perpendicular() {
+        // Point (0, 1) perpendicular to segment (0,0)-(2,0), closest at (0,0)
+        let dist = point_segment_distance_sq(0.0, 1.0, 0.0, 0.0, 2.0, 0.0);
+        assert!((dist - 1.0).abs() < EPS);
+    }
+
+    #[test]
+    fn distance_to_segment_midpoint() {
+        // Point (1, 1) above segment (0,0)-(2,0), closest at (1,0)
+        let dist = point_segment_distance_sq(1.0, 1.0, 0.0, 0.0, 2.0, 0.0);
+        assert!((dist - 1.0).abs() < EPS);
+    }
+
+    #[test]
+    fn distance_to_degenerate_segment() {
+        // Degenerate segment (point)
+        let dist = point_segment_distance_sq(3.0, 4.0, 0.0, 0.0, 0.0, 0.0);
+        assert!((dist - 25.0).abs() < EPS, "distance to point segment");
+    }
+
+    // ── clip_polygon_near tests ──────────────────────────────────────
+
+    #[test]
+    fn clip_empty_polygon() {
+        let result = clip_polygon_near(&[], 1.0);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn clip_all_in_front() {
+        let poly = [
+            Vec3::new(0.0, 0.0, 2.0),
+            Vec3::new(1.0, 0.0, 2.0),
+            Vec3::new(0.0, 1.0, 2.0),
+        ];
+        let result = clip_polygon_near(&poly, 1.0);
+        assert_eq!(result.len(), 3, "all-in-front triangle should be unclipped");
+    }
+
+    #[test]
+    fn clip_all_behind() {
+        let poly = [
+            Vec3::new(0.0, 0.0, 0.1),
+            Vec3::new(1.0, 0.0, 0.1),
+            Vec3::new(0.0, 1.0, 0.1),
+        ];
+        let result = clip_polygon_near(&poly, 1.0);
+        assert!(
+            result.is_empty(),
+            "all-behind triangle should be fully clipped"
+        );
+    }
+
+    #[test]
+    fn clip_partial_produces_valid_polygon() {
+        // One vertex behind, two in front
+        let poly = [
+            Vec3::new(0.0, 0.0, 0.5), // Behind near=1.0
+            Vec3::new(1.0, 0.0, 2.0), // In front
+            Vec3::new(0.0, 1.0, 2.0), // In front
+        ];
+        let result = clip_polygon_near(&poly, 1.0);
+        assert!(
+            result.len() >= 3,
+            "partial clip should produce >= 3 vertices"
+        );
+        // All clipped vertices must be at or beyond the near plane
+        for v in &result {
+            assert!(
+                v.z >= 1.0 - EPS,
+                "clipped vertex z={} should be >= near=1.0",
+                v.z
+            );
+        }
+    }
+
+    // ── palette_quake_stone tests ────────────────────────────────────
+
+    #[test]
+    fn palette_at_zero() {
+        let c = palette_quake_stone(0.0);
+        // Should be the dark mud color (47, 43, 35)
+        assert_eq!(c.r(), 47);
+        assert_eq!(c.g(), 43);
+        assert_eq!(c.b(), 35);
+    }
+
+    #[test]
+    fn palette_at_one() {
+        let c = palette_quake_stone(1.0);
+        // Should be grey stone (110, 100, 90)
+        assert_eq!(c.r(), 110);
+        assert_eq!(c.g(), 100);
+        assert_eq!(c.b(), 90);
+    }
+
+    #[test]
+    fn palette_clamps_out_of_range() {
+        // Values beyond [0, 1] should clamp
+        let c_neg = palette_quake_stone(-1.0);
+        let c_zero = palette_quake_stone(0.0);
+        assert_eq!(c_neg.r(), c_zero.r());
+        assert_eq!(c_neg.g(), c_zero.g());
+
+        let c_over = palette_quake_stone(2.0);
+        let c_one = palette_quake_stone(1.0);
+        assert_eq!(c_over.r(), c_one.r());
+        assert_eq!(c_over.g(), c_one.g());
+    }
+
+    // ── FloorTri tests ───────────────────────────────────────────────
+
+    #[test]
+    fn floor_tri_degenerate_returns_none() {
+        // Three collinear points should produce None (zero area)
+        let v0 = Vec3::new(0.0, 0.0, 0.0);
+        let v1 = Vec3::new(1.0, 0.0, 0.0);
+        let v2 = Vec3::new(2.0, 0.0, 0.0);
+        assert!(FloorTri::new(v0, v1, v2).is_none());
+    }
+
+    #[test]
+    fn floor_tri_valid_computes_bounds() {
+        let v0 = Vec3::new(0.0, 0.0, 1.0);
+        let v1 = Vec3::new(1.0, 0.0, 1.0);
+        let v2 = Vec3::new(0.0, 1.0, 1.0);
+        let tri = FloorTri::new(v0, v1, v2).expect("valid triangle");
+        assert!((tri.min_x - 0.0).abs() < EPS);
+        assert!((tri.max_x - 1.0).abs() < EPS);
+        assert!((tri.min_y - 0.0).abs() < EPS);
+        assert!((tri.max_y - 1.0).abs() < EPS);
+        assert!(tri.area.abs() > EPS, "area should be nonzero");
+    }
+
+    // ── QuakePlayer tests ────────────────────────────────────────────
+
+    #[test]
+    fn player_starts_grounded() {
+        let player = QuakePlayer::new(Vec3::new(0.0, 0.0, 0.0));
+        assert!(player.grounded);
+        assert!((player.vel.x).abs() < EPS);
+        assert!((player.vel.y).abs() < EPS);
+        assert!((player.vel.z).abs() < EPS);
+    }
+
+    // ── QuakeE1M1State tests ─────────────────────────────────────────
+
+    #[test]
+    fn state_default_constructs() {
+        let state = QuakeE1M1State::default();
+        assert!(state.player.grounded);
+        assert!(!state.wall_segments.is_empty(), "should have wall segments");
+        // floor_tris may be empty depending on geometry normals
+        assert!(state.player.pos.x.is_finite());
+        assert!(state.player.pos.y.is_finite());
+        assert!(state.player.pos.z.is_finite());
+    }
+
+    #[test]
+    fn state_look_clamps_pitch() {
+        let mut state = QuakeE1M1State::default();
+        state.look(0.0, 10.0);
+        assert!(state.player.pitch <= 1.2 + EPS, "pitch should be clamped");
+        state.look(0.0, -20.0);
+        assert!(state.player.pitch >= -1.2 - EPS, "pitch should be clamped");
+    }
+
+    #[test]
+    fn state_look_wraps_yaw() {
+        let mut state = QuakeE1M1State::default();
+        state.look(TAU + 0.1, 0.0);
+        assert!(state.player.yaw < TAU, "yaw should wrap around TAU");
+    }
+
+    #[test]
+    fn state_set_move_fwd_clamps() {
+        let mut state = QuakeE1M1State::default();
+        state.set_move_fwd(5.0);
+        assert!((state.move_fwd - 1.0).abs() < EPS);
+        state.set_move_fwd(-5.0);
+        assert!((state.move_fwd + 1.0).abs() < EPS);
+    }
+
+    #[test]
+    fn state_set_move_side_clamps() {
+        let mut state = QuakeE1M1State::default();
+        state.set_move_side(5.0);
+        assert!((state.move_side - 1.0).abs() < EPS);
+    }
+
+    #[test]
+    fn state_jump_sets_velocity() {
+        let mut state = QuakeE1M1State::default();
+        assert!(state.player.grounded);
+        state.jump();
+        assert!(!state.player.grounded);
+        assert!((state.player.vel.z - QUAKE_JUMP_VELOCITY).abs() < EPS);
+    }
+
+    #[test]
+    fn state_jump_no_double_jump() {
+        let mut state = QuakeE1M1State::default();
+        state.jump();
+        state.player.vel.z = 0.1; // Simulate mid-air
+        state.jump(); // Should be a no-op since not grounded
+        assert!(
+            (state.player.vel.z - 0.1).abs() < EPS,
+            "should not double jump"
+        );
+    }
+
+    #[test]
+    fn state_fire_sets_flash() {
+        let mut state = QuakeE1M1State::default();
+        state.fire();
+        assert!((state.fire_flash - 1.0).abs() < EPS);
+    }
+
+    #[test]
+    fn state_update_decays_fire_flash() {
+        let mut state = QuakeE1M1State::default();
+        state.fire();
+        state.update();
+        assert!(state.fire_flash < 1.0, "fire flash should decay");
+        for _ in 0..20 {
+            state.update();
+        }
+        assert!(
+            state.fire_flash.abs() < EPS,
+            "fire flash should reach 0 eventually"
+        );
+    }
+
+    #[test]
+    fn state_update_does_not_panic() {
+        let mut state = QuakeE1M1State::default();
+        state.set_move_fwd(1.0);
+        state.set_move_side(0.5);
+        for _ in 0..100 {
+            state.update();
+        }
+        // Player should still be within bounds
+        assert!(state.player.pos.x.is_finite());
+        assert!(state.player.pos.y.is_finite());
+        assert!(state.player.pos.z.is_finite());
+    }
+
+    #[test]
+    fn state_player_stays_within_bounds_after_movement() {
+        let mut state = QuakeE1M1State::default();
+        let margin = (QUAKE_COLLISION_RADIUS + 0.02).max(0.04);
+        state.set_move_fwd(1.0);
+        for _ in 0..500 {
+            state.update();
+        }
+        assert!(state.player.pos.x >= state.bounds_min.x + margin - EPS);
+        assert!(state.player.pos.x <= state.bounds_max.x - margin + EPS);
+        assert!(state.player.pos.y >= state.bounds_min.y + margin - EPS);
+        assert!(state.player.pos.y <= state.bounds_max.y - margin + EPS);
     }
 }

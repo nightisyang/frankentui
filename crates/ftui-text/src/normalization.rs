@@ -351,4 +351,164 @@ mod tests {
         let b = normalize("A\u{0301}\u{0327}", NormForm::Nfc);
         assert_eq!(a, b, "Canonical ordering should make these equivalent");
     }
+
+    // ==========================================================
+    // is_normalized: NFKC / NFKD coverage
+    // ==========================================================
+
+    #[test]
+    fn is_nfkc_on_ascii() {
+        assert!(is_normalized("hello", NormForm::Nfkc));
+    }
+
+    #[test]
+    fn is_nfkc_false_for_compatibility_char() {
+        // Fullwidth A (U+FF21) is NOT in NFKC form.
+        assert!(!is_normalized("\u{FF21}", NormForm::Nfkc));
+    }
+
+    #[test]
+    fn is_nfkd_false_for_composed() {
+        // U+00E9 (é precomposed) is NOT in NFKD form.
+        assert!(!is_normalized("\u{00E9}", NormForm::Nfkd));
+    }
+
+    #[test]
+    fn is_nfkd_true_for_decomposed_ascii() {
+        assert!(is_normalized("abc", NormForm::Nfkd));
+    }
+
+    // ==========================================================
+    // eq_normalized: compatibility forms
+    // ==========================================================
+
+    #[test]
+    fn eq_normalized_compatibility_ligature() {
+        // fi ligature equals "fi" under NFKC/NFKD
+        assert!(eq_normalized("\u{FB01}", "fi", NormForm::Nfkc));
+        assert!(eq_normalized("\u{FB01}", "fi", NormForm::Nfkd));
+    }
+
+    #[test]
+    fn eq_normalized_fullwidth_vs_ascii() {
+        assert!(eq_normalized("\u{FF21}", "A", NormForm::Nfkc));
+    }
+
+    #[test]
+    fn eq_normalized_false_for_different_base() {
+        assert!(!eq_normalized("a\u{0301}", "o\u{0301}", NormForm::Nfc));
+    }
+
+    // ==========================================================
+    // Streaming iterator: NFKC / NFKD coverage
+    // ==========================================================
+
+    #[test]
+    fn nfkc_iter_matches_normalize() {
+        let input = "\u{FB01}\u{FF21}\u{00B2}";
+        let iter_result: String = nfkc_iter(input).collect();
+        let norm_result = normalize(input, NormForm::Nfkc);
+        assert_eq!(iter_result, norm_result);
+    }
+
+    #[test]
+    fn nfkd_iter_matches_normalize() {
+        let input = "\u{00E9}\u{FB01}";
+        let iter_result: String = nfkd_iter(input).collect();
+        let norm_result = normalize(input, NormForm::Nfkd);
+        assert_eq!(iter_result, norm_result);
+    }
+
+    // ==========================================================
+    // Idempotency
+    // ==========================================================
+
+    #[test]
+    fn normalize_is_idempotent_nfc() {
+        let input = "e\u{0301} caf\u{00E9}";
+        let once = normalize(input, NormForm::Nfc);
+        let twice = normalize(&once, NormForm::Nfc);
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn normalize_is_idempotent_nfkd() {
+        let input = "\u{FB01}\u{00E9}";
+        let once = normalize(input, NormForm::Nfkd);
+        let twice = normalize(&once, NormForm::Nfkd);
+        assert_eq!(once, twice);
+    }
+
+    // ==========================================================
+    // Supplementary plane characters
+    // ==========================================================
+
+    #[test]
+    fn supplementary_plane_emoji_roundtrips() {
+        // Emoji in supplementary plane should pass through all forms unchanged.
+        let input = "🦀🎉🌍";
+        assert_eq!(normalize(input, NormForm::Nfc), input);
+        assert_eq!(normalize(input, NormForm::Nfd), input);
+        assert_eq!(normalize(input, NormForm::Nfkc), input);
+        assert_eq!(normalize(input, NormForm::Nfkd), input);
+    }
+
+    #[test]
+    fn mathematical_bold_a_nfkc() {
+        // U+1D400 (Mathematical Bold Capital A) -> "A" under NFKC.
+        let input = "\u{1D400}";
+        let result = normalize(input, NormForm::Nfkc);
+        assert_eq!(result, "A");
+    }
+
+    // ==========================================================
+    // Zero-width and special characters
+    // ==========================================================
+
+    #[test]
+    fn zero_width_joiner_preserved() {
+        // ZWJ (U+200D) is not a combining mark and should be preserved.
+        let input = "a\u{200D}b";
+        let result = normalize(input, NormForm::Nfc);
+        assert!(result.contains('\u{200D}'));
+    }
+
+    #[test]
+    fn normalize_for_search_ligature_and_case() {
+        // fi ligature + uppercase -> "fi" lowercase
+        let result = normalize_for_search("\u{FB01}LE");
+        assert_eq!(result, "file");
+    }
+
+    #[test]
+    fn normalize_for_search_empty() {
+        assert_eq!(normalize_for_search(""), "");
+    }
+
+    // ==========================================================
+    // NormForm enum traits
+    // ==========================================================
+
+    #[test]
+    fn norm_form_debug_and_clone() {
+        let form = NormForm::Nfc;
+        let cloned = form;
+        assert_eq!(form, cloned);
+        // Debug derive is present
+        let _ = format!("{form:?}");
+    }
+
+    #[test]
+    fn norm_form_all_variants_distinct() {
+        let forms = [NormForm::Nfc, NormForm::Nfd, NormForm::Nfkc, NormForm::Nfkd];
+        for (i, a) in forms.iter().enumerate() {
+            for (j, b) in forms.iter().enumerate() {
+                if i == j {
+                    assert_eq!(a, b);
+                } else {
+                    assert_ne!(a, b);
+                }
+            }
+        }
+    }
 }
