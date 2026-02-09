@@ -1,0 +1,18 @@
+{
+  "name": "ed_erase_above",
+  "description": "ED mode 1 erases everything above cursor position (all prior rows + current row up to cursor)",
+  "initial_size": [10, 3],
+  "input_bytes_hex": "41424344451b5b323b3148464748494a1b5b323b33481b5b314a",
+  "comment": "Print ABCDE at row 0, CUP(2,1) → (1,0), print FGHIJ at row 1, CUP(2,3) → (1,2), ED(1) erases: all of row 0 + row 1 cols 0-2; I(1,3) and J(1,4) survive; cursor at (1,2)",
+  "expected": {
+    "cursor": { "row": 1, "col": 2 },
+    "cells": [
+      { "row": 0, "col": 0, "char": " " },
+      { "row": 0, "col": 4, "char": " " },
+      { "row": 1, "col": 0, "char": " " },
+      { "row": 1, "col": 2, "char": " " },
+      { "row": 1, "col": 3, "char": "I" },
+      { "row": 1, "col": 4, "char": "J" }
+    ]
+  }
+}

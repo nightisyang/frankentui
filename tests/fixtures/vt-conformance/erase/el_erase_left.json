@@ -1,0 +1,16 @@
+{
+  "name": "el_erase_left",
+  "description": "EL mode 1 erases from start of line to cursor position (inclusive)",
+  "initial_size": [10, 3],
+  "input_bytes_hex": "4142434445464748494a1b5b313b35481b5b314b",
+  "comment": "Print ABCDEFGHIJ fills row 0, CUP(1,5) → (0,4), EL(1) erases cols 0-4 (inclusive); F-J at cols 5-9 survive; cursor at (0,4)",
+  "expected": {
+    "cursor": { "row": 0, "col": 4 },
+    "cells": [
+      { "row": 0, "col": 0, "char": " " },
+      { "row": 0, "col": 4, "char": " " },
+      { "row": 0, "col": 5, "char": "F" },
+      { "row": 0, "col": 9, "char": "J" }
+    ]
+  }
+}

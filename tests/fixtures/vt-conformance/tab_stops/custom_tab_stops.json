@@ -1,0 +1,15 @@
+{
+  "name": "custom_tab_stops",
+  "description": "Clear all default tab stops, set custom stops at cols 4 and 9, tab through them",
+  "initial_size": [20, 3],
+  "input_bytes_hex": "1b5b33671b5b35471b481b5b3130471b481b5b484109420943",
+  "comment": "CSI 3 g (clear all tabs), CUP col 5 → col 4, HTS set tab, CUP col 10 → col 9, HTS set tab, CUP home, print A at col 0, TAB → col 4, print B at col 4, TAB → col 9, print C at col 9; cursor at (0,10)",
+  "expected": {
+    "cursor": { "row": 0, "col": 10 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "A" },
+      { "row": 0, "col": 4, "char": "B" },
+      { "row": 0, "col": 9, "char": "C" }
+    ]
+  }
+}

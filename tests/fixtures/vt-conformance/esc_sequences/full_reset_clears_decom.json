@@ -1,0 +1,14 @@
+{
+  "name": "full_reset_clears_decom",
+  "description": "Full reset (ESC c) clears scroll region, DECOM, and all modes; cursor returns to (0,0)",
+  "initial_size": [10, 5],
+  "input_bytes_hex": "1b5b323b34721b5b3f36681b5b48411b6342",
+  "comment": "Set scroll region 2-4, DECOM on, CUP → region top (1,0), print A, ESC c full reset clears everything, print B at (0,0); cursor at (0,1)",
+  "expected": {
+    "cursor": { "row": 0, "col": 1 },
+    "cells": [
+      { "row": 0, "col": 0, "char": "B" },
+      { "row": 1, "col": 0, "char": " " }
+    ]
+  }
+}
