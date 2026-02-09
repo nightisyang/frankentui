@@ -28,6 +28,7 @@ pub mod grid;
 pub mod modes;
 pub mod parser;
 pub mod patch;
+pub mod reply;
 pub mod scrollback;
 pub mod selection;
 
@@ -37,5 +38,9 @@ pub use grid::Grid;
 pub use modes::{AnsiModes, DecModes, Modes};
 pub use parser::{Action, Parser};
 pub use patch::{CellUpdate, ChangeRun, DirtySpan, DirtyTracker, GridDiff, Patch};
+pub use reply::{
+    ReplyContext, ReplyEngine, TerminalQuery, parse_terminal_query, reply_for_query,
+    reply_for_query_bytes,
+};
 pub use scrollback::{Scrollback, ScrollbackLine};
 pub use selection::{BufferPos, Selection};
