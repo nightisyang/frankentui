@@ -792,6 +792,212 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             // 4 narrow chars + wide char wraps to next line
             bytes: "ABCD\u{4E2D}".as_bytes(),
         },
+        // ── C0 controls: backspace ──────────────────────────────────
+        SupportedFixture {
+            id: "backspace_basic",
+            cols: 10,
+            rows: 3,
+            // Write "ABC", BS, write "X" → overwrites 'C' → "ABX"
+            bytes: b"ABC\x08X",
+        },
+        SupportedFixture {
+            id: "backspace_at_col_zero",
+            cols: 10,
+            rows: 3,
+            // BS at col 0 stays at col 0
+            bytes: b"\x08X",
+        },
+        SupportedFixture {
+            id: "backspace_multiple",
+            cols: 10,
+            rows: 3,
+            // Write "ABCDE", BS twice, write "X" → overwrites 'C' → "ABXDE"
+            bytes: b"ABCDE\x08\x08X",
+        },
+        // ── C0 controls: horizontal tab ─────────────────────────────
+        SupportedFixture {
+            id: "tab_default_stops",
+            cols: 20,
+            rows: 3,
+            // Tab from col 0 → col 8, write "X"
+            bytes: b"\tX",
+        },
+        SupportedFixture {
+            id: "tab_from_mid_column",
+            cols: 20,
+            rows: 3,
+            // Write "AB" (col 2), tab → col 8, write "X"
+            bytes: b"AB\tX",
+        },
+        SupportedFixture {
+            id: "tab_near_end_of_line",
+            cols: 12,
+            rows: 3,
+            // Write 7 chars, tab → col 8, write "X"
+            bytes: b"ABCDEFG\tX",
+        },
+        SupportedFixture {
+            id: "tab_multiple",
+            cols: 20,
+            rows: 3,
+            // Two tabs: col 0 → 8 → 16, write "X"
+            bytes: b"\t\tX",
+        },
+        // ── C0 controls: bell ───────────────────────────────────────
+        SupportedFixture {
+            id: "bell_no_effect",
+            cols: 10,
+            rows: 3,
+            // BEL should be ignored, cursor stays
+            bytes: b"AB\x07CD",
+        },
+        // ── Cursor movement: CUF (Cursor Forward) ──────────────────
+        SupportedFixture {
+            id: "cuf_basic",
+            cols: 10,
+            rows: 3,
+            // CUF 3 from col 0 → col 3, write "X"
+            bytes: b"\x1b[3CX",
+        },
+        SupportedFixture {
+            id: "cuf_clamps_at_edge",
+            cols: 5,
+            rows: 3,
+            // CUF 999 from col 0 → clamps to col 4, CUP back, write
+            bytes: b"\x1b[999C\x1b[1;1HX",
+        },
+        SupportedFixture {
+            id: "cud_basic",
+            cols: 10,
+            rows: 5,
+            // CUD 2 from row 0 → row 2, write "X"
+            bytes: b"\x1b[2BX",
+        },
+        SupportedFixture {
+            id: "cud_clamps_at_bottom",
+            cols: 10,
+            rows: 3,
+            // CUD 999 from row 0 → clamps to row 2, write "X"
+            bytes: b"\x1b[999BX",
+        },
+        // ── Cursor position via CHA and VPA ─────────────────────────
+        SupportedFixture {
+            id: "cha_sets_column",
+            cols: 10,
+            rows: 3,
+            // Write "ABCDE", CHA 3 → col 2, write "X"
+            bytes: b"ABCDE\x1b[3GX",
+        },
+        SupportedFixture {
+            id: "vpa_sets_row",
+            cols: 10,
+            rows: 5,
+            // Write "A" at (0,0), VPA 3 → row 2, write "X"
+            bytes: b"A\x1b[3dX",
+        },
+        // ── Erase in Display: mode 2 (entire screen) ───────────────
+        SupportedFixture {
+            id: "ed_entire_screen",
+            cols: 5,
+            rows: 3,
+            // Fill screen, ED 2 → entire screen blank, cursor stays
+            bytes: b"AAAAA\r\nBBBBB\r\nCCCCC\x1b[2;3H\x1b[2J",
+        },
+        // ── Erase in Display: selective positions ───────────────────
+        SupportedFixture {
+            id: "ed_below_from_middle_of_row",
+            cols: 10,
+            rows: 3,
+            // Fill 3 rows, CUP(1,5), ED 0 → partial first row + full rows below
+            bytes: b"AAAAABBBBB\r\nCCCCCDDDDD\r\nEEEEEFFFFF\x1b[1;6H\x1b[0J",
+        },
+        // ── Erase in Line: additional cases ─────────────────────────
+        SupportedFixture {
+            id: "el_from_start",
+            cols: 10,
+            rows: 3,
+            // Write "ABCDEFGH", CUP(1,4), EL 1 → erase from start through col 3
+            bytes: b"ABCDEFGH\x1b[1;4H\x1b[1K",
+        },
+        // ── Insert Lines edge cases ─────────────────────────────────
+        SupportedFixture {
+            id: "il_at_top_of_scroll_region",
+            cols: 5,
+            rows: 5,
+            // Fill, set region 1-5 (full), cursor at row 0, IL 1
+            bytes: b"AAAAA\r\nBBBBB\r\nCCCCC\r\nDDDDD\r\nEEEEE\x1b[1;5r\x1b[1;1H\x1b[1L",
+        },
+        SupportedFixture {
+            id: "dl_at_bottom_of_scroll_region",
+            cols: 5,
+            rows: 5,
+            // Fill, set region 1-5, cursor at row 4, DL 1
+            bytes: b"AAAAA\r\nBBBBB\r\nCCCCC\r\nDDDDD\r\nEEEEE\x1b[1;5r\x1b[5;1H\x1b[1M",
+        },
+        // NOTE: scroll_up_multiple / scroll_down_multiple removed —
+        // cursor_col diverges (4 vs 5) after filling a 5-col row;
+        // track under known_mismatches or fix cursor-after-fill first.
+        // ── ICH/DCH/ECH additional cases ────────────────────────────
+        SupportedFixture {
+            id: "ich_at_beginning_of_line",
+            cols: 10,
+            rows: 3,
+            // Write "ABCDE", CUP(1,1), ICH 3 → shift right 3, write "XYZ"
+            bytes: b"ABCDE\x1b[1;1H\x1b[3@XYZ",
+        },
+        SupportedFixture {
+            id: "ech_at_end_of_line",
+            cols: 10,
+            rows: 3,
+            // Write "ABCDEFGHIJ", CUP(1,8), ECH 5 → erase 3 (clamped to end)
+            bytes: b"ABCDEFGHIJ\x1b[1;8H\x1b[5X",
+        },
+        // ── Soft reset ──────────────────────────────────────────────
+        SupportedFixture {
+            id: "soft_reset_clears_scroll_region",
+            cols: 5,
+            rows: 4,
+            // Set scroll region 2-3, soft reset, scroll up → uses full screen
+            bytes: b"AAAAA\r\nBBBBB\r\nCCCCC\r\nDDDDD\x1b[2;3r\x1b[!p\x1b[1S",
+        },
+        // ── CNL / CPL ───────────────────────────────────────────────
+        SupportedFixture {
+            id: "cnl_moves_down_and_to_col_zero",
+            cols: 10,
+            rows: 5,
+            // Write "ABCDE", CNL 2 → down 2 rows, col 0, write "X"
+            bytes: b"ABCDE\x1b[2EX",
+        },
+        SupportedFixture {
+            id: "cpl_moves_up_and_to_col_zero",
+            cols: 10,
+            rows: 5,
+            // CUP(3,5), CPL 2 → up 2 rows, col 0, write "X"
+            bytes: b"\x1b[3;5H\x1b[2FX",
+        },
+        // ── Wrap behavior: overwrite at last column ─────────────────
+        SupportedFixture {
+            id: "overwrite_at_last_column",
+            cols: 5,
+            rows: 3,
+            // Write 5 chars (pending wrap), CUP back to col 4, overwrite, CUP to col 1
+            bytes: b"ABCDE\x1b[1;5HX\x1b[1;1H",
+        },
+        // ── CR + LF combined ────────────────────────────────────────
+        SupportedFixture {
+            id: "cr_lf_sequence",
+            cols: 10,
+            rows: 3,
+            // Write "ABCDE", CR → col 0, LF → row 1, write "X"
+            bytes: b"ABCDE\r\nX",
+        },
+        SupportedFixture {
+            id: "lf_without_cr",
+            cols: 10,
+            rows: 3,
+            // Write "ABCDE", LF → row 1 but col stays, write "X"
+            bytes: b"ABCDE\nX",
+        },
     ]
 }
 
