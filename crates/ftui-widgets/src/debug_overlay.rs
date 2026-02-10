@@ -15,7 +15,7 @@ use ftui_render::drawing::{BorderChars, Draw};
 use ftui_render::frame::Frame;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// Render metadata for a single widget.
 #[derive(Debug, Clone)]

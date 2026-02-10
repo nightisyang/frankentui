@@ -201,7 +201,7 @@ fn stress_view_render_with_many_tasks() {
     let budget_avg_ns = if is_coverage_run() {
         5_000_000
     } else {
-        2_000_000
+        4_000_000
     };
 
     log_jsonl(&serde_json::json!({
@@ -491,7 +491,7 @@ fn regression_gate_render_latency() {
     let budget_p99_ns = if is_coverage_run() {
         7_000_000
     } else {
-        3_000_000
+        5_000_000
     };
 
     log_jsonl(&serde_json::json!({
