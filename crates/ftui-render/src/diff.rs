@@ -3400,6 +3400,500 @@ mod tests {
             _ => unreachable!("expected Fallback for 1x1"),
         }
     }
+
+    // =========================================================================
+    // Dirty Span-Based Scanning (bd-khkj4)
+    // =========================================================================
+
+    #[test]
+    fn compute_dirty_with_targeted_spans() {
+        // Verify that compute_dirty correctly uses span information
+        // to limit scanning to only the dirty span regions.
+        let width = 100u16;
+        let height = 10u16;
+        let old = Buffer::new(width, height);
+        let mut new = old.clone();
+        new.clear_dirty();
+
+        // Set a few cells in specific positions to create narrow spans
+        new.set_raw(10, 3, Cell::from_char('A'));
+        new.set_raw(11, 3, Cell::from_char('B'));
+        new.set_raw(50, 7, Cell::from_char('C'));
+
+        let full = BufferDiff::compute(&old, &new);
+        let dirty = BufferDiff::compute_dirty(&old, &new);
+
+        assert_eq!(full.changes(), dirty.changes());
+        assert_eq!(dirty.len(), 3);
+        assert!(dirty.changes().contains(&(10, 3)));
+        assert!(dirty.changes().contains(&(11, 3)));
+        assert!(dirty.changes().contains(&(50, 7)));
+    }
+
+    #[test]
+    fn compute_dirty_spans_on_multiple_rows() {
+        // Multiple rows with spans at different positions
+        let width = 80u16;
+        let height = 5u16;
+        let old = Buffer::new(width, height);
+        let mut new = old.clone();
+        new.clear_dirty();
+
+        // Row 0: changes at start
+        new.set_raw(0, 0, Cell::from_char('A'));
+        new.set_raw(1, 0, Cell::from_char('B'));
+        // Row 2: changes in middle
+        new.set_raw(40, 2, Cell::from_char('C'));
+        // Row 4: changes at end
+        new.set_raw(79, 4, Cell::from_char('D'));
+
+        let full = BufferDiff::compute(&old, &new);
+        let dirty = BufferDiff::compute_dirty(&old, &new);
+
+        assert_eq!(full.changes(), dirty.changes());
+        assert_eq!(dirty.len(), 4);
+    }
+
+    #[test]
+    fn compute_dirty_span_with_false_positive_row() {
+        // Row is dirty but actual cell content hasn't changed
+        let old = Buffer::new(20, 3);
+        let mut new = old.clone();
+        new.clear_dirty();
+
+        // Mark row 1 dirty via set_raw with default cell (matches old)
+        new.set_raw(5, 1, Cell::default());
+        // Real change on row 2
+        new.set_raw(10, 2, Cell::from_char('X'));
+
+        let dirty = BufferDiff::compute_dirty(&old, &new);
+        assert_eq!(dirty.len(), 1);
+        assert_eq!(dirty.changes(), &[(10, 2)]);
+    }
+
+    #[test]
+    fn compute_dirty_many_spans_per_row() {
+        // Create many separate spans on a single row (below overflow threshold)
+        let width = 200u16;
+        let height = 1u16;
+        let old = Buffer::new(width, height);
+        let mut new = old.clone();
+        new.clear_dirty();
+
+        // Create 10 isolated changes (each creates a separate span)
+        let positions: Vec<u16> = vec![5, 20, 35, 50, 65, 80, 95, 110, 125, 140];
+        for &x in &positions {
+            new.set_raw(x, 0, Cell::from_char('X'));
+        }
+
+        let full = BufferDiff::compute(&old, &new);
+        let dirty = BufferDiff::compute_dirty(&old, &new);
+
+        assert_eq!(full.changes(), dirty.changes());
+        assert_eq!(dirty.len(), positions.len());
+    }
+
+    // =========================================================================
+    // Tile + Span Combination Path (bd-khkj4)
+    // =========================================================================
+
+    #[test]
+    fn tile_diff_with_dirty_spans_matches_full() {
+        // Force tile path and verify it works correctly with dirty spans
+        let width = 200u16;
+        let height = 60u16;
+        let old = Buffer::new(width, height);
+        let mut new = old.clone();
+        new.clear_dirty();
+
+        // Create sparse changes across multiple tiles
+        new.set_raw(5, 2, Cell::from_char('A'));
+        new.set_raw(100, 30, Cell::from_char('B'));
+        new.set_raw(195, 55, Cell::from_char('C'));
+
+        let (dirty_diff, stats) = diff_with_forced_tiles(&old, &new);
+        let full = BufferDiff::compute(&old, &new);
+
+        assert!(stats.fallback.is_none(), "tile path should be used");
+        assert_eq!(full.changes(), dirty_diff.changes());
+        assert_eq!(dirty_diff.len(), 3);
+    }
+
+    #[test]
+    fn tile_diff_with_spans_straddling_tile_boundary() {
+        // Create a span that crosses a tile boundary
+        let width = 200u16;
+        let height = 60u16;
+        let old = Buffer::new(width, height);
+        let mut new = old.clone();
+        new.clear_dirty();
+
+        // With tile_w=8, create adjacent changes around position 8 (tile boundary)
+        new.set_raw(6, 0, Cell::from_char('A'));
+        new.set_raw(7, 0, Cell::from_char('B'));
+        new.set_raw(8, 0, Cell::from_char('C'));
+        new.set_raw(9, 0, Cell::from_char('D'));
+
+        let (dirty_diff, stats) = diff_with_forced_tiles(&old, &new);
+        let full = BufferDiff::compute(&old, &new);
+
+        assert!(stats.fallback.is_none());
+        assert_eq!(full.changes(), dirty_diff.changes());
+        assert_eq!(dirty_diff.len(), 4);
+    }
+
+    #[test]
+    fn tile_diff_single_dirty_tile_skips_others() {
+        // Verify that clean tiles are skipped
+        let width = 200u16;
+        let height = 60u16;
+        let old = Buffer::new(width, height);
+        let mut new = old.clone();
+        new.clear_dirty();
+
+        // Only one change in one tile
+        new.set_raw(3, 3, Cell::from_char('X'));
+
+        let (dirty_diff, stats) = diff_with_forced_tiles(&old, &new);
+
+        assert!(stats.fallback.is_none());
+        assert_eq!(dirty_diff.len(), 1);
+        assert!(stats.skipped_tiles > 0, "should skip clean tiles");
+        assert_eq!(stats.dirty_tiles, 1, "only one tile should be dirty");
+    }
+
+    // =========================================================================
+    // TileDiffPlan Field Access (bd-khkj4)
+    // =========================================================================
+
+    #[test]
+    fn tile_diff_plan_fields_accessible() {
+        let mut builder = TileDiffBuilder::new();
+        let config = TileDiffConfig::default()
+            .with_min_cells_for_tiles(0)
+            .with_dense_tile_ratio(1.1)
+            .with_dense_cell_ratio(1.1)
+            .with_max_tiles(usize::MAX / 4);
+
+        let w = 32u16;
+        let h = 16u16;
+        let dirty_rows = vec![true; h as usize];
+        let mut dirty_bits = vec![0u8; (w as usize) * (h as usize)];
+        // Mark two cells dirty in different tiles
+        dirty_bits[0] = 1; // tile (0,0)
+        dirty_bits[8 + 8 * w as usize] = 1; // tile (1,1) roughly
+
+        let input = TileDiffInput {
+            width: w,
+            height: h,
+            dirty_rows: &dirty_rows,
+            dirty_bits: &dirty_bits,
+            dirty_cells: 2,
+            dirty_all: false,
+        };
+
+        let result = builder.build(&config, input);
+        match result {
+            TileDiffBuild::UseTiles(plan) => {
+                // Verify params are accessible
+                assert_eq!(plan.params.width, w);
+                assert_eq!(plan.params.height, h);
+                assert!(plan.params.tile_w >= 8);
+                assert!(plan.params.tile_h >= 8);
+                assert!(plan.params.tiles_x > 0);
+                assert!(plan.params.tiles_y > 0);
+
+                // Verify dirty_tiles slice
+                assert_eq!(plan.dirty_tiles.len(), plan.params.total_tiles());
+                let dirty_count: usize = plan.dirty_tiles.iter().filter(|&&d| d).count();
+                assert_eq!(dirty_count, plan.stats.dirty_tiles);
+
+                // Verify tile_counts slice
+                assert_eq!(plan.tile_counts.len(), plan.params.total_tiles());
+
+                // Verify SAT slice (tiles_x+1 * tiles_y+1)
+                let expected_sat_len = (plan.params.tiles_x + 1) * (plan.params.tiles_y + 1);
+                assert_eq!(plan.sat.len(), expected_sat_len);
+
+                // SAT[0][*] and SAT[*][0] should be 0 (prefix sum boundary)
+                let sat_w = plan.params.tiles_x + 1;
+                for tx in 0..sat_w {
+                    assert_eq!(plan.sat[tx], 0, "SAT top border should be 0");
+                }
+                for ty in 0..plan.params.tiles_y + 1 {
+                    assert_eq!(plan.sat[ty * sat_w], 0, "SAT left border should be 0");
+                }
+            }
+            _ => unreachable!("expected UseTiles"),
+        }
+    }
+
+    // =========================================================================
+    // DenseTiles Threshold Boundary (bd-khkj4)
+    // =========================================================================
+
+    #[test]
+    fn dense_tiles_exact_threshold_triggers_fallback() {
+        let mut builder = TileDiffBuilder::new();
+        let w = 32u16;
+        let h = 32u16;
+        // With tile_w=8, tile_h=8: tiles_x=4, tiles_y=4, total=16
+        // Dense tile ratio = 0.5 means >=8 dirty tiles trigger fallback
+
+        let total_cells = (w as usize) * (h as usize);
+        let config = TileDiffConfig {
+            enabled: true,
+            tile_w: 8,
+            tile_h: 8,
+            skip_clean_rows: false,
+            min_cells_for_tiles: 0,
+            dense_cell_ratio: 1.1,
+            dense_tile_ratio: 0.5,
+            max_tiles: usize::MAX / 4,
+        };
+
+        let dirty_rows = vec![true; h as usize];
+        let mut dirty_bits = vec![0u8; total_cells];
+        // Mark one cell dirty in each of 8 tiles (50% of 16 tiles)
+        // Tiles are 8x8 on a 32x32 grid: (0,0), (1,0), (2,0), (3,0), (0,1)...
+        for tile_y in 0..2 {
+            for tile_x in 0..4 {
+                let x = tile_x * 8;
+                let y = tile_y * 8;
+                dirty_bits[y * w as usize + x] = 1;
+            }
+        }
+
+        let input = TileDiffInput {
+            width: w,
+            height: h,
+            dirty_rows: &dirty_rows,
+            dirty_bits: &dirty_bits,
+            dirty_cells: 8,
+            dirty_all: false,
+        };
+
+        let result = builder.build(&config, input);
+        assert!(
+            matches!(
+                result,
+                TileDiffBuild::Fallback(stats) if stats.fallback == Some(TileDiffFallback::DenseTiles)
+            ),
+            "8 of 16 tiles dirty (50%) should trigger DenseTiles with threshold 0.5"
+        );
+    }
+
+    #[test]
+    fn dense_tiles_just_below_threshold_passes() {
+        let mut builder = TileDiffBuilder::new();
+        let w = 32u16;
+        let h = 32u16;
+        // tiles: 4x4=16. Dense tile ratio = 0.5 means <8 dirty tiles pass
+
+        let total_cells = (w as usize) * (h as usize);
+        let config = TileDiffConfig {
+            enabled: true,
+            tile_w: 8,
+            tile_h: 8,
+            skip_clean_rows: false,
+            min_cells_for_tiles: 0,
+            dense_cell_ratio: 1.1,
+            dense_tile_ratio: 0.5,
+            max_tiles: usize::MAX / 4,
+        };
+
+        let dirty_rows = vec![true; h as usize];
+        let mut dirty_bits = vec![0u8; total_cells];
+        // Mark one cell dirty in 7 tiles (43.75% < 50%)
+        for tile_idx in 0..7 {
+            let tile_x = tile_idx % 4;
+            let tile_y = tile_idx / 4;
+            let x = tile_x * 8;
+            let y = tile_y * 8;
+            dirty_bits[y * w as usize + x] = 1;
+        }
+
+        let input = TileDiffInput {
+            width: w,
+            height: h,
+            dirty_rows: &dirty_rows,
+            dirty_bits: &dirty_bits,
+            dirty_cells: 7,
+            dirty_all: false,
+        };
+
+        let result = builder.build(&config, input);
+        assert!(
+            matches!(result, TileDiffBuild::UseTiles(_)),
+            "7 of 16 tiles dirty (43.75%) should use tiles with threshold 0.5"
+        );
+    }
+
+    // =========================================================================
+    // span_diagnostics Helper (bd-khkj4)
+    // =========================================================================
+
+    #[test]
+    fn span_diagnostics_with_no_dirty_spans() {
+        let mut buf = Buffer::new(20, 3);
+        buf.clear_dirty();
+        let diag = span_diagnostics(&buf);
+        // Should report stats with no dirty rows
+        assert!(
+            diag.contains("stats="),
+            "diagnostics should include stats: {diag}"
+        );
+    }
+
+    #[test]
+    fn span_diagnostics_with_dirty_cells() {
+        let mut buf = Buffer::new(20, 3);
+        buf.clear_dirty();
+        buf.set_raw(5, 1, Cell::from_char('X'));
+        let diag = span_diagnostics(&buf);
+        assert!(
+            diag.contains("stats="),
+            "diagnostics should include stats: {diag}"
+        );
+    }
+
+    #[test]
+    fn span_diagnostics_with_full_row() {
+        let mut buf = Buffer::new(20, 2);
+        buf.clear_dirty();
+        // Fill entire row to trigger full-row dirty
+        for x in 0..20u16 {
+            buf.set_raw(x, 0, Cell::from_char('X'));
+        }
+        let diag = span_diagnostics(&buf);
+        // Should mention "full" for the full-row dirty case
+        assert!(
+            diag.contains("stats="),
+            "diagnostics should include stats: {diag}"
+        );
+    }
+
+    // =========================================================================
+    // Misc Edge Cases (bd-khkj4)
+    // =========================================================================
+
+    #[test]
+    fn compute_dirty_matches_full_for_single_row_buffer() {
+        let old = Buffer::new(50, 1);
+        let mut new = old.clone();
+        new.set_raw(25, 0, Cell::from_char('M'));
+
+        let full = BufferDiff::compute(&old, &new);
+        let dirty = BufferDiff::compute_dirty(&old, &new);
+
+        assert_eq!(full.changes(), dirty.changes());
+    }
+
+    #[test]
+    fn compute_dirty_matches_full_for_single_column_buffer() {
+        let old = Buffer::new(1, 50);
+        let mut new = old.clone();
+        new.set_raw(0, 25, Cell::from_char('M'));
+
+        let full = BufferDiff::compute(&old, &new);
+        let dirty = BufferDiff::compute_dirty(&old, &new);
+
+        assert_eq!(full.changes(), dirty.changes());
+    }
+
+    #[test]
+    fn tile_config_chain_returns_same_type() {
+        // Verify builder pattern chaining works and returns Self
+        let config = TileDiffConfig::default()
+            .with_enabled(true)
+            .with_tile_size(16, 16)
+            .with_min_cells_for_tiles(1000)
+            .with_skip_clean_rows(true)
+            .with_dense_cell_ratio(0.3)
+            .with_dense_tile_ratio(0.7)
+            .with_max_tiles(2048);
+
+        assert!(config.enabled);
+        assert_eq!(config.tile_w, 16);
+        assert_eq!(config.tile_h, 16);
+        assert_eq!(config.min_cells_for_tiles, 1000);
+        assert!(config.skip_clean_rows);
+        assert!((config.dense_cell_ratio - 0.3).abs() < f64::EPSILON);
+        assert!((config.dense_tile_ratio - 0.7).abs() < f64::EPSILON);
+        assert_eq!(config.max_tiles, 2048);
+    }
+
+    #[test]
+    fn runs_into_reuse_across_multiple_diffs() {
+        // Verify runs_into correctly reuses buffer across multiple diff operations
+        let mut runs_buf: Vec<ChangeRun> = Vec::new();
+
+        // First diff
+        let old1 = Buffer::new(10, 2);
+        let mut new1 = Buffer::new(10, 2);
+        new1.set_raw(0, 0, Cell::from_char('A'));
+        new1.set_raw(1, 0, Cell::from_char('B'));
+        let diff1 = BufferDiff::compute(&old1, &new1);
+        diff1.runs_into(&mut runs_buf);
+        assert_eq!(runs_buf.len(), 1);
+        assert_eq!(runs_buf[0], ChangeRun::new(0, 0, 1));
+
+        // Second diff - should clear previous and fill with new
+        let old2 = Buffer::new(5, 3);
+        let mut new2 = Buffer::new(5, 3);
+        new2.set_raw(2, 1, Cell::from_char('X'));
+        new2.set_raw(4, 2, Cell::from_char('Y'));
+        let diff2 = BufferDiff::compute(&old2, &new2);
+        diff2.runs_into(&mut runs_buf);
+        assert_eq!(runs_buf.len(), 2);
+        assert_eq!(runs_buf[0], ChangeRun::new(1, 2, 2));
+        assert_eq!(runs_buf[1], ChangeRun::new(2, 4, 4));
+    }
+
+    #[test]
+    fn full_diff_zero_dimensions_runs_empty() {
+        let diff_w0 = BufferDiff::full(0, 5);
+        assert!(diff_w0.runs().is_empty());
+
+        let diff_h0 = BufferDiff::full(5, 0);
+        assert!(diff_h0.runs().is_empty());
+
+        let diff_both = BufferDiff::full(0, 0);
+        assert!(diff_both.runs().is_empty());
+    }
+
+    #[test]
+    fn change_run_max_u16_values() {
+        // Test near-max values that don't overflow len()
+        let run = ChangeRun::new(u16::MAX, 1, u16::MAX);
+        assert_eq!(run.y, u16::MAX);
+        assert_eq!(run.x0, 1);
+        assert_eq!(run.x1, u16::MAX);
+        assert_eq!(run.len(), u16::MAX); // 65535 - 1 + 1 = 65535
+
+        // Single-cell run at max position
+        let run2 = ChangeRun::new(u16::MAX, u16::MAX, u16::MAX);
+        assert_eq!(run2.len(), 1);
+    }
+
+    #[test]
+    fn tile_diff_equivalence_adjacent_tiles() {
+        // Changes at tile boundaries (tiles are 8 cells wide)
+        let width = 200u16;
+        let height = 60u16;
+        let old = Buffer::new(width, height);
+        let mut new = old.clone();
+        new.clear_dirty();
+
+        // Place changes at boundaries of adjacent tiles
+        // tile_w=8, so tile boundaries at 0, 8, 16, 24...
+        new.set_raw(7, 0, Cell::from_char('A')); // end of tile 0
+        new.set_raw(8, 0, Cell::from_char('B')); // start of tile 1
+        new.set_raw(15, 0, Cell::from_char('C')); // end of tile 1
+        new.set_raw(16, 0, Cell::from_char('D')); // start of tile 2
+
+        assert_tile_diff_equivalence(&old, &new, "adjacent_tile_boundaries");
+    }
 }
 
 #[cfg(test)]
