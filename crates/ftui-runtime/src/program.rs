@@ -6446,4 +6446,830 @@ mod tests {
 
         assert!(config.persistence.registry.is_some());
     }
+
+    // =========================================================================
+    // TaskSpec tests (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn task_spec_default() {
+        let spec = TaskSpec::default();
+        assert_eq!(spec.weight, DEFAULT_TASK_WEIGHT);
+        assert_eq!(spec.estimate_ms, DEFAULT_TASK_ESTIMATE_MS);
+        assert!(spec.name.is_none());
+    }
+
+    #[test]
+    fn task_spec_new() {
+        let spec = TaskSpec::new(5.0, 20.0);
+        assert_eq!(spec.weight, 5.0);
+        assert_eq!(spec.estimate_ms, 20.0);
+        assert!(spec.name.is_none());
+    }
+
+    #[test]
+    fn task_spec_with_name() {
+        let spec = TaskSpec::default().with_name("fetch_data");
+        assert_eq!(spec.name.as_deref(), Some("fetch_data"));
+    }
+
+    #[test]
+    fn task_spec_debug() {
+        let spec = TaskSpec::new(2.0, 15.0).with_name("test");
+        let debug = format!("{spec:?}");
+        assert!(debug.contains("2.0"));
+        assert!(debug.contains("15.0"));
+        assert!(debug.contains("test"));
+    }
+
+    // =========================================================================
+    // Cmd::count() tests (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn cmd_count_none() {
+        let cmd: Cmd<TestMsg> = Cmd::none();
+        assert_eq!(cmd.count(), 0);
+    }
+
+    #[test]
+    fn cmd_count_atomic() {
+        assert_eq!(Cmd::<TestMsg>::quit().count(), 1);
+        assert_eq!(Cmd::<TestMsg>::msg(TestMsg::Inc).count(), 1);
+        assert_eq!(Cmd::<TestMsg>::tick(Duration::from_millis(100)).count(), 1);
+        assert_eq!(Cmd::<TestMsg>::log("hello").count(), 1);
+        assert_eq!(Cmd::<TestMsg>::save_state().count(), 1);
+        assert_eq!(Cmd::<TestMsg>::restore_state().count(), 1);
+        assert_eq!(Cmd::<TestMsg>::set_mouse_capture(true).count(), 1);
+    }
+
+    #[test]
+    fn cmd_count_batch() {
+        let cmd: Cmd<TestMsg> = Cmd::Batch(vec![Cmd::quit(), Cmd::msg(TestMsg::Inc), Cmd::none()]);
+        assert_eq!(cmd.count(), 2); // quit + msg, none counts 0
+    }
+
+    #[test]
+    fn cmd_count_nested() {
+        let cmd: Cmd<TestMsg> = Cmd::Batch(vec![
+            Cmd::msg(TestMsg::Inc),
+            Cmd::Sequence(vec![Cmd::quit(), Cmd::msg(TestMsg::Inc)]),
+        ]);
+        assert_eq!(cmd.count(), 3);
+    }
+
+    // =========================================================================
+    // Cmd::type_name() tests (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn cmd_type_name_all_variants() {
+        assert_eq!(Cmd::<TestMsg>::none().type_name(), "None");
+        assert_eq!(Cmd::<TestMsg>::quit().type_name(), "Quit");
+        assert_eq!(
+            Cmd::<TestMsg>::Batch(vec![Cmd::none()]).type_name(),
+            "Batch"
+        );
+        assert_eq!(
+            Cmd::<TestMsg>::Sequence(vec![Cmd::none()]).type_name(),
+            "Sequence"
+        );
+        assert_eq!(Cmd::<TestMsg>::msg(TestMsg::Inc).type_name(), "Msg");
+        assert_eq!(
+            Cmd::<TestMsg>::tick(Duration::from_millis(1)).type_name(),
+            "Tick"
+        );
+        assert_eq!(Cmd::<TestMsg>::log("x").type_name(), "Log");
+        assert_eq!(Cmd::<TestMsg>::task(|| TestMsg::Inc).type_name(), "Task");
+        assert_eq!(Cmd::<TestMsg>::save_state().type_name(), "SaveState");
+        assert_eq!(Cmd::<TestMsg>::restore_state().type_name(), "RestoreState");
+        assert_eq!(
+            Cmd::<TestMsg>::set_mouse_capture(true).type_name(),
+            "SetMouseCapture"
+        );
+    }
+
+    // =========================================================================
+    // Cmd::batch() / Cmd::sequence() edge-case tests (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn cmd_batch_empty_returns_none() {
+        let cmd: Cmd<TestMsg> = Cmd::batch(vec![]);
+        assert!(matches!(cmd, Cmd::None));
+    }
+
+    #[test]
+    fn cmd_batch_single_unwraps() {
+        let cmd: Cmd<TestMsg> = Cmd::batch(vec![Cmd::quit()]);
+        assert!(matches!(cmd, Cmd::Quit));
+    }
+
+    #[test]
+    fn cmd_batch_multiple_stays_batch() {
+        let cmd: Cmd<TestMsg> = Cmd::batch(vec![Cmd::quit(), Cmd::msg(TestMsg::Inc)]);
+        assert!(matches!(cmd, Cmd::Batch(_)));
+    }
+
+    #[test]
+    fn cmd_sequence_empty_returns_none() {
+        let cmd: Cmd<TestMsg> = Cmd::sequence(vec![]);
+        assert!(matches!(cmd, Cmd::None));
+    }
+
+    #[test]
+    fn cmd_sequence_single_unwraps() {
+        let cmd: Cmd<TestMsg> = Cmd::sequence(vec![Cmd::quit()]);
+        assert!(matches!(cmd, Cmd::Quit));
+    }
+
+    #[test]
+    fn cmd_sequence_multiple_stays_sequence() {
+        let cmd: Cmd<TestMsg> = Cmd::sequence(vec![Cmd::quit(), Cmd::msg(TestMsg::Inc)]);
+        assert!(matches!(cmd, Cmd::Sequence(_)));
+    }
+
+    // =========================================================================
+    // Cmd task constructor variants (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn cmd_task_with_spec() {
+        let spec = TaskSpec::new(3.0, 25.0).with_name("my_task");
+        let cmd: Cmd<TestMsg> = Cmd::task_with_spec(spec, || TestMsg::Inc);
+        match cmd {
+            Cmd::Task(s, _) => {
+                assert_eq!(s.weight, 3.0);
+                assert_eq!(s.estimate_ms, 25.0);
+                assert_eq!(s.name.as_deref(), Some("my_task"));
+            }
+            _ => panic!("expected Task variant"),
+        }
+    }
+
+    #[test]
+    fn cmd_task_weighted() {
+        let cmd: Cmd<TestMsg> = Cmd::task_weighted(2.0, 50.0, || TestMsg::Inc);
+        match cmd {
+            Cmd::Task(s, _) => {
+                assert_eq!(s.weight, 2.0);
+                assert_eq!(s.estimate_ms, 50.0);
+                assert!(s.name.is_none());
+            }
+            _ => panic!("expected Task variant"),
+        }
+    }
+
+    #[test]
+    fn cmd_task_named() {
+        let cmd: Cmd<TestMsg> = Cmd::task_named("background_fetch", || TestMsg::Inc);
+        match cmd {
+            Cmd::Task(s, _) => {
+                assert_eq!(s.weight, DEFAULT_TASK_WEIGHT);
+                assert_eq!(s.estimate_ms, DEFAULT_TASK_ESTIMATE_MS);
+                assert_eq!(s.name.as_deref(), Some("background_fetch"));
+            }
+            _ => panic!("expected Task variant"),
+        }
+    }
+
+    // =========================================================================
+    // Cmd Debug formatting (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn cmd_debug_all_variants() {
+        assert_eq!(format!("{:?}", Cmd::<TestMsg>::none()), "None");
+        assert_eq!(format!("{:?}", Cmd::<TestMsg>::quit()), "Quit");
+        assert!(format!("{:?}", Cmd::<TestMsg>::msg(TestMsg::Inc)).starts_with("Msg("));
+        assert!(
+            format!("{:?}", Cmd::<TestMsg>::tick(Duration::from_millis(100))).starts_with("Tick(")
+        );
+        assert!(format!("{:?}", Cmd::<TestMsg>::log("hi")).starts_with("Log("));
+        assert!(format!("{:?}", Cmd::<TestMsg>::task(|| TestMsg::Inc)).starts_with("Task"));
+        assert_eq!(format!("{:?}", Cmd::<TestMsg>::save_state()), "SaveState");
+        assert_eq!(
+            format!("{:?}", Cmd::<TestMsg>::restore_state()),
+            "RestoreState"
+        );
+        assert_eq!(
+            format!("{:?}", Cmd::<TestMsg>::set_mouse_capture(true)),
+            "SetMouseCapture(true)"
+        );
+    }
+
+    // =========================================================================
+    // Cmd::set_mouse_capture headless execution (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn headless_execute_cmd_set_mouse_capture() {
+        let mut program =
+            headless_program_with_config(TestModel { value: 0 }, ProgramConfig::default());
+        assert!(!program.backend_features.mouse_capture);
+
+        program
+            .execute_cmd(Cmd::set_mouse_capture(true))
+            .expect("set mouse capture true");
+        assert!(program.backend_features.mouse_capture);
+
+        program
+            .execute_cmd(Cmd::set_mouse_capture(false))
+            .expect("set mouse capture false");
+        assert!(!program.backend_features.mouse_capture);
+    }
+
+    // =========================================================================
+    // ResizeBehavior tests (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn resize_behavior_uses_coalescer() {
+        assert!(ResizeBehavior::Throttled.uses_coalescer());
+        assert!(!ResizeBehavior::Immediate.uses_coalescer());
+    }
+
+    #[test]
+    fn resize_behavior_eq_and_debug() {
+        assert_eq!(ResizeBehavior::Immediate, ResizeBehavior::Immediate);
+        assert_ne!(ResizeBehavior::Immediate, ResizeBehavior::Throttled);
+        let debug = format!("{:?}", ResizeBehavior::Throttled);
+        assert_eq!(debug, "Throttled");
+    }
+
+    // =========================================================================
+    // WidgetRefreshConfig default values (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn widget_refresh_config_defaults() {
+        let config = WidgetRefreshConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.staleness_window_ms, 1_000);
+        assert_eq!(config.starve_ms, 3_000);
+        assert_eq!(config.max_starved_per_frame, 2);
+        assert_eq!(config.max_drop_fraction, 1.0);
+        assert_eq!(config.weight_priority, 1.0);
+        assert_eq!(config.weight_staleness, 0.5);
+        assert_eq!(config.weight_focus, 0.75);
+        assert_eq!(config.weight_interaction, 0.5);
+        assert_eq!(config.starve_boost, 1.5);
+        assert_eq!(config.min_cost_us, 1.0);
+    }
+
+    // =========================================================================
+    // EffectQueueConfig tests (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn effect_queue_config_default() {
+        let config = EffectQueueConfig::default();
+        assert!(!config.enabled);
+        assert!(config.scheduler.smith_enabled);
+        assert!(!config.scheduler.force_fifo);
+        assert!(!config.scheduler.preemptive);
+    }
+
+    #[test]
+    fn effect_queue_config_with_enabled() {
+        let config = EffectQueueConfig::default().with_enabled(true);
+        assert!(config.enabled);
+    }
+
+    #[test]
+    fn effect_queue_config_with_scheduler() {
+        let sched = SchedulerConfig {
+            force_fifo: true,
+            ..Default::default()
+        };
+        let config = EffectQueueConfig::default().with_scheduler(sched);
+        assert!(config.scheduler.force_fifo);
+    }
+
+    // =========================================================================
+    // InlineAutoRemeasureConfig defaults (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn inline_auto_remeasure_config_defaults() {
+        let config = InlineAutoRemeasureConfig::default();
+        assert_eq!(config.change_threshold_rows, 1);
+        assert_eq!(config.voi.prior_alpha, 1.0);
+        assert_eq!(config.voi.prior_beta, 9.0);
+        assert_eq!(config.voi.max_interval_ms, 1000);
+        assert_eq!(config.voi.min_interval_ms, 100);
+        assert_eq!(config.voi.sample_cost, 0.08);
+    }
+
+    // =========================================================================
+    // HeadlessEventSource direct tests (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn headless_event_source_size() {
+        let source = HeadlessEventSource::new(120, 40, BackendFeatures::default());
+        assert_eq!(source.size().unwrap(), (120, 40));
+    }
+
+    #[test]
+    fn headless_event_source_poll_always_false() {
+        let mut source = HeadlessEventSource::new(80, 24, BackendFeatures::default());
+        assert!(!source.poll_event(Duration::from_millis(100)).unwrap());
+    }
+
+    #[test]
+    fn headless_event_source_read_always_none() {
+        let mut source = HeadlessEventSource::new(80, 24, BackendFeatures::default());
+        assert!(source.read_event().unwrap().is_none());
+    }
+
+    #[test]
+    fn headless_event_source_set_features() {
+        let mut source = HeadlessEventSource::new(80, 24, BackendFeatures::default());
+        let features = BackendFeatures {
+            mouse_capture: true,
+            bracketed_paste: true,
+            focus_events: true,
+            kitty_keyboard: true,
+        };
+        source.set_features(features).unwrap();
+        assert_eq!(source.features, features);
+    }
+
+    // =========================================================================
+    // Program helper methods (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn headless_program_quit_and_is_running() {
+        let mut program =
+            headless_program_with_config(TestModel { value: 0 }, ProgramConfig::default());
+        assert!(program.is_running());
+
+        program.quit();
+        assert!(!program.is_running());
+    }
+
+    #[test]
+    fn headless_program_model_mut() {
+        let mut program =
+            headless_program_with_config(TestModel { value: 0 }, ProgramConfig::default());
+        assert_eq!(program.model().value, 0);
+
+        program.model_mut().value = 42;
+        assert_eq!(program.model().value, 42);
+    }
+
+    #[test]
+    fn headless_program_request_redraw() {
+        let mut program =
+            headless_program_with_config(TestModel { value: 0 }, ProgramConfig::default());
+        program.dirty = false;
+
+        program.request_redraw();
+        assert!(program.dirty);
+    }
+
+    #[test]
+    fn headless_program_last_widget_signals_initially_empty() {
+        let program =
+            headless_program_with_config(TestModel { value: 0 }, ProgramConfig::default());
+        assert!(program.last_widget_signals().is_empty());
+    }
+
+    #[test]
+    fn headless_program_no_persistence_by_default() {
+        let program =
+            headless_program_with_config(TestModel { value: 0 }, ProgramConfig::default());
+        assert!(!program.has_persistence());
+        assert!(program.state_registry().is_none());
+    }
+
+    // =========================================================================
+    // classify_event_for_fairness (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn classify_event_fairness_key_is_input() {
+        let event = Event::Key(ftui_core::event::KeyEvent::new(
+            ftui_core::event::KeyCode::Char('a'),
+        ));
+        let classification =
+            Program::<TestModel, HeadlessEventSource, Vec<u8>>::classify_event_for_fairness(&event);
+        assert_eq!(classification, FairnessEventType::Input);
+    }
+
+    #[test]
+    fn classify_event_fairness_resize_is_resize() {
+        let event = Event::Resize {
+            width: 80,
+            height: 24,
+        };
+        let classification =
+            Program::<TestModel, HeadlessEventSource, Vec<u8>>::classify_event_for_fairness(&event);
+        assert_eq!(classification, FairnessEventType::Resize);
+    }
+
+    #[test]
+    fn classify_event_fairness_tick_is_tick() {
+        let event = Event::Tick;
+        let classification =
+            Program::<TestModel, HeadlessEventSource, Vec<u8>>::classify_event_for_fairness(&event);
+        assert_eq!(classification, FairnessEventType::Tick);
+    }
+
+    #[test]
+    fn classify_event_fairness_paste_is_input() {
+        let event = Event::Paste("hello".into());
+        let classification =
+            Program::<TestModel, HeadlessEventSource, Vec<u8>>::classify_event_for_fairness(&event);
+        assert_eq!(classification, FairnessEventType::Input);
+    }
+
+    #[test]
+    fn classify_event_fairness_focus_is_input() {
+        let event = Event::Focus(true);
+        let classification =
+            Program::<TestModel, HeadlessEventSource, Vec<u8>>::classify_event_for_fairness(&event);
+        assert_eq!(classification, FairnessEventType::Input);
+    }
+
+    // =========================================================================
+    // ProgramConfig builder methods (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn program_config_with_diff_config() {
+        let diff = RuntimeDiffConfig::default();
+        let config = ProgramConfig::default().with_diff_config(diff.clone());
+        // Just verify it doesn't panic and the field is set
+        let _ = format!("{:?}", config);
+    }
+
+    #[test]
+    fn program_config_with_evidence_sink() {
+        let config =
+            ProgramConfig::default().with_evidence_sink(EvidenceSinkConfig::enabled_stdout());
+        let _ = format!("{:?}", config);
+    }
+
+    #[test]
+    fn program_config_with_render_trace() {
+        let config = ProgramConfig::default().with_render_trace(RenderTraceConfig::default());
+        let _ = format!("{:?}", config);
+    }
+
+    #[test]
+    fn program_config_with_locale() {
+        let config = ProgramConfig::default().with_locale("fr");
+        let _ = format!("{:?}", config);
+    }
+
+    #[test]
+    fn program_config_with_locale_context() {
+        let config =
+            ProgramConfig::default().with_locale_context(LocaleContext::new("de"));
+        let _ = format!("{:?}", config);
+    }
+
+    #[test]
+    fn program_config_without_forced_size() {
+        let config = ProgramConfig::default()
+            .with_forced_size(80, 24)
+            .without_forced_size();
+        assert!(config.forced_size.is_none());
+    }
+
+    #[test]
+    fn program_config_forced_size_clamps_min() {
+        let config = ProgramConfig::default().with_forced_size(0, 0);
+        assert_eq!(config.forced_size, Some((1, 1)));
+    }
+
+    #[test]
+    fn program_config_with_widget_refresh() {
+        let mut wrc = WidgetRefreshConfig::default();
+        wrc.enabled = false;
+        let config = ProgramConfig::default().with_widget_refresh(wrc);
+        assert!(!config.widget_refresh.enabled);
+    }
+
+    #[test]
+    fn program_config_with_effect_queue() {
+        let eqc = EffectQueueConfig::default().with_enabled(true);
+        let config = ProgramConfig::default().with_effect_queue(eqc);
+        assert!(config.effect_queue.enabled);
+    }
+
+    #[test]
+    fn program_config_with_resize_coalescer() {
+        let cc = CoalescerConfig {
+            steady_delay_ms: 42,
+            ..Default::default()
+        };
+        let config = ProgramConfig::default().with_resize_coalescer(cc);
+        assert_eq!(config.resize_coalescer.steady_delay_ms, 42);
+    }
+
+    #[test]
+    fn program_config_with_inline_auto_remeasure() {
+        let config = ProgramConfig::default()
+            .with_inline_auto_remeasure(InlineAutoRemeasureConfig::default());
+        assert!(config.inline_auto_remeasure.is_some());
+
+        let config = config.without_inline_auto_remeasure();
+        assert!(config.inline_auto_remeasure.is_none());
+    }
+
+    #[test]
+    fn program_config_with_persistence_full() {
+        let pc = PersistenceConfig::disabled();
+        let config = ProgramConfig::default().with_persistence(pc);
+        assert!(config.persistence.registry.is_none());
+    }
+
+    #[test]
+    fn program_config_with_conformal_config() {
+        let config = ProgramConfig::default()
+            .with_conformal_config(ConformalConfig::default())
+            .without_conformal();
+        assert!(config.conformal_config.is_none());
+    }
+
+    // =========================================================================
+    // PersistenceConfig Debug (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn persistence_config_debug() {
+        let config = PersistenceConfig::default();
+        let debug = format!("{config:?}");
+        assert!(debug.contains("PersistenceConfig"));
+        assert!(debug.contains("auto_load"));
+        assert!(debug.contains("auto_save"));
+    }
+
+    // =========================================================================
+    // FrameTimingConfig (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn frame_timing_config_debug() {
+        use std::sync::Arc;
+
+        struct DummySink;
+        impl FrameTimingSink for DummySink {
+            fn record_frame(&self, _timing: &FrameTiming) {}
+        }
+
+        let config = FrameTimingConfig::new(Arc::new(DummySink));
+        let debug = format!("{config:?}");
+        assert!(debug.contains("FrameTimingConfig"));
+    }
+
+    #[test]
+    fn program_config_with_frame_timing() {
+        use std::sync::Arc;
+
+        struct DummySink;
+        impl FrameTimingSink for DummySink {
+            fn record_frame(&self, _timing: &FrameTiming) {}
+        }
+
+        let config =
+            ProgramConfig::default().with_frame_timing(FrameTimingConfig::new(Arc::new(DummySink)));
+        assert!(config.frame_timing.is_some());
+    }
+
+    // =========================================================================
+    // BudgetDecisionEvidence helper functions (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn budget_decision_evidence_decision_from_levels() {
+        use ftui_render::budget::DegradationLevel;
+        // Degrade: after > before
+        assert_eq!(
+            BudgetDecisionEvidence::decision_from_levels(
+                DegradationLevel::Full,
+                DegradationLevel::Reduced
+            ),
+            BudgetDecision::Degrade
+        );
+        // Upgrade: after < before
+        assert_eq!(
+            BudgetDecisionEvidence::decision_from_levels(
+                DegradationLevel::Reduced,
+                DegradationLevel::Full
+            ),
+            BudgetDecision::Upgrade
+        );
+        // Hold: same
+        assert_eq!(
+            BudgetDecisionEvidence::decision_from_levels(
+                DegradationLevel::Full,
+                DegradationLevel::Full
+            ),
+            BudgetDecision::Hold
+        );
+    }
+
+    // =========================================================================
+    // WidgetRefreshPlan (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn widget_refresh_plan_clear() {
+        let mut plan = WidgetRefreshPlan::new();
+        plan.frame_idx = 5;
+        plan.budget_us = 100.0;
+        plan.signal_count = 3;
+        plan.over_budget = true;
+        plan.clear();
+        assert_eq!(plan.frame_idx, 0);
+        assert_eq!(plan.budget_us, 0.0);
+        assert_eq!(plan.signal_count, 0);
+        assert!(!plan.over_budget);
+    }
+
+    #[test]
+    fn widget_refresh_plan_as_budget_empty_signals() {
+        let plan = WidgetRefreshPlan::new();
+        let budget = plan.as_budget();
+        // With signal_count == 0, should be allow_all
+        assert!(budget.should_render(0));
+        assert!(budget.should_render(999));
+    }
+
+    #[test]
+    fn widget_refresh_plan_to_jsonl_structure() {
+        let plan = WidgetRefreshPlan::new();
+        let jsonl = plan.to_jsonl();
+        assert!(jsonl.contains("\"event\":\"widget_refresh\""));
+        assert!(jsonl.contains("\"frame_idx\":0"));
+        assert!(jsonl.contains("\"selected\":[]"));
+    }
+
+    // =========================================================================
+    // BatchController Default trait (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn batch_controller_default_trait() {
+        let bc = BatchController::default();
+        let bc2 = BatchController::new();
+        // Should be equivalent
+        assert_eq!(bc.tau_s(), bc2.tau_s());
+        assert_eq!(bc.observations(), bc2.observations());
+    }
+
+    #[test]
+    fn batch_controller_observe_arrival_stale_gap_ignored() {
+        let mut bc = BatchController::new();
+        let base = Instant::now();
+        // First arrival
+        bc.observe_arrival(base);
+        // Stale gap > 10s should be ignored
+        bc.observe_arrival(base + Duration::from_secs(15));
+        assert_eq!(bc.observations(), 0);
+    }
+
+    #[test]
+    fn batch_controller_observe_service_out_of_range() {
+        let mut bc = BatchController::new();
+        let original_service = bc.service_est_s();
+        // Out-of-range (>= 10s) should be ignored
+        bc.observe_service(Duration::from_secs(15));
+        assert_eq!(bc.service_est_s(), original_service);
+    }
+
+    #[test]
+    fn batch_controller_lambda_zero_inter_arrival() {
+        // When ema_inter_arrival_s is effectively 0, lambda should be 0
+        let bc = BatchController {
+            ema_inter_arrival_s: 0.0,
+            ..BatchController::new()
+        };
+        assert_eq!(bc.lambda_est(), 0.0);
+    }
+
+    // =========================================================================
+    // Headless program: Cmd::Log with and without trailing newline (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn headless_execute_cmd_log_appends_newline_if_missing() {
+        let mut program =
+            headless_program_with_config(TestModel { value: 0 }, ProgramConfig::default());
+        program.execute_cmd(Cmd::log("no newline")).expect("log");
+
+        let bytes = program.writer.into_inner().expect("writer output");
+        let output = String::from_utf8_lossy(&bytes);
+        // The sanitized output should end with a newline
+        assert!(output.contains("no newline"));
+    }
+
+    #[test]
+    fn headless_execute_cmd_log_preserves_trailing_newline() {
+        let mut program =
+            headless_program_with_config(TestModel { value: 0 }, ProgramConfig::default());
+        program.execute_cmd(Cmd::log("with newline\n")).expect("log");
+
+        let bytes = program.writer.into_inner().expect("writer output");
+        let output = String::from_utf8_lossy(&bytes);
+        assert!(output.contains("with newline"));
+    }
+
+    // =========================================================================
+    // Headless program: immediate resize behavior (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn headless_handle_event_immediate_resize() {
+        struct ResizeModel {
+            last_size: Option<(u16, u16)>,
+        }
+
+        #[derive(Debug)]
+        enum ResizeMsg {
+            Resize(u16, u16),
+            Other,
+        }
+
+        impl From<Event> for ResizeMsg {
+            fn from(event: Event) -> Self {
+                match event {
+                    Event::Resize { width, height } => ResizeMsg::Resize(width, height),
+                    _ => ResizeMsg::Other,
+                }
+            }
+        }
+
+        impl Model for ResizeModel {
+            type Message = ResizeMsg;
+
+            fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+                if let ResizeMsg::Resize(w, h) = msg {
+                    self.last_size = Some((w, h));
+                }
+                Cmd::none()
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let config = ProgramConfig::default().with_resize_behavior(ResizeBehavior::Immediate);
+        let mut program = headless_program_with_config(ResizeModel { last_size: None }, config);
+
+        program
+            .handle_event(Event::Resize {
+                width: 120,
+                height: 40,
+            })
+            .expect("handle resize");
+
+        assert_eq!(program.width, 120);
+        assert_eq!(program.height, 40);
+        assert_eq!(program.model().last_size, Some((120, 40)));
+    }
+
+    // =========================================================================
+    // Headless program: resize clamps zero dimensions (bd-2yjus)
+    // =========================================================================
+
+    #[test]
+    fn headless_apply_resize_clamps_zero_to_one() {
+        struct SimpleModel;
+
+        #[derive(Debug)]
+        enum SimpleMsg {
+            Noop,
+        }
+
+        impl From<Event> for SimpleMsg {
+            fn from(_: Event) -> Self {
+                SimpleMsg::Noop
+            }
+        }
+
+        impl Model for SimpleModel {
+            type Message = SimpleMsg;
+
+            fn update(&mut self, _msg: Self::Message) -> Cmd<Self::Message> {
+                Cmd::none()
+            }
+
+            fn view(&self, _frame: &mut Frame) {}
+        }
+
+        let mut program =
+            headless_program_with_config(SimpleModel, ProgramConfig::default());
+        program
+            .apply_resize(0, 0, Duration::ZERO, false)
+            .expect("resize");
+
+        // Zero dimensions should be clamped to 1
+        assert_eq!(program.width, 1);
+        assert_eq!(program.height, 1);
+    }
 }

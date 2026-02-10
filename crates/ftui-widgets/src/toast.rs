@@ -2326,4 +2326,652 @@ mod tests {
         let r = unwrap_remaining(remaining);
         assert!(r > Duration::from_secs(9));
     }
+
+    // =========================================================================
+    // Position edge cases (bd-9vqk6)
+    // =========================================================================
+
+    #[test]
+    fn position_bottom_left() {
+        let (x, y) = ToastPosition::BottomLeft.calculate_position(80, 24, 20, 3, 1);
+        assert_eq!(x, 1);
+        assert_eq!(y, 24 - 3 - 1); // 20
+    }
+
+    #[test]
+    fn position_bottom_center() {
+        let (x, y) = ToastPosition::BottomCenter.calculate_position(80, 24, 20, 3, 1);
+        assert_eq!(x, (80 - 20) / 2); // 30
+        assert_eq!(y, 24 - 3 - 1); // 20
+    }
+
+    #[test]
+    fn position_toast_wider_than_terminal_saturates() {
+        // Toast is wider than the terminal — x should saturate to 0, not wrap
+        let (x, y) = ToastPosition::TopRight.calculate_position(20, 10, 30, 3, 1);
+        assert_eq!(x, 0); // 20 - 30 = saturates to 0, then - 1 = still 0
+        assert_eq!(y, 1);
+    }
+
+    #[test]
+    fn position_zero_margin() {
+        let (x, y) = ToastPosition::TopLeft.calculate_position(80, 24, 20, 3, 0);
+        assert_eq!(x, 0);
+        assert_eq!(y, 0);
+
+        let (x, y) = ToastPosition::BottomRight.calculate_position(80, 24, 20, 3, 0);
+        assert_eq!(x, 60);
+        assert_eq!(y, 21);
+    }
+
+    #[test]
+    fn position_toast_taller_than_terminal_saturates() {
+        let (_, y) = ToastPosition::BottomLeft.calculate_position(80, 3, 20, 10, 1);
+        assert_eq!(y, 0); // 3 - 10 saturates to 0, then - 1 = still 0
+    }
+
+    // =========================================================================
+    // ToastIcon edge cases (bd-9vqk6)
+    // =========================================================================
+
+    #[test]
+    fn icon_custom_non_ascii_falls_back_to_star() {
+        let icon = ToastIcon::Custom('\u{1F525}'); // 🔥
+        assert_eq!(icon.as_char(), '\u{1F525}');
+        assert_eq!(icon.as_ascii(), '*');
+    }
+
+    #[test]
+    fn icon_custom_ascii_preserved() {
+        let icon = ToastIcon::Custom('#');
+        assert_eq!(icon.as_char(), '#');
+        assert_eq!(icon.as_ascii(), '#');
+    }
+
+    #[test]
+    fn icon_warning_ascii_same() {
+        assert_eq!(ToastIcon::Warning.as_ascii(), '!');
+        assert_eq!(ToastIcon::Info.as_ascii(), 'i');
+    }
+
+    // =========================================================================
+    // Default trait coverage (bd-9vqk6)
+    // =========================================================================
+
+    #[test]
+    fn toast_position_default_is_top_right() {
+        assert_eq!(ToastPosition::default(), ToastPosition::TopRight);
+    }
+
+    #[test]
+    fn toast_icon_default_is_info() {
+        assert_eq!(ToastIcon::default(), ToastIcon::Info);
+    }
+
+    #[test]
+    fn toast_style_default_is_info() {
+        assert_eq!(ToastStyle::default(), ToastStyle::Info);
+    }
+
+    #[test]
+    fn toast_animation_phase_default_is_visible() {
+        assert_eq!(
+            ToastAnimationPhase::default(),
+            ToastAnimationPhase::Visible
+        );
+    }
+
+    #[test]
+    fn toast_entrance_animation_default_is_slide_from_right() {
+        assert_eq!(
+            ToastEntranceAnimation::default(),
+            ToastEntranceAnimation::SlideFromRight
+        );
+    }
+
+    #[test]
+    fn toast_exit_animation_default_is_fade_out() {
+        assert_eq!(ToastExitAnimation::default(), ToastExitAnimation::FadeOut);
+    }
+
+    #[test]
+    fn toast_easing_default_is_ease_out() {
+        assert_eq!(ToastEasing::default(), ToastEasing::EaseOut);
+    }
+
+    // =========================================================================
+    // Entrance animation all variants (bd-9vqk6)
+    // =========================================================================
+
+    #[test]
+    fn entrance_slide_from_bottom_offset() {
+        let (dx, dy) = ToastEntranceAnimation::SlideFromBottom.initial_offset(20, 5);
+        assert_eq!(dx, 0);
+        assert_eq!(dy, 5); // starts below
+    }
+
+    #[test]
+    fn entrance_slide_from_left_offset() {
+        let (dx, dy) = ToastEntranceAnimation::SlideFromLeft.initial_offset(20, 5);
+        assert_eq!(dx, -20);
+        assert_eq!(dy, 0);
+    }
+
+    #[test]
+    fn entrance_fade_in_no_offset() {
+        let (dx, dy) = ToastEntranceAnimation::FadeIn.initial_offset(20, 5);
+        assert_eq!(dx, 0);
+        assert_eq!(dy, 0);
+    }
+
+    #[test]
+    fn entrance_none_no_offset() {
+        let (dx, dy) = ToastEntranceAnimation::None.initial_offset(20, 5);
+        assert_eq!(dx, 0);
+        assert_eq!(dy, 0);
+    }
+
+    #[test]
+    fn entrance_offset_progress_clamped() {
+        // Below 0 should clamp
+        let (dx, dy) =
+            ToastEntranceAnimation::SlideFromTop.offset_at_progress(-0.5, 20, 5);
+        assert_eq!(dx, 0);
+        assert_eq!(dy, -5); // Same as progress 0.0
+
+        // Above 1 should clamp
+        let (dx, dy) =
+            ToastEntranceAnimation::SlideFromTop.offset_at_progress(2.0, 20, 5);
+        assert_eq!(dx, 0);
+        assert_eq!(dy, 0); // Same as progress 1.0
+    }
+
+    #[test]
+    fn entrance_offset_at_half_progress() {
+        let (dx, dy) =
+            ToastEntranceAnimation::SlideFromRight.offset_at_progress(0.5, 20, 5);
+        assert_eq!(dx, 10); // Half of width
+        assert_eq!(dy, 0);
+    }
+
+    // =========================================================================
+    // Exit animation all variants (bd-9vqk6)
+    // =========================================================================
+
+    #[test]
+    fn exit_slide_to_top_offset() {
+        let entrance = ToastEntranceAnimation::SlideFromRight;
+        let (dx, dy) = ToastExitAnimation::SlideToTop.final_offset(20, 5, entrance);
+        assert_eq!(dx, 0);
+        assert_eq!(dy, -5);
+    }
+
+    #[test]
+    fn exit_slide_to_right_offset() {
+        let entrance = ToastEntranceAnimation::SlideFromRight;
+        let (dx, dy) = ToastExitAnimation::SlideToRight.final_offset(20, 5, entrance);
+        assert_eq!(dx, 20);
+        assert_eq!(dy, 0);
+    }
+
+    #[test]
+    fn exit_slide_to_bottom_offset() {
+        let entrance = ToastEntranceAnimation::SlideFromRight;
+        let (dx, dy) = ToastExitAnimation::SlideToBottom.final_offset(20, 5, entrance);
+        assert_eq!(dx, 0);
+        assert_eq!(dy, 5);
+    }
+
+    #[test]
+    fn exit_slide_to_left_offset() {
+        let entrance = ToastEntranceAnimation::SlideFromRight;
+        let (dx, dy) = ToastExitAnimation::SlideToLeft.final_offset(20, 5, entrance);
+        assert_eq!(dx, -20);
+        assert_eq!(dy, 0);
+    }
+
+    #[test]
+    fn exit_fade_out_no_offset() {
+        let entrance = ToastEntranceAnimation::SlideFromRight;
+        let (dx, dy) = ToastExitAnimation::FadeOut.final_offset(20, 5, entrance);
+        assert_eq!(dx, 0);
+        assert_eq!(dy, 0);
+    }
+
+    #[test]
+    fn exit_none_no_offset() {
+        let entrance = ToastEntranceAnimation::SlideFromRight;
+        let (dx, dy) = ToastExitAnimation::None.final_offset(20, 5, entrance);
+        assert_eq!(dx, 0);
+        assert_eq!(dy, 0);
+    }
+
+    #[test]
+    fn exit_offset_progress_clamped() {
+        let entrance = ToastEntranceAnimation::SlideFromRight;
+        let (dx, dy) =
+            ToastExitAnimation::SlideToTop.offset_at_progress(-1.0, 20, 5, entrance);
+        assert_eq!((dx, dy), (0, 0)); // Clamped to 0.0
+
+        let (dx, dy) =
+            ToastExitAnimation::SlideToTop.offset_at_progress(5.0, 20, 5, entrance);
+        assert_eq!((dx, dy), (0, -5)); // Clamped to 1.0
+    }
+
+    // =========================================================================
+    // Easing function edge cases (bd-9vqk6)
+    // =========================================================================
+
+    #[test]
+    fn easing_clamped_below_zero() {
+        for easing in [
+            ToastEasing::Linear,
+            ToastEasing::EaseIn,
+            ToastEasing::EaseOut,
+            ToastEasing::EaseInOut,
+            ToastEasing::Bounce,
+        ] {
+            let result = easing.apply(-0.5);
+            assert!(
+                (result - 0.0).abs() < 0.001,
+                "{easing:?} at -0.5 should clamp to 0"
+            );
+        }
+    }
+
+    #[test]
+    fn easing_clamped_above_one() {
+        for easing in [
+            ToastEasing::Linear,
+            ToastEasing::EaseIn,
+            ToastEasing::EaseOut,
+            ToastEasing::EaseInOut,
+            ToastEasing::Bounce,
+        ] {
+            let result = easing.apply(1.5);
+            assert!(
+                (result - 1.0).abs() < 0.001,
+                "{easing:?} at 1.5 should clamp to 1"
+            );
+        }
+    }
+
+    #[test]
+    fn easing_ease_in_out_first_half() {
+        let result = ToastEasing::EaseInOut.apply(0.25);
+        assert!(result < 0.25, "EaseInOut at 0.25 should be < 0.25 (accelerating)");
+    }
+
+    #[test]
+    fn easing_ease_in_out_second_half() {
+        let result = ToastEasing::EaseInOut.apply(0.75);
+        assert!(result > 0.75, "EaseInOut at 0.75 should be > 0.75 (decelerating)");
+    }
+
+    #[test]
+    fn easing_bounce_monotonic_at_key_points() {
+        let d1 = 2.75;
+        // Sample all four branches of the bounce function
+        let t1 = 0.2 / d1; // first branch
+        let t2 = 1.5 / d1; // second branch
+        let t3 = 2.3 / d1; // third branch
+        let t4 = 2.7 / d1; // fourth branch
+
+        let v1 = ToastEasing::Bounce.apply(t1);
+        let v2 = ToastEasing::Bounce.apply(t2);
+        let v3 = ToastEasing::Bounce.apply(t3);
+        let v4 = ToastEasing::Bounce.apply(t4);
+
+        assert!(v1 >= 0.0 && v1 <= 1.0, "branch 1: {v1}");
+        assert!(v2 >= 0.0 && v2 <= 1.0, "branch 2: {v2}");
+        assert!(v3 >= 0.0 && v3 <= 1.0, "branch 3: {v3}");
+        assert!(v4 >= 0.0 && v4 <= 1.0, "branch 4: {v4}");
+    }
+
+    // =========================================================================
+    // Animation state transitions (bd-9vqk6)
+    // =========================================================================
+
+    #[test]
+    fn animation_state_tick_entering_to_visible() {
+        let config = ToastAnimationConfig {
+            entrance_duration: Duration::ZERO, // Instant transition
+            ..ToastAnimationConfig::default()
+        };
+        let mut state = ToastAnimationState::new();
+        assert_eq!(state.phase, ToastAnimationPhase::Entering);
+
+        let changed = state.tick(&config);
+        assert!(changed, "Phase should change from Entering to Visible");
+        assert_eq!(state.phase, ToastAnimationPhase::Visible);
+    }
+
+    #[test]
+    fn animation_state_tick_exiting_to_hidden() {
+        let config = ToastAnimationConfig {
+            exit_duration: Duration::ZERO,
+            ..ToastAnimationConfig::default()
+        };
+        let mut state = ToastAnimationState::new();
+        state.transition_to(ToastAnimationPhase::Exiting);
+
+        let changed = state.tick(&config);
+        assert!(changed, "Phase should change from Exiting to Hidden");
+        assert_eq!(state.phase, ToastAnimationPhase::Hidden);
+    }
+
+    #[test]
+    fn animation_state_tick_visible_no_change() {
+        let config = ToastAnimationConfig::default();
+        let mut state = ToastAnimationState::new();
+        state.transition_to(ToastAnimationPhase::Visible);
+
+        let changed = state.tick(&config);
+        assert!(!changed, "Visible phase should not auto-transition");
+        assert_eq!(state.phase, ToastAnimationPhase::Visible);
+    }
+
+    #[test]
+    fn animation_state_tick_hidden_no_change() {
+        let config = ToastAnimationConfig::default();
+        let mut state = ToastAnimationState::new();
+        state.transition_to(ToastAnimationPhase::Hidden);
+
+        let changed = state.tick(&config);
+        assert!(!changed);
+        assert_eq!(state.phase, ToastAnimationPhase::Hidden);
+    }
+
+    #[test]
+    fn animation_state_start_exit_reduced_motion_goes_to_hidden() {
+        let mut state = ToastAnimationState::with_reduced_motion();
+        assert_eq!(state.phase, ToastAnimationPhase::Visible);
+        state.start_exit();
+        assert_eq!(state.phase, ToastAnimationPhase::Hidden);
+    }
+
+    #[test]
+    fn animation_state_is_complete() {
+        let mut state = ToastAnimationState::new();
+        assert!(!state.is_complete());
+        state.transition_to(ToastAnimationPhase::Hidden);
+        assert!(state.is_complete());
+    }
+
+    // =========================================================================
+    // Animation offset and opacity in all phases (bd-9vqk6)
+    // =========================================================================
+
+    #[test]
+    fn animation_offset_visible_is_zero() {
+        let config = ToastAnimationConfig::default();
+        let mut state = ToastAnimationState::new();
+        state.phase = ToastAnimationPhase::Visible;
+        let (dx, dy) = state.current_offset(&config, 20, 5);
+        assert_eq!((dx, dy), (0, 0));
+    }
+
+    #[test]
+    fn animation_offset_hidden_is_zero() {
+        let config = ToastAnimationConfig::default();
+        let mut state = ToastAnimationState::new();
+        state.phase = ToastAnimationPhase::Hidden;
+        let (dx, dy) = state.current_offset(&config, 20, 5);
+        assert_eq!((dx, dy), (0, 0));
+    }
+
+    #[test]
+    fn animation_offset_reduced_motion_always_zero() {
+        let config = ToastAnimationConfig::default();
+        let state = ToastAnimationState::with_reduced_motion();
+        let (dx, dy) = state.current_offset(&config, 20, 5);
+        assert_eq!((dx, dy), (0, 0));
+    }
+
+    #[test]
+    fn animation_opacity_visible_is_one() {
+        let config = ToastAnimationConfig::default();
+        let mut state = ToastAnimationState::new();
+        state.phase = ToastAnimationPhase::Visible;
+        assert!((state.current_opacity(&config) - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn animation_opacity_hidden_is_zero() {
+        let config = ToastAnimationConfig::default();
+        let mut state = ToastAnimationState::new();
+        state.phase = ToastAnimationPhase::Hidden;
+        assert!((state.current_opacity(&config) - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn animation_opacity_reduced_motion_visible_is_one() {
+        let config = ToastAnimationConfig::default();
+        let mut state = ToastAnimationState::with_reduced_motion();
+        state.phase = ToastAnimationPhase::Visible;
+        assert!((state.current_opacity(&config) - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn animation_opacity_reduced_motion_hidden_is_zero() {
+        let config = ToastAnimationConfig::default();
+        let mut state = ToastAnimationState::with_reduced_motion();
+        state.phase = ToastAnimationPhase::Hidden;
+        assert!((state.current_opacity(&config) - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn animation_opacity_exiting_non_fade_is_one() {
+        let config = ToastAnimationConfig {
+            exit: ToastExitAnimation::SlideOut,
+            ..ToastAnimationConfig::default()
+        };
+        let mut state = ToastAnimationState::new();
+        state.phase = ToastAnimationPhase::Exiting;
+        // Non-FadeOut exit keeps opacity at 1.0
+        assert!((state.current_opacity(&config) - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn animation_opacity_entering_non_fade_is_one() {
+        let config = ToastAnimationConfig {
+            entrance: ToastEntranceAnimation::SlideFromTop,
+            ..ToastAnimationConfig::default()
+        };
+        let mut state = ToastAnimationState::new();
+        state.phase = ToastAnimationPhase::Entering;
+        // Non-FadeIn entrance keeps opacity at 1.0
+        assert!((state.current_opacity(&config) - 1.0).abs() < 0.001);
+    }
+
+    // =========================================================================
+    // Toast API coverage (bd-9vqk6)
+    // =========================================================================
+
+    #[test]
+    fn toast_with_id() {
+        let toast = Toast::with_id(ToastId::new(42), "Custom ID");
+        assert_eq!(toast.id, ToastId::new(42));
+        assert_eq!(toast.content.message, "Custom ID");
+    }
+
+    #[test]
+    fn toast_tick_animation_returns_true_on_phase_change() {
+        let mut toast = Toast::new("Test")
+            .entrance_duration(Duration::ZERO);
+        assert_eq!(toast.state.animation.phase, ToastAnimationPhase::Entering);
+        let changed = toast.tick_animation();
+        assert!(changed);
+        assert_eq!(toast.state.animation.phase, ToastAnimationPhase::Visible);
+    }
+
+    #[test]
+    fn toast_tick_animation_returns_false_when_stable() {
+        let mut toast = Toast::new("Test").no_animation();
+        assert_eq!(toast.state.animation.phase, ToastAnimationPhase::Visible);
+        let changed = toast.tick_animation();
+        assert!(!changed);
+    }
+
+    #[test]
+    fn toast_animation_phase_accessor() {
+        let toast = Toast::new("Test").no_animation();
+        assert_eq!(toast.animation_phase(), ToastAnimationPhase::Visible);
+    }
+
+    #[test]
+    fn toast_animation_opacity_accessor() {
+        let toast = Toast::new("Test").no_animation();
+        assert!((toast.animation_opacity() - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn toast_remaining_time_persistent_is_none() {
+        let toast = Toast::new("msg").persistent().no_animation();
+        assert!(toast.remaining_time().is_none());
+    }
+
+    #[test]
+    fn toast_dismiss_twice_idempotent() {
+        let mut toast = Toast::new("msg").no_animation();
+        toast.state.animation.reduced_motion = false;
+        toast.dismiss();
+        assert!(toast.state.dismissed);
+        let phase_after_first = toast.state.animation.phase;
+        toast.dismiss(); // Should not change phase again
+        assert_eq!(toast.state.animation.phase, phase_after_first);
+    }
+
+    #[test]
+    fn toast_non_dismissable_esc_noop() {
+        let mut toast = Toast::new("msg").dismissable(false).no_animation();
+        let result = toast.handle_key(KeyEvent::Esc);
+        assert_eq!(result, ToastEvent::None);
+        assert!(toast.is_visible());
+    }
+
+    #[test]
+    fn toast_margin_builder() {
+        let toast = Toast::new("msg").margin(5);
+        assert_eq!(toast.config.margin, 5);
+    }
+
+    #[test]
+    fn toast_with_icon_style_builder() {
+        let style = Style::new().italic();
+        let toast = Toast::new("msg").with_icon_style(style);
+        assert_eq!(toast.icon_style, style);
+    }
+
+    #[test]
+    fn toast_with_title_style_builder() {
+        let style = Style::new().bold();
+        let toast = Toast::new("msg").with_title_style(style);
+        assert_eq!(toast.title_style, style);
+    }
+
+    // =========================================================================
+    // ToastConfig defaults (bd-9vqk6)
+    // =========================================================================
+
+    #[test]
+    fn toast_config_default_values() {
+        let config = ToastConfig::default();
+        assert_eq!(config.position, ToastPosition::TopRight);
+        assert_eq!(config.duration, Some(Duration::from_secs(5)));
+        assert_eq!(config.style_variant, ToastStyle::Info);
+        assert_eq!(config.max_width, 50);
+        assert_eq!(config.margin, 1);
+        assert!(config.dismissable);
+    }
+
+    // =========================================================================
+    // ToastAnimationConfig (bd-9vqk6)
+    // =========================================================================
+
+    #[test]
+    fn animation_config_none_fields() {
+        let config = ToastAnimationConfig::none();
+        assert_eq!(config.entrance, ToastEntranceAnimation::None);
+        assert_eq!(config.exit, ToastExitAnimation::None);
+        assert_eq!(config.entrance_duration, Duration::ZERO);
+        assert_eq!(config.exit_duration, Duration::ZERO);
+        assert!(config.is_disabled());
+    }
+
+    #[test]
+    fn animation_config_is_disabled_false_for_default() {
+        let config = ToastAnimationConfig::default();
+        assert!(!config.is_disabled());
+    }
+
+    // =========================================================================
+    // ToastId and trait coverage (bd-9vqk6)
+    // =========================================================================
+
+    #[test]
+    fn toast_id_hash_consistent() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(ToastId::new(1));
+        set.insert(ToastId::new(2));
+        set.insert(ToastId::new(1)); // Duplicate
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn toast_id_debug() {
+        let id = ToastId::new(42);
+        let dbg = format!("{:?}", id);
+        assert!(dbg.contains("42"), "Debug: {dbg}");
+    }
+
+    #[test]
+    fn toast_event_debug_clone() {
+        let event = ToastEvent::Action("test".into());
+        let dbg = format!("{:?}", event);
+        assert!(dbg.contains("Action"), "Debug: {dbg}");
+        let cloned = event.clone();
+        assert_eq!(cloned, ToastEvent::Action("test".into()));
+    }
+
+    #[test]
+    fn key_event_traits() {
+        let key = KeyEvent::Tab;
+        let copy = key; // Copy
+        assert_eq!(key, copy);
+        let dbg = format!("{:?}", key);
+        assert!(dbg.contains("Tab"), "Debug: {dbg}");
+    }
+
+    // =========================================================================
+    // Tick with reduced motion in entering phase (bd-9vqk6)
+    // =========================================================================
+
+    #[test]
+    fn animation_tick_entering_reduced_motion_transitions_immediately() {
+        let config = ToastAnimationConfig::default();
+        let mut state = ToastAnimationState {
+            phase: ToastAnimationPhase::Entering,
+            phase_started: Instant::now(),
+            reduced_motion: true,
+        };
+        // With reduced_motion, entering duration is treated as ZERO → immediate transition
+        let changed = state.tick(&config);
+        assert!(changed);
+        assert_eq!(state.phase, ToastAnimationPhase::Visible);
+    }
+
+    #[test]
+    fn animation_tick_exiting_reduced_motion_transitions_immediately() {
+        let config = ToastAnimationConfig::default();
+        let mut state = ToastAnimationState {
+            phase: ToastAnimationPhase::Exiting,
+            phase_started: Instant::now(),
+            reduced_motion: true,
+        };
+        let changed = state.tick(&config);
+        assert!(changed);
+        assert_eq!(state.phase, ToastAnimationPhase::Hidden);
+    }
 }

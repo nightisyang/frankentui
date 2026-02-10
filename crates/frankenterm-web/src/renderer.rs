@@ -719,6 +719,162 @@ mod gpu {
     const ATTR_STRIKETHROUGH: u32 = 1 << 6;
     const ATTR_HIDDEN: u32 = 1 << 7;
 
+    // Must match the `@font-face` family name in the showcase HTML.
+    const TERMINAL_FONT_FAMILY: &str = "Pragmasevka NF";
+    const TERMINAL_FONT_FALLBACK: &str = "monospace";
+    const TERMINAL_FONT_SCALE: f64 = 0.82;
+
+    struct GlyphCanvasRasterizer {
+        canvas: HtmlCanvasElement,
+        context: CanvasRenderingContext2d,
+        canvas_width: u16,
+        canvas_height: u16,
+        cached_font_height: u16,
+        cached_font_css: String,
+    }
+
+    impl GlyphCanvasRasterizer {
+        fn new() -> Result<Self, RendererError> {
+            let window = web_sys::window().ok_or_else(|| {
+                RendererError::SurfaceError("window unavailable for glyph rasterizer".to_owned())
+            })?;
+            let document = window.document().ok_or_else(|| {
+                RendererError::SurfaceError("document unavailable for glyph rasterizer".to_owned())
+            })?;
+
+            let canvas = document
+                .create_element("canvas")
+                .map_err(|error| {
+                    RendererError::SurfaceError(format!(
+                        "failed to create glyph rasterizer canvas element: {error:?}"
+                    ))
+                })?
+                .dyn_into::<HtmlCanvasElement>()
+                .map_err(|error| {
+                    RendererError::SurfaceError(format!(
+                        "failed to cast glyph rasterizer canvas element: {error:?}"
+                    ))
+                })?;
+
+            let context = canvas
+                .get_context("2d")
+                .map_err(|error| {
+                    RendererError::SurfaceError(format!(
+                        "canvas2d context request failed for glyph rasterizer: {error:?}"
+                    ))
+                })?
+                .ok_or_else(|| {
+                    RendererError::SurfaceError(
+                        "canvas2d context unavailable for glyph rasterizer".to_owned(),
+                    )
+                })?
+                .dyn_into::<CanvasRenderingContext2d>()
+                .map_err(|error| {
+                    RendererError::SurfaceError(format!(
+                        "canvas2d context cast failed for glyph rasterizer: {error:?}"
+                    ))
+                })?;
+
+            context.set_text_baseline("top");
+            context.set_text_align("left");
+            context.set_image_smoothing_enabled(false);
+
+            Ok(Self {
+                canvas,
+                context,
+                canvas_width: 0,
+                canvas_height: 0,
+                cached_font_height: 0,
+                cached_font_css: String::new(),
+            })
+        }
+
+        fn ensure_canvas_size(&mut self, width: u16, height: u16) {
+            let w = width.max(1);
+            let h = height.max(1);
+            if self.canvas_width != w {
+                self.canvas.set_width(u32::from(w));
+                self.canvas_width = w;
+            }
+            if self.canvas_height != h {
+                self.canvas.set_height(u32::from(h));
+                self.canvas_height = h;
+            }
+        }
+
+        fn ensure_font_for_height(&mut self, height_px: u16) {
+            if self.cached_font_height == height_px {
+                return;
+            }
+
+            let font_px = (f64::from(height_px.max(1)) * TERMINAL_FONT_SCALE).max(1.0);
+            self.cached_font_css = format!(
+                "{font_px:.2}px \"{TERMINAL_FONT_FAMILY}\", {TERMINAL_FONT_FALLBACK}"
+            );
+            self.context.set_font(&self.cached_font_css);
+            self.cached_font_height = height_px;
+        }
+
+        fn rasterize(&mut self, codepoint: u32, width: u16, height: u16) -> GlyphRaster {
+            let Some(ch) = char::from_u32(codepoint) else {
+                return rasterize_procedural_glyph(codepoint, width, height);
+            };
+            if ch.is_whitespace() {
+                return GlyphRaster {
+                    width: width.max(1),
+                    height: height.max(1),
+                    pixels: vec![0u8; (width.max(1) as usize) * (height.max(1) as usize)],
+                    metrics: GlyphMetrics::default(),
+                };
+            }
+
+            self.ensure_canvas_size(width, height);
+            self.ensure_font_for_height(height);
+
+            let w = f64::from(self.canvas_width);
+            let h = f64::from(self.canvas_height);
+            self.context.clear_rect(0.0, 0.0, w, h);
+            self.context.set_fill_style_str("rgba(255, 255, 255, 1.0)");
+
+            let mut glyph_buf = [0u8; 4];
+            let glyph_text = ch.encode_utf8(&mut glyph_buf);
+
+            if self
+                .context
+                .fill_text(glyph_text, 0.0, 0.0)
+                .is_err()
+            {
+                return rasterize_procedural_glyph(codepoint, width, height);
+            }
+
+            let image = match self.context.get_image_data(0.0, 0.0, w, h) {
+                Ok(img) => img,
+                Err(_) => return rasterize_procedural_glyph(codepoint, width, height),
+            };
+            let rgba = image.data().0;
+            let pixel_count = (self.canvas_width as usize) * (self.canvas_height as usize);
+            if rgba.len() < pixel_count.saturating_mul(4) {
+                return rasterize_procedural_glyph(codepoint, width, height);
+            }
+
+            let mut pixels = vec![0u8; pixel_count];
+            for i in 0..pixel_count {
+                pixels[i] = rgba[i * 4 + 3];
+            }
+
+            GlyphRaster {
+                width: self.canvas_width,
+                height: self.canvas_height,
+                pixels,
+                metrics: GlyphMetrics {
+                    advance_x: i16::try_from(self.canvas_width).unwrap_or(i16::MAX),
+                    bearing_x: 0,
+                    bearing_y: i16::try_from(self.canvas_height).unwrap_or(i16::MAX),
+                },
+            }
+        }
+    }
+
     /// WebGPU renderer owning all GPU resources.
     ///
     /// Follows ADR-009: single pipeline, instanced cell quads, storage-buffer
@@ -746,6 +902,7 @@ mod gpu {
         atlas_width: u16,
         atlas_height: u16,
         glyph_cache: GlyphAtlasCache,
+        glyph_rasterizer: GlyphCanvasRasterizer,
         glyph_slot_by_key: HashMap<GlyphKey, u32>,
         glyph_meta_cpu: Vec<GlyphMetaEntry>,
         next_glyph_slot: u32,
@@ -958,6 +1115,7 @@ mod gpu {
                 atlas_height,
                 usize::from(atlas_width) * usize::from(atlas_height),
             );
+            let glyph_rasterizer = GlyphCanvasRasterizer::new()?;
 
             let atlas_texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("glyph_atlas"),
@@ -1069,6 +1227,7 @@ mod gpu {
                 atlas_width,
                 atlas_height,
                 glyph_cache,
+                glyph_rasterizer,
                 glyph_slot_by_key: HashMap::new(),
                 glyph_meta_cpu,
                 next_glyph_slot: 1,
