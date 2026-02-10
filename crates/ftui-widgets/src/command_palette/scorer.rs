@@ -2477,6 +2477,677 @@ mod tests {
             assert!((a.1.score - b.1.score).abs() < f64::EPSILON);
         }
     }
+
+    // -----------------------------------------------------------------------
+    // MatchType::description coverage (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn match_type_descriptions() {
+        assert_eq!(MatchType::Exact.description(), "exact match");
+        assert_eq!(MatchType::Prefix.description(), "prefix match");
+        assert_eq!(MatchType::WordStart.description(), "word-start match");
+        assert_eq!(MatchType::Substring.description(), "contiguous substring");
+        assert_eq!(MatchType::Fuzzy.description(), "fuzzy match");
+        assert_eq!(MatchType::NoMatch.description(), "no match");
+    }
+
+    #[test]
+    fn match_type_no_match_prior_is_zero() {
+        assert_eq!(MatchType::NoMatch.prior_odds(), 0.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // EvidenceDescription Display variants (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn evidence_description_static_display() {
+        let d = EvidenceDescription::Static("test message");
+        assert_eq!(format!("{d}"), "test message");
+    }
+
+    #[test]
+    fn evidence_description_title_length_display() {
+        let d = EvidenceDescription::TitleLengthChars { len: 42 };
+        assert_eq!(format!("{d}"), "title length 42 chars");
+    }
+
+    #[test]
+    fn evidence_description_first_match_pos_display() {
+        let d = EvidenceDescription::FirstMatchPos { pos: 5 };
+        assert_eq!(format!("{d}"), "first match at position 5");
+    }
+
+    #[test]
+    fn evidence_description_word_boundary_count_display() {
+        let d = EvidenceDescription::WordBoundaryCount { count: 3 };
+        assert_eq!(format!("{d}"), "3 word boundary matches");
+    }
+
+    #[test]
+    fn evidence_description_gap_total_display() {
+        let d = EvidenceDescription::GapTotal { total: 7 };
+        assert_eq!(format!("{d}"), "total gap of 7 characters");
+    }
+
+    #[test]
+    fn evidence_description_coverage_percent_display() {
+        let d = EvidenceDescription::CoveragePercent { percent: 83.5 };
+        let s = format!("{d}");
+        assert!(s.contains("84%"), "Should round: {s}");
+    }
+
+    // -----------------------------------------------------------------------
+    // EvidenceEntry Display (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn evidence_entry_display_supports() {
+        let entry = EvidenceEntry {
+            kind: EvidenceKind::Position,
+            bayes_factor: 1.5,
+            description: EvidenceDescription::FirstMatchPos { pos: 0 },
+        };
+        let s = format!("{entry}");
+        assert!(s.contains("supports"));
+        assert!(s.contains("Position"));
+    }
+
+    #[test]
+    fn evidence_entry_display_opposes() {
+        let entry = EvidenceEntry {
+            kind: EvidenceKind::GapPenalty,
+            bayes_factor: 0.5,
+            description: EvidenceDescription::GapTotal { total: 10 },
+        };
+        let s = format!("{entry}");
+        assert!(s.contains("opposes"));
+    }
+
+    #[test]
+    fn evidence_entry_display_neutral() {
+        let entry = EvidenceEntry {
+            kind: EvidenceKind::TitleLength,
+            bayes_factor: 1.0,
+            description: EvidenceDescription::Static("neutral factor"),
+        };
+        let s = format!("{entry}");
+        assert!(s.contains("neutral"));
+    }
+
+    // -----------------------------------------------------------------------
+    // EvidenceLedger direct method tests (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ledger_combined_bayes_factor() {
+        let mut ledger = EvidenceLedger::new();
+        ledger.add(
+            EvidenceKind::Position,
+            2.0,
+            EvidenceDescription::Static("a"),
+        );
+        ledger.add(
+            EvidenceKind::WordBoundary,
+            3.0,
+            EvidenceDescription::Static("b"),
+        );
+        assert!((ledger.combined_bayes_factor() - 6.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn ledger_combined_bayes_factor_empty() {
+        let ledger = EvidenceLedger::new();
+        assert!((ledger.combined_bayes_factor() - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn ledger_prior_odds_present() {
+        let mut ledger = EvidenceLedger::new();
+        ledger.add(
+            EvidenceKind::MatchType,
+            9.0,
+            EvidenceDescription::Static("prefix"),
+        );
+        assert_eq!(ledger.prior_odds(), Some(9.0));
+    }
+
+    #[test]
+    fn ledger_prior_odds_absent() {
+        let ledger = EvidenceLedger::new();
+        assert_eq!(ledger.prior_odds(), None);
+    }
+
+    #[test]
+    fn ledger_posterior_probability_no_prior() {
+        let mut ledger = EvidenceLedger::new();
+        ledger.add(
+            EvidenceKind::Position,
+            2.0,
+            EvidenceDescription::Static("pos"),
+        );
+        // No MatchType entry → prior defaults to 1.0
+        // posterior_odds = 1.0 * 2.0 = 2.0 → prob = 2/3
+        let prob = ledger.posterior_probability();
+        assert!((prob - 2.0 / 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn ledger_posterior_probability_infinite_odds() {
+        let mut ledger = EvidenceLedger::new();
+        ledger.add(
+            EvidenceKind::MatchType,
+            f64::INFINITY,
+            EvidenceDescription::Static("inf"),
+        );
+        assert_eq!(ledger.posterior_probability(), 1.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // BayesianScorer::fast() path (no evidence tracking) (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn fast_scorer_no_evidence() {
+        let scorer = BayesianScorer::fast();
+        let result = scorer.score("set", "Settings");
+        assert!(result.score > 0.0);
+        assert!(result.evidence.entries().is_empty());
+    }
+
+    #[test]
+    fn fast_scorer_score_matches_probability_range() {
+        let scorer = BayesianScorer::fast();
+        let result = scorer.score("set", "Settings");
+        assert!(result.score >= 0.0 && result.score <= 1.0);
+    }
+
+    #[test]
+    fn fast_scorer_empty_query() {
+        let scorer = BayesianScorer::fast();
+        let result = scorer.score("", "Test");
+        assert!(result.score > 0.0);
+        assert!(result.evidence.entries().is_empty());
+    }
+
+    #[test]
+    fn fast_scorer_fuzzy_with_gap_penalty() {
+        let scorer = BayesianScorer::fast();
+        let result = scorer.score("ace", "a...b...c...d...e");
+        assert_eq!(result.match_type, MatchType::Fuzzy);
+        assert!(result.score > 0.0);
+    }
+
+    #[test]
+    fn fast_scorer_tag_boost() {
+        let scorer = BayesianScorer::fast();
+        let without = scorer.score("set", "Settings");
+        let with = scorer.score_with_tags("set", "Settings", &["setup"]);
+        assert!(with.score > without.score);
+    }
+
+    #[test]
+    fn fast_scorer_tag_no_boost_at_score_one() {
+        let scorer = BayesianScorer::fast();
+        // score_with_tags fast path only boosts when score is in (0, 1)
+        let result = scorer.score_with_tags("Settings", "Settings", &["settings"]);
+        assert!(result.score <= 1.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Unicode (non-ASCII) matching paths (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn unicode_exact_match() {
+        let scorer = BayesianScorer::new();
+        let result = scorer.score("日本語", "日本語");
+        assert_eq!(result.match_type, MatchType::Exact);
+        assert!(result.score > 0.9);
+    }
+
+    #[test]
+    fn unicode_prefix_match() {
+        let scorer = BayesianScorer::new();
+        let result = scorer.score("日本", "日本語テスト");
+        assert_eq!(result.match_type, MatchType::Prefix);
+    }
+
+    #[test]
+    fn unicode_substring_match() {
+        let scorer = BayesianScorer::new();
+        let result = scorer.score("本語", "日本語テスト");
+        assert_eq!(result.match_type, MatchType::Substring);
+    }
+
+    #[test]
+    fn unicode_fuzzy_match() {
+        let scorer = BayesianScorer::new();
+        let result = scorer.score("日テ", "日本語テスト");
+        assert_eq!(result.match_type, MatchType::Fuzzy);
+    }
+
+    #[test]
+    fn unicode_no_match() {
+        let scorer = BayesianScorer::new();
+        let result = scorer.score("ωψξ", "αβγ");
+        assert_eq!(result.match_type, MatchType::NoMatch);
+    }
+
+    #[test]
+    fn unicode_word_start_match() {
+        let scorer = BayesianScorer::new();
+        // Word boundaries at space/dash/underscore
+        let result = scorer.score("gd", "go dashboard");
+        assert_eq!(result.match_type, MatchType::WordStart);
+    }
+
+    // -----------------------------------------------------------------------
+    // score_with_query_lower / score_with_lowered_title (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn score_with_query_lower_matches_score() {
+        let scorer = BayesianScorer::new();
+        let direct = scorer.score("Set", "Settings");
+        let pre = scorer.score_with_query_lower("Set", "set", "Settings");
+        assert!((direct.score - pre.score).abs() < f64::EPSILON);
+        assert_eq!(direct.match_type, pre.match_type);
+    }
+
+    #[test]
+    fn score_with_lowered_title_matches_score() {
+        let scorer = BayesianScorer::new();
+        let direct = scorer.score("set", "Settings");
+        let pre = scorer.score_with_lowered_title("set", "set", "Settings", "settings");
+        assert!((direct.score - pre.score).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn score_with_lowered_title_and_words_matches() {
+        let scorer = BayesianScorer::new();
+        let direct = scorer.score("gd", "Go Dashboard");
+        let pre = scorer.score_with_lowered_title_and_words(
+            "gd",
+            "gd",
+            "Go Dashboard",
+            "go dashboard",
+            Some(&[0, 3]),
+        );
+        assert_eq!(direct.match_type, pre.match_type);
+        assert!((direct.score - pre.score).abs() < f64::EPSILON);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tag matching edge cases (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn tag_match_no_title_match_returns_nomatch() {
+        let scorer = BayesianScorer::new();
+        let result = scorer.score_with_tags("xyz", "Settings", &["xyz"]);
+        // Tag matches "xyz" but title doesn't match → no boost applied
+        assert_eq!(result.match_type, MatchType::NoMatch);
+        assert_eq!(result.score, 0.0);
+    }
+
+    #[test]
+    fn tag_match_no_matching_tag() {
+        let scorer = BayesianScorer::new();
+        let without = scorer.score("set", "Settings");
+        let with = scorer.score_with_tags("set", "Settings", &["foo", "bar"]);
+        // No tag matches → score unchanged
+        assert!((without.score - with.score).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn tag_match_case_insensitive() {
+        let scorer = BayesianScorer::new();
+        let result = scorer.score_with_tags("set", "Settings", &["SETUP"]);
+        let without = scorer.score("set", "Settings");
+        assert!(result.score > without.score);
+    }
+
+    // -----------------------------------------------------------------------
+    // MatchResult::no_match() (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn no_match_result_has_evidence() {
+        let r = MatchResult::no_match();
+        assert_eq!(r.score, 0.0);
+        assert_eq!(r.match_type, MatchType::NoMatch);
+        assert!(r.match_positions.is_empty());
+        assert_eq!(r.evidence.entries().len(), 1);
+        assert_eq!(r.evidence.entries()[0].kind, EvidenceKind::MatchType);
+        assert_eq!(r.evidence.entries()[0].bayes_factor, 0.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // count_word_boundaries / total_gap edge cases (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn count_word_boundaries_at_start() {
+        let scorer = BayesianScorer::new();
+        // Position 0 is always a word boundary
+        let count = scorer.count_word_boundaries(&[0], "hello");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn count_word_boundaries_after_separators() {
+        let scorer = BayesianScorer::new();
+        // "a-b_c d" → positions 0, 2, 4, 6 are word starts
+        let count = scorer.count_word_boundaries(&[0, 2, 4, 6], "a-b_c d");
+        assert_eq!(count, 4);
+    }
+
+    #[test]
+    fn count_word_boundaries_mid_word() {
+        let scorer = BayesianScorer::new();
+        // Position 2 in "hello" is mid-word
+        let count = scorer.count_word_boundaries(&[2], "hello");
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn total_gap_empty() {
+        let scorer = BayesianScorer::new();
+        assert_eq!(scorer.total_gap(&[]), 0);
+    }
+
+    #[test]
+    fn total_gap_single() {
+        let scorer = BayesianScorer::new();
+        assert_eq!(scorer.total_gap(&[5]), 0);
+    }
+
+    #[test]
+    fn total_gap_contiguous() {
+        let scorer = BayesianScorer::new();
+        // [0,1,2] → gaps are 0,0 → total 0
+        assert_eq!(scorer.total_gap(&[0, 1, 2]), 0);
+    }
+
+    #[test]
+    fn total_gap_with_gaps() {
+        let scorer = BayesianScorer::new();
+        // [0, 3, 7] → gaps: (3-0-1)=2, (7-3-1)=3 → total 5
+        assert_eq!(scorer.total_gap(&[0, 3, 7]), 5);
+    }
+
+    // -----------------------------------------------------------------------
+    // ConformalRanker edge cases (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn conformal_custom_thresholds() {
+        let ranker = ConformalRanker {
+            tie_epsilon: 0.1,
+            stable_threshold: 0.9,
+            marginal_threshold: 0.5,
+        };
+        // With tie_epsilon=0.1, scores within 0.1 are ties
+        let mut r1 = MatchResult::no_match();
+        r1.score = 0.5;
+        r1.match_type = MatchType::Prefix;
+        let mut r2 = MatchResult::no_match();
+        r2.score = 0.45;
+        r2.match_type = MatchType::Prefix;
+
+        let ranked = ranker.rank(vec![r1, r2]);
+        assert_eq!(
+            ranked.items[0].rank_confidence.stability,
+            RankStability::Unstable,
+            "Gap 0.05 < epsilon 0.1 → tie"
+        );
+    }
+
+    #[test]
+    fn conformal_rank_top_k_larger_than_count() {
+        let scorer = BayesianScorer::new();
+        let results = vec![scorer.score("set", "Settings")];
+        let ranker = ConformalRanker::new();
+        let ranked = ranker.rank_top_k(results, 100);
+        assert_eq!(ranked.items.len(), 1);
+    }
+
+    #[test]
+    fn conformal_rank_top_k_zero() {
+        let scorer = BayesianScorer::new();
+        let results = vec![
+            scorer.score("set", "Settings"),
+            scorer.score("set", "Asset"),
+        ];
+        let ranker = ConformalRanker::new();
+        let ranked = ranker.rank_top_k(results, 0);
+        assert!(ranked.items.is_empty());
+        assert_eq!(ranked.summary.stable_count, 0);
+    }
+
+    #[test]
+    fn conformal_rank_confidence_display_marginal() {
+        let rc = RankConfidence {
+            confidence: 0.5,
+            gap_to_next: 0.05,
+            stability: RankStability::Marginal,
+        };
+        let s = format!("{rc}");
+        assert!(s.contains("marginal"));
+    }
+
+    #[test]
+    fn conformal_rank_confidence_display_unstable() {
+        let rc = RankConfidence {
+            confidence: 0.1,
+            gap_to_next: 0.001,
+            stability: RankStability::Unstable,
+        };
+        let s = format!("{rc}");
+        assert!(s.contains("unstable"));
+    }
+
+    #[test]
+    fn conformal_median_gap_even_count() {
+        // 4 items → 3 gaps → odd, but let's use 5 items → 4 gaps → even
+        let mut results = Vec::new();
+        for &s in &[0.9, 0.7, 0.5, 0.3, 0.1] {
+            let mut r = MatchResult::no_match();
+            r.score = s;
+            r.match_type = MatchType::Prefix;
+            results.push(r);
+        }
+        let ranker = ConformalRanker::new();
+        let ranked = ranker.rank(results);
+        // 4 gaps, all 0.2 → median = 0.2
+        assert!(
+            (ranked.summary.median_gap - 0.2).abs() < 0.01,
+            "median_gap={}, expected ~0.2",
+            ranked.summary.median_gap
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // IncrementalScorer additional coverage (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn incremental_with_scorer_uses_provided_scorer() {
+        let scorer = BayesianScorer::new(); // evidence tracking ON
+        let mut inc = IncrementalScorer::with_scorer(scorer);
+        let corpus = test_corpus();
+        let results = inc.score_corpus("git", &corpus, None);
+        assert!(!results.is_empty());
+        // Evidence tracking is on, so evidence should be populated
+        assert!(!results[0].1.evidence.entries().is_empty());
+    }
+
+    #[test]
+    fn incremental_default_trait() {
+        let inc = IncrementalScorer::default();
+        assert_eq!(inc.stats().full_scans, 0);
+        assert_eq!(inc.stats().incremental_scans, 0);
+    }
+
+    #[test]
+    fn incremental_stats_prune_ratio_zero_when_empty() {
+        let stats = IncrementalStats::default();
+        assert_eq!(stats.prune_ratio(), 0.0);
+    }
+
+    #[test]
+    fn incremental_score_corpus_with_lowered() {
+        let corpus = vec!["Open File", "Save File", "Close Tab"];
+        let lower = vec!["open file", "save file", "close tab"];
+        let mut inc = IncrementalScorer::new();
+        let results = inc.score_corpus_with_lowered("fi", &corpus, &lower, None);
+        assert!(!results.is_empty());
+        // All results should reference valid corpus indices
+        for (idx, _) in &results {
+            assert!(*idx < corpus.len());
+        }
+    }
+
+    #[test]
+    fn incremental_score_corpus_with_lowered_incremental_path() {
+        let corpus = vec!["Open File", "Save File", "Close Tab"];
+        let lower = vec!["open file", "save file", "close tab"];
+        let mut inc = IncrementalScorer::new();
+        inc.score_corpus_with_lowered("f", &corpus, &lower, None);
+        let results = inc.score_corpus_with_lowered("fi", &corpus, &lower, None);
+        assert_eq!(inc.stats().incremental_scans, 1);
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn incremental_score_corpus_with_lowered_and_words() {
+        let corpus = vec![
+            "Open File".to_string(),
+            "Save File".to_string(),
+            "Close Tab".to_string(),
+        ];
+        let lower = vec![
+            "open file".to_string(),
+            "save file".to_string(),
+            "close tab".to_string(),
+        ];
+        let word_starts = vec![vec![0, 5], vec![0, 5], vec![0, 6]];
+
+        let mut inc = IncrementalScorer::new();
+        let results =
+            inc.score_corpus_with_lowered_and_words("fi", &corpus, &lower, &word_starts, None);
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn incremental_score_corpus_with_lowered_and_words_incremental_path() {
+        let corpus = vec![
+            "Open File".to_string(),
+            "Save File".to_string(),
+            "Close Tab".to_string(),
+        ];
+        let lower = vec![
+            "open file".to_string(),
+            "save file".to_string(),
+            "close tab".to_string(),
+        ];
+        let word_starts = vec![vec![0, 5], vec![0, 5], vec![0, 6]];
+
+        let mut inc = IncrementalScorer::new();
+        inc.score_corpus_with_lowered_and_words("f", &corpus, &lower, &word_starts, None);
+        let results =
+            inc.score_corpus_with_lowered_and_words("fi", &corpus, &lower, &word_starts, None);
+        assert_eq!(inc.stats().incremental_scans, 1);
+        assert!(!results.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // BayesianScorer::Default (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn bayesian_scorer_default_has_evidence_off() {
+        let scorer = BayesianScorer::default();
+        assert!(!scorer.track_evidence);
+    }
+
+    // -----------------------------------------------------------------------
+    // Word boundary separator: hyphen and underscore (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn word_start_match_with_hyphens() {
+        let scorer = BayesianScorer::new();
+        let result = scorer.score("fc", "file-commander");
+        assert_eq!(result.match_type, MatchType::WordStart);
+        assert_eq!(result.match_positions, vec![0, 5]);
+    }
+
+    #[test]
+    fn word_start_match_with_underscores() {
+        let scorer = BayesianScorer::new();
+        let result = scorer.score("fc", "file_commander");
+        assert_eq!(result.match_type, MatchType::WordStart);
+        assert_eq!(result.match_positions, vec![0, 5]);
+    }
+
+    // -----------------------------------------------------------------------
+    // MatchType Ord derivation (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn match_type_ord() {
+        let mut types = vec![
+            MatchType::Exact,
+            MatchType::NoMatch,
+            MatchType::Fuzzy,
+            MatchType::Prefix,
+            MatchType::Substring,
+            MatchType::WordStart,
+        ];
+        types.sort();
+        assert_eq!(
+            types,
+            vec![
+                MatchType::NoMatch,
+                MatchType::Fuzzy,
+                MatchType::Substring,
+                MatchType::WordStart,
+                MatchType::Prefix,
+                MatchType::Exact,
+            ]
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // EvidenceKind equality (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn evidence_kind_equality() {
+        assert_eq!(EvidenceKind::MatchType, EvidenceKind::MatchType);
+        assert_ne!(EvidenceKind::Position, EvidenceKind::GapPenalty);
+    }
+
+    // -----------------------------------------------------------------------
+    // Scoring position bonus (bd-z1c65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn earlier_substring_scores_higher() {
+        let scorer = BayesianScorer::new();
+        let early = scorer.score("set", "set in stone");
+        let late = scorer.score("set", "the asset");
+        // "set" at position 0 vs "set" at position 5
+        assert!(
+            early.score > late.score,
+            "Earlier match should score higher: {} vs {}",
+            early.score,
+            late.score
+        );
+    }
 }
 
 // ===========================================================================
