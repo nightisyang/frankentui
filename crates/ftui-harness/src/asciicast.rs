@@ -1155,6 +1155,33 @@ mod tests {
     }
 
     #[test]
+    fn loader_invalid_event_missing_type_quotes() {
+        let data = "{\"version\":2,\"width\":80,\"height\":24}\n\
+                    [0.1,o,\"payload\"]\n";
+        let mut loader = AsciicastLoader::new(data.as_bytes()).unwrap();
+        let result = loader.next_event();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn loader_invalid_event_missing_data_segment() {
+        let data = "{\"version\":2,\"width\":80,\"height\":24}\n\
+                    [0.1,\"o\"]\n";
+        let mut loader = AsciicastLoader::new(data.as_bytes()).unwrap();
+        let result = loader.next_event();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn loader_invalid_event_invalid_time_value() {
+        let data = "{\"version\":2,\"width\":80,\"height\":24}\n\
+                    [abc,\"o\",\"payload\"]\n";
+        let mut loader = AsciicastLoader::new(data.as_bytes()).unwrap();
+        let result = loader.next_event();
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn loader_empty_events() {
         let data = "{\"version\":2,\"width\":80,\"height\":24}\n";
         let mut loader = AsciicastLoader::new(data.as_bytes()).unwrap();
@@ -1274,6 +1301,12 @@ mod tests {
     }
 
     #[test]
+    fn unescape_json_string_invalid_unicode_escape_ignored() {
+        let result = unescape_json_string("\\u12G4\"").unwrap();
+        assert_eq!(result, "");
+    }
+
+    #[test]
     fn roundtrip_with_input_events() {
         let mut output = Cursor::new(Vec::new());
         let config = RecordConfig::new(80, 24).with_input_recording(true);
@@ -1323,6 +1356,23 @@ mod tests {
                 "timestamps should be non-decreasing"
             );
         }
+    }
+
+    #[test]
+    fn recorder_output_at_microsecond_precision() {
+        let mut output = Cursor::new(Vec::new());
+        let config = RecordConfig::new(80, 24);
+        let mut recorder = AsciicastRecorder::new(&mut output, config).unwrap();
+
+        recorder
+            .record_output_at(Duration::from_micros(123_456), b"precise")
+            .unwrap();
+        recorder.finish().unwrap();
+
+        let data = String::from_utf8(output.into_inner()).unwrap();
+        let lines: Vec<&str> = data.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[1].starts_with("[0.123456"));
     }
 
     #[test]
