@@ -847,4 +847,292 @@ mod tests {
             }
         }
     }
+
+    // --- Edge-case tests ---
+
+    #[test]
+    fn pool_debug_and_clone() {
+        let mut pool = GraphemePool::new();
+        pool.intern("🚀", 2);
+        let dbg = format!("{:?}", pool);
+        assert!(dbg.contains("GraphemePool"), "Debug: {dbg}");
+        let cloned = pool.clone();
+        assert_eq!(cloned.len(), 1);
+        // Cloned pool is independent
+        let id = cloned.lookup.values().next().copied().unwrap();
+        assert_eq!(cloned.get(id), Some("🚀"));
+    }
+
+    #[test]
+    fn pool_default_is_new() {
+        let pool = GraphemePool::default();
+        assert!(pool.is_empty());
+        assert_eq!(pool.len(), 0);
+    }
+
+    #[test]
+    fn intern_width_zero() {
+        let mut pool = GraphemePool::new();
+        let id = pool.intern("zero-width", 0);
+        assert_eq!(id.width(), 0);
+        assert_eq!(pool.get(id), Some("zero-width"));
+    }
+
+    #[test]
+    fn intern_width_max() {
+        let mut pool = GraphemePool::new();
+        let id = pool.intern("max-width", 127);
+        assert_eq!(id.width(), 127);
+        assert_eq!(pool.get(id), Some("max-width"));
+    }
+
+    #[test]
+    fn intern_empty_string() {
+        let mut pool = GraphemePool::new();
+        let id = pool.intern("", 0);
+        assert_eq!(pool.get(id), Some(""));
+    }
+
+    #[test]
+    fn intern_long_string() {
+        let mut pool = GraphemePool::new();
+        let long = "a".repeat(1000);
+        let id = pool.intern(&long, 1);
+        assert_eq!(pool.get(id), Some(long.as_str()));
+    }
+
+    #[test]
+    fn clear_then_intern_reuses_from_scratch() {
+        let mut pool = GraphemePool::new();
+        pool.intern("A", 1);
+        pool.intern("B", 1);
+        pool.clear();
+        assert!(pool.is_empty());
+        // After clear, free_list is also cleared, so slots start fresh
+        let id = pool.intern("C", 1);
+        assert_eq!(id.slot(), 0);
+        assert_eq!(pool.get(id), Some("C"));
+        assert_eq!(pool.len(), 1);
+    }
+
+    #[test]
+    fn with_capacity_then_intern() {
+        let mut pool = GraphemePool::with_capacity(50);
+        for i in 0..50 {
+            pool.intern(&format!("g{i}"), 1);
+        }
+        assert_eq!(pool.len(), 50);
+    }
+
+    #[test]
+    fn refcount_of_freed_slot_is_zero() {
+        let mut pool = GraphemePool::new();
+        let id = pool.intern("temp", 1);
+        pool.release(id);
+        assert_eq!(pool.refcount(id), 0);
+    }
+
+    #[test]
+    fn refcount_of_invalid_id_is_zero() {
+        let pool = GraphemePool::new();
+        assert_eq!(pool.refcount(GraphemeId::new(0, 1)), 0);
+        assert_eq!(pool.refcount(GraphemeId::new(999, 1)), 0);
+    }
+
+    #[test]
+    fn retain_freed_slot_is_noop() {
+        let mut pool = GraphemePool::new();
+        let id = pool.intern("temp", 1);
+        pool.release(id);
+        // Slot is now freed (None)
+        pool.retain(id); // Should not panic, noop
+        assert_eq!(pool.refcount(id), 0);
+        assert_eq!(pool.get(id), None);
+    }
+
+    #[test]
+    fn double_release_is_safe() {
+        let mut pool = GraphemePool::new();
+        let id = pool.intern("temp", 1);
+        pool.release(id); // refcount 0, freed
+        pool.release(id); // noop on None slot
+        assert_eq!(pool.refcount(id), 0);
+    }
+
+    #[test]
+    fn multiple_slot_reuse_cycles() {
+        let mut pool = GraphemePool::new();
+        for cycle in 0..5 {
+            let id = pool.intern(&format!("cycle{cycle}"), 1);
+            assert_eq!(id.slot(), 0); // Always reuses slot 0
+            assert_eq!(pool.get(id), Some(format!("cycle{cycle}").as_str()));
+            pool.release(id);
+        }
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn free_list_ordering() {
+        let mut pool = GraphemePool::new();
+        let id0 = pool.intern("A", 1);
+        let id1 = pool.intern("B", 1);
+        let id2 = pool.intern("C", 1);
+        assert_eq!(id0.slot(), 0);
+        assert_eq!(id1.slot(), 1);
+        assert_eq!(id2.slot(), 2);
+
+        // Release in order: 0, 2 (skip 1)
+        pool.release(id0);
+        pool.release(id2);
+        assert_eq!(pool.len(), 1); // Only B remains
+
+        // Free list is LIFO: next alloc gets slot 2 (last freed), then slot 0
+        let new1 = pool.intern("D", 1);
+        assert_eq!(new1.slot(), 2);
+        let new2 = pool.intern("E", 1);
+        assert_eq!(new2.slot(), 0);
+    }
+
+    #[test]
+    fn intern_after_release_deduplicates_correctly() {
+        let mut pool = GraphemePool::new();
+        let id1 = pool.intern("X", 1);
+        pool.release(id1);
+        // "X" is now freed from both slot and lookup
+        assert_eq!(pool.get(id1), None);
+
+        // Interning "X" again should work (creates new slot)
+        let id2 = pool.intern("X", 1);
+        assert_eq!(pool.get(id2), Some("X"));
+        assert_eq!(pool.refcount(id2), 1);
+    }
+
+    #[test]
+    fn clone_independence() {
+        let mut pool = GraphemePool::new();
+        let id = pool.intern("shared", 1);
+
+        let mut cloned = pool.clone();
+        // Modify original
+        pool.release(id);
+        assert_eq!(pool.get(id), None);
+
+        // Clone should be unaffected
+        assert_eq!(cloned.get(id), Some("shared"));
+        assert_eq!(cloned.refcount(id), 1);
+
+        // Modify clone
+        cloned.retain(id);
+        assert_eq!(cloned.refcount(id), 2);
+        // Original still freed
+        assert_eq!(pool.refcount(id), 0);
+    }
+
+    #[test]
+    fn gc_double_run_idempotent() {
+        use crate::buffer::Buffer;
+        use crate::cell::{Cell, CellContent};
+
+        let mut pool = GraphemePool::new();
+        let id = pool.intern("keep", 1);
+        let _id2 = pool.intern("drop", 1);
+
+        let mut buf = Buffer::new(4, 1);
+        buf.set(0, 0, Cell::new(CellContent::from_grapheme(id)));
+
+        pool.gc(&[&buf]);
+        assert_eq!(pool.len(), 1);
+        assert_eq!(pool.get(id), Some("keep"));
+
+        // Second GC with same buffer should be idempotent
+        pool.gc(&[&buf]);
+        assert_eq!(pool.len(), 1);
+        assert_eq!(pool.refcount(id), 1);
+    }
+
+    #[test]
+    fn gc_with_already_freed_slots() {
+        use crate::buffer::Buffer;
+
+        let mut pool = GraphemePool::new();
+        let id1 = pool.intern("A", 1);
+        let id2 = pool.intern("B", 1);
+
+        // Manually free id1 before GC
+        pool.release(id1);
+        assert_eq!(pool.len(), 1);
+
+        // GC with empty buffer — should free id2 as well
+        let buf = Buffer::new(4, 1);
+        pool.gc(&[&buf]);
+
+        assert!(pool.is_empty());
+        assert_eq!(pool.get(id2), None);
+    }
+
+    #[test]
+    fn stress_100_graphemes() {
+        let mut pool = GraphemePool::new();
+        let mut ids = Vec::new();
+        for i in 0..100 {
+            ids.push(pool.intern(&format!("g{i:03}"), 1));
+        }
+        assert_eq!(pool.len(), 100);
+
+        // All accessible
+        for (i, &id) in ids.iter().enumerate() {
+            assert_eq!(pool.get(id), Some(format!("g{i:03}").as_str()));
+        }
+
+        // Release even-indexed
+        for i in (0..100).step_by(2) {
+            pool.release(ids[i]);
+        }
+        assert_eq!(pool.len(), 50);
+
+        // Odd-indexed still valid
+        for i in (1..100).step_by(2) {
+            assert_eq!(pool.get(ids[i]), Some(format!("g{i:03}").as_str()));
+        }
+    }
+
+    #[test]
+    fn capacity_grows_with_interns() {
+        let mut pool = GraphemePool::new();
+        let cap_before = pool.capacity();
+        for i in 0..20 {
+            pool.intern(&format!("grow{i}"), 1);
+        }
+        // Capacity should have grown
+        assert!(pool.capacity() >= 20);
+        assert!(pool.capacity() >= cap_before);
+    }
+
+    #[test]
+    fn len_after_mixed_operations() {
+        let mut pool = GraphemePool::new();
+        assert_eq!(pool.len(), 0);
+
+        let a = pool.intern("A", 1);
+        assert_eq!(pool.len(), 1);
+
+        let b = pool.intern("B", 1);
+        assert_eq!(pool.len(), 2);
+
+        // Dedup: same string doesn't increase len
+        pool.intern("A", 1);
+        assert_eq!(pool.len(), 2);
+
+        pool.release(a);
+        // A still has refcount 1 (was retained by dedup intern)
+        assert_eq!(pool.len(), 2);
+
+        pool.release(a);
+        // Now A is freed
+        assert_eq!(pool.len(), 1);
+
+        pool.release(b);
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+    }
 }
