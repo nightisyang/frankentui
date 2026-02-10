@@ -1564,26 +1564,18 @@ mod tests {
     }
 
     #[test]
-    fn unpack_with_migration_successful_migration() {
-        let vs = VersionedState::new(1, ScrollStateV1 { scroll_offset: 42 });
+    fn unpack_with_migration_version_mismatch_type_mismatch_falls_back() {
+        // VersionedState<S> requires S == Stateful::State (ScrollStateV2 for WidgetV2).
+        // When version != current, migrate_erased receives Box<ScrollStateV2> but
+        // the V1ToV2Migration expects Box<ScrollStateV1> → downcast fails → fallback.
+        let vs = VersionedState::new(1, ScrollStateV2::default());
 
         let mut chain = MigrationChain::<ScrollStateV2>::new();
         chain.register(Box::new(V1ToV2Migration));
 
-        // Note: VersionedState<ScrollStateV1> vs WidgetV2 expects ScrollStateV2
-        // We need to use the same state type. The migration chain works on
-        // Box<dyn Any + Send>, so we box it properly.
-
-        // Actually, unpack_with_migration requires VersionedState<S> where S == Stateful::State.
-        // The version mismatch triggers migration through the chain.
-        // The data field type S must match the widget's State type.
-        // So we construct VersionedState<ScrollStateV2> with version 1 (old),
-        // and the chain migrates from v1 data to v2 data via Box<dyn Any>.
-
-        // BUT: the data IS ScrollStateV2 already (wrong type for v1). The boxed
-        // data is Box<ScrollStateV2>, migration expects Box<ScrollStateV1>.
-        // This will cause a type mismatch in migrate_erased → fallback.
-        // That's actually the correct behavior for a type-mismatch scenario.
+        let result = vs.unpack_with_migration::<WidgetV2>(&chain);
+        assert!(result.is_fallback());
+        assert!(!result.was_migrated());
     }
 
     #[test]
