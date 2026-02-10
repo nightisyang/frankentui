@@ -39,6 +39,7 @@ use std::time::{Duration, Instant};
 use crate::terminal_capabilities::TerminalCapabilities;
 
 /// Maximum bytes to read in a single probe response.
+#[cfg(unix)]
 const MAX_RESPONSE_LEN: usize = 256;
 
 /// Default per-probe timeout.
@@ -274,6 +275,7 @@ fn probe_background_color(timeout: Duration) -> Option<bool> {
 ///
 /// Returns `Some(true)` for dark backgrounds, `Some(false)` for light,
 /// `None` if the response is unparseable.
+#[cfg(unix)]
 fn parse_background_response(bytes: &[u8]) -> Option<bool> {
     let s = std::str::from_utf8(bytes).ok()?;
 
@@ -319,6 +321,7 @@ fn parse_background_response(bytes: &[u8]) -> Option<bool> {
 }
 
 /// Parse a hex color component (2- or 4-digit).
+#[cfg(unix)]
 fn parse_color_component(s: &str) -> Option<u16> {
     if s.is_empty() {
         return None;
@@ -407,6 +410,7 @@ fn read_tty_response(timeout: Duration) -> Option<Vec<u8>> {
 /// Recognizes:
 /// - CSI responses: `ESC [ ... <alpha>` (e.g., DA1/DA2 ending in `c`)
 /// - OSC responses: `ESC ] ... BEL` or `ESC ] ... ESC \`
+#[cfg(unix)]
 fn is_response_complete(buf: &[u8]) -> bool {
     if buf.len() < 3 {
         return false;
@@ -1251,6 +1255,7 @@ mod tests {
 
     // --- Background color parsing tests ---
 
+    #[cfg(unix)]
     #[test]
     fn parse_bg_dark() {
         // Dark background: rgb:0000/0000/0000 (black)
@@ -1258,6 +1263,7 @@ mod tests {
         assert_eq!(parse_background_response(response), Some(true));
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_bg_light() {
         // Light background: rgb:ffff/ffff/ffff (white)
@@ -1265,6 +1271,7 @@ mod tests {
         assert_eq!(parse_background_response(response), Some(false));
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_bg_dark_solarized() {
         // Solarized Dark base03: #002b36 → rgb:0000/2b2b/3636
@@ -1272,6 +1279,7 @@ mod tests {
         assert_eq!(parse_background_response(response), Some(true));
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_bg_light_solarized() {
         // Solarized Light base3: #fdf6e3 → rgb:fdfd/f6f6/e3e3
@@ -1279,6 +1287,7 @@ mod tests {
         assert_eq!(parse_background_response(response), Some(false));
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_bg_bel_terminator() {
         // Some terminals use BEL instead of ST.
@@ -1286,6 +1295,7 @@ mod tests {
         assert_eq!(parse_background_response(response), Some(true));
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_bg_two_digit_hex() {
         // Some terminals report 2-digit hex: rgb:00/00/00
@@ -1296,17 +1306,20 @@ mod tests {
         assert_eq!(parse_background_response(response), Some(false));
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_bg_empty_response() {
         assert!(parse_background_response(b"").is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_bg_malformed_no_rgb() {
         let response = b"\x1b]11;something\x1b\\";
         assert!(parse_background_response(response).is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_bg_malformed_incomplete_rgb() {
         let response = b"\x1b]11;rgb:0000/0000\x1b\\";
@@ -1315,6 +1328,7 @@ mod tests {
 
     // --- Color component parsing ---
 
+    #[cfg(unix)]
     #[test]
     fn parse_component_four_digit() {
         assert_eq!(parse_color_component("ffff"), Some(0xffff));
@@ -1322,6 +1336,7 @@ mod tests {
         assert_eq!(parse_color_component("8080"), Some(0x8080));
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_component_two_digit() {
         assert_eq!(parse_color_component("ff"), Some(0xff));
@@ -1329,11 +1344,13 @@ mod tests {
         assert_eq!(parse_color_component("80"), Some(0x80));
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_component_empty() {
         assert!(parse_color_component("").is_none());
     }
 
+    #[cfg(unix)]
     #[test]
     fn parse_component_invalid() {
         assert!(parse_color_component("zzzz").is_none());
@@ -1341,33 +1358,39 @@ mod tests {
 
     // --- Response completeness ---
 
+    #[cfg(unix)]
     #[test]
     fn response_complete_csi() {
         assert!(is_response_complete(b"\x1b[?1;2c"));
         assert!(is_response_complete(b"\x1b[>41;354c"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn response_complete_osc_bel() {
         assert!(is_response_complete(b"\x1b]11;rgb:0/0/0\x07"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn response_complete_osc_st() {
         assert!(is_response_complete(b"\x1b]11;rgb:0/0/0\x1b\\"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn response_incomplete_csi() {
         assert!(!is_response_complete(b"\x1b[?1;2"));
         assert!(!is_response_complete(b"\x1b["));
     }
 
+    #[cfg(unix)]
     #[test]
     fn response_incomplete_osc() {
         assert!(!is_response_complete(b"\x1b]11;rgb:0/0/0"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn response_incomplete_too_short() {
         assert!(!is_response_complete(b""));
