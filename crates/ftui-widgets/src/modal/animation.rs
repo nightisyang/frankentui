@@ -1131,4 +1131,508 @@ mod tests {
             assert!(opacity <= 1.0, "opacity {} > 1.0 at step {}", opacity, i);
         }
     }
+
+    // ---- Edge-case tests (bd-a4n4z) ----
+
+    #[test]
+    fn edge_easing_ease_in_out_at_boundary() {
+        // At exactly 0.5 the branch flips
+        let at_half = ModalEasing::EaseInOut.apply(0.5);
+        assert!(
+            (at_half - 0.5).abs() < 0.001,
+            "EaseInOut at 0.5 should be ~0.5, got {at_half}"
+        );
+        // Endpoints
+        assert_eq!(ModalEasing::EaseInOut.apply(0.0), 0.0);
+        assert!((ModalEasing::EaseInOut.apply(1.0) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn edge_easing_back_overshoots() {
+        // Back easing overshoots 1.0 briefly then settles at 1.0
+        // At midpoint it should overshoot
+        let mid = ModalEasing::Back.apply(0.5);
+        // At t=0 and t=1
+        assert!((ModalEasing::Back.apply(0.0)).abs() < 1e-10);
+        assert!((ModalEasing::Back.apply(1.0) - 1.0).abs() < 1e-10);
+        // Verify overshoot actually happens somewhere in (0, 1)
+        let mut found_overshoot = false;
+        for i in 1..100 {
+            let t = i as f64 / 100.0;
+            let v = ModalEasing::Back.apply(t);
+            if v > 1.0 {
+                found_overshoot = true;
+                break;
+            }
+        }
+        assert!(
+            found_overshoot,
+            "Back easing should overshoot 1.0 at some point, mid={mid}"
+        );
+    }
+
+    #[test]
+    fn edge_can_overshoot_only_back() {
+        assert!(!ModalEasing::Linear.can_overshoot());
+        assert!(!ModalEasing::EaseOut.can_overshoot());
+        assert!(!ModalEasing::EaseIn.can_overshoot());
+        assert!(!ModalEasing::EaseInOut.can_overshoot());
+        assert!(ModalEasing::Back.can_overshoot());
+    }
+
+    #[test]
+    fn edge_easing_ease_in_endpoints() {
+        assert_eq!(ModalEasing::EaseIn.apply(0.0), 0.0);
+        assert!((ModalEasing::EaseIn.apply(1.0) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn edge_easing_ease_out_endpoints() {
+        assert_eq!(ModalEasing::EaseOut.apply(0.0), 0.0);
+        assert!((ModalEasing::EaseOut.apply(1.0) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn edge_exit_final_scale_variants() {
+        let config = ModalAnimationConfig::default();
+        assert!(
+            (ModalExitAnimation::ScaleOut.final_scale(&config) - config.min_scale).abs() < 1e-10
+        );
+        assert!((ModalExitAnimation::FadeOut.final_scale(&config) - 1.0).abs() < 1e-10);
+        assert!((ModalExitAnimation::SlideUp.final_scale(&config) - 1.0).abs() < 1e-10);
+        assert!((ModalExitAnimation::SlideDown.final_scale(&config) - 1.0).abs() < 1e-10);
+        assert!((ModalExitAnimation::None.final_scale(&config) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn edge_exit_final_opacity_all_zero() {
+        // All exit animations end at opacity 0
+        assert_eq!(ModalExitAnimation::ScaleOut.final_opacity(), 0.0);
+        assert_eq!(ModalExitAnimation::FadeOut.final_opacity(), 0.0);
+        assert_eq!(ModalExitAnimation::SlideUp.final_opacity(), 0.0);
+        assert_eq!(ModalExitAnimation::SlideDown.final_opacity(), 0.0);
+        assert_eq!(ModalExitAnimation::None.final_opacity(), 0.0);
+    }
+
+    #[test]
+    fn edge_exit_final_y_offset() {
+        assert!(ModalExitAnimation::SlideUp.final_y_offset(20) < 0);
+        assert!(ModalExitAnimation::SlideDown.final_y_offset(20) > 0);
+        assert_eq!(ModalExitAnimation::ScaleOut.final_y_offset(20), 0);
+        assert_eq!(ModalExitAnimation::FadeOut.final_y_offset(20), 0);
+        assert_eq!(ModalExitAnimation::None.final_y_offset(20), 0);
+    }
+
+    #[test]
+    fn edge_exit_scale_at_progress() {
+        let config = ModalAnimationConfig::default();
+        // At progress 0, scale = 1.0 (fully open)
+        let s0 = ModalExitAnimation::ScaleOut.scale_at_progress(0.0, &config);
+        assert!((s0 - 1.0).abs() < 1e-10);
+        // At progress 1, scale = min_scale
+        let s1 = ModalExitAnimation::ScaleOut.scale_at_progress(1.0, &config);
+        assert!((s1 - config.min_scale).abs() < 1e-10);
+    }
+
+    #[test]
+    fn edge_exit_opacity_at_progress() {
+        assert!((ModalExitAnimation::FadeOut.opacity_at_progress(0.0) - 1.0).abs() < 1e-10);
+        assert!((ModalExitAnimation::FadeOut.opacity_at_progress(1.0)).abs() < 1e-10);
+        assert!((ModalExitAnimation::FadeOut.opacity_at_progress(0.5) - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn edge_exit_y_offset_at_progress() {
+        assert_eq!(ModalExitAnimation::SlideUp.y_offset_at_progress(0.0, 20), 0);
+        let final_offset = ModalExitAnimation::SlideUp.y_offset_at_progress(1.0, 20);
+        assert_eq!(final_offset, ModalExitAnimation::SlideUp.final_y_offset(20));
+    }
+
+    #[test]
+    fn edge_entrance_none_instant() {
+        let config = ModalAnimationConfig::default();
+        assert!((ModalEntranceAnimation::None.initial_scale(&config) - 1.0).abs() < 1e-10);
+        assert!((ModalEntranceAnimation::None.initial_opacity() - 1.0).abs() < 1e-10);
+        assert_eq!(ModalEntranceAnimation::None.initial_y_offset(20), 0);
+    }
+
+    #[test]
+    fn edge_slide_height_clamped_at_8() {
+        // Large modal_height should clamp offset at 8
+        let down = ModalEntranceAnimation::SlideDown.initial_y_offset(100);
+        assert_eq!(down, -8);
+        let up = ModalEntranceAnimation::SlideUp.initial_y_offset(100);
+        assert_eq!(up, 8);
+
+        // Exit slide clamping
+        let exit_up = ModalExitAnimation::SlideUp.final_y_offset(100);
+        assert_eq!(exit_up, -8);
+        let exit_down = ModalExitAnimation::SlideDown.final_y_offset(100);
+        assert_eq!(exit_down, 8);
+    }
+
+    #[test]
+    fn edge_zero_modal_height_y_offset() {
+        assert_eq!(ModalEntranceAnimation::SlideDown.initial_y_offset(0), 0);
+        assert_eq!(ModalEntranceAnimation::SlideUp.initial_y_offset(0), 0);
+        assert_eq!(ModalExitAnimation::SlideUp.final_y_offset(0), 0);
+        assert_eq!(ModalExitAnimation::SlideDown.final_y_offset(0), 0);
+    }
+
+    #[test]
+    fn edge_config_builder_methods() {
+        let config = ModalAnimationConfig::new()
+            .entrance(ModalEntranceAnimation::SlideDown)
+            .exit(ModalExitAnimation::SlideUp)
+            .entrance_duration(Duration::from_millis(300))
+            .exit_duration(Duration::from_millis(200))
+            .entrance_easing(ModalEasing::Back)
+            .exit_easing(ModalEasing::EaseInOut)
+            .min_scale(0.8)
+            .animate_backdrop(false)
+            .backdrop_duration(Duration::from_millis(50))
+            .respect_reduced_motion(false);
+
+        assert_eq!(config.entrance, ModalEntranceAnimation::SlideDown);
+        assert_eq!(config.exit, ModalExitAnimation::SlideUp);
+        assert_eq!(config.entrance_duration, Duration::from_millis(300));
+        assert_eq!(config.exit_duration, Duration::from_millis(200));
+        assert_eq!(config.entrance_easing, ModalEasing::Back);
+        assert_eq!(config.exit_easing, ModalEasing::EaseInOut);
+        assert!((config.min_scale - 0.8).abs() < 1e-10);
+        assert!(!config.animate_backdrop);
+        assert_eq!(config.backdrop_duration, Duration::from_millis(50));
+        assert!(!config.respect_reduced_motion);
+    }
+
+    #[test]
+    fn edge_min_scale_clamped() {
+        // Below 0.5 → clamped to 0.5
+        let config = ModalAnimationConfig::new().min_scale(0.1);
+        assert!((config.min_scale - 0.5).abs() < 1e-10);
+
+        // Above 1.0 → clamped to 1.0
+        let config = ModalAnimationConfig::new().min_scale(1.5);
+        assert!((config.min_scale - 1.0).abs() < 1e-10);
+
+        // Normal value passes through
+        let config = ModalAnimationConfig::new().min_scale(0.75);
+        assert!((config.min_scale - 0.75).abs() < 1e-10);
+    }
+
+    #[test]
+    fn edge_is_disabled() {
+        let config = ModalAnimationConfig::none();
+        assert!(config.is_disabled());
+
+        let config = ModalAnimationConfig::default();
+        assert!(!config.is_disabled());
+
+        // Only entrance None but exit not → not disabled
+        let config = ModalAnimationConfig::new()
+            .entrance(ModalEntranceAnimation::None)
+            .exit(ModalExitAnimation::FadeOut);
+        assert!(!config.is_disabled());
+    }
+
+    #[test]
+    fn edge_effective_without_reduced_motion() {
+        let config = ModalAnimationConfig::default();
+        let eff = config.effective(false);
+        // Should return a clone of the original config
+        assert_eq!(eff.entrance, ModalEntranceAnimation::ScaleIn);
+        assert_eq!(eff.exit, ModalExitAnimation::ScaleOut);
+    }
+
+    #[test]
+    fn edge_effective_with_reduced_motion_but_not_respected() {
+        let config = ModalAnimationConfig::default().respect_reduced_motion(false);
+        let eff = config.effective(true);
+        // respect_reduced_motion=false → should NOT apply reduced motion
+        assert_eq!(eff.entrance, ModalEntranceAnimation::ScaleIn);
+    }
+
+    #[test]
+    fn edge_current_values_helper() {
+        let state = ModalAnimationState::open();
+        let config = ModalAnimationConfig::default();
+        let (scale, opacity, backdrop, y_offset) = state.current_values(&config, 20);
+        assert!((scale - 1.0).abs() < 1e-10);
+        assert!((opacity - 1.0).abs() < 1e-10);
+        assert!((backdrop - 1.0).abs() < 1e-10);
+        assert_eq!(y_offset, 0);
+    }
+
+    #[test]
+    fn edge_current_values_closed() {
+        let state = ModalAnimationState::new();
+        let config = ModalAnimationConfig::default();
+        let (scale, opacity, backdrop, y_offset) = state.current_values(&config, 20);
+        assert!((scale - config.min_scale).abs() < 1e-10);
+        assert!(opacity.abs() < 1e-10);
+        assert!(backdrop.abs() < 1e-10);
+        assert_eq!(y_offset, 0);
+    }
+
+    #[test]
+    fn edge_tick_noop_on_open() {
+        let mut state = ModalAnimationState::open();
+        let config = ModalAnimationConfig::default();
+        let changed = state.tick(Duration::from_millis(100), &config);
+        assert!(!changed);
+        assert_eq!(state.phase(), ModalAnimationPhase::Open);
+    }
+
+    #[test]
+    fn edge_tick_noop_on_closed() {
+        let mut state = ModalAnimationState::new();
+        let config = ModalAnimationConfig::default();
+        let changed = state.tick(Duration::from_millis(100), &config);
+        assert!(!changed);
+        assert_eq!(state.phase(), ModalAnimationPhase::Closed);
+    }
+
+    #[test]
+    fn edge_tick_returns_false_mid_animation() {
+        let mut state = ModalAnimationState::new();
+        let config = ModalAnimationConfig::default();
+        state.start_opening();
+        // Small tick that won't complete the 200ms animation
+        let changed = state.tick(Duration::from_millis(50), &config);
+        assert!(!changed);
+        assert_eq!(state.phase(), ModalAnimationPhase::Opening);
+    }
+
+    #[test]
+    fn edge_closing_animation_completes_to_closed() {
+        let mut state = ModalAnimationState::open();
+        let config = ModalAnimationConfig::default();
+        state.start_closing();
+        let changed = state.tick(Duration::from_secs(1), &config);
+        assert!(changed);
+        assert_eq!(state.phase(), ModalAnimationPhase::Closed);
+        assert_eq!(state.progress(), 0.0);
+        assert_eq!(state.backdrop_progress(), 0.0);
+    }
+
+    #[test]
+    fn edge_start_opening_when_open_is_noop() {
+        let mut state = ModalAnimationState::open();
+        state.start_opening();
+        assert_eq!(state.phase(), ModalAnimationPhase::Open);
+        assert_eq!(state.progress(), 1.0);
+    }
+
+    #[test]
+    fn edge_start_closing_when_closed_is_noop() {
+        let mut state = ModalAnimationState::new();
+        state.start_closing();
+        assert_eq!(state.phase(), ModalAnimationPhase::Closed);
+        assert_eq!(state.progress(), 0.0);
+    }
+
+    #[test]
+    fn edge_default_state_equals_new() {
+        let default = ModalAnimationState::default();
+        let new = ModalAnimationState::new();
+        assert_eq!(default.phase(), new.phase());
+        assert_eq!(default.progress(), new.progress());
+        assert_eq!(default.backdrop_progress(), new.backdrop_progress());
+    }
+
+    #[test]
+    fn edge_backdrop_no_animation() {
+        let mut state = ModalAnimationState::new();
+        let config = ModalAnimationConfig::default().animate_backdrop(false);
+        state.start_opening();
+
+        // With animate_backdrop=false, backdrop should be 1.0 during Opening
+        let backdrop = state.current_backdrop_opacity(&config);
+        assert!((backdrop - 1.0).abs() < 1e-10);
+
+        // Force to closing
+        state.force_open();
+        state.start_closing();
+        let backdrop = state.current_backdrop_opacity(&config);
+        assert!(backdrop.abs() < 1e-10);
+    }
+
+    #[test]
+    fn edge_entrance_scale_at_progress_clamped() {
+        let config = ModalAnimationConfig::default();
+        // Progress values outside [0, 1] should be clamped
+        let s = ModalEntranceAnimation::ScaleIn.scale_at_progress(-0.5, &config);
+        assert!((s - config.min_scale).abs() < 1e-10);
+        let s = ModalEntranceAnimation::ScaleIn.scale_at_progress(2.0, &config);
+        assert!((s - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn edge_entrance_opacity_at_progress_clamped() {
+        let o = ModalEntranceAnimation::FadeIn.opacity_at_progress(-1.0);
+        assert!(o.abs() < 1e-10);
+        let o = ModalEntranceAnimation::FadeIn.opacity_at_progress(5.0);
+        assert!((o - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn edge_entrance_y_offset_at_progress_clamped() {
+        // At progress < 0 → clamped to 0 → full initial offset
+        let y = ModalEntranceAnimation::SlideDown.y_offset_at_progress(-1.0, 20);
+        assert_eq!(y, ModalEntranceAnimation::SlideDown.initial_y_offset(20));
+        // At progress > 1 → clamped to 1 → offset 0
+        let y = ModalEntranceAnimation::SlideDown.y_offset_at_progress(5.0, 20);
+        assert_eq!(y, 0);
+    }
+
+    #[test]
+    fn edge_phase_default_is_closed() {
+        assert_eq!(ModalAnimationPhase::default(), ModalAnimationPhase::Closed);
+    }
+
+    #[test]
+    fn edge_entrance_default_is_scale_in() {
+        assert_eq!(
+            ModalEntranceAnimation::default(),
+            ModalEntranceAnimation::ScaleIn
+        );
+    }
+
+    #[test]
+    fn edge_exit_default_is_scale_out() {
+        assert_eq!(ModalExitAnimation::default(), ModalExitAnimation::ScaleOut);
+    }
+
+    #[test]
+    fn edge_easing_default_is_ease_out() {
+        assert_eq!(ModalEasing::default(), ModalEasing::EaseOut);
+    }
+
+    #[test]
+    fn edge_config_none_fields() {
+        let config = ModalAnimationConfig::none();
+        assert_eq!(config.entrance, ModalEntranceAnimation::None);
+        assert_eq!(config.exit, ModalExitAnimation::None);
+        assert_eq!(config.entrance_duration, Duration::ZERO);
+        assert_eq!(config.exit_duration, Duration::ZERO);
+        assert_eq!(config.backdrop_duration, Duration::ZERO);
+    }
+
+    #[test]
+    fn edge_state_is_visible_is_closed_is_open() {
+        let mut state = ModalAnimationState::new();
+        assert!(!state.is_visible());
+        assert!(state.is_closed());
+        assert!(!state.is_open());
+        assert!(!state.is_animating());
+
+        state.start_opening();
+        assert!(state.is_visible());
+        assert!(!state.is_closed());
+        assert!(!state.is_open());
+        assert!(state.is_animating());
+
+        state.force_open();
+        assert!(state.is_visible());
+        assert!(!state.is_closed());
+        assert!(state.is_open());
+        assert!(!state.is_animating());
+    }
+
+    #[test]
+    fn edge_force_open_during_closing() {
+        let mut state = ModalAnimationState::open();
+        state.start_closing();
+        let config = ModalAnimationConfig::default();
+        state.tick(Duration::from_millis(50), &config);
+        assert_eq!(state.phase(), ModalAnimationPhase::Closing);
+
+        state.force_open();
+        assert_eq!(state.phase(), ModalAnimationPhase::Open);
+        assert_eq!(state.progress(), 1.0);
+    }
+
+    #[test]
+    fn edge_force_close_during_opening() {
+        let mut state = ModalAnimationState::new();
+        state.start_opening();
+        let config = ModalAnimationConfig::default();
+        state.tick(Duration::from_millis(50), &config);
+
+        state.force_close();
+        assert_eq!(state.phase(), ModalAnimationPhase::Closed);
+        assert_eq!(state.progress(), 0.0);
+    }
+
+    #[test]
+    fn edge_eased_progress_open_closed() {
+        let config = ModalAnimationConfig::default();
+        let state_open = ModalAnimationState::open();
+        assert!((state_open.eased_progress(&config) - 1.0).abs() < 1e-10);
+
+        let state_closed = ModalAnimationState::new();
+        assert!(state_closed.eased_progress(&config).abs() < 1e-10);
+    }
+
+    #[test]
+    fn edge_eased_backdrop_progress_open_closed() {
+        let config = ModalAnimationConfig::default();
+        let state_open = ModalAnimationState::open();
+        assert!((state_open.eased_backdrop_progress(&config) - 1.0).abs() < 1e-10);
+
+        let state_closed = ModalAnimationState::new();
+        assert!(state_closed.eased_backdrop_progress(&config).abs() < 1e-10);
+    }
+
+    #[test]
+    fn edge_clone_debug_phase() {
+        let phase = ModalAnimationPhase::Opening;
+        let cloned = phase;
+        assert_eq!(cloned, ModalAnimationPhase::Opening);
+        let _ = format!("{phase:?}");
+    }
+
+    #[test]
+    fn edge_clone_debug_entrance() {
+        let anim = ModalEntranceAnimation::SlideDown;
+        let cloned = anim;
+        assert_eq!(cloned, ModalEntranceAnimation::SlideDown);
+        let _ = format!("{anim:?}");
+    }
+
+    #[test]
+    fn edge_clone_debug_exit() {
+        let anim = ModalExitAnimation::SlideUp;
+        let cloned = anim;
+        assert_eq!(cloned, ModalExitAnimation::SlideUp);
+        let _ = format!("{anim:?}");
+    }
+
+    #[test]
+    fn edge_clone_debug_easing() {
+        let easing = ModalEasing::Back;
+        let _ = format!("{easing:?}");
+        // PartialEq
+        assert_eq!(easing, ModalEasing::Back);
+        assert_ne!(easing, ModalEasing::Linear);
+    }
+
+    #[test]
+    fn edge_clone_debug_config() {
+        let config = ModalAnimationConfig::default();
+        let cloned = config.clone();
+        assert_eq!(cloned.entrance, config.entrance);
+        assert_eq!(cloned.exit, config.exit);
+        let _ = format!("{config:?}");
+    }
+
+    #[test]
+    fn edge_clone_debug_state() {
+        let mut state = ModalAnimationState::new();
+        state.start_opening();
+        let cloned = state.clone();
+        assert_eq!(cloned.phase(), state.phase());
+        assert_eq!(cloned.progress(), state.progress());
+        let _ = format!("{state:?}");
+    }
 }

@@ -562,13 +562,12 @@ struct PlasmaScratch {
     // Per-column geometry bases (computed once per resize).
     x_v1_sin: Vec<f64>,
     x_v1_cos: Vec<f64>,
-    x_diag_sin: Vec<f64>,
-    x_diag_cos: Vec<f64>,
     // Per-row geometry bases (computed once per resize).
     y_v2_sin: Vec<f64>,
     y_v2_cos: Vec<f64>,
-    y_diag_sin: Vec<f64>,
-    y_diag_cos: Vec<f64>,
+    // Per-pixel diagonal basis for v3 (computed once per resize).
+    diag_sin: Vec<f64>,
+    diag_cos: Vec<f64>,
     // Per-pixel geometry bases for full quality (computed once per resize).
     radial_center_sin: Vec<f64>,
     radial_center_cos: Vec<f64>,
@@ -588,12 +587,10 @@ impl PlasmaScratch {
             height: 0,
             x_v1_sin: Vec::new(),
             x_v1_cos: Vec::new(),
-            x_diag_sin: Vec::new(),
-            x_diag_cos: Vec::new(),
             y_v2_sin: Vec::new(),
             y_v2_cos: Vec::new(),
-            y_diag_sin: Vec::new(),
-            y_diag_cos: Vec::new(),
+            diag_sin: Vec::new(),
+            diag_cos: Vec::new(),
             radial_center_sin: Vec::new(),
             radial_center_cos: Vec::new(),
             radial_offset_sin: Vec::new(),
@@ -617,13 +614,13 @@ impl PlasmaScratch {
         // Per-column bases.
         self.x_v1_sin.resize(w_len, 0.0);
         self.x_v1_cos.resize(w_len, 0.0);
-        self.x_diag_sin.resize(w_len, 0.0);
-        self.x_diag_cos.resize(w_len, 0.0);
 
         let mut x_coords = vec![0.0f64; w_len];
         let mut sin_x2 = vec![0.0f64; w_len];
         let mut x_sq = vec![0.0f64; w_len];
         let mut x_center_sq = vec![0.0f64; w_len];
+        let mut x_diag_sin = vec![0.0f64; w_len];
+        let mut x_diag_cos = vec![0.0f64; w_len];
 
         for dx in 0..w_len {
             let x = (dx as f64 / w) * 6.0;
@@ -637,18 +634,18 @@ impl PlasmaScratch {
             self.x_v1_sin[dx] = s1;
             self.x_v1_cos[dx] = c1;
             let (sd, cd) = (x * 1.2).sin_cos();
-            self.x_diag_sin[dx] = sd;
-            self.x_diag_cos[dx] = cd;
+            x_diag_sin[dx] = sd;
+            x_diag_cos[dx] = cd;
         }
 
         // Per-row bases.
         self.y_v2_sin.resize(h_len, 0.0);
         self.y_v2_cos.resize(h_len, 0.0);
-        self.y_diag_sin.resize(h_len, 0.0);
-        self.y_diag_cos.resize(h_len, 0.0);
 
         let mut y_coords = vec![0.0f64; h_len];
         let mut cos_y2 = vec![0.0f64; h_len];
+        let mut y_diag_sin = vec![0.0f64; h_len];
+        let mut y_diag_cos = vec![0.0f64; h_len];
 
         for dy in 0..h_len {
             let y = (dy as f64 / h) * 6.0;
@@ -659,8 +656,8 @@ impl PlasmaScratch {
             self.y_v2_sin[dy] = s2;
             self.y_v2_cos[dy] = c2;
             let (sd, cd) = (y * 1.2).sin_cos();
-            self.y_diag_sin[dy] = sd;
-            self.y_diag_cos[dy] = cd;
+            y_diag_sin[dy] = sd;
+            y_diag_cos[dy] = cd;
         }
 
         // Per-pixel bases for full quality.
@@ -671,6 +668,8 @@ impl PlasmaScratch {
         self.radial_offset_cos.resize(total, 0.0);
         self.interference_sin.resize(total, 0.0);
         self.interference_cos.resize(total, 0.0);
+        self.diag_sin.resize(total, 0.0);
+        self.diag_cos.resize(total, 0.0);
 
         for dy in 0..h_len {
             let y = y_coords[dy];
@@ -678,10 +677,17 @@ impl PlasmaScratch {
             let y_center = y - 3.0;
             let y_center_sq = y_center * y_center;
             let cy2 = cos_y2[dy];
+            let diag_y_sin = y_diag_sin[dy];
+            let diag_y_cos = y_diag_cos[dy];
             let row_offset = dy * w_len;
 
             for dx in 0..w_len {
                 let idx = row_offset + dx;
+
+                let diag_x_sin = x_diag_sin[dx];
+                let diag_x_cos = x_diag_cos[dx];
+                self.diag_sin[idx] = diag_x_sin * diag_y_cos + diag_x_cos * diag_y_sin;
+                self.diag_cos[idx] = diag_x_cos * diag_y_cos - diag_x_sin * diag_y_sin;
 
                 let radial_center = (x_sq[dx] + y_sq).sqrt() * 2.0;
                 let radial_offset = (x_center_sq[dx] + y_center_sq).sqrt() * 1.8;
@@ -747,17 +753,17 @@ impl PlasmaFx {
             scratch.v2_frame[dy] = scratch.y_v2_sin[dy] * cos_t2 + scratch.y_v2_cos[dy] * sin_t2;
         }
         let v1_frame = &scratch.v1_frame;
-        let x_diag_sin = &scratch.x_diag_sin;
-        let x_diag_cos = &scratch.x_diag_cos;
+        let diag_sin = &scratch.diag_sin;
+        let diag_cos = &scratch.diag_cos;
 
         // Quality-hoisted loops: zero sin/cos per pixel.
         match quality {
             FxQuality::Full => {
                 for dy in 0..hh {
                     let v2 = scratch.v2_frame[dy];
-                    let y_sin = scratch.y_diag_sin[dy];
-                    let y_cos = scratch.y_diag_cos[dy];
                     let row_offset = dy * ww;
+                    let diag_sin_row = &diag_sin[row_offset..row_offset + ww];
+                    let diag_cos_row = &diag_cos[row_offset..row_offset + ww];
                     let radial_center_sin_row =
                         &scratch.radial_center_sin[row_offset..row_offset + ww];
                     let radial_center_cos_row =
@@ -773,9 +779,7 @@ impl PlasmaFx {
                     let out_row = &mut out[row_offset..row_offset + ww];
                     for dx in 0..ww {
                         let v1 = v1_frame[dx];
-                        let sin_xy = x_diag_sin[dx] * y_cos + x_diag_cos[dx] * y_sin;
-                        let cos_xy = x_diag_cos[dx] * y_cos - x_diag_sin[dx] * y_sin;
-                        let v3 = sin_xy * cos_t3 + cos_xy * sin_t3;
+                        let v3 = diag_sin_row[dx] * cos_t3 + diag_cos_row[dx] * sin_t3;
                         let v4 =
                             radial_center_sin_row[dx] * cos_t4 - radial_center_cos_row[dx] * sin_t4;
                         let v5 = radial_offset_cos_row[dx] * cos_time
@@ -791,9 +795,9 @@ impl PlasmaFx {
             FxQuality::Reduced => {
                 for dy in 0..hh {
                     let v2 = scratch.v2_frame[dy];
-                    let y_sin = scratch.y_diag_sin[dy];
-                    let y_cos = scratch.y_diag_cos[dy];
                     let row_offset = dy * ww;
+                    let diag_sin_row = &diag_sin[row_offset..row_offset + ww];
+                    let diag_cos_row = &diag_cos[row_offset..row_offset + ww];
                     let interference_sin_row =
                         &scratch.interference_sin[row_offset..row_offset + ww];
                     let interference_cos_row =
@@ -801,9 +805,7 @@ impl PlasmaFx {
                     let out_row = &mut out[row_offset..row_offset + ww];
                     for dx in 0..ww {
                         let v1 = v1_frame[dx];
-                        let sin_xy = x_diag_sin[dx] * y_cos + x_diag_cos[dx] * y_sin;
-                        let cos_xy = x_diag_cos[dx] * y_cos - x_diag_sin[dx] * y_sin;
-                        let v3 = sin_xy * cos_t3 + cos_xy * sin_t3;
+                        let v3 = diag_sin_row[dx] * cos_t3 + diag_cos_row[dx] * sin_t3;
                         let v6 =
                             interference_sin_row[dx] * cos_t6 + interference_cos_row[dx] * sin_t6;
                         let value = (v1 + v2 + v3 + v6) / 4.0;
@@ -815,15 +817,13 @@ impl PlasmaFx {
             FxQuality::Minimal => {
                 for dy in 0..hh {
                     let v2 = scratch.v2_frame[dy];
-                    let y_sin = scratch.y_diag_sin[dy];
-                    let y_cos = scratch.y_diag_cos[dy];
                     let row_offset = dy * ww;
+                    let diag_sin_row = &diag_sin[row_offset..row_offset + ww];
+                    let diag_cos_row = &diag_cos[row_offset..row_offset + ww];
                     let out_row = &mut out[row_offset..row_offset + ww];
                     for dx in 0..ww {
                         let v1 = v1_frame[dx];
-                        let sin_xy = x_diag_sin[dx] * y_cos + x_diag_cos[dx] * y_sin;
-                        let cos_xy = x_diag_cos[dx] * y_cos - x_diag_sin[dx] * y_sin;
-                        let v3 = sin_xy * cos_t3 + cos_xy * sin_t3;
+                        let v3 = diag_sin_row[dx] * cos_t3 + diag_cos_row[dx] * sin_t3;
                         let value = (v1 + v2 + v3) / 3.0;
                         let wave = (value + 1.0) / 2.0;
                         out_row[dx] = sample(wave.clamp(0.0, 1.0));
