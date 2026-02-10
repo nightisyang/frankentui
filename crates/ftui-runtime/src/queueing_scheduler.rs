@@ -771,8 +771,18 @@ impl QueueingScheduler {
         let id = self.next_job_id;
         self.next_job_id += 1;
 
-        let mut job =
-            Job::new(id, weight, estimated_time).with_sources(weight_source, estimate_source);
+        // Build from raw caller values, then normalize against this scheduler's config.
+        let mut job = Job {
+            id,
+            weight,
+            remaining_time: estimated_time,
+            total_time: estimated_time,
+            arrival_time: 0.0,
+            arrival_seq: 0,
+            estimate_source,
+            weight_source,
+            name: None,
+        };
         job.weight = self.normalize_weight_with_source(job.weight, job.weight_source);
         job.remaining_time =
             self.normalize_time_with_source(job.remaining_time, job.estimate_source);
@@ -803,7 +813,7 @@ impl QueueingScheduler {
     /// Returns a list of completed job IDs.
     pub fn tick(&mut self, delta_time: f64) -> Vec<u64> {
         let mut completed = Vec::new();
-        if delta_time <= 0.0 {
+        if !delta_time.is_finite() || delta_time <= 0.0 {
             return completed;
         }
 
@@ -1944,6 +1954,42 @@ mod tests {
         assert!((next.remaining_time - 2.0).abs() < f64::EPSILON);
     }
 
+    #[test]
+    fn explicit_weight_honors_config_w_max_above_defaults() {
+        let mut config = test_config();
+        config.w_max = 50.0;
+        let mut scheduler = QueueingScheduler::new(config);
+
+        scheduler.submit_with_sources(
+            20.0,
+            1.0,
+            WeightSource::Explicit,
+            EstimateSource::Explicit,
+            None::<&str>,
+        );
+
+        let next = scheduler.peek_next().unwrap();
+        assert!((next.weight - 20.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn explicit_estimate_honors_config_p_max_above_defaults() {
+        let mut config = test_config();
+        config.p_max_ms = 100_000.0;
+        let mut scheduler = QueueingScheduler::new(config);
+
+        scheduler.submit_with_sources(
+            1.0,
+            50_000.0,
+            WeightSource::Explicit,
+            EstimateSource::Explicit,
+            None::<&str>,
+        );
+
+        let next = scheduler.peek_next().unwrap();
+        assert!((next.remaining_time - 50_000.0).abs() < f64::EPSILON);
+    }
+
     // =========================================================================
     // Cancel tests
     // =========================================================================
@@ -2213,6 +2259,22 @@ mod tests {
         scheduler.submit(1.0, -10.0);
         let completed = scheduler.tick(1.0);
         assert_eq!(completed.len(), 1);
+    }
+
+    #[test]
+    fn tick_non_finite_delta_noops() {
+        let mut scheduler = QueueingScheduler::new(test_config());
+        scheduler.submit(1.0, 5.0);
+
+        let before = scheduler.stats();
+        assert!(scheduler.tick(f64::NAN).is_empty());
+        assert!(scheduler.tick(f64::INFINITY).is_empty());
+        assert!(scheduler.tick(f64::NEG_INFINITY).is_empty());
+        let after = scheduler.stats();
+
+        assert_eq!(before.total_processing_time, after.total_processing_time);
+        assert_eq!(before.total_completed, after.total_completed);
+        assert!(scheduler.peek_next().is_some());
     }
 
     // =========================================================================
