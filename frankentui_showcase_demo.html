@@ -67,7 +67,7 @@ let termMod, runnerMod;
 try {
   status.textContent = "Loading WASM modules…";
   [termMod, runnerMod] = await Promise.all([
-    import("./pkg/frankenterm_web.js"),
+    import("./pkg/FrankenTerm.js"),
     import("./pkg/ftui_showcase_wasm.js"),
   ]);
   // Initialize both WASM modules (fetches .wasm files).
@@ -78,9 +78,9 @@ try {
 } catch (e) {
   showError(
     `Failed to load WASM modules.\n\n` +
-    `Expected wasm-pack output at ./pkg/frankenterm_web.js and ./pkg/ftui_showcase_wasm.js\n\n` +
+    `Expected wasm-pack output at ./pkg/FrankenTerm.js and ./pkg/ftui_showcase_wasm.js\n\n` +
     `Build with:\n` +
-    `  wasm-pack build crates/frankenterm-web --target web --out-dir ../../pkg\n` +
+    `  wasm-pack build crates/frankenterm-web --target web --out-dir ../../pkg --out-name FrankenTerm\n` +
     `  wasm-pack build crates/ftui-showcase-wasm --target web --out-dir ../../pkg\n\n` +
     `Error: ${e.message || e}`
   );

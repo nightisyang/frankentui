@@ -65,14 +65,15 @@ cargo build -p ftui-web --target wasm32-unknown-unknown --release
 wasm-pack build crates/frankenterm-web \
   --target web \
   --release \
-  --out-dir ../frankentui_website/src/wasm/frankenterm-web
+  --out-dir ../frankentui_website/src/wasm/frankenterm-web \
+  --out-name FrankenTerm
 ```
 
 Expected output files in `frankentui_website/src/wasm/frankenterm-web/`:
 
-- `frankenterm_web.js`
-- `frankenterm_web_bg.wasm`
-- `frankenterm_web.d.ts`
+- `FrankenTerm.js`
+- `FrankenTerm_bg.wasm`
+- `FrankenTerm.d.ts`
 
 ### 2. Initialize in a Next.js client component
 
@@ -80,7 +81,7 @@ Expected output files in `frankentui_website/src/wasm/frankenterm-web/`:
 "use client";
 
 import { useEffect, useRef } from "react";
-import init, { FrankenTermWeb } from "@/wasm/frankenterm-web/frankenterm_web";
+import init, { FrankenTermWeb } from "@/wasm/frankenterm-web/FrankenTerm";
 
 export function TerminalCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -90,7 +91,7 @@ export function TerminalCanvas() {
     let disposed = false;
 
     (async () => {
-      await init(); // loads frankenterm_web_bg.wasm
+      await init(); // loads FrankenTerm_bg.wasm
       if (disposed || !canvasRef.current) return;
 
       term = new FrankenTermWeb();
