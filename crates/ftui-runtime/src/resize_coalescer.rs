@@ -3291,4 +3291,627 @@ mod tests {
         assert!(parsed["regime"].as_str().is_some());
         assert!(parsed["checksum"].as_str().is_some());
     }
+
+    // =========================================================================
+    // DecisionEvidence tests (bd-dionl)
+    // =========================================================================
+
+    #[test]
+    fn decision_evidence_favor_apply_steady() {
+        let ev = DecisionEvidence::favor_apply(Regime::Steady, 80.0, 2.0);
+        // Steady regime contrib = 1.0, timing = min(80/50, 2) = 1.6, rate<5 = 0.5
+        assert!(ev.log_bayes_factor > 0.0, "Should favor apply");
+        assert_eq!(ev.regime_contribution, 1.0);
+        assert!((ev.timing_contribution - 1.6).abs() < 0.01);
+        assert_eq!(ev.rate_contribution, 0.5);
+        assert!(ev.is_strong());
+        assert!(ev.is_decisive());
+    }
+
+    #[test]
+    fn decision_evidence_favor_apply_burst_regime() {
+        let ev = DecisionEvidence::favor_apply(Regime::Burst, 10.0, 20.0);
+        // Burst regime contrib = -0.5, timing = min(10/50, 2) = 0.2, rate>=5 = -0.3
+        assert_eq!(ev.regime_contribution, -0.5);
+        assert!((ev.timing_contribution - 0.2).abs() < 0.01);
+        assert_eq!(ev.rate_contribution, -0.3);
+        // LBF = -0.5 + 0.2 + (-0.3) = -0.6, so not strong
+        assert!(!ev.is_strong());
+    }
+
+    #[test]
+    fn decision_evidence_favor_coalesce_burst() {
+        let ev = DecisionEvidence::favor_coalesce(Regime::Burst, 5.0, 15.0);
+        // Burst regime contrib = 1.0, timing = min(20/5, 2) = 2.0, rate>10 = 0.5
+        // LBF = -(1.0 + 2.0 + 0.5) = -3.5
+        assert!(ev.log_bayes_factor < 0.0, "Should favor coalesce");
+        assert_eq!(ev.regime_contribution, 1.0);
+        assert!((ev.timing_contribution - 2.0).abs() < 0.01);
+        assert_eq!(ev.rate_contribution, 0.5);
+        assert!(ev.is_strong());
+        assert!(ev.is_decisive());
+    }
+
+    #[test]
+    fn decision_evidence_favor_coalesce_steady_regime() {
+        let ev = DecisionEvidence::favor_coalesce(Regime::Steady, 100.0, 3.0);
+        // Steady regime contrib = -0.5, timing = min(20/100, 2) = 0.2, rate<=10 = -0.3
+        assert_eq!(ev.regime_contribution, -0.5);
+        assert!((ev.timing_contribution - 0.2).abs() < 0.01);
+        assert_eq!(ev.rate_contribution, -0.3);
+    }
+
+    #[test]
+    fn decision_evidence_forced_deadline() {
+        let ev = DecisionEvidence::forced_deadline(100.0);
+        assert!(ev.log_bayes_factor.is_infinite());
+        assert_eq!(ev.regime_contribution, 0.0);
+        assert!((ev.timing_contribution - 100.0).abs() < 0.01);
+        assert_eq!(ev.rate_contribution, 0.0);
+        assert!(ev.is_strong());
+        assert!(ev.is_decisive());
+        assert!(ev.explanation.contains("100.0ms"));
+    }
+
+    #[test]
+    fn decision_evidence_is_strong_boundary() {
+        // Exactly 1.0 is NOT strong (need >1.0)
+        let ev = DecisionEvidence {
+            log_bayes_factor: 1.0,
+            regime_contribution: 0.0,
+            timing_contribution: 0.0,
+            rate_contribution: 0.0,
+            explanation: String::new(),
+        };
+        assert!(!ev.is_strong());
+
+        let ev2 = DecisionEvidence {
+            log_bayes_factor: 1.001,
+            ..ev.clone()
+        };
+        assert!(ev2.is_strong());
+
+        // Negative values also count
+        let ev3 = DecisionEvidence {
+            log_bayes_factor: -1.5,
+            ..ev
+        };
+        assert!(ev3.is_strong());
+    }
+
+    #[test]
+    fn decision_evidence_is_decisive_boundary() {
+        let ev = DecisionEvidence {
+            log_bayes_factor: 2.0,
+            regime_contribution: 0.0,
+            timing_contribution: 0.0,
+            rate_contribution: 0.0,
+            explanation: String::new(),
+        };
+        assert!(!ev.is_decisive()); // need >2.0
+
+        let ev2 = DecisionEvidence {
+            log_bayes_factor: 2.001,
+            ..ev
+        };
+        assert!(ev2.is_decisive());
+    }
+
+    #[test]
+    fn decision_evidence_to_jsonl_valid() {
+        let ev = DecisionEvidence::favor_apply(Regime::Steady, 50.0, 3.0);
+        let jsonl = ev.to_jsonl("test-run", ScreenMode::AltScreen, 80, 24, 5);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&jsonl).expect("DecisionEvidence JSONL must be valid JSON");
+
+        assert_eq!(parsed["event"].as_str().unwrap(), "decision_evidence");
+        assert!(parsed["log_bayes_factor"].as_f64().is_some());
+        assert!(parsed["regime_contribution"].as_f64().is_some());
+        assert!(parsed["timing_contribution"].as_f64().is_some());
+        assert!(parsed["rate_contribution"].as_f64().is_some());
+        assert!(parsed["explanation"].as_str().is_some());
+    }
+
+    #[test]
+    fn decision_evidence_to_jsonl_infinity() {
+        let ev = DecisionEvidence::forced_deadline(100.0);
+        let jsonl = ev.to_jsonl("test-run", ScreenMode::AltScreen, 80, 24, 0);
+        // Infinity serialized as "inf" string
+        assert!(jsonl.contains("\"inf\""));
+    }
+
+    // =========================================================================
+    // Edge case tests (bd-dionl)
+    // =========================================================================
+
+    #[test]
+    fn hard_deadline_zero_applies_immediately() {
+        let config = CoalescerConfig {
+            hard_deadline_ms: 0,
+            enable_logging: true,
+            ..test_config()
+        };
+        let mut c = ResizeCoalescer::new(config, (80, 24));
+        let base = Instant::now();
+
+        // Any resize should apply immediately since deadline is 0
+        let action = c.handle_resize_at(100, 40, base);
+        assert!(
+            matches!(action, CoalesceAction::ApplyResize { .. }),
+            "hard_deadline_ms=0 should force immediate apply, got {action:?}"
+        );
+    }
+
+    #[test]
+    fn rate_window_size_zero_returns_zero_rate() {
+        let config = CoalescerConfig {
+            rate_window_size: 0,
+            enable_logging: true,
+            ..test_config()
+        };
+        let mut c = ResizeCoalescer::new(config, (80, 24));
+        let base = Instant::now();
+
+        // Feed events — rate should stay 0 since window can hold 0 events
+        for i in 0..5 {
+            c.handle_resize_at(80 + i, 24, base + Duration::from_millis(i as u64 * 10));
+        }
+        let rate = c.calculate_event_rate(base + Duration::from_millis(50));
+        assert_eq!(rate, 0.0, "rate_window_size=0 should yield 0 rate");
+    }
+
+    #[test]
+    fn rate_window_size_one_returns_zero_rate() {
+        let config = CoalescerConfig {
+            rate_window_size: 1,
+            enable_logging: true,
+            ..test_config()
+        };
+        let mut c = ResizeCoalescer::new(config, (80, 24));
+        let base = Instant::now();
+
+        for i in 0..5 {
+            c.handle_resize_at(80 + i, 24, base + Duration::from_millis(i as u64 * 10));
+        }
+        // With window=1, only 1 event kept, so < 2 elements → rate=0
+        let rate = c.calculate_event_rate(base + Duration::from_millis(50));
+        assert_eq!(rate, 0.0, "rate_window_size=1 should yield 0 rate");
+    }
+
+    #[test]
+    fn tick_no_pending_returns_none() {
+        let config = test_config();
+        let mut c = ResizeCoalescer::new(config, (80, 24));
+        let base = Instant::now();
+
+        // No resize events, tick should return None
+        let action = c.tick_at(base);
+        assert_eq!(action, CoalesceAction::None);
+        let action = c.tick_at(base + Duration::from_millis(500));
+        assert_eq!(action, CoalesceAction::None);
+    }
+
+    #[test]
+    fn time_until_apply_none_when_no_pending() {
+        let c = ResizeCoalescer::new(test_config(), (80, 24));
+        assert!(c.time_until_apply(Instant::now()).is_none());
+    }
+
+    #[test]
+    fn time_until_apply_zero_when_past_delay() {
+        let config = test_config();
+        let mut c = ResizeCoalescer::new(config, (80, 24));
+        let base = Instant::now();
+
+        c.handle_resize_at(100, 40, base);
+        // Well past the steady_delay_ms of 16ms
+        let result = c.time_until_apply(base + Duration::from_millis(500));
+        assert_eq!(result, Some(Duration::ZERO));
+    }
+
+    // =========================================================================
+    // json_escape tests (bd-dionl)
+    // =========================================================================
+
+    #[test]
+    fn json_escape_special_characters() {
+        assert_eq!(json_escape("hello"), "hello");
+        assert_eq!(json_escape("a\"b"), "a\\\"b");
+        assert_eq!(json_escape("a\\b"), "a\\\\b");
+        assert_eq!(json_escape("a\nb"), "a\\nb");
+        assert_eq!(json_escape("a\rb"), "a\\rb");
+        assert_eq!(json_escape("a\tb"), "a\\tb");
+    }
+
+    #[test]
+    fn json_escape_control_characters() {
+        // Control char \x01 should be escaped as \u0001
+        let input = "a\x01b";
+        let escaped = json_escape(input);
+        assert_eq!(escaped, "a\\u0001b");
+    }
+
+    #[test]
+    fn json_escape_empty_string() {
+        assert_eq!(json_escape(""), "");
+    }
+
+    // =========================================================================
+    // clear_logs and decision_logs_jsonl tests (bd-dionl)
+    // =========================================================================
+
+    #[test]
+    fn clear_logs_resets_state() {
+        let mut config = test_config();
+        config.enable_logging = true;
+        let mut c = ResizeCoalescer::new(config, (80, 24));
+
+        c.handle_resize(100, 40);
+        assert!(!c.logs().is_empty());
+
+        c.clear_logs();
+        assert!(c.logs().is_empty());
+
+        // After clearing, new logs should work
+        c.handle_resize(120, 50);
+        assert!(!c.logs().is_empty());
+    }
+
+    #[test]
+    fn decision_logs_jsonl_each_line_valid() {
+        let mut config = test_config();
+        config.enable_logging = true;
+        let base = Instant::now();
+        let mut c = ResizeCoalescer::new(config, (80, 24))
+            .with_evidence_run_id("jsonl-test")
+            .with_screen_mode(ScreenMode::AltScreen);
+
+        c.handle_resize_at(100, 40, base);
+        c.handle_resize_at(110, 50, base + Duration::from_millis(5));
+        c.tick_at(base + Duration::from_millis(50));
+
+        let jsonl = c.decision_logs_jsonl();
+        assert!(!jsonl.is_empty());
+        for line in jsonl.lines() {
+            let _: serde_json::Value =
+                serde_json::from_str(line).expect("Each JSONL line must be valid JSON");
+        }
+    }
+
+    // =========================================================================
+    // TelemetryHooks tests (bd-dionl)
+    // =========================================================================
+
+    #[test]
+    fn telemetry_hooks_has_methods() {
+        let hooks = TelemetryHooks::new();
+        assert!(!hooks.has_resize_applied());
+        assert!(!hooks.has_regime_change());
+        assert!(!hooks.has_decision());
+
+        let hooks = hooks.on_resize_applied(|_| {});
+        assert!(hooks.has_resize_applied());
+        assert!(!hooks.has_regime_change());
+        assert!(!hooks.has_decision());
+    }
+
+    #[test]
+    fn telemetry_hooks_with_tracing() {
+        let hooks = TelemetryHooks::new().with_tracing(true);
+        let debug_str = format!("{:?}", hooks);
+        assert!(debug_str.contains("emit_tracing: true"));
+    }
+
+    #[test]
+    fn telemetry_hooks_default_equals_new() {
+        let h1 = TelemetryHooks::default();
+        let h2 = TelemetryHooks::new();
+        assert!(!h1.has_resize_applied());
+        assert!(!h2.has_resize_applied());
+    }
+
+    #[test]
+    fn telemetry_hooks_on_decision_fires() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let count = Arc::new(AtomicU32::new(0));
+        let count_clone = count.clone();
+
+        let hooks = TelemetryHooks::new().on_decision(move |_entry| {
+            count_clone.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let mut config = test_config();
+        config.enable_logging = true;
+        let mut c = ResizeCoalescer::new(config, (80, 24)).with_telemetry_hooks(hooks);
+
+        let base = Instant::now();
+        c.handle_resize_at(100, 40, base);
+
+        // The coalesce decision should fire the on_decision hook
+        assert!(count.load(Ordering::SeqCst) >= 1);
+    }
+
+    // =========================================================================
+    // Regime::as_str tests (bd-dionl)
+    // =========================================================================
+
+    #[test]
+    fn regime_as_str_values() {
+        assert_eq!(Regime::Steady.as_str(), "steady");
+        assert_eq!(Regime::Burst.as_str(), "burst");
+    }
+
+    #[test]
+    fn regime_default_is_steady() {
+        assert_eq!(Regime::default(), Regime::Steady);
+    }
+
+    // =========================================================================
+    // DecisionSummary tests (bd-dionl)
+    // =========================================================================
+
+    #[test]
+    fn decision_summary_checksum_hex_format() {
+        let summary = DecisionSummary {
+            checksum: 0x0123456789ABCDEF,
+            ..DecisionSummary::default()
+        };
+        assert_eq!(summary.checksum_hex(), "0123456789abcdef");
+    }
+
+    #[test]
+    fn decision_summary_default_values() {
+        let summary = DecisionSummary::default();
+        assert_eq!(summary.decision_count, 0);
+        assert_eq!(summary.apply_count, 0);
+        assert_eq!(summary.forced_apply_count, 0);
+        assert_eq!(summary.coalesce_count, 0);
+        assert_eq!(summary.skip_count, 0);
+        assert_eq!(summary.regime, Regime::Steady);
+        assert_eq!(summary.last_applied, (0, 0));
+        assert_eq!(summary.checksum, 0);
+    }
+
+    #[test]
+    fn decision_summary_to_jsonl_valid() {
+        let summary = DecisionSummary {
+            decision_count: 5,
+            apply_count: 2,
+            forced_apply_count: 1,
+            coalesce_count: 2,
+            skip_count: 1,
+            regime: Regime::Burst,
+            last_applied: (120, 40),
+            checksum: 0xDEADBEEF,
+        };
+        let jsonl = summary.to_jsonl("run-1", ScreenMode::AltScreen, 120, 40, 5);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&jsonl).expect("Summary JSONL must be valid JSON");
+
+        assert_eq!(parsed["event"].as_str().unwrap(), "summary");
+        assert_eq!(parsed["decisions"].as_u64().unwrap(), 5);
+        assert_eq!(parsed["applies"].as_u64().unwrap(), 2);
+        assert_eq!(parsed["forced_applies"].as_u64().unwrap(), 1);
+        assert_eq!(parsed["coalesces"].as_u64().unwrap(), 2);
+        assert_eq!(parsed["skips"].as_u64().unwrap(), 1);
+        assert_eq!(parsed["regime"].as_str().unwrap(), "burst");
+        assert_eq!(parsed["last_w"].as_u64().unwrap(), 120);
+        assert_eq!(parsed["last_h"].as_u64().unwrap(), 40);
+        assert!(parsed["checksum"].as_str().unwrap().contains("deadbeef"));
+    }
+
+    // =========================================================================
+    // screen_mode_str tests (bd-dionl)
+    // =========================================================================
+
+    #[test]
+    fn screen_mode_str_all_variants() {
+        assert_eq!(screen_mode_str(ScreenMode::AltScreen), "altscreen");
+        assert_eq!(
+            screen_mode_str(ScreenMode::Inline { ui_height: 10 }),
+            "inline"
+        );
+        assert_eq!(
+            screen_mode_str(ScreenMode::InlineAuto {
+                min_height: 5,
+                max_height: 20,
+            }),
+            "inline_auto"
+        );
+    }
+
+    // =========================================================================
+    // Config builder chaining tests (bd-dionl)
+    // =========================================================================
+
+    #[test]
+    fn config_with_logging_chaining() {
+        let config = CoalescerConfig::default().with_logging(true);
+        assert!(config.enable_logging);
+
+        let config2 = config.with_logging(false);
+        assert!(!config2.enable_logging);
+    }
+
+    #[test]
+    fn config_with_bocpd_chaining() {
+        let config = CoalescerConfig::default().with_bocpd();
+        assert!(config.enable_bocpd);
+        assert!(config.bocpd_config.is_some());
+    }
+
+    #[test]
+    fn config_with_bocpd_config_chaining() {
+        let bocpd_cfg = BocpdConfig {
+            max_run_length: 42,
+            ..BocpdConfig::default()
+        };
+        let config = CoalescerConfig::default().with_bocpd_config(bocpd_cfg);
+        assert!(config.enable_bocpd);
+        assert_eq!(config.bocpd_config.as_ref().unwrap().max_run_length, 42);
+    }
+
+    // =========================================================================
+    // Coalescer builder chaining tests (bd-dionl)
+    // =========================================================================
+
+    #[test]
+    fn coalescer_with_evidence_run_id() {
+        let c = ResizeCoalescer::new(test_config(), (80, 24)).with_evidence_run_id("custom-run-id");
+        // Verify via evidence JSONL output
+        let jsonl = c.evidence_to_jsonl();
+        assert!(jsonl.contains("custom-run-id"));
+    }
+
+    #[test]
+    fn coalescer_with_screen_mode() {
+        let mut config = test_config();
+        config.enable_logging = true;
+        let mut c = ResizeCoalescer::new(config, (80, 24))
+            .with_screen_mode(ScreenMode::Inline { ui_height: 8 });
+
+        c.handle_resize(100, 40);
+        let jsonl = c.evidence_to_jsonl();
+        assert!(jsonl.contains("\"screen_mode\":\"inline\""));
+    }
+
+    #[test]
+    fn coalescer_set_evidence_sink_clears_config_logged() {
+        let mut config = test_config();
+        config.enable_logging = true;
+        let mut c = ResizeCoalescer::new(config, (80, 24));
+
+        // Generate some events so config is logged
+        c.handle_resize(100, 40);
+
+        // Setting evidence sink to None should reset config_logged
+        c.set_evidence_sink(None);
+
+        // Evidence JSONL should still have config line since it rebuilds from config
+        let jsonl = c.evidence_to_jsonl();
+        assert!(jsonl.contains("\"event\":\"config\""));
+    }
+
+    // =========================================================================
+    // duration_since_or_zero tests (bd-dionl)
+    // =========================================================================
+
+    #[test]
+    fn duration_since_or_zero_normal() {
+        let earlier = Instant::now();
+        std::thread::sleep(Duration::from_millis(1));
+        let now = Instant::now();
+        let result = duration_since_or_zero(now, earlier);
+        assert!(result >= Duration::from_millis(1));
+    }
+
+    #[test]
+    fn duration_since_or_zero_same_instant() {
+        let now = Instant::now();
+        let result = duration_since_or_zero(now, now);
+        assert_eq!(result, Duration::ZERO);
+    }
+
+    // =========================================================================
+    // ResizeAppliedEvent and RegimeChangeEvent struct tests (bd-dionl)
+    // =========================================================================
+
+    #[test]
+    fn resize_applied_event_fields() {
+        let event = ResizeAppliedEvent {
+            new_size: (100, 40),
+            old_size: (80, 24),
+            elapsed: Duration::from_millis(42),
+            forced: true,
+        };
+        assert_eq!(event.new_size, (100, 40));
+        assert_eq!(event.old_size, (80, 24));
+        assert_eq!(event.elapsed, Duration::from_millis(42));
+        assert!(event.forced);
+    }
+
+    #[test]
+    fn regime_change_event_fields() {
+        let event = RegimeChangeEvent {
+            from: Regime::Steady,
+            to: Regime::Burst,
+            event_idx: 42,
+        };
+        assert_eq!(event.from, Regime::Steady);
+        assert_eq!(event.to, Regime::Burst);
+        assert_eq!(event.event_idx, 42);
+    }
+
+    // =========================================================================
+    // CoalesceAction equality edge cases (bd-dionl)
+    // =========================================================================
+
+    #[test]
+    fn coalesce_action_show_placeholder_eq() {
+        assert_eq!(
+            CoalesceAction::ShowPlaceholder,
+            CoalesceAction::ShowPlaceholder
+        );
+        assert_ne!(CoalesceAction::ShowPlaceholder, CoalesceAction::None);
+    }
+
+    #[test]
+    fn coalesce_action_apply_resize_eq() {
+        let a = CoalesceAction::ApplyResize {
+            width: 100,
+            height: 40,
+            coalesce_time: Duration::from_millis(16),
+            forced_by_deadline: false,
+        };
+        let b = CoalesceAction::ApplyResize {
+            width: 100,
+            height: 40,
+            coalesce_time: Duration::from_millis(16),
+            forced_by_deadline: false,
+        };
+        assert_eq!(a, b);
+
+        let c = CoalesceAction::ApplyResize {
+            width: 100,
+            height: 40,
+            coalesce_time: Duration::from_millis(16),
+            forced_by_deadline: true,
+        };
+        assert_ne!(a, c);
+    }
+
+    // =========================================================================
+    // FNV hash consistency (bd-dionl)
+    // =========================================================================
+
+    #[test]
+    fn fnv_hash_deterministic() {
+        let mut h1 = FNV_OFFSET_BASIS;
+        fnv_hash_bytes(&mut h1, b"hello world");
+
+        let mut h2 = FNV_OFFSET_BASIS;
+        fnv_hash_bytes(&mut h2, b"hello world");
+
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn fnv_hash_different_inputs_different_hashes() {
+        let mut h1 = FNV_OFFSET_BASIS;
+        fnv_hash_bytes(&mut h1, b"hello");
+
+        let mut h2 = FNV_OFFSET_BASIS;
+        fnv_hash_bytes(&mut h2, b"world");
+
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn fnv_hash_empty_input_returns_basis() {
+        let mut hash = FNV_OFFSET_BASIS;
+        fnv_hash_bytes(&mut hash, b"");
+        assert_eq!(hash, FNV_OFFSET_BASIS);
+    }
 }
