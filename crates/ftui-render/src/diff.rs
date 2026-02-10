@@ -2813,28 +2813,31 @@ mod tests {
         };
 
         let result = builder.build(&config, input);
-        match result {
-            TileDiffBuild::UseTiles(plan) => {
-                let stats = plan.stats;
-                assert_eq!(stats.width, w);
-                assert_eq!(stats.height, h);
-                // tile_w clamped from 16 → 16 (within [8,64])
-                assert_eq!(stats.tile_w, 16);
-                assert_eq!(stats.tile_h, 8);
-                // tiles_x = ceil(32/16) = 2, tiles_y = ceil(16/8) = 2
-                assert_eq!(stats.tiles_x, 2);
-                assert_eq!(stats.tiles_y, 2);
-                assert_eq!(stats.total_tiles, 4);
-                assert_eq!(stats.dirty_cells, 1);
-                assert_eq!(stats.dirty_tiles, 1);
-                assert_eq!(stats.skipped_tiles, 3);
-                assert!(stats.fallback.is_none());
-                // Copy trait works
-                let copy = stats;
-                assert_eq!(copy.width, stats.width);
-            }
-            _ => unreachable!("expected UseTiles"),
-        }
+        assert!(
+            matches!(&result, TileDiffBuild::UseTiles(_)),
+            "expected UseTiles, got {result:?}"
+        );
+        let TileDiffBuild::UseTiles(plan) = result else {
+            return;
+        };
+
+        let stats = plan.stats;
+        assert_eq!(stats.width, w);
+        assert_eq!(stats.height, h);
+        // tile_w clamped from 16 → 16 (within [8,64])
+        assert_eq!(stats.tile_w, 16);
+        assert_eq!(stats.tile_h, 8);
+        // tiles_x = ceil(32/16) = 2, tiles_y = ceil(16/8) = 2
+        assert_eq!(stats.tiles_x, 2);
+        assert_eq!(stats.tiles_y, 2);
+        assert_eq!(stats.total_tiles, 4);
+        assert_eq!(stats.dirty_cells, 1);
+        assert_eq!(stats.dirty_tiles, 1);
+        assert_eq!(stats.skipped_tiles, 3);
+        assert!(stats.fallback.is_none());
+        // Copy trait works
+        let copy = stats;
+        assert_eq!(copy.width, stats.width);
     }
 
     // --- clamp_tile_size via builder ---
@@ -2867,13 +2870,15 @@ mod tests {
         };
 
         let result = builder.build(&config, input);
-        match result {
-            TileDiffBuild::UseTiles(plan) => {
-                assert_eq!(plan.stats.tile_w, 8);
-                assert_eq!(plan.stats.tile_h, 8);
-            }
-            _ => unreachable!("expected UseTiles"),
-        }
+        assert!(
+            matches!(&result, TileDiffBuild::UseTiles(_)),
+            "expected UseTiles, got {result:?}"
+        );
+        let TileDiffBuild::UseTiles(plan) = result else {
+            return;
+        };
+        assert_eq!(plan.stats.tile_w, 8);
+        assert_eq!(plan.stats.tile_h, 8);
     }
 
     #[test]
@@ -2904,13 +2909,15 @@ mod tests {
         };
 
         let result = builder.build(&config, input);
-        match result {
-            TileDiffBuild::UseTiles(plan) => {
-                assert_eq!(plan.stats.tile_w, 64);
-                assert_eq!(plan.stats.tile_h, 64);
-            }
-            _ => unreachable!("expected UseTiles"),
-        }
+        assert!(
+            matches!(&result, TileDiffBuild::UseTiles(_)),
+            "expected UseTiles, got {result:?}"
+        );
+        let TileDiffBuild::UseTiles(plan) = result else {
+            return;
+        };
+        assert_eq!(plan.stats.tile_w, 64);
+        assert_eq!(plan.stats.tile_h, 64);
     }
 
     // --- BufferDiff trait coverage ---
@@ -3380,17 +3387,20 @@ mod tests {
             dirty_all: false,
         };
         let result = builder.build(&config, input);
-        match result {
-            TileDiffBuild::Fallback(stats) => {
-                let dbg = format!("{:?}", stats);
-                assert!(dbg.contains("TileDiffStats"), "Debug: {dbg}");
-                let copy = stats;
-                assert_eq!(copy.width, stats.width);
-                let cloned: TileDiffStats = stats; // Copy
-                assert_eq!(cloned.height, stats.height);
-            }
-            _ => unreachable!("expected Fallback for 1x1"),
-        }
+        assert!(
+            matches!(&result, TileDiffBuild::Fallback(_)),
+            "expected Fallback for 1x1, got {result:?}"
+        );
+        let TileDiffBuild::Fallback(stats) = result else {
+            return;
+        };
+
+        let dbg = format!("{:?}", stats);
+        assert!(dbg.contains("TileDiffStats"), "Debug: {dbg}");
+        let copy = stats;
+        assert_eq!(copy.width, stats.width);
+        let cloned: TileDiffStats = stats; // Copy
+        assert_eq!(cloned.height, stats.height);
     }
 }
 

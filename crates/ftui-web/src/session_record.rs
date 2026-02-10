@@ -2227,12 +2227,16 @@ mod tests {
             let jsonl = record.to_jsonl();
             let parsed = SessionTrace::from_jsonl(&jsonl).unwrap();
             let parsed_record = &parsed.records[0];
+            assert!(
+                matches!(parsed_record, TraceRecord::Input { .. }),
+                "expected Input record for event {i}, got {parsed_record:?}"
+            );
             let TraceRecord::Input {
                 event: parsed_event,
                 ..
             } = parsed_record
             else {
-                unreachable!("expected Input record for event {i}");
+                continue;
             };
 
             assert_eq!(parsed_event, event, "event {i} round-trip failed: {jsonl}");
