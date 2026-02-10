@@ -1061,4 +1061,900 @@ mod tests {
         assert_eq!(id1, 1);
         assert_eq!(id2, 2);
     }
+
+    // ─── Edge-case tests (bd-1bv8r) ─────────────────────────────
+
+    #[test]
+    fn run_all_pass_multi_validator() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("a", Duration::from_millis(5));
+        pipeline.register("b", Duration::from_millis(10));
+        pipeline.register("c", Duration::from_millis(15));
+
+        let result = pipeline.run(|_| (true, Duration::from_millis(7)));
+        assert!(result.all_passed);
+        assert_eq!(result.outcomes.len(), 3, "all validators should run");
+        assert_eq!(result.skipped, 0);
+        assert!(result.outcomes.iter().all(|o| o.passed));
+    }
+
+    #[test]
+    fn run_failure_at_second_position() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("a", Duration::from_millis(5));
+        pipeline.register("b", Duration::from_millis(10));
+        pipeline.register("c", Duration::from_millis(15));
+
+        // With uniform priors and costs 5,10,15, ordering is by p/c.
+        // All have same p=0.5, so ordering is by 1/c → cheapest first: a(0), b(1), c(2).
+        let result = pipeline.run(|id| {
+            if id == 1 {
+                (false, Duration::from_millis(10))
+            } else {
+                (true, Duration::from_millis(5))
+            }
+        });
+        assert!(!result.all_passed);
+        // a passes, b fails → c skipped
+        assert_eq!(result.outcomes.len(), 2);
+        assert!(result.outcomes[0].passed);
+        assert!(!result.outcomes[1].passed);
+        assert_eq!(result.skipped, 1);
+    }
+
+    #[test]
+    fn ema_gamma_one_full_replacement() {
+        let mut pipeline = ValidationPipeline::with_config(PipelineConfig {
+            gamma: 1.0,
+            ..Default::default()
+        });
+        let id = pipeline.register("v", Duration::from_millis(100));
+
+        pipeline.update(&ValidationOutcome {
+            id,
+            passed: true,
+            duration: Duration::from_millis(50),
+        });
+        // gamma=1.0 → c_new = 1.0*50 + 0.0*100 = 50ms
+        let cost = pipeline.stats(id).unwrap().cost_ema;
+        assert_eq!(cost.as_millis(), 50);
+    }
+
+    #[test]
+    fn ema_gamma_near_zero_minimal_update() {
+        let mut pipeline = ValidationPipeline::with_config(PipelineConfig {
+            gamma: 0.01,
+            ..Default::default()
+        });
+        let id = pipeline.register("v", Duration::from_millis(100));
+
+        pipeline.update(&ValidationOutcome {
+            id,
+            passed: true,
+            duration: Duration::from_millis(200),
+        });
+        // gamma=0.01 → c_new = 0.01*200 + 0.99*100 = 2 + 99 = 101ms
+        let cost = pipeline.stats(id).unwrap().cost_ema;
+        assert!(
+            (cost.as_millis() as i64 - 101).abs() <= 1,
+            "cost should barely move: got {}ms",
+            cost.as_millis()
+        );
+    }
+
+    #[test]
+    fn cost_ema_floor_during_update() {
+        let mut pipeline = ValidationPipeline::new();
+        let id = pipeline.register("v", Duration::from_millis(10));
+
+        // Observe zero-duration → EMA should clamp to c_min
+        pipeline.update(&ValidationOutcome {
+            id,
+            passed: true,
+            duration: Duration::ZERO,
+        });
+        let cost = pipeline.stats(id).unwrap().cost_ema;
+        assert!(
+            cost >= C_MIN,
+            "cost should be floored to c_min, got {:?}",
+            cost
+        );
+    }
+
+    #[test]
+    fn ordering_tie_break_by_id() {
+        // Two validators with identical cost and identical priors → same score.
+        // Tie should be broken by lower id first.
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("second", Duration::from_millis(10));
+        pipeline.register("first", Duration::from_millis(10));
+
+        let (ordering, _) = pipeline.compute_ordering();
+        assert_eq!(
+            ordering,
+            vec![0, 1],
+            "identical scores should tie-break by lower id first"
+        );
+    }
+
+    #[test]
+    fn ordering_tie_break_three_way() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("c", Duration::from_millis(5));
+        pipeline.register("a", Duration::from_millis(5));
+        pipeline.register("b", Duration::from_millis(5));
+
+        // All same cost, same prior → same score → order by id
+        let (ordering, _) = pipeline.compute_ordering();
+        assert_eq!(ordering, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn expected_cost_single_validator() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("v", Duration::from_millis(10));
+
+        let cost = pipeline.expected_cost(&[0]);
+        // Single validator: E = c_0 * 1.0 (survival starts at 1)
+        let c = pipeline.stats(0).unwrap().cost_ema.as_secs_f64();
+        assert!((cost - c).abs() < 1e-12);
+    }
+
+    #[test]
+    fn expected_cost_empty_ordering() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("v", Duration::from_millis(10));
+
+        // Empty ordering → zero cost
+        let cost = pipeline.expected_cost(&[]);
+        assert!((cost).abs() < 1e-15);
+    }
+
+    #[test]
+    fn summary_single_validator() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("v", Duration::from_millis(10));
+
+        let summary = pipeline.summary();
+        assert_eq!(summary.validator_count, 1);
+        assert_eq!(summary.optimal_ordering, vec![0]);
+        // Natural order = optimal order → improvement = 0
+        assert!(
+            summary.improvement_fraction.abs() < 1e-10,
+            "single validator can't improve: got {}",
+            summary.improvement_fraction
+        );
+    }
+
+    #[test]
+    fn summary_identical_validators_no_improvement() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("a", Duration::from_millis(10));
+        pipeline.register("b", Duration::from_millis(10));
+
+        // Same cost, same priors → no improvement possible
+        let summary = pipeline.summary();
+        assert!(
+            summary.improvement_fraction.abs() < 1e-10,
+            "identical validators should have zero improvement"
+        );
+    }
+
+    #[test]
+    fn observations_and_failures_counters() {
+        let mut pipeline = ValidationPipeline::new();
+        let id = pipeline.register("v", Duration::from_millis(5));
+
+        assert_eq!(pipeline.stats(id).unwrap().observations, 0);
+        assert_eq!(pipeline.stats(id).unwrap().failures, 0);
+
+        // 3 failures
+        for _ in 0..3 {
+            pipeline.update(&ValidationOutcome {
+                id,
+                passed: false,
+                duration: Duration::from_millis(5),
+            });
+        }
+        assert_eq!(pipeline.stats(id).unwrap().observations, 3);
+        assert_eq!(pipeline.stats(id).unwrap().failures, 3);
+
+        // 2 successes
+        for _ in 0..2 {
+            pipeline.update(&ValidationOutcome {
+                id,
+                passed: true,
+                duration: Duration::from_millis(5),
+            });
+        }
+        assert_eq!(pipeline.stats(id).unwrap().observations, 5);
+        assert_eq!(pipeline.stats(id).unwrap().failures, 3);
+    }
+
+    #[test]
+    fn update_batch_multiple_calls_increment_total_runs() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("v", Duration::from_millis(5));
+
+        let result = PipelineResult {
+            all_passed: true,
+            outcomes: vec![ValidationOutcome {
+                id: 0,
+                passed: true,
+                duration: Duration::from_millis(4),
+            }],
+            total_cost: Duration::from_millis(4),
+            ordering: vec![0],
+            ledger: Vec::new(),
+            skipped: 0,
+        };
+
+        pipeline.update_batch(&result);
+        pipeline.update_batch(&result);
+        pipeline.update_batch(&result);
+        assert_eq!(pipeline.total_runs(), 3);
+    }
+
+    #[test]
+    fn update_batch_empty_outcomes_still_increments() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("v", Duration::from_millis(5));
+
+        let result = PipelineResult {
+            all_passed: true,
+            outcomes: Vec::new(),
+            total_cost: Duration::ZERO,
+            ordering: vec![0],
+            ledger: Vec::new(),
+            skipped: 1,
+        };
+
+        pipeline.update_batch(&result);
+        assert_eq!(pipeline.total_runs(), 1);
+        // Validator stats unchanged
+        assert_eq!(pipeline.stats(0).unwrap().observations, 0);
+    }
+
+    #[test]
+    fn run_then_update_batch_round_trip() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("fast", Duration::from_millis(1));
+        pipeline.register("slow", Duration::from_millis(100));
+
+        let result = pipeline.run(|id| {
+            if id == 0 {
+                (true, Duration::from_millis(2))
+            } else {
+                (true, Duration::from_millis(80))
+            }
+        });
+        assert!(result.all_passed);
+
+        pipeline.update_batch(&result);
+        assert_eq!(pipeline.total_runs(), 1);
+
+        // Both validators should have 1 observation
+        assert_eq!(pipeline.stats(0).unwrap().observations, 1);
+        assert_eq!(pipeline.stats(1).unwrap().observations, 1);
+        // Both should have updated beta (success)
+        assert!(
+            pipeline.stats(0).unwrap().beta > 1.0,
+            "beta should increase on success"
+        );
+    }
+
+    #[test]
+    fn run_then_update_batch_with_early_exit() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("a", Duration::from_millis(5));
+        pipeline.register("b", Duration::from_millis(10));
+
+        let result = pipeline.run(|id| {
+            if id == 0 {
+                (false, Duration::from_millis(3))
+            } else {
+                (true, Duration::from_millis(8))
+            }
+        });
+        assert!(!result.all_passed);
+
+        pipeline.update_batch(&result);
+        // Only first validator ran (early exit), so only it gets updated
+        let ran_id = result.outcomes[0].id;
+        assert_eq!(pipeline.stats(ran_id).unwrap().observations, 1);
+
+        // The skipped validator should still have 0 observations
+        let skipped_count: u64 = pipeline
+            .all_stats()
+            .iter()
+            .filter(|s| s.observations == 0)
+            .count() as u64;
+        assert_eq!(skipped_count, 1, "one validator was skipped");
+    }
+
+    #[test]
+    fn confidence_width_always_positive() {
+        let mut pipeline = ValidationPipeline::new();
+        let id = pipeline.register("v", Duration::from_millis(5));
+
+        // Before any observations
+        let w = pipeline.stats(id).unwrap().confidence_width();
+        assert!(w > 0.0, "confidence_width should be positive: {w}");
+
+        // After observations
+        for _ in 0..10 {
+            pipeline.update(&ValidationOutcome {
+                id,
+                passed: true,
+                duration: Duration::from_millis(5),
+            });
+        }
+        let w2 = pipeline.stats(id).unwrap().confidence_width();
+        assert!(w2 > 0.0, "confidence_width should be positive: {w2}");
+    }
+
+    #[test]
+    fn variance_known_values() {
+        let mut pipeline = ValidationPipeline::new();
+        let id = pipeline.register("v", Duration::from_millis(5));
+
+        // Prior Beta(1,1): variance = 1*1 / (4*3) = 1/12
+        let var = pipeline.stats(id).unwrap().variance();
+        assert!(
+            (var - 1.0 / 12.0).abs() < 1e-10,
+            "Beta(1,1) variance should be 1/12"
+        );
+
+        // After 3 failures: Beta(4,1), variance = 4*1 / (25*6) = 4/150
+        for _ in 0..3 {
+            pipeline.update(&ValidationOutcome {
+                id,
+                passed: false,
+                duration: Duration::from_millis(5),
+            });
+        }
+        let var2 = pipeline.stats(id).unwrap().variance();
+        let expected = 4.0 * 1.0 / (25.0 * 6.0);
+        assert!(
+            (var2 - expected).abs() < 1e-10,
+            "Beta(4,1) variance: expected {expected}, got {var2}"
+        );
+    }
+
+    #[test]
+    fn strong_prior_dominates() {
+        let config = PipelineConfig {
+            prior_alpha: 100.0,
+            prior_beta: 100.0,
+            ..Default::default()
+        };
+        let mut pipeline = ValidationPipeline::with_config(config);
+        let id = pipeline.register("v", Duration::from_millis(5));
+
+        // Prior: p = 100/200 = 0.5
+        // After 5 failures: p = 105/205 ≈ 0.5122 (barely moves)
+        for _ in 0..5 {
+            pipeline.update(&ValidationOutcome {
+                id,
+                passed: false,
+                duration: Duration::from_millis(5),
+            });
+        }
+        let p = pipeline.stats(id).unwrap().failure_prob();
+        assert!(
+            (p - 105.0 / 205.0).abs() < 1e-10,
+            "strong prior should dominate: got {p}"
+        );
+    }
+
+    #[test]
+    fn register_empty_name() {
+        let mut pipeline = ValidationPipeline::new();
+        let id = pipeline.register("", Duration::from_millis(5));
+        assert_eq!(pipeline.stats(id).unwrap().name, "");
+    }
+
+    #[test]
+    fn expected_cost_many_validators_survival_shrinks() {
+        let mut pipeline = ValidationPipeline::new();
+        // 10 validators each with p=0.5 (uniform prior), cost=10ms
+        for i in 0..10 {
+            pipeline.register(format!("v{i}"), Duration::from_millis(10));
+        }
+
+        let ordering: Vec<usize> = (0..10).collect();
+        let cost = pipeline.expected_cost(&ordering);
+
+        // E = 10*(1 + 0.5 + 0.25 + ... + 0.5^9) = 10 * (1 - 0.5^10) / (1 - 0.5)
+        // = 10 * (1 - 1/1024) / 0.5 = 10 * 1023/1024 / 0.5 ≈ 19.98
+        let c = 0.010; // 10ms in seconds
+        let geometric_sum: f64 = (0..10).map(|k| 0.5_f64.powi(k)).sum();
+        let expected = c * geometric_sum;
+        assert!(
+            (cost - expected).abs() < 1e-10,
+            "expected {expected}, got {cost}"
+        );
+    }
+
+    #[test]
+    fn score_with_very_large_cost() {
+        let mut pipeline = ValidationPipeline::new();
+        let id = pipeline.register("v", Duration::from_secs(1_000_000));
+        let score = pipeline.stats(id).unwrap().score(C_MIN);
+        assert!(score.is_finite());
+        assert!(score > 0.0);
+        assert!(score < 1.0, "score with huge cost should be tiny");
+    }
+
+    #[test]
+    fn score_with_cost_at_c_min() {
+        let mut pipeline = ValidationPipeline::new();
+        let id = pipeline.register("v", C_MIN);
+        let score = pipeline.stats(id).unwrap().score(C_MIN);
+        assert!(score.is_finite());
+        // p=0.5, c=1μs → score = 0.5/0.000001 = 500000
+        assert!(score > 1.0, "score with c_min cost should be large");
+    }
+
+    #[test]
+    fn ledger_entry_fields_match_stats() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("v", Duration::from_millis(10));
+
+        // Add some observations
+        for _ in 0..5 {
+            pipeline.update(&ValidationOutcome {
+                id: 0,
+                passed: false,
+                duration: Duration::from_millis(10),
+            });
+        }
+
+        let (_, ledger) = pipeline.compute_ordering();
+        assert_eq!(ledger.len(), 1);
+        let entry = &ledger[0];
+        let stats = pipeline.stats(0).unwrap();
+
+        assert_eq!(entry.id, stats.id);
+        assert_eq!(entry.name, stats.name);
+        assert!((entry.p - stats.failure_prob()).abs() < 1e-10);
+        assert_eq!(entry.c, stats.cost_ema);
+        assert!((entry.score - stats.score(C_MIN)).abs() < 1e-10);
+        assert_eq!(entry.rank, 0);
+    }
+
+    #[test]
+    fn run_closure_called_in_ordering_sequence() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("expensive", Duration::from_millis(100));
+        pipeline.register("cheap", Duration::from_millis(1));
+
+        // cheap (id=1) should run first due to higher p/c score
+        let mut call_order = Vec::new();
+        let _result = pipeline.run(|id| {
+            call_order.push(id);
+            (true, Duration::from_millis(5))
+        });
+
+        let (expected_ordering, _) = pipeline.compute_ordering();
+        assert_eq!(
+            call_order, expected_ordering,
+            "closure should be called in ordering sequence"
+        );
+    }
+
+    #[test]
+    fn pipeline_result_ordering_matches_compute() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("a", Duration::from_millis(5));
+        pipeline.register("b", Duration::from_millis(50));
+        pipeline.register("c", Duration::from_millis(1));
+
+        let (expected_ordering, _) = pipeline.compute_ordering();
+        let result = pipeline.run(|_| (true, Duration::from_millis(3)));
+        assert_eq!(result.ordering, expected_ordering);
+    }
+
+    #[test]
+    fn update_batch_applies_to_all_outcomes() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("a", Duration::from_millis(5));
+        pipeline.register("b", Duration::from_millis(10));
+
+        let result = PipelineResult {
+            all_passed: true,
+            outcomes: vec![
+                ValidationOutcome {
+                    id: 0,
+                    passed: true,
+                    duration: Duration::from_millis(4),
+                },
+                ValidationOutcome {
+                    id: 1,
+                    passed: false,
+                    duration: Duration::from_millis(8),
+                },
+            ],
+            total_cost: Duration::from_millis(12),
+            ordering: vec![0, 1],
+            ledger: Vec::new(),
+            skipped: 0,
+        };
+
+        pipeline.update_batch(&result);
+        assert_eq!(pipeline.stats(0).unwrap().observations, 1);
+        assert_eq!(pipeline.stats(0).unwrap().failures, 0);
+        assert_eq!(pipeline.stats(1).unwrap().observations, 1);
+        assert_eq!(pipeline.stats(1).unwrap().failures, 1);
+    }
+
+    #[test]
+    fn multiple_pipelines_independent() {
+        let mut p1 = ValidationPipeline::new();
+        let mut p2 = ValidationPipeline::new();
+
+        p1.register("v", Duration::from_millis(5));
+        p2.register("v", Duration::from_millis(5));
+
+        for _ in 0..10 {
+            p1.update(&ValidationOutcome {
+                id: 0,
+                passed: false,
+                duration: Duration::from_millis(5),
+            });
+        }
+
+        // p2 should be unaffected
+        assert_eq!(p2.stats(0).unwrap().observations, 0);
+        assert_eq!(p1.stats(0).unwrap().observations, 10);
+    }
+
+    #[test]
+    fn pipeline_clone_independent() {
+        let mut original = ValidationPipeline::new();
+        original.register("v", Duration::from_millis(5));
+
+        let mut cloned = original.clone();
+
+        // Mutate clone
+        cloned.update(&ValidationOutcome {
+            id: 0,
+            passed: false,
+            duration: Duration::from_millis(5),
+        });
+
+        // Original unchanged
+        assert_eq!(original.stats(0).unwrap().observations, 0);
+        assert_eq!(cloned.stats(0).unwrap().observations, 1);
+    }
+
+    #[test]
+    fn pipeline_config_clone() {
+        let config = PipelineConfig {
+            prior_alpha: 2.0,
+            prior_beta: 3.0,
+            gamma: 0.5,
+            c_min: Duration::from_micros(10),
+        };
+        let cloned = config.clone();
+        assert!((cloned.prior_alpha - 2.0).abs() < 1e-10);
+        assert!((cloned.prior_beta - 3.0).abs() < 1e-10);
+        assert!((cloned.gamma - 0.5).abs() < 1e-10);
+        assert_eq!(cloned.c_min, Duration::from_micros(10));
+    }
+
+    #[test]
+    fn validator_stats_clone() {
+        let mut pipeline = ValidationPipeline::new();
+        let id = pipeline.register("v", Duration::from_millis(5));
+        for _ in 0..3 {
+            pipeline.update(&ValidationOutcome {
+                id,
+                passed: false,
+                duration: Duration::from_millis(5),
+            });
+        }
+        let stats = pipeline.stats(id).unwrap().clone();
+        assert_eq!(stats.observations, 3);
+        assert_eq!(stats.failures, 3);
+        assert_eq!(stats.name, "v");
+    }
+
+    #[test]
+    fn debug_formatting_pipeline_result() {
+        let result = PipelineResult {
+            all_passed: true,
+            outcomes: Vec::new(),
+            total_cost: Duration::ZERO,
+            ordering: vec![0],
+            ledger: Vec::new(),
+            skipped: 0,
+        };
+        let debug = format!("{result:?}");
+        assert!(debug.contains("PipelineResult"));
+        assert!(debug.contains("all_passed: true"));
+    }
+
+    #[test]
+    fn debug_formatting_validation_outcome() {
+        let outcome = ValidationOutcome {
+            id: 42,
+            passed: false,
+            duration: Duration::from_millis(10),
+        };
+        let debug = format!("{outcome:?}");
+        assert!(debug.contains("ValidationOutcome"));
+        assert!(debug.contains("42"));
+        assert!(debug.contains("false"));
+    }
+
+    #[test]
+    fn debug_formatting_ledger_entry() {
+        let entry = LedgerEntry {
+            id: 7,
+            name: "test_validator".to_string(),
+            p: 0.75,
+            c: Duration::from_millis(10),
+            score: 75.0,
+            rank: 0,
+        };
+        let debug = format!("{entry:?}");
+        assert!(debug.contains("LedgerEntry"));
+        assert!(debug.contains("test_validator"));
+    }
+
+    #[test]
+    fn debug_formatting_pipeline_summary() {
+        let summary = PipelineSummary {
+            validator_count: 2,
+            total_runs: 5,
+            optimal_ordering: vec![1, 0],
+            expected_cost_secs: 0.015,
+            natural_cost_secs: 0.020,
+            improvement_fraction: 0.25,
+            ledger: Vec::new(),
+        };
+        let debug = format!("{summary:?}");
+        assert!(debug.contains("PipelineSummary"));
+        assert!(debug.contains("validator_count: 2"));
+    }
+
+    #[test]
+    fn debug_formatting_pipeline_config() {
+        let config = PipelineConfig::default();
+        let debug = format!("{config:?}");
+        assert!(debug.contains("PipelineConfig"));
+        assert!(debug.contains("prior_alpha"));
+    }
+
+    #[test]
+    fn debug_formatting_validator_stats() {
+        let mut pipeline = ValidationPipeline::new();
+        let id = pipeline.register("test_v", Duration::from_millis(5));
+        let stats = pipeline.stats(id).unwrap();
+        let debug = format!("{stats:?}");
+        assert!(debug.contains("ValidatorStats"));
+        assert!(debug.contains("test_v"));
+    }
+
+    #[test]
+    fn debug_formatting_validation_pipeline() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("v", Duration::from_millis(5));
+        let debug = format!("{pipeline:?}");
+        assert!(debug.contains("ValidationPipeline"));
+    }
+
+    #[test]
+    fn with_config_custom_prior() {
+        let config = PipelineConfig {
+            prior_alpha: 5.0,
+            prior_beta: 10.0,
+            ..Default::default()
+        };
+        let mut pipeline = ValidationPipeline::with_config(config);
+        let id = pipeline.register("v", Duration::from_millis(5));
+
+        // p = 5/(5+10) = 1/3
+        let p = pipeline.stats(id).unwrap().failure_prob();
+        assert!(
+            (p - 1.0 / 3.0).abs() < 1e-10,
+            "custom prior should set initial p: got {p}"
+        );
+    }
+
+    #[test]
+    fn with_config_custom_c_min() {
+        let config = PipelineConfig {
+            c_min: Duration::from_millis(10),
+            ..Default::default()
+        };
+        let mut pipeline = ValidationPipeline::with_config(config);
+        let id = pipeline.register("v", Duration::from_millis(1));
+
+        // Cost should be clamped to custom c_min=10ms
+        let cost = pipeline.stats(id).unwrap().cost_ema;
+        assert!(
+            cost >= Duration::from_millis(10),
+            "cost should be clamped to c_min: got {:?}",
+            cost
+        );
+    }
+
+    #[test]
+    fn update_does_not_increment_total_runs() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("v", Duration::from_millis(5));
+
+        pipeline.update(&ValidationOutcome {
+            id: 0,
+            passed: true,
+            duration: Duration::from_millis(5),
+        });
+        // update (not update_batch) should NOT increment total_runs
+        assert_eq!(
+            pipeline.total_runs(),
+            0,
+            "update() should not increment total_runs"
+        );
+    }
+
+    #[test]
+    fn ordering_reverses_after_learning() {
+        let mut pipeline = ValidationPipeline::new();
+        let a = pipeline.register("a", Duration::from_millis(10));
+        let b = pipeline.register("b", Duration::from_millis(10));
+
+        // Initially both same → order by id: [0, 1]
+        let (ordering1, _) = pipeline.compute_ordering();
+        assert_eq!(ordering1, vec![0, 1]);
+
+        // Make b much more flaky → higher p/c → should come first
+        for _ in 0..20 {
+            pipeline.update(&ValidationOutcome {
+                id: b,
+                passed: false,
+                duration: Duration::from_millis(10),
+            });
+        }
+        for _ in 0..20 {
+            pipeline.update(&ValidationOutcome {
+                id: a,
+                passed: true,
+                duration: Duration::from_millis(10),
+            });
+        }
+
+        let (ordering2, _) = pipeline.compute_ordering();
+        assert_eq!(ordering2[0], 1, "flaky validator b should now come first");
+    }
+
+    #[test]
+    fn summary_natural_cost_matches_sequential_order() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("a", Duration::from_millis(10));
+        pipeline.register("b", Duration::from_millis(20));
+        pipeline.register("c", Duration::from_millis(5));
+
+        let summary = pipeline.summary();
+        let natural: Vec<usize> = (0..3).collect();
+        let natural_cost = pipeline.expected_cost(&natural);
+        assert!(
+            (summary.natural_cost_secs - natural_cost).abs() < 1e-15,
+            "summary natural cost should match sequential ordering"
+        );
+    }
+
+    #[test]
+    fn validator_count_after_multiple_registers() {
+        let mut pipeline = ValidationPipeline::new();
+        assert_eq!(pipeline.validator_count(), 0);
+        pipeline.register("a", Duration::from_millis(5));
+        assert_eq!(pipeline.validator_count(), 1);
+        pipeline.register("b", Duration::from_millis(10));
+        assert_eq!(pipeline.validator_count(), 2);
+        pipeline.register("c", Duration::from_millis(15));
+        assert_eq!(pipeline.validator_count(), 3);
+    }
+
+    #[test]
+    fn alpha_beta_after_mixed_outcomes() {
+        let mut pipeline = ValidationPipeline::new();
+        let id = pipeline.register("v", Duration::from_millis(5));
+
+        // Prior: α=1, β=1
+        // 5 failures, 3 successes → α=6, β=4
+        for _ in 0..5 {
+            pipeline.update(&ValidationOutcome {
+                id,
+                passed: false,
+                duration: Duration::from_millis(5),
+            });
+        }
+        for _ in 0..3 {
+            pipeline.update(&ValidationOutcome {
+                id,
+                passed: true,
+                duration: Duration::from_millis(5),
+            });
+        }
+
+        let stats = pipeline.stats(id).unwrap();
+        assert!((stats.alpha - 6.0).abs() < 1e-10);
+        assert!((stats.beta - 4.0).abs() < 1e-10);
+        assert!((stats.failure_prob() - 0.6).abs() < 1e-10);
+    }
+
+    #[test]
+    fn pipeline_result_total_cost_accumulates() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("a", Duration::from_millis(5));
+        pipeline.register("b", Duration::from_millis(10));
+
+        let result = pipeline.run(|id| {
+            if id == 0 {
+                (true, Duration::from_millis(7))
+            } else {
+                (true, Duration::from_millis(12))
+            }
+        });
+
+        assert_eq!(result.total_cost, Duration::from_millis(19));
+    }
+
+    #[test]
+    fn cost_ema_multiple_updates_converge() {
+        let mut pipeline = ValidationPipeline::with_config(PipelineConfig {
+            gamma: 0.5,
+            ..Default::default()
+        });
+        let id = pipeline.register("v", Duration::from_millis(100));
+
+        // Repeatedly observe 10ms → EMA should converge toward 10ms
+        for _ in 0..50 {
+            pipeline.update(&ValidationOutcome {
+                id,
+                passed: true,
+                duration: Duration::from_millis(10),
+            });
+        }
+        let cost = pipeline.stats(id).unwrap().cost_ema;
+        // After 50 iterations with gamma=0.5, should be very close to 10ms
+        assert!(
+            (cost.as_millis() as i64 - 10).abs() <= 1,
+            "EMA should converge to observed value: got {}ms",
+            cost.as_millis()
+        );
+    }
+
+    #[test]
+    fn ledger_ranks_are_contiguous() {
+        let mut pipeline = ValidationPipeline::new();
+        for i in 0..5 {
+            pipeline.register(format!("v{i}"), Duration::from_millis((i as u64 + 1) * 10));
+        }
+
+        let (_, ledger) = pipeline.compute_ordering();
+        let mut ranks: Vec<usize> = ledger.iter().map(|e| e.rank).collect();
+        ranks.sort_unstable();
+        assert_eq!(ranks, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn ledger_scores_descending() {
+        let mut pipeline = ValidationPipeline::new();
+        pipeline.register("a", Duration::from_millis(5));
+        pipeline.register("b", Duration::from_millis(50));
+        pipeline.register("c", Duration::from_millis(1));
+
+        let (_, ledger) = pipeline.compute_ordering();
+        for window in ledger.windows(2) {
+            assert!(
+                window[0].score >= window[1].score,
+                "ledger scores should be descending: {} < {}",
+                window[0].score,
+                window[1].score
+            );
+        }
+    }
 }
