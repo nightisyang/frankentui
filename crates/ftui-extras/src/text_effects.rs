@@ -3172,6 +3172,7 @@ impl StyledText {
     }
 
     /// Get the configured shadows.
+    #[must_use]
     pub fn get_shadows(&self) -> &[Shadow] {
         &self.shadows
     }
