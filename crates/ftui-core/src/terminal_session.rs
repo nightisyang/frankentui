@@ -77,6 +77,7 @@
 use std::env;
 use std::io::{self, Write};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::event::Event;
@@ -84,6 +85,29 @@ use crate::event::Event;
 const KITTY_KEYBOARD_ENABLE: &[u8] = b"\x1b[>15u";
 const KITTY_KEYBOARD_DISABLE: &[u8] = b"\x1b[<u";
 const SYNC_END: &[u8] = b"\x1b[?2026l";
+
+static TERMINAL_SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug)]
+struct SessionLock;
+
+impl SessionLock {
+    fn acquire() -> io::Result<Self> {
+        if TERMINAL_SESSION_ACTIVE
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err(io::Error::other("TerminalSession already active"));
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for SessionLock {
+    fn drop(&mut self) {
+        TERMINAL_SESSION_ACTIVE.store(false, Ordering::SeqCst);
+    }
+}
 
 #[cfg(unix)]
 use signal_hook::consts::signal::{SIGINT, SIGTERM, SIGWINCH};
@@ -202,6 +226,11 @@ pub struct SessionOptions {
 /// ```
 #[derive(Debug)]
 pub struct TerminalSession {
+    /// Process-wide exclusivity guard for the one-session-at-a-time contract.
+    ///
+    /// Only sessions created via `TerminalSession::new` acquire this lock.
+    /// `new_for_tests` intentionally skips it to allow parallel headless tests.
+    session_lock: Option<SessionLock>,
     options: SessionOptions,
     /// Track what was enabled so we can disable on drop.
     alternate_screen_enabled: bool,
@@ -222,6 +251,8 @@ impl TerminalSession {
     pub fn new(options: SessionOptions) -> io::Result<Self> {
         install_panic_hook();
 
+        let session_lock = SessionLock::acquire()?;
+
         // Create signal guard before raw mode so that a failure here
         // does not leave the terminal in raw mode (the struct would never
         // be fully constructed, so Drop would not run).
@@ -234,6 +265,7 @@ impl TerminalSession {
         tracing::info!("terminal raw mode enabled");
 
         let mut session = Self {
+            session_lock: Some(session_lock),
             options: options.clone(),
             alternate_screen_enabled: false,
             mouse_enabled: false,
@@ -305,6 +337,7 @@ impl TerminalSession {
         let signal_guard = None;
 
         Ok(Self {
+            session_lock: None,
             options,
             alternate_screen_enabled: false,
             mouse_enabled: false,
@@ -475,6 +508,9 @@ impl TerminalSession {
 
         // Flush to ensure cleanup bytes are sent
         let _ = stdout.flush();
+
+        // Release process-wide exclusivity only after terminal state is restored.
+        let _ = self.session_lock.take();
     }
 
     fn enable_kitty_keyboard(writer: &mut impl Write) -> io::Result<()> {
@@ -882,6 +918,13 @@ mod tests {
 
     #[cfg(feature = "test-helpers")]
     #[test]
+    fn new_for_tests_allows_multiple_sessions() {
+        let _a = TerminalSession::new_for_tests(SessionOptions::default()).unwrap();
+        let _b = TerminalSession::new_for_tests(SessionOptions::default()).unwrap();
+    }
+
+    #[cfg(feature = "test-helpers")]
+    #[test]
     fn mouse_capture_enabled_getter() {
         let session = TerminalSession::new_for_tests(SessionOptions::default()).unwrap();
         assert!(!session.mouse_capture_enabled());
@@ -1124,5 +1167,88 @@ mod tests {
         assert_contains_any(&captured, FOCUS_DISABLE_SEQS, "focus disable");
         assert_contains_any(&captured, KITTY_DISABLE_SEQS, "kitty disable");
         assert_contains_any(&captured, CURSOR_SHOW_SEQS, "cursor show");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_session_enforces_single_active_session() {
+        const MARKER: &[u8] = b"EXCLUSIVITY_OK";
+        const TEST_NAME: &str =
+            "terminal_session::tests::terminal_session_enforces_single_active_session";
+
+        if std::env::var("FTUI_CORE_EXCLUSIVITY_CHILD").is_ok() {
+            let session = TerminalSession::new(SessionOptions::default())
+                .expect("TerminalSession::new should succeed in PTY");
+            let err = TerminalSession::new(SessionOptions::default())
+                .expect_err("second TerminalSession::new should be rejected");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("already active"),
+                "unexpected error message: {msg}"
+            );
+            drop(session);
+
+            let _session2 = TerminalSession::new(SessionOptions::default())
+                .expect("TerminalSession::new should succeed after previous session dropped");
+
+            let _ = io::stdout().write_all(MARKER);
+            let _ = io::stdout().flush();
+            return;
+        }
+
+        let exe = std::env::current_exe().expect("current_exe");
+        let mut cmd = CommandBuilder::new(exe);
+        cmd.args(["--exact", TEST_NAME, "--nocapture"]);
+        cmd.env("FTUI_CORE_EXCLUSIVITY_CHILD", "1");
+        cmd.env("RUST_BACKTRACE", "0");
+
+        let pty_system = portable_pty::native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+
+        let mut child = pair.slave.spawn_command(cmd).expect("spawn PTY child");
+        drop(pair.slave);
+
+        let mut reader = pair.master.try_clone_reader().expect("clone PTY reader");
+        let _writer = pair.master.take_writer().expect("take PTY writer");
+
+        let (tx, rx) = mpsc::channel::<ReaderMsg>();
+        let reader_thread = thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => {
+                        let _ = tx.send(ReaderMsg::Eof);
+                        break;
+                    }
+                    Ok(n) => {
+                        let _ = tx.send(ReaderMsg::Data(buf[..n].to_vec()));
+                    }
+                    Err(err) => {
+                        let _ = tx.send(ReaderMsg::Err(err));
+                        break;
+                    }
+                }
+            }
+        });
+
+        let mut captured = Vec::new();
+        read_until_pattern(&rx, &mut captured, MARKER, Duration::from_secs(5))
+            .expect("expected marker from child");
+
+        let status = child.wait().expect("child wait");
+        let _ = reader_thread.join();
+
+        assert!(status.success(), "child should exit successfully");
+        assert!(
+            captured.windows(MARKER.len()).any(|w| w == MARKER),
+            "expected marker in PTY output"
+        );
     }
 }

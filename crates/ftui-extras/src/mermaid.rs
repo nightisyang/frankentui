@@ -12719,9 +12719,7 @@ mod tests {
 
     #[test]
     fn link_resolution_jsonl_evidence() {
-        let log_path = format!("/tmp/ftui_test_link_jsonl_{}.jsonl", std::process::id());
-        // Clean up from any prior run.
-        let _ = std::fs::remove_file(&log_path);
+        let log_path = next_log_path("link_jsonl");
 
         let src = "graph TD\nA-->B\nclick A \"https://example.com\"\n";
         let ast = parse(src).expect("parse");
@@ -12737,13 +12735,15 @@ mod tests {
             &MermaidCompatibilityMatrix::default(),
             &MermaidFallbackPolicy::default(),
         );
-        let log_content = std::fs::read_to_string(&log_path).expect("read log");
+        let value = jsonl_event(&log_path, "mermaid_links");
         let _ = std::fs::remove_file(&log_path);
-        assert!(log_content.contains("mermaid_links"));
-        assert!(log_content.contains("\"link_mode\":\"footnote\""));
-        assert!(log_content.contains("\"total_count\":1"));
-        assert!(log_content.contains("\"allowed_count\":1"));
-        assert!(log_content.contains("\"blocked_count\":0"));
+        assert_eq!(
+            value.get("link_mode").and_then(|v| v.as_str()),
+            Some("footnote")
+        );
+        assert_eq!(value.get("total_count").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(value.get("allowed_count").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(value.get("blocked_count").and_then(|v| v.as_u64()), Some(0));
     }
 
     // ── NodeShape parsing tests ──────────────────────────────────────

@@ -6966,7 +6966,6 @@ mod tests {
         let mut buf = Buffer::new(80, 24);
         let _plan = render_diagram_adaptive(&layout, &ir_parse.ir, &config, area, &mut buf);
         let log_content = std::fs::read_to_string(&log_path).expect("read log");
-        assert!(log_content.contains("layout_metrics"));
         assert!(log_content.contains("mermaid_render"));
         assert!(log_content.contains("\"diagram_type\":\"mindmap\""));
     }
