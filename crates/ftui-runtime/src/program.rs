@@ -3418,7 +3418,7 @@ pub struct BatchController {
     /// Headroom factor: τ >= E[S] × headroom to keep ρ < 1.
     headroom: f64,
     /// Last event arrival timestamp.
-    last_arrival: Option<std::time::Instant>,
+    last_arrival: Option<Instant>,
     /// Number of observations.
     observations: u64,
 }
@@ -3444,7 +3444,7 @@ impl BatchController {
     }
 
     /// Record an event arrival, updating the inter-arrival estimate.
-    pub fn observe_arrival(&mut self, now: std::time::Instant) {
+    pub fn observe_arrival(&mut self, now: Instant) {
         if let Some(last) = self.last_arrival {
             let dt = now.duration_since(last).as_secs_f64();
             if dt > 0.0 && dt < 10.0 {
@@ -3458,7 +3458,7 @@ impl BatchController {
     }
 
     /// Record a service (render) time observation.
-    pub fn observe_service(&mut self, duration: std::time::Duration) {
+    pub fn observe_service(&mut self, duration: Duration) {
         let dt = duration.as_secs_f64();
         if (0.0..10.0).contains(&dt) {
             self.ema_service_s = self.alpha * dt + (1.0 - self.alpha) * self.ema_service_s;
@@ -3498,8 +3498,8 @@ impl BatchController {
     }
 
     /// Compute the optimal batch window as a Duration.
-    pub fn tau(&self) -> std::time::Duration {
-        std::time::Duration::from_secs_f64(self.tau_s())
+    pub fn tau(&self) -> Duration {
+        Duration::from_secs_f64(self.tau_s())
     }
 
     /// Check if the system is stable (ρ < 1).

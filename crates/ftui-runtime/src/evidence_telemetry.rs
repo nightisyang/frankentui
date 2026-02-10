@@ -355,7 +355,7 @@ mod tests {
             recommended_delay_ms: Some(20),
             hard_deadline_forced: None,
             observation_count: 50,
-            timestamp: std::time::Instant::now(),
+            timestamp: web_time::Instant::now(),
         });
         let mut guard = RESIZE_SNAPSHOT
             .write()

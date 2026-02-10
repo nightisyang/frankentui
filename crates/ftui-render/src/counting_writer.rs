@@ -24,7 +24,7 @@
 //! ```
 
 use std::io::{self, Write};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// A write wrapper that counts bytes written.
 ///

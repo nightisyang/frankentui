@@ -643,7 +643,7 @@ mod tests {
 
         // Create a DecisionLog entry representing an apply event
         let entry = DecisionLog {
-            timestamp: std::time::Instant::now(),
+            timestamp: Instant::now(),
             elapsed_ms: 0.0,
             event_idx: 1,
             dt_ms: 0.0,
@@ -663,7 +663,7 @@ mod tests {
         // Feed more entries
         for i in 0..5 {
             let entry = DecisionLog {
-                timestamp: std::time::Instant::now(),
+                timestamp: Instant::now(),
                 elapsed_ms: 0.0,
                 event_idx: 2 + i,
                 dt_ms: 0.0,

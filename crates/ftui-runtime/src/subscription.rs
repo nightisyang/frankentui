@@ -17,7 +17,7 @@
 use std::collections::HashSet;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use web_time::{Duration, Instant};
 
 /// A unique identifier for a subscription.
 ///
@@ -84,7 +84,7 @@ impl StopSignal {
             return true;
         }
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let mut remaining = duration;
 
         loop {
@@ -618,7 +618,7 @@ mod tests {
         trigger.stop();
 
         // Should return immediately, not wait for timeout
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let stopped = signal.wait_timeout(Duration::from_secs(10));
         let elapsed = start.elapsed();
 
@@ -712,7 +712,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let (signal, trigger) = StopSignal::new();
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let handle = thread::spawn(move || {
             sub.run(tx, signal);
         });

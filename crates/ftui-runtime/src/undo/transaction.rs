@@ -702,4 +702,151 @@ mod tests {
         assert!(s.contains("Transaction"));
         assert!(s.contains("Debug Test"));
     }
+
+    // ====================================================================
+    // Additional coverage: double rollback, scope edge cases
+    // ====================================================================
+
+    #[test]
+    fn test_rollback_is_idempotent() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let mut txn = Transaction::begin("Double Rollback");
+        txn.add_executed(make_cmd(buffer.clone(), "x")).unwrap();
+
+        txn.rollback();
+        assert_eq!(*buffer.lock().unwrap(), "");
+
+        // Second rollback is a no-op (finalized)
+        txn.rollback();
+        assert_eq!(*buffer.lock().unwrap(), "");
+    }
+
+    #[test]
+    fn test_rollback_empty_transaction() {
+        let mut txn = Transaction::begin("Empty Rollback");
+        txn.rollback();
+        // Should not panic, nothing to undo
+        assert!(txn.commit().is_none());
+    }
+
+    #[test]
+    fn test_scope_drop_with_multiple_uncommitted() {
+        let mut history = HistoryManager::new(HistoryConfig::unlimited());
+
+        {
+            let mut scope = TransactionScope::new(&mut history);
+            scope.begin("Outer");
+            // Use separate buffers to avoid cross-transaction interference
+            let buf_a = Arc::new(Mutex::new(String::new()));
+            scope.execute(make_cmd(buf_a, "a")).unwrap();
+
+            scope.begin("Inner");
+            let buf_b = Arc::new(Mutex::new(String::new()));
+            scope.execute(make_cmd(buf_b, "b")).unwrap();
+
+            // Drop without committing either transaction
+        }
+
+        // Both should have been rolled back — nothing in history
+        assert_eq!(history.undo_depth(), 0);
+    }
+
+    #[test]
+    fn test_scope_inner_rollback_outer_continues() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let mut history = HistoryManager::new(HistoryConfig::unlimited());
+
+        {
+            let mut scope = TransactionScope::new(&mut history);
+
+            // Outer transaction
+            scope.begin("Outer");
+            scope.execute(make_cmd(buffer.clone(), "outer")).unwrap();
+
+            // Inner transaction
+            scope.begin("Inner");
+            scope.execute(make_cmd(buffer.clone(), "inner")).unwrap();
+            scope.rollback().unwrap(); // Roll back inner only
+
+            assert_eq!(scope.depth(), 1); // Outer still active
+
+            // Commit outer
+            scope.commit().unwrap();
+        }
+
+        assert_eq!(history.undo_depth(), 1);
+    }
+
+    #[test]
+    fn test_scope_commit_empty_inner_txn() {
+        let mut history = HistoryManager::new(HistoryConfig::unlimited());
+
+        {
+            let mut scope = TransactionScope::new(&mut history);
+            scope.begin("Outer");
+            scope.begin("Empty Inner");
+            scope.commit().unwrap(); // Empty inner commits as None
+            scope.commit().unwrap(); // Outer commits as empty too
+        }
+
+        // Empty transactions produce no history entry
+        assert_eq!(history.undo_depth(), 0);
+    }
+
+    #[test]
+    fn test_transaction_execute_failure_rolls_back_prior() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let b1 = buffer.clone();
+        let b2 = buffer.clone();
+
+        let ok_cmd = TextInsertCmd::new(WidgetId::new(1), 0, "ok")
+            .with_apply(move |_, _, txt| {
+                let mut buf = b1.lock().unwrap();
+                buf.push_str(txt);
+                Ok(())
+            })
+            .with_remove(move |_, _, _| {
+                let mut buf = b2.lock().unwrap();
+                buf.drain(..2);
+                Ok(())
+            });
+
+        // A command that fails on execute (no apply callback)
+        let fail_cmd = TextInsertCmd::new(WidgetId::new(1), 2, "fail");
+
+        let mut txn = Transaction::begin("Execute Failure");
+        txn.execute(Box::new(ok_cmd)).unwrap();
+        assert_eq!(*buffer.lock().unwrap(), "ok");
+
+        // This should fail and rollback the "ok" command
+        let result = txn.execute(Box::new(fail_cmd));
+        assert!(result.is_err());
+        assert_eq!(*buffer.lock().unwrap(), "");
+    }
+
+    #[test]
+    fn test_transaction_is_empty_after_add() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let mut txn = Transaction::begin("Not Empty");
+        assert!(txn.is_empty());
+
+        txn.add_executed(make_cmd(buffer, "x")).unwrap();
+        assert!(!txn.is_empty());
+    }
+
+    #[test]
+    fn test_scope_execute_failure_without_txn() {
+        let mut history = HistoryManager::new(HistoryConfig::unlimited());
+
+        // Execute without begin() with a failing command
+        let fail_cmd = TextInsertCmd::new(WidgetId::new(1), 0, "fail");
+        // No callbacks, so execute will fail
+
+        {
+            let mut scope = TransactionScope::new(&mut history);
+            let result = scope.execute(Box::new(fail_cmd));
+            assert!(result.is_err());
+        }
+        assert_eq!(history.undo_depth(), 0);
+    }
 }

@@ -944,7 +944,7 @@ mod tests {
             }
         }
 
-        let start = std::time::Instant::now();
+        let start = web_time::Instant::now();
         for _ in 0..1000 {
             let _ = pipeline.compute_ordering();
         }

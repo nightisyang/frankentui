@@ -37,7 +37,7 @@
 //! }
 //! ```
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 #[cfg(feature = "tracing")]
 use tracing::{trace, warn};

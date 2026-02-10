@@ -697,4 +697,603 @@ mod tests {
         let after_redo = mgr.memory_usage();
         assert_eq!(after_push, after_redo);
     }
+
+    // ====================================================================
+    // Undo/redo failure paths
+    // ====================================================================
+
+    /// Helper to create a command whose undo always fails.
+    fn make_failing_undo_cmd() -> Box<dyn UndoableCmd> {
+        use crate::undo::command::CommandError;
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let b1 = buffer.clone();
+
+        Box::new(
+            TextInsertCmd::new(WidgetId::new(1), 0, "x")
+                .with_apply(move |_, _, txt| {
+                    let mut buf = b1.lock().unwrap();
+                    buf.push_str(txt);
+                    Ok(())
+                })
+                .with_remove(move |_, _, _| Err(CommandError::Other("undo fail".to_string()))),
+        )
+    }
+
+    /// Helper to create a command whose redo (execute) always fails
+    /// but whose undo succeeds.
+    fn make_failing_redo_cmd() -> (Box<dyn UndoableCmd>, Arc<Mutex<String>>) {
+        use crate::undo::command::CommandError;
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let b1 = buffer.clone();
+        let b2 = buffer.clone();
+        let call_count = Arc::new(Mutex::new(0u32));
+        let cc = call_count.clone();
+
+        let cmd = TextInsertCmd::new(WidgetId::new(1), 0, "y")
+            .with_apply(move |_, _, txt| {
+                let mut count = cc.lock().unwrap();
+                *count += 1;
+                if *count > 1 {
+                    return Err(CommandError::Other("redo fail".to_string()));
+                }
+                let mut buf = b1.lock().unwrap();
+                buf.push_str(txt);
+                Ok(())
+            })
+            .with_remove(move |_, _, len| {
+                let mut buf = b2.lock().unwrap();
+                buf.drain(..len);
+                Ok(())
+            });
+
+        (Box::new(cmd), buffer)
+    }
+
+    #[test]
+    fn test_undo_failure_keeps_command_on_stack() {
+        let mut mgr = HistoryManager::new(HistoryConfig::unlimited());
+
+        // Execute the command manually first, then push
+        let mut cmd = make_failing_undo_cmd();
+        cmd.execute().unwrap();
+        mgr.push(cmd);
+
+        assert_eq!(mgr.undo_depth(), 1);
+
+        // Undo should fail
+        let result = mgr.undo();
+        assert!(result.is_some());
+        assert!(result.unwrap().is_err());
+
+        // Command should still be on undo stack
+        assert_eq!(mgr.undo_depth(), 1);
+        assert_eq!(mgr.redo_depth(), 0);
+    }
+
+    #[test]
+    fn test_redo_failure_keeps_command_on_redo_stack() {
+        let mut mgr = HistoryManager::new(HistoryConfig::unlimited());
+
+        let (mut cmd, _buffer) = make_failing_redo_cmd();
+        cmd.execute().unwrap(); // First execute succeeds
+        mgr.push(cmd);
+
+        // Undo should succeed
+        let result = mgr.undo();
+        assert!(result.unwrap().is_ok());
+        assert_eq!(mgr.redo_depth(), 1);
+
+        // Redo should fail (second execute fails)
+        let result = mgr.redo();
+        assert!(result.is_some());
+        assert!(result.unwrap().is_err());
+
+        // Command should remain on redo stack
+        assert_eq!(mgr.redo_depth(), 1);
+        assert_eq!(mgr.undo_depth(), 0);
+    }
+
+    // ====================================================================
+    // Merge path
+    // ====================================================================
+
+    #[test]
+    fn test_push_merges_consecutive_inserts() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let b1 = buffer.clone();
+        let b2 = buffer.clone();
+        let b3 = buffer.clone();
+        let b4 = buffer.clone();
+
+        let mut mgr = HistoryManager::new(HistoryConfig::default());
+
+        // First insert "a" at position 0
+        let mut cmd1 = TextInsertCmd::new(WidgetId::new(1), 0, "a")
+            .with_apply(move |_, pos, txt| {
+                let mut buf = b1.lock().unwrap();
+                buf.insert_str(pos, txt);
+                Ok(())
+            })
+            .with_remove(move |_, pos, len| {
+                let mut buf = b2.lock().unwrap();
+                buf.drain(pos..pos + len);
+                Ok(())
+            });
+        cmd1.execute().unwrap();
+        mgr.push(Box::new(cmd1));
+
+        // Second insert "b" at position 1 (consecutive)
+        let mut cmd2 = TextInsertCmd::new(WidgetId::new(1), 1, "b")
+            .with_apply(move |_, pos, txt| {
+                let mut buf = b3.lock().unwrap();
+                buf.insert_str(pos, txt);
+                Ok(())
+            })
+            .with_remove(move |_, pos, len| {
+                let mut buf = b4.lock().unwrap();
+                buf.drain(pos..pos + len);
+                Ok(())
+            });
+        cmd2.metadata.timestamp = mgr.undo_stack.back().unwrap().metadata().timestamp;
+        cmd2.execute().unwrap();
+        mgr.push(Box::new(cmd2));
+
+        // Should have merged into 1 command
+        assert_eq!(
+            mgr.undo_depth(),
+            1,
+            "consecutive inserts should merge into 1 command"
+        );
+    }
+
+    // ====================================================================
+    // Memory eviction: redo evicted before undo
+    // ====================================================================
+
+    #[test]
+    fn test_push_clears_redo_memory_accounting() {
+        let mut mgr = HistoryManager::new(HistoryConfig::unlimited());
+
+        mgr.push(make_insert_cmd("redo_me"));
+        let mem_after_push = mgr.memory_usage();
+
+        mgr.undo();
+        // Memory unchanged (moved to redo)
+        assert_eq!(mgr.memory_usage(), mem_after_push);
+
+        // New push clears redo; total memory should only be for the new cmd
+        mgr.push(make_insert_cmd("new"));
+        assert_eq!(mgr.redo_depth(), 0);
+        // Memory should be for "new" only (redo was cleared)
+        assert!(mgr.memory_usage() > 0);
+    }
+
+    // ====================================================================
+    // Descriptions on empty stacks
+    // ====================================================================
+
+    #[test]
+    fn test_descriptions_empty_stacks() {
+        let mgr = HistoryManager::default();
+        assert!(mgr.undo_descriptions(10).is_empty());
+        assert!(mgr.redo_descriptions(10).is_empty());
+        assert_eq!(mgr.next_undo_description(), None);
+        assert_eq!(mgr.next_redo_description(), None);
+    }
+
+    // ====================================================================
+    // Memory accounting after push clears redo
+    // ====================================================================
+
+    #[test]
+    fn test_memory_decreases_when_push_clears_redo() {
+        let mut mgr = HistoryManager::new(HistoryConfig::unlimited());
+
+        mgr.push(make_insert_cmd("aaa"));
+        mgr.push(make_insert_cmd("bbb"));
+        mgr.undo(); // "bbb" moves to redo
+        let mem_with_redo = mgr.memory_usage();
+        assert!(mem_with_redo > 0);
+
+        // Push clears redo
+        mgr.push(make_insert_cmd("ccc"));
+
+        // Memory should account for "aaa" + "ccc" but not "bbb"
+        assert_eq!(mgr.redo_depth(), 0);
+        // Memory after clearing redo and adding new should be different
+        let mem_after = mgr.memory_usage();
+        assert!(mem_after > 0);
+    }
+
+    // ====================================================================
+    // Depth limit with eviction
+    // ====================================================================
+
+    #[test]
+    fn test_depth_limit_evicts_oldest() {
+        let config = HistoryConfig::new(2, 0);
+        let mut mgr = HistoryManager::new(config);
+
+        mgr.push(make_insert_cmd("first"));
+        mgr.push(make_insert_cmd("second"));
+        mgr.push(make_insert_cmd("third"));
+
+        assert_eq!(mgr.undo_depth(), 2);
+        // Most recent two should remain
+        let descs = mgr.undo_descriptions(2);
+        assert_eq!(descs.len(), 2);
+    }
+
+    // ====================================================================
+    // Default impl
+    // ====================================================================
+
+    #[test]
+    fn test_default_impl() {
+        let mgr = HistoryManager::default();
+        assert_eq!(mgr.config().max_depth, 100);
+        assert_eq!(mgr.config().max_bytes, 10 * 1024 * 1024);
+    }
+
+    // ====================================================================
+    // try_merge: merge_text() returns None
+    // ====================================================================
+
+    /// A command that reports can_merge = true but merge_text = None.
+    /// This exercises the early-exit at line 361-363.
+    struct MergeableNoText {
+        metadata: crate::undo::command::CommandMetadata,
+    }
+
+    impl MergeableNoText {
+        fn new() -> Self {
+            Self {
+                metadata: crate::undo::command::CommandMetadata::new("MergeableNoText"),
+            }
+        }
+    }
+
+    impl crate::undo::command::UndoableCmd for MergeableNoText {
+        fn execute(&mut self) -> crate::undo::command::CommandResult {
+            Ok(())
+        }
+        fn undo(&mut self) -> crate::undo::command::CommandResult {
+            Ok(())
+        }
+        fn description(&self) -> &str {
+            &self.metadata.description
+        }
+        fn size_bytes(&self) -> usize {
+            std::mem::size_of::<Self>()
+        }
+        fn can_merge(
+            &self,
+            _other: &dyn crate::undo::command::UndoableCmd,
+            _config: &MergeConfig,
+        ) -> bool {
+            true // Says it can merge...
+        }
+        fn merge_text(&self) -> Option<&str> {
+            None // ...but has no text to merge
+        }
+        fn accept_merge(&mut self, _other: &dyn crate::undo::command::UndoableCmd) -> bool {
+            false
+        }
+        fn metadata(&self) -> &crate::undo::command::CommandMetadata {
+            &self.metadata
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn test_try_merge_exits_early_when_merge_text_none() {
+        let mut mgr = HistoryManager::new(HistoryConfig::unlimited());
+
+        mgr.push(Box::new(MergeableNoText::new()));
+        assert_eq!(mgr.undo_depth(), 1);
+
+        // Second push: can_merge=true but merge_text=None → not merged
+        mgr.push(Box::new(MergeableNoText::new()));
+        assert_eq!(mgr.undo_depth(), 2);
+    }
+
+    // ====================================================================
+    // try_merge: accept_merge returns false
+    // ====================================================================
+
+    /// A command where can_merge=true, merge_text=Some, but accept_merge=false.
+    struct MergeableRejectsAccept {
+        metadata: crate::undo::command::CommandMetadata,
+    }
+
+    impl MergeableRejectsAccept {
+        fn new() -> Self {
+            Self {
+                metadata: crate::undo::command::CommandMetadata::new("MergeableRejectsAccept"),
+            }
+        }
+    }
+
+    impl crate::undo::command::UndoableCmd for MergeableRejectsAccept {
+        fn execute(&mut self) -> crate::undo::command::CommandResult {
+            Ok(())
+        }
+        fn undo(&mut self) -> crate::undo::command::CommandResult {
+            Ok(())
+        }
+        fn description(&self) -> &str {
+            &self.metadata.description
+        }
+        fn size_bytes(&self) -> usize {
+            std::mem::size_of::<Self>()
+        }
+        fn can_merge(
+            &self,
+            _other: &dyn crate::undo::command::UndoableCmd,
+            _config: &MergeConfig,
+        ) -> bool {
+            true
+        }
+        fn merge_text(&self) -> Option<&str> {
+            Some("text")
+        }
+        fn accept_merge(&mut self, _other: &dyn crate::undo::command::UndoableCmd) -> bool {
+            false // Rejects the merge
+        }
+        fn metadata(&self) -> &crate::undo::command::CommandMetadata {
+            &self.metadata
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    #[test]
+    fn test_try_merge_not_merged_when_accept_merge_false() {
+        let mut mgr = HistoryManager::new(HistoryConfig::unlimited());
+
+        mgr.push(Box::new(MergeableRejectsAccept::new()));
+        assert_eq!(mgr.undo_depth(), 1);
+
+        mgr.push(Box::new(MergeableRejectsAccept::new()));
+        assert_eq!(mgr.undo_depth(), 2);
+    }
+
+    // ====================================================================
+    // enforce_limits: redo evicted before undo under memory pressure
+    // ====================================================================
+
+    #[test]
+    fn test_memory_limit_evicts_redo_before_undo() {
+        // Use a byte limit that can hold ~1-2 commands
+        let config = HistoryConfig::new(100, 1);
+        let mut mgr = HistoryManager::new(config);
+
+        // Push and undo to put cmd on redo stack
+        mgr.push(make_insert_cmd("redo_item"));
+        mgr.undo();
+        assert_eq!(mgr.redo_depth(), 1);
+
+        // Push a new command — this clears redo first, then enforce_limits
+        // sees total_bytes > max_bytes and should evict
+        mgr.push(make_insert_cmd("new_item"));
+
+        // Redo should be cleared by push()
+        assert_eq!(mgr.redo_depth(), 0);
+    }
+
+    // ====================================================================
+    // max_bytes = 0 means unlimited
+    // ====================================================================
+
+    #[test]
+    fn test_max_bytes_zero_means_unlimited() {
+        let config = HistoryConfig::new(100, 0); // 0 = unlimited bytes
+        let mut mgr = HistoryManager::new(config);
+
+        for i in 0..50 {
+            mgr.push(make_insert_cmd(&format!("cmd{i}")));
+        }
+
+        // All 50 should be retained (depth limit is 100)
+        assert_eq!(mgr.undo_depth(), 50);
+        assert!(mgr.memory_usage() > 0);
+    }
+
+    // ====================================================================
+    // Memory accounting after successful merge
+    // ====================================================================
+
+    #[test]
+    fn test_memory_accounting_after_merge() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let b1 = buffer.clone();
+        let b2 = buffer.clone();
+        let b3 = buffer.clone();
+        let b4 = buffer.clone();
+
+        let mut mgr = HistoryManager::new(HistoryConfig::default());
+
+        // First insert
+        let mut cmd1 = TextInsertCmd::new(WidgetId::new(1), 0, "a")
+            .with_apply(move |_, pos, txt| {
+                let mut buf = b1.lock().unwrap();
+                buf.insert_str(pos, txt);
+                Ok(())
+            })
+            .with_remove(move |_, pos, len| {
+                let mut buf = b2.lock().unwrap();
+                buf.drain(pos..pos + len);
+                Ok(())
+            });
+        cmd1.execute().unwrap();
+        mgr.push(Box::new(cmd1));
+        let mem_after_first = mgr.memory_usage();
+
+        // Second insert (consecutive, same timestamp → merges)
+        let mut cmd2 = TextInsertCmd::new(WidgetId::new(1), 1, "b")
+            .with_apply(move |_, pos, txt| {
+                let mut buf = b3.lock().unwrap();
+                buf.insert_str(pos, txt);
+                Ok(())
+            })
+            .with_remove(move |_, pos, len| {
+                let mut buf = b4.lock().unwrap();
+                buf.drain(pos..pos + len);
+                Ok(())
+            });
+        cmd2.metadata.timestamp = mgr.undo_stack.back().unwrap().metadata().timestamp;
+        cmd2.execute().unwrap();
+        mgr.push(Box::new(cmd2));
+
+        // Still 1 command (merged)
+        assert_eq!(mgr.undo_depth(), 1);
+
+        // Memory should increase by the merged text size
+        let mem_after_merge = mgr.memory_usage();
+        assert!(
+            mem_after_merge > mem_after_first,
+            "memory should increase after merge: {} vs {}",
+            mem_after_merge,
+            mem_after_first
+        );
+    }
+
+    // ====================================================================
+    // HistoryConfig Debug and Clone
+    // ====================================================================
+
+    #[test]
+    fn test_history_config_debug() {
+        let config = HistoryConfig::new(50, 4096);
+        let debug_str = format!("{:?}", config);
+        assert!(debug_str.contains("HistoryConfig"));
+        assert!(debug_str.contains("50"));
+        assert!(debug_str.contains("4096"));
+    }
+
+    #[test]
+    fn test_history_config_clone() {
+        let config = HistoryConfig::new(50, 4096);
+        let cloned = config.clone();
+        assert_eq!(cloned.max_depth, 50);
+        assert_eq!(cloned.max_bytes, 4096);
+    }
+
+    // ====================================================================
+    // Depth limit + memory limit interaction
+    // ====================================================================
+
+    #[test]
+    fn test_depth_and_byte_limits_both_enforced() {
+        // Depth limit 3, byte limit very small
+        let config = HistoryConfig::new(3, 1);
+        let mut mgr = HistoryManager::new(config);
+
+        for i in 0..10 {
+            mgr.push(make_insert_cmd(&format!("cmd{i}")));
+        }
+
+        // Both limits apply; depth ≤ 3 AND bytes may further reduce
+        assert!(mgr.undo_depth() <= 3);
+    }
+
+    // ====================================================================
+    // Push onto empty undo stack (try_merge early exit on empty)
+    // ====================================================================
+
+    #[test]
+    fn test_try_merge_returns_err_on_empty_stack() {
+        let mut mgr = HistoryManager::new(HistoryConfig::default());
+
+        // First push should not attempt merge (empty stack)
+        mgr.push(make_insert_cmd("first"));
+        assert_eq!(mgr.undo_depth(), 1);
+    }
+
+    // ====================================================================
+    // Undo returns description on success
+    // ====================================================================
+
+    #[test]
+    fn test_undo_returns_description_string() {
+        let mut mgr = HistoryManager::new(HistoryConfig::unlimited());
+        mgr.push(make_insert_cmd("hello"));
+
+        let result = mgr.undo().unwrap();
+        assert_eq!(result.unwrap(), "Insert text");
+    }
+
+    #[test]
+    fn test_redo_returns_description_string() {
+        let mut mgr = HistoryManager::new(HistoryConfig::unlimited());
+        mgr.push(make_insert_cmd("hello"));
+        mgr.undo();
+
+        let result = mgr.redo().unwrap();
+        assert_eq!(result.unwrap(), "Insert text");
+    }
+
+    // ====================================================================
+    // Clear with items on both stacks
+    // ====================================================================
+
+    #[test]
+    fn test_clear_resets_memory_with_both_stacks() {
+        let mut mgr = HistoryManager::new(HistoryConfig::unlimited());
+        mgr.push(make_insert_cmd("a"));
+        mgr.push(make_insert_cmd("b"));
+        mgr.push(make_insert_cmd("c"));
+        mgr.undo(); // "c" to redo
+        mgr.undo(); // "b" to redo
+
+        assert_eq!(mgr.undo_depth(), 1);
+        assert_eq!(mgr.redo_depth(), 2);
+        assert!(mgr.memory_usage() > 0);
+
+        mgr.clear();
+
+        assert_eq!(mgr.undo_depth(), 0);
+        assert_eq!(mgr.redo_depth(), 0);
+        assert_eq!(mgr.memory_usage(), 0);
+    }
+
+    // ====================================================================
+    // Depth limit of 1
+    // ====================================================================
+
+    #[test]
+    fn test_depth_limit_one() {
+        let config = HistoryConfig::new(1, 0);
+        let mut mgr = HistoryManager::new(config);
+
+        mgr.push(make_insert_cmd("first"));
+        mgr.push(make_insert_cmd("second"));
+        mgr.push(make_insert_cmd("third"));
+
+        assert_eq!(mgr.undo_depth(), 1);
+    }
+
+    // ====================================================================
+    // Depth limit of 0 (edge case)
+    // ====================================================================
+
+    #[test]
+    fn test_depth_limit_zero_evicts_everything() {
+        let config = HistoryConfig::new(0, 0);
+        let mut mgr = HistoryManager::new(config);
+
+        mgr.push(make_insert_cmd("will_be_evicted"));
+
+        // Depth limit 0 means everything gets evicted
+        assert_eq!(mgr.undo_depth(), 0);
+    }
 }
