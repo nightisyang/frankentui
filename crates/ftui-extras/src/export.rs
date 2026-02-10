@@ -1065,4 +1065,627 @@ mod tests {
         // No attributes, just ESC [ m
         assert_eq!(out, "\x1b[m");
     }
+
+    // ── HTML exporter (additional) ───────────────────────────────────
+
+    #[test]
+    fn html_dim_style() {
+        let mut buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+
+        let cell = Cell::from_char('D').with_attrs(CellAttrs::new(StyleFlags::DIM, 0));
+        buf.set_fast(0, 0, cell);
+
+        let html = HtmlExporter::default().export(&buf, &pool);
+        assert!(html.contains("opacity:0.5"));
+    }
+
+    #[test]
+    fn html_strikethrough_style() {
+        let mut buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+
+        let cell = Cell::from_char('S').with_attrs(CellAttrs::new(StyleFlags::STRIKETHROUGH, 0));
+        buf.set_fast(0, 0, cell);
+
+        let html = HtmlExporter::default().export(&buf, &pool);
+        assert!(html.contains("text-decoration:line-through"));
+    }
+
+    #[test]
+    fn html_underline_and_strikethrough_combined() {
+        let mut buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+
+        let cell = Cell::from_char('C').with_attrs(CellAttrs::new(
+            StyleFlags::UNDERLINE | StyleFlags::STRIKETHROUGH,
+            0,
+        ));
+        buf.set_fast(0, 0, cell);
+
+        let html = HtmlExporter::default().export(&buf, &pool);
+        assert!(html.contains("text-decoration:underline line-through"));
+    }
+
+    #[test]
+    fn html_custom_class_prefix() {
+        let (buf, pool) = make_buffer("A", 3);
+        let exporter = HtmlExporter {
+            class_prefix: "myapp".into(),
+            ..HtmlExporter::default()
+        };
+        let html = exporter.export(&buf, &pool);
+        assert!(html.contains("class=\"myapp\""));
+    }
+
+    #[test]
+    fn html_custom_font_settings() {
+        let (buf, pool) = make_buffer("A", 3);
+        let exporter = HtmlExporter {
+            font_family: "Courier New".into(),
+            font_size: "16px".into(),
+            ..HtmlExporter::default()
+        };
+        let html = exporter.export(&buf, &pool);
+        assert!(html.contains("font-family:Courier New"));
+        assert!(html.contains("font-size:16px"));
+    }
+
+    #[test]
+    fn html_css_class_deduplication() {
+        let mut buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+
+        // Two cells with identical style should use the same class
+        let cell = Cell::from_char('A').with_fg(PackedRgba::rgb(128, 0, 0));
+        buf.set_fast(0, 0, cell);
+        let cell2 = Cell::from_char('B').with_fg(PackedRgba::rgb(128, 0, 0));
+        buf.set_fast(1, 0, cell2);
+
+        let exporter = HtmlExporter {
+            inline_styles: false,
+            ..HtmlExporter::default()
+        };
+        let html = exporter.export(&buf, &pool);
+
+        // Both should use s0, no s1
+        let s0_count = html.matches("ftui-s0").count();
+        assert!(
+            s0_count >= 3,
+            "Should have at least 3 refs to s0 (1 def + 2 uses): {s0_count}"
+        );
+        assert!(
+            !html.contains("ftui-s1"),
+            "Should not create second class for identical style"
+        );
+    }
+
+    #[test]
+    fn html_css_class_multiple_different_styles() {
+        let mut buf = Buffer::new(2, 1);
+        let pool = GraphemePool::new();
+
+        let cell_a = Cell::from_char('A').with_fg(PackedRgba::rgb(255, 0, 0));
+        let cell_b = Cell::from_char('B').with_fg(PackedRgba::rgb(0, 255, 0));
+        buf.set_fast(0, 0, cell_a);
+        buf.set_fast(1, 0, cell_b);
+
+        let exporter = HtmlExporter {
+            inline_styles: false,
+            ..HtmlExporter::default()
+        };
+        let html = exporter.export(&buf, &pool);
+
+        assert!(html.contains("ftui-s0"));
+        assert!(html.contains("ftui-s1"));
+    }
+
+    #[test]
+    fn html_default_values() {
+        let exp = HtmlExporter::default();
+        assert_eq!(exp.class_prefix, "ftui");
+        assert_eq!(exp.font_family, "monospace");
+        assert_eq!(exp.font_size, "14px");
+        assert!(exp.inline_styles);
+    }
+
+    #[test]
+    fn html_quote_escape() {
+        let (buf, pool) = make_buffer("\"", 3);
+        let html = HtmlExporter::default().export(&buf, &pool);
+        assert!(html.contains("&quot;"));
+    }
+
+    // ── SVG exporter (additional) ────────────────────────────────────
+
+    #[test]
+    fn svg_italic_style() {
+        let mut buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+
+        let cell = Cell::from_char('I').with_attrs(CellAttrs::new(StyleFlags::ITALIC, 0));
+        buf.set_fast(0, 0, cell);
+
+        let svg = SvgExporter::default().export(&buf, &pool);
+        assert!(svg.contains("font-style=\"italic\""));
+    }
+
+    #[test]
+    fn svg_dim_style() {
+        let mut buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+
+        let cell = Cell::from_char('D').with_attrs(CellAttrs::new(StyleFlags::DIM, 0));
+        buf.set_fast(0, 0, cell);
+
+        let svg = SvgExporter::default().export(&buf, &pool);
+        assert!(svg.contains("opacity=\"0.5\""));
+    }
+
+    #[test]
+    fn svg_underline_style() {
+        let mut buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+
+        let cell = Cell::from_char('U').with_attrs(CellAttrs::new(StyleFlags::UNDERLINE, 0));
+        buf.set_fast(0, 0, cell);
+
+        let svg = SvgExporter::default().export(&buf, &pool);
+        assert!(svg.contains("text-decoration=\"underline\""));
+    }
+
+    #[test]
+    fn svg_strikethrough_style() {
+        let mut buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+
+        let cell = Cell::from_char('S').with_attrs(CellAttrs::new(StyleFlags::STRIKETHROUGH, 0));
+        buf.set_fast(0, 0, cell);
+
+        let svg = SvgExporter::default().export(&buf, &pool);
+        assert!(svg.contains("text-decoration=\"line-through\""));
+    }
+
+    #[test]
+    fn svg_transparent_background_no_rect() {
+        let buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+        let exporter = SvgExporter {
+            background: PackedRgba::TRANSPARENT,
+            ..SvgExporter::default()
+        };
+        let svg = exporter.export(&buf, &pool);
+        // Should not have the full-size background rect
+        assert!(!svg.contains("width=\"100%\""));
+    }
+
+    #[test]
+    fn svg_cell_bg_rect() {
+        let mut buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+
+        let cell = Cell::from_char('X').with_bg(PackedRgba::rgb(0, 128, 0));
+        buf.set_fast(0, 0, cell);
+
+        let svg = SvgExporter::default().export(&buf, &pool);
+        assert!(svg.contains("fill=\"#008000\""));
+    }
+
+    #[test]
+    fn svg_multiline() {
+        let mut buf = Buffer::new(3, 2);
+        let pool = GraphemePool::new();
+        buf.set_fast(0, 0, Cell::from_char('A'));
+        buf.set_fast(0, 1, Cell::from_char('B'));
+
+        let svg = SvgExporter::default().export(&buf, &pool);
+        assert!(svg.contains(">A</text>"));
+        assert!(svg.contains(">B</text>"));
+    }
+
+    #[test]
+    fn svg_default_values() {
+        let exp = SvgExporter::default();
+        assert!((exp.cell_width - 8.4).abs() < f32::EPSILON);
+        assert!((exp.cell_height - 17.0).abs() < f32::EPSILON);
+        assert!((exp.font_size - 14.0).abs() < f32::EPSILON);
+        assert_eq!(exp.font_family, "monospace");
+        assert_eq!(exp.background, PackedRgba::BLACK);
+    }
+
+    #[test]
+    fn svg_custom_font() {
+        let buf = Buffer::new(2, 1);
+        let pool = GraphemePool::new();
+        let exporter = SvgExporter {
+            font_family: "Fira Code".into(),
+            font_size: 12.0,
+            ..SvgExporter::default()
+        };
+        let svg = exporter.export(&buf, &pool);
+        assert!(svg.contains("font-family=\"Fira Code\""));
+        assert!(svg.contains("font-size=\"12\""));
+    }
+
+    // ── Text exporter (additional) ───────────────────────────────────
+
+    #[test]
+    fn text_ansi_dim() {
+        let mut buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+
+        let cell = Cell::from_char('D').with_attrs(CellAttrs::new(StyleFlags::DIM, 0));
+        buf.set_fast(0, 0, cell);
+
+        let text = TextExporter::ansi().export(&buf, &pool);
+        assert!(text.contains("\x1b[2m"));
+    }
+
+    #[test]
+    fn text_ansi_italic() {
+        let mut buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+
+        let cell = Cell::from_char('I').with_attrs(CellAttrs::new(StyleFlags::ITALIC, 0));
+        buf.set_fast(0, 0, cell);
+
+        let text = TextExporter::ansi().export(&buf, &pool);
+        assert!(text.contains("\x1b[3m"));
+    }
+
+    #[test]
+    fn text_ansi_underline() {
+        let mut buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+
+        let cell = Cell::from_char('U').with_attrs(CellAttrs::new(StyleFlags::UNDERLINE, 0));
+        buf.set_fast(0, 0, cell);
+
+        let text = TextExporter::ansi().export(&buf, &pool);
+        assert!(text.contains("\x1b[4m"));
+    }
+
+    #[test]
+    fn text_ansi_strikethrough() {
+        let mut buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+
+        let cell = Cell::from_char('S').with_attrs(CellAttrs::new(StyleFlags::STRIKETHROUGH, 0));
+        buf.set_fast(0, 0, cell);
+
+        let text = TextExporter::ansi().export(&buf, &pool);
+        assert!(text.contains("\x1b[9m"));
+    }
+
+    #[test]
+    fn text_ansi_bg_color() {
+        let mut buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+
+        let cell = Cell::from_char('B').with_bg(PackedRgba::rgb(0, 0, 255));
+        buf.set_fast(0, 0, cell);
+
+        let text = TextExporter::ansi().export(&buf, &pool);
+        assert!(text.contains("48;2;0;0;255"));
+    }
+
+    #[test]
+    fn text_ansi_reset_after_styled_cell() {
+        let mut buf = Buffer::new(3, 1);
+        let pool = GraphemePool::new();
+
+        let cell = Cell::from_char('R').with_fg(PackedRgba::rgb(255, 0, 0));
+        buf.set_fast(0, 0, cell);
+
+        let text = TextExporter::ansi().export(&buf, &pool);
+        assert!(text.contains("\x1b[0m"), "Should reset after styled cell");
+    }
+
+    #[test]
+    fn text_ansi_no_trim() {
+        let mut buf = Buffer::new(5, 1);
+        let pool = GraphemePool::new();
+        buf.set_fast(0, 0, Cell::from_char('A'));
+
+        let exporter = TextExporter {
+            include_ansi: true,
+            trim_trailing: false,
+        };
+        let text = exporter.export(&buf, &pool);
+        // Should have trailing spaces (4 empty cells become spaces)
+        assert!(text.len() > 1);
+    }
+
+    #[test]
+    fn text_ansi_multiline() {
+        let mut buf = Buffer::new(3, 2);
+        let pool = GraphemePool::new();
+
+        let cell = Cell::from_char('R').with_fg(PackedRgba::rgb(255, 0, 0));
+        buf.set_fast(0, 0, cell);
+        buf.set_fast(0, 1, cell);
+
+        let text = TextExporter::ansi().export(&buf, &pool);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("38;2;255;0;0"));
+        assert!(lines[1].contains("38;2;255;0;0"));
+    }
+
+    #[test]
+    fn text_ansi_empty_styled_cell_exports_space() {
+        let mut buf = Buffer::new(1, 1);
+        let pool = GraphemePool::new();
+
+        // Empty cell with bg color
+        buf.set_fast(
+            0,
+            0,
+            Cell::default().with_bg(PackedRgba::rgb(128, 128, 128)),
+        );
+
+        let text = TextExporter::ansi().export(&buf, &pool);
+        assert!(
+            text.contains("48;2;128;128;128"),
+            "Should include bg ANSI code"
+        );
+    }
+
+    // ── Helper function tests (additional) ───────────────────────────
+
+    #[test]
+    fn html_escape_empty_string() {
+        let mut out = String::new();
+        html_escape_into(&mut out, "");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn svg_escape_empty_string() {
+        let mut out = String::new();
+        svg_escape_into(&mut out, "");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn svg_escape_passthrough_normal() {
+        let mut out = String::new();
+        svg_escape_into(&mut out, "Hello World 123");
+        assert_eq!(out, "Hello World 123");
+    }
+
+    #[test]
+    fn svg_escape_does_not_escape_quotes() {
+        let mut out = String::new();
+        svg_escape_into(&mut out, "say \"hello\"");
+        // SVG escape doesn't escape quotes, unlike HTML
+        assert_eq!(out, "say \"hello\"");
+    }
+
+    #[test]
+    fn cell_content_str_empty() {
+        let pool = GraphemePool::new();
+        assert_eq!(cell_content_str(CellContent::EMPTY, &pool), "");
+    }
+
+    #[test]
+    fn cell_content_str_continuation() {
+        let pool = GraphemePool::new();
+        assert_eq!(cell_content_str(CellContent::CONTINUATION, &pool), "");
+    }
+
+    #[test]
+    fn cell_content_str_char() {
+        let pool = GraphemePool::new();
+        assert_eq!(cell_content_str(CellContent::from_char('Z'), &pool), "Z");
+    }
+
+    // ── write_ansi_style (additional) ────────────────────────────────
+
+    #[test]
+    fn ansi_style_bg_only() {
+        let mut out = String::new();
+        write_ansi_style(
+            &mut out,
+            PackedRgba::WHITE,
+            PackedRgba::rgb(0, 128, 255),
+            CellAttrs::NONE,
+        );
+        assert_eq!(out, "\x1b[48;2;0;128;255m");
+    }
+
+    #[test]
+    fn ansi_style_dim() {
+        let mut out = String::new();
+        write_ansi_style(
+            &mut out,
+            PackedRgba::WHITE,
+            PackedRgba::TRANSPARENT,
+            CellAttrs::new(StyleFlags::DIM, 0),
+        );
+        assert_eq!(out, "\x1b[2m");
+    }
+
+    #[test]
+    fn ansi_style_italic() {
+        let mut out = String::new();
+        write_ansi_style(
+            &mut out,
+            PackedRgba::WHITE,
+            PackedRgba::TRANSPARENT,
+            CellAttrs::new(StyleFlags::ITALIC, 0),
+        );
+        assert_eq!(out, "\x1b[3m");
+    }
+
+    #[test]
+    fn ansi_style_underline() {
+        let mut out = String::new();
+        write_ansi_style(
+            &mut out,
+            PackedRgba::WHITE,
+            PackedRgba::TRANSPARENT,
+            CellAttrs::new(StyleFlags::UNDERLINE, 0),
+        );
+        assert_eq!(out, "\x1b[4m");
+    }
+
+    #[test]
+    fn ansi_style_blink() {
+        let mut out = String::new();
+        write_ansi_style(
+            &mut out,
+            PackedRgba::WHITE,
+            PackedRgba::TRANSPARENT,
+            CellAttrs::new(StyleFlags::BLINK, 0),
+        );
+        assert_eq!(out, "\x1b[5m");
+    }
+
+    #[test]
+    fn ansi_style_reverse() {
+        let mut out = String::new();
+        write_ansi_style(
+            &mut out,
+            PackedRgba::WHITE,
+            PackedRgba::TRANSPARENT,
+            CellAttrs::new(StyleFlags::REVERSE, 0),
+        );
+        assert_eq!(out, "\x1b[7m");
+    }
+
+    #[test]
+    fn ansi_style_hidden() {
+        let mut out = String::new();
+        write_ansi_style(
+            &mut out,
+            PackedRgba::WHITE,
+            PackedRgba::TRANSPARENT,
+            CellAttrs::new(StyleFlags::HIDDEN, 0),
+        );
+        assert_eq!(out, "\x1b[8m");
+    }
+
+    #[test]
+    fn ansi_style_strikethrough() {
+        let mut out = String::new();
+        write_ansi_style(
+            &mut out,
+            PackedRgba::WHITE,
+            PackedRgba::TRANSPARENT,
+            CellAttrs::new(StyleFlags::STRIKETHROUGH, 0),
+        );
+        assert_eq!(out, "\x1b[9m");
+    }
+
+    #[test]
+    fn ansi_style_all_flags() {
+        let all_flags = StyleFlags::BOLD
+            | StyleFlags::DIM
+            | StyleFlags::ITALIC
+            | StyleFlags::UNDERLINE
+            | StyleFlags::BLINK
+            | StyleFlags::REVERSE
+            | StyleFlags::HIDDEN
+            | StyleFlags::STRIKETHROUGH;
+        let mut out = String::new();
+        write_ansi_style(
+            &mut out,
+            PackedRgba::WHITE,
+            PackedRgba::TRANSPARENT,
+            CellAttrs::new(all_flags, 0),
+        );
+        assert!(out.starts_with("\x1b["));
+        assert!(out.ends_with('m'));
+        // Should contain all SGR codes: 1;2;3;4;5;7;8;9
+        assert!(out.contains('1'));
+        assert!(out.contains('2'));
+        assert!(out.contains('3'));
+        assert!(out.contains('4'));
+        assert!(out.contains('5'));
+        assert!(out.contains('7'));
+        assert!(out.contains('8'));
+        assert!(out.contains('9'));
+    }
+
+    #[test]
+    fn ansi_style_fg_transparent_skipped() {
+        // WHITE fg is the default (skipped), but so is transparent alpha
+        let mut out = String::new();
+        write_ansi_style(
+            &mut out,
+            PackedRgba::rgba(255, 0, 0, 0), // transparent fg
+            PackedRgba::TRANSPARENT,
+            CellAttrs::NONE,
+        );
+        // fg with alpha 0 should be skipped
+        assert_eq!(out, "\x1b[m");
+    }
+
+    // ── Derive trait tests ───────────────────────────────────────────
+
+    #[test]
+    fn html_exporter_debug_and_clone() {
+        let exp = HtmlExporter::default();
+        let cloned = exp.clone();
+        assert_eq!(cloned.class_prefix, "ftui");
+        let _ = format!("{exp:?}");
+    }
+
+    #[test]
+    fn svg_exporter_debug_and_clone() {
+        let exp = SvgExporter::default();
+        let cloned = exp.clone();
+        assert_eq!(cloned.font_family, "monospace");
+        let _ = format!("{exp:?}");
+    }
+
+    #[test]
+    fn text_exporter_debug_and_clone() {
+        let exp = TextExporter::plain();
+        let cloned = exp.clone();
+        assert!(!cloned.include_ansi);
+        assert!(cloned.trim_trailing);
+        let _ = format!("{exp:?}");
+
+        let ansi = TextExporter::ansi();
+        assert!(ansi.include_ansi);
+        assert!(ansi.trim_trailing);
+    }
+
+    #[test]
+    fn html_style_key_derives() {
+        let key = HtmlStyleKey {
+            fg: PackedRgba::WHITE,
+            bg: PackedRgba::TRANSPARENT,
+            attrs: CellAttrs::NONE,
+        };
+        let cloned = key;
+        assert_eq!(key, cloned);
+        let _ = format!("{key:?}");
+
+        // Test Hash by using in a HashMap
+        let mut map = HashMap::new();
+        map.insert(key, 1);
+        assert_eq!(map.get(&key), Some(&1));
+    }
+
+    // ── make_buffer helper test ──────────────────────────────────────
+
+    #[test]
+    fn make_buffer_fills_cells() {
+        let (buf, pool) = make_buffer("ABC", 5);
+        assert_eq!(cell_content_str(buf.get(0, 0).unwrap().content, &pool), "A");
+        assert_eq!(cell_content_str(buf.get(1, 0).unwrap().content, &pool), "B");
+        assert_eq!(cell_content_str(buf.get(2, 0).unwrap().content, &pool), "C");
+    }
+
+    #[test]
+    fn make_buffer_truncates_at_width() {
+        let (buf, _pool) = make_buffer("ABCDE", 3);
+        // Only first 3 chars should be set
+        assert!(buf.get(0, 0).unwrap().content.as_char() == Some('A'));
+        assert!(buf.get(1, 0).unwrap().content.as_char() == Some('B'));
+        assert!(buf.get(2, 0).unwrap().content.as_char() == Some('C'));
+    }
 }
