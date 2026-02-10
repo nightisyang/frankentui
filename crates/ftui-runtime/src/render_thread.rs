@@ -67,7 +67,7 @@ pub struct RenderThread {
 
 #[allow(clippy::result_large_err)]
 impl RenderThread {
-    pub fn start<W: Write + Send + 'static>(writer: TerminalWriter<W>) -> Self {
+    pub fn start<W: Write + Send + 'static>(writer: TerminalWriter<W>) -> io::Result<Self> {
         let (tx, rx) = mpsc::sync_channel::<OutMsg>(CHANNEL_CAPACITY);
         let (err_tx, err_rx) = mpsc::sync_channel::<io::Error>(8);
 
@@ -75,14 +75,13 @@ impl RenderThread {
             .name("ftui-render".into())
             .spawn(move || {
                 render_loop(writer, rx, err_tx);
-            })
-            .expect("failed to spawn render thread");
+            })?;
 
-        Self {
+        Ok(Self {
             sender: tx,
             handle: Some(handle),
             error_rx: err_rx,
-        }
+        })
     }
 
     pub fn send(&self, msg: OutMsg) -> Result<(), mpsc::SendError<OutMsg>> {
@@ -294,14 +293,14 @@ mod tests {
     #[test]
     fn start_and_shutdown() {
         let (writer, _tw) = test_writer();
-        let rt = RenderThread::start(writer);
+        let rt = RenderThread::start(writer).unwrap();
         rt.shutdown();
     }
 
     #[test]
     fn send_log_is_written() {
         let (writer, tw) = test_writer();
-        let rt = RenderThread::start(writer);
+        let rt = RenderThread::start(writer).unwrap();
 
         rt.send(OutMsg::Log(b"hello world\n".to_vec())).unwrap();
         std::thread::sleep(Duration::from_millis(50));
@@ -316,7 +315,7 @@ mod tests {
     fn interleaved_logs_and_renders() {
         let (mut writer, tw) = test_writer();
         writer.set_size(10, 10);
-        let rt = RenderThread::start(writer);
+        let rt = RenderThread::start(writer).unwrap();
 
         // Send enough logs to force chunking (> 64)
         // plus a render in between
@@ -369,7 +368,7 @@ mod tests {
     #[test]
     fn check_error_none_when_clean() {
         let (writer, _tw) = test_writer();
-        let rt = RenderThread::start(writer);
+        let rt = RenderThread::start(writer).unwrap();
         assert!(rt.check_error().is_none());
         rt.shutdown();
     }
@@ -377,7 +376,7 @@ mod tests {
     #[test]
     fn try_send_succeeds() {
         let (writer, tw) = test_writer();
-        let rt = RenderThread::start(writer);
+        let rt = RenderThread::start(writer).unwrap();
 
         assert!(
             rt.try_send(OutMsg::Log(
@@ -398,7 +397,7 @@ mod tests {
     #[test]
     fn drop_triggers_shutdown() {
         let (writer, _tw) = test_writer();
-        let rt = RenderThread::start(writer);
+        let rt = RenderThread::start(writer).unwrap();
         // Drop without explicit shutdown should not hang
         drop(rt);
     }
@@ -407,7 +406,7 @@ mod tests {
     fn render_coalescing_uses_latest() {
         let (mut writer, tw) = test_writer();
         writer.set_size(10, 5);
-        let rt = RenderThread::start(writer);
+        let rt = RenderThread::start(writer).unwrap();
 
         // Send two renders in quick succession: first with 'A', second with 'Z'
         let mut buf_a = Buffer::new(10, 5);
@@ -440,7 +439,7 @@ mod tests {
     #[test]
     fn resize_message_processed() {
         let (writer, _tw) = test_writer();
-        let rt = RenderThread::start(writer);
+        let rt = RenderThread::start(writer).unwrap();
         // Resize should not cause errors
         rt.send(OutMsg::Resize { w: 120, h: 40 }).unwrap();
         std::thread::sleep(Duration::from_millis(50));
@@ -451,7 +450,7 @@ mod tests {
     #[test]
     fn set_mode_message_processed() {
         let (writer, _tw) = test_writer();
-        let rt = RenderThread::start(writer);
+        let rt = RenderThread::start(writer).unwrap();
         rt.send(OutMsg::SetMode(ScreenMode::AltScreen)).unwrap();
         std::thread::sleep(Duration::from_millis(50));
         assert!(rt.check_error().is_none());
@@ -461,7 +460,7 @@ mod tests {
     #[test]
     fn multiple_logs_all_written() {
         let (writer, tw) = test_writer();
-        let rt = RenderThread::start(writer);
+        let rt = RenderThread::start(writer).unwrap();
 
         for i in 0..10 {
             rt.send(OutMsg::Log(
@@ -509,7 +508,7 @@ mod tests {
     #[test]
     fn send_after_shutdown_returns_err() {
         let (writer, _tw) = test_writer();
-        let rt = RenderThread::start(writer);
+        let rt = RenderThread::start(writer).unwrap();
         let _ = rt.sender.send(OutMsg::Shutdown);
         // Wait for render thread to exit
         std::thread::sleep(Duration::from_millis(100));
@@ -533,7 +532,7 @@ mod tests {
     fn render_with_cursor_position() {
         let (mut writer, tw) = test_writer();
         writer.set_size(10, 5);
-        let rt = RenderThread::start(writer);
+        let rt = RenderThread::start(writer).unwrap();
 
         let buf = Buffer::new(10, 5);
         rt.send(OutMsg::Render {
@@ -555,7 +554,7 @@ mod tests {
     fn render_with_hidden_cursor() {
         let (mut writer, _tw) = test_writer();
         writer.set_size(10, 5);
-        let rt = RenderThread::start(writer);
+        let rt = RenderThread::start(writer).unwrap();
 
         let buf = Buffer::new(10, 5);
         rt.send(OutMsg::Render {
@@ -573,7 +572,7 @@ mod tests {
     #[test]
     fn rapid_resize_messages() {
         let (writer, _tw) = test_writer();
-        let rt = RenderThread::start(writer);
+        let rt = RenderThread::start(writer).unwrap();
 
         for size in [(80, 24), (120, 40), (40, 10), (200, 60)] {
             rt.send(OutMsg::Resize {
@@ -591,7 +590,7 @@ mod tests {
     #[test]
     fn sequential_log_send_no_panic() {
         let (writer, _tw) = test_writer();
-        let rt = RenderThread::start(writer);
+        let rt = RenderThread::start(writer).unwrap();
 
         // Rapidly send different message types in sequence
         rt.send(OutMsg::Log(b"line-1\n".to_vec())).unwrap();
