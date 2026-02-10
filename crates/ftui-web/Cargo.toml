@@ -9,11 +9,18 @@ homepage = "https://github.com/Dicklesworthstone/frankentui"
 documentation = "https://docs.rs/ftui-web"
 readme = "../../README.md"
 
+[features]
+default = []
+# Enable JSON input parser for converting frankenterm-web encoded inputs to Events.
+input-parser = ["dep:serde", "dep:serde_json"]
+
 [dependencies]
 ftui-backend = { path = "../ftui-backend", version = "0.1.0" }
 ftui-core = { path = "../ftui-core", version = "0.1.1" }
 ftui-render = { path = "../ftui-render", version = "0.1.1" }
 ftui-runtime = { path = "../ftui-runtime", version = "0.1.1", default-features = false }
+serde = { version = "1.0.227", features = ["derive"], optional = true }
+serde_json = { version = "1.0.145", optional = true }
 
 [dev-dependencies]
 # Used only for small deterministic unit tests.

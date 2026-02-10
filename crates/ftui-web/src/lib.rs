@@ -11,6 +11,8 @@
 //! purpose is to provide backend building blocks that `frankenterm-web` can
 //! wrap with a stable JS API.
 
+#[cfg(feature = "input-parser")]
+pub mod input_parser;
 pub mod session_record;
 pub mod step_program;
 

@@ -21,6 +21,7 @@ members = [
   "crates/ftui-backend",
   "crates/ftui-tty",
   "crates/ftui-web",
+  "crates/ftui-showcase-wasm",
 ]
 
 [profile.release]

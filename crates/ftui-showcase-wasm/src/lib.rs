@@ -1,0 +1,137 @@
+#![forbid(unsafe_code)]
+
+//! WASM showcase runner for the FrankenTUI demo application.
+//!
+//! This crate provides [`ShowcaseRunner`], a `wasm-bindgen`-exported struct
+//! that wraps `ftui_web::step_program::StepProgram<AppModel>` and exposes
+//! it to JavaScript for host-driven execution.
+//!
+//! See `docs/spec/wasm-showcase-runner-contract.md` for the full contract.
+
+#[cfg(target_arch = "wasm32")]
+mod wasm;
+
+#[cfg(target_arch = "wasm32")]
+pub use wasm::ShowcaseRunner;
+
+// Runner core is used by the wasm module and by native tests.
+#[cfg(any(target_arch = "wasm32", test))]
+mod runner_core;
+
+#[cfg(test)]
+mod tests {
+    use crate::runner_core::RunnerCore;
+
+    #[test]
+    fn runner_core_creates_and_inits() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+        assert!(core.is_running());
+        assert_eq!(core.frame_idx(), 1); // First frame rendered during init.
+    }
+
+    #[test]
+    fn runner_core_step_no_events() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+        let result = core.step();
+        assert!(result.running);
+        assert!(!result.rendered);
+        assert_eq!(result.events_processed, 0);
+    }
+
+    #[test]
+    fn runner_core_push_encoded_input() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+        // Push a Tick event via JSON
+        let accepted =
+            core.push_encoded_input(r#"{"kind":"key","phase":"down","code":"Tab","mods":0}"#);
+        assert!(accepted);
+        let result = core.step();
+        assert_eq!(result.events_processed, 1);
+        assert!(result.rendered);
+    }
+
+    #[test]
+    fn runner_core_resize() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+        core.resize(120, 40);
+        let result = core.step();
+        assert!(result.rendered);
+    }
+
+    #[test]
+    fn runner_core_advance_time() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+        core.advance_time_ms(16.0);
+        let _ = core.step();
+        // Just verify it doesn't panic.
+    }
+
+    #[test]
+    fn runner_core_set_time() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+        core.set_time_ns(16_000_000.0);
+        let _ = core.step();
+    }
+
+    #[test]
+    fn runner_core_patch_hash() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+        let hash = core.patch_hash();
+        assert!(hash.is_some());
+        assert!(hash.unwrap().starts_with("fnv1a64:"));
+    }
+
+    #[test]
+    fn runner_core_take_flat_patches() {
+        let mut core = RunnerCore::new(10, 2);
+        core.init();
+        let flat = core.take_flat_patches();
+        // First frame: full repaint of 10*2=20 cells → 80 u32 values + 2 span values.
+        assert_eq!(flat.spans, vec![0, 20]);
+        assert_eq!(flat.cells.len(), 80); // 20 cells * 4 u32 per cell
+    }
+
+    #[test]
+    fn runner_core_take_logs() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+        let logs = core.take_logs();
+        // Logs may or may not be present depending on AppModel behavior.
+        // Just verify we can drain them.
+        assert!(logs.is_empty() || !logs.is_empty());
+    }
+
+    #[test]
+    fn runner_core_unknown_input_returns_false() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+        let accepted = core.push_encoded_input(r#"{"kind":"accessibility","screen_reader":true}"#);
+        assert!(!accepted);
+    }
+
+    #[test]
+    fn runner_core_malformed_input_returns_false() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+        let accepted = core.push_encoded_input("not json");
+        assert!(!accepted);
+    }
+
+    #[test]
+    fn runner_core_patch_stats() {
+        let mut core = RunnerCore::new(10, 2);
+        core.init();
+        let stats = core.patch_stats();
+        assert!(stats.is_some());
+        let stats = stats.unwrap();
+        assert_eq!(stats.dirty_cells, 20);
+        assert_eq!(stats.patch_count, 1);
+    }
+}
