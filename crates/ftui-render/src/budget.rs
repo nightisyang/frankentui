@@ -2812,4 +2812,876 @@ mod tests {
             }
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Edge-case tests (bd-1x69n)
+    // -----------------------------------------------------------------------
+
+    mod edge_case_tests {
+        use super::super::*;
+
+        // --- PID edge cases ---
+
+        #[test]
+        fn pid_negative_integral_windup() {
+            // Sustained negative error should clamp integral at -integral_max
+            let mut state = PidState::default();
+            let gains = PidGains {
+                integral_max: 3.0,
+                ..Default::default()
+            };
+
+            for _ in 0..200 {
+                state.update(-10.0, &gains);
+            }
+
+            assert!(
+                state.integral >= -3.0 - f64::EPSILON,
+                "Negative integral should be clamped to -max: {}",
+                state.integral
+            );
+            assert!(
+                state.integral <= -3.0 + f64::EPSILON,
+                "Negative integral should saturate at -max: {}",
+                state.integral
+            );
+        }
+
+        #[test]
+        fn pid_zero_gains_zero_output() {
+            let mut state = PidState::default();
+            let gains = PidGains {
+                kp: 0.0,
+                ki: 0.0,
+                kd: 0.0,
+                integral_max: 5.0,
+            };
+
+            let u = state.update(42.0, &gains);
+            assert!(
+                u.abs() < 1e-10,
+                "Zero gains should yield zero output: {}",
+                u
+            );
+        }
+
+        #[test]
+        fn pid_large_error_stays_finite() {
+            let mut state = PidState::default();
+            let gains = PidGains::default();
+
+            // Very large error
+            let u = state.update(1e12, &gains);
+            assert!(
+                u.is_finite(),
+                "PID output should be finite for large error: {}",
+                u
+            );
+
+            // Integral should be clamped
+            assert!(
+                state.integral <= gains.integral_max + f64::EPSILON,
+                "Integral should be clamped: {}",
+                state.integral
+            );
+        }
+
+        #[test]
+        fn pid_alternating_error_derivative_responds() {
+            let mut state = PidState::default();
+            let gains = PidGains::default();
+
+            // Alternating +1/-1 error
+            let u1 = state.update(1.0, &gains);
+            let u2 = state.update(-1.0, &gains);
+
+            // Derivative component for second call: Kd * (-1.0 - 1.0) = 0.2 * -2.0 = -0.4
+            // So u2 should have negative derivative contribution
+            assert!(
+                u2 < u1,
+                "Alternating error should reduce output: u1={}, u2={}",
+                u1,
+                u2
+            );
+        }
+
+        #[test]
+        fn pid_telemetry_terms_match_after_update() {
+            let mut state = PidState::default();
+            let gains = PidGains::default();
+
+            state.update(2.0, &gains);
+
+            // P = Kp * error = 0.5 * 2.0 = 1.0
+            assert!(
+                (state.last_p - 1.0).abs() < 1e-10,
+                "P term: {}",
+                state.last_p
+            );
+            // I = Ki * integral = 0.05 * 2.0 = 0.1
+            assert!(
+                (state.last_i - 0.1).abs() < 1e-10,
+                "I term: {}",
+                state.last_i
+            );
+            // D = Kd * (error - prev_error) = 0.2 * (2.0 - 0.0) = 0.4
+            assert!(
+                (state.last_d - 0.4).abs() < 1e-10,
+                "D term: {}",
+                state.last_d
+            );
+        }
+
+        #[test]
+        fn pid_integral_clamping_symmetric() {
+            let mut state = PidState::default();
+            let gains = PidGains {
+                integral_max: 1.0,
+                ..Default::default()
+            };
+
+            // Positive saturation
+            for _ in 0..50 {
+                state.update(100.0, &gains);
+            }
+            let pos_integral = state.integral;
+
+            state.reset();
+
+            // Negative saturation
+            for _ in 0..50 {
+                state.update(-100.0, &gains);
+            }
+            let neg_integral = state.integral;
+
+            assert!(
+                (pos_integral + neg_integral).abs() < f64::EPSILON,
+                "Clamping should be symmetric: pos={}, neg={}",
+                pos_integral,
+                neg_integral
+            );
+        }
+
+        // --- E-process edge cases ---
+
+        #[test]
+        fn eprocess_first_frame_initializes_mean() {
+            let mut state = EProcessState::default();
+            let config = EProcessConfig::default();
+
+            state.update(25.0, 16.0, &config);
+
+            assert!(
+                (state.mean_ema - 25.0).abs() < f64::EPSILON,
+                "First frame should set mean_ema directly: {}",
+                state.mean_ema
+            );
+            assert!(
+                (state.sigma_ema - config.sigma_floor_ms).abs() < f64::EPSILON,
+                "First frame should set sigma_ema to floor: {}",
+                state.sigma_ema
+            );
+            assert_eq!(state.frames_observed, 1);
+        }
+
+        #[test]
+        fn eprocess_e_value_clamped_at_upper_bound() {
+            let mut state = EProcessState::default();
+            let config = EProcessConfig {
+                lambda: 2.0, // High sensitivity to force rapid growth
+                warmup_frames: 0,
+                sigma_floor_ms: 0.001, // Tiny floor to amplify residuals
+                ..Default::default()
+            };
+
+            // Extreme overload to push e_value toward upper clamp
+            for _ in 0..1000 {
+                state.update(1e6, 16.0, &config);
+            }
+
+            assert!(
+                state.e_value <= 1e10,
+                "E-value should be clamped at 1e10: {}",
+                state.e_value
+            );
+        }
+
+        #[test]
+        fn eprocess_e_value_clamped_at_lower_bound() {
+            let mut state = EProcessState::default();
+            let config = EProcessConfig {
+                lambda: 2.0,
+                warmup_frames: 0,
+                sigma_floor_ms: 0.001,
+                ..Default::default()
+            };
+
+            // Extreme underload to push e_value toward lower clamp
+            for _ in 0..1000 {
+                state.update(0.001, 1e6, &config);
+            }
+
+            assert!(
+                state.e_value >= 1e-10,
+                "E-value should be clamped at 1e-10: {}",
+                state.e_value
+            );
+        }
+
+        #[test]
+        fn eprocess_should_upgrade_during_warmup() {
+            let state = EProcessState::default();
+            let config = EProcessConfig {
+                warmup_frames: 10,
+                ..Default::default()
+            };
+
+            // During warmup, should_upgrade returns true to allow PID-driven upgrades
+            assert!(
+                state.should_upgrade(&config),
+                "should_upgrade should return true during warmup"
+            );
+        }
+
+        #[test]
+        fn eprocess_frames_observed_saturates() {
+            let mut state = EProcessState {
+                frames_observed: u32::MAX,
+                ..EProcessState::default()
+            };
+            let config = EProcessConfig::default();
+
+            // Should not panic or wrap around
+            state.update(16.0, 16.0, &config);
+            assert_eq!(
+                state.frames_observed,
+                u32::MAX,
+                "frames_observed should saturate at u32::MAX"
+            );
+        }
+
+        #[test]
+        fn eprocess_sigma_ema_decay_boundary_zero() {
+            let mut state = EProcessState::default();
+            let config = EProcessConfig {
+                sigma_ema_decay: 0.0,
+                warmup_frames: 0,
+                ..Default::default()
+            };
+
+            // With decay=0, each update fully replaces the EMA
+            state.update(20.0, 16.0, &config);
+            state.update(30.0, 16.0, &config);
+
+            // mean_ema should be exactly the latest value
+            assert!(
+                (state.mean_ema - 30.0).abs() < f64::EPSILON,
+                "decay=0 should fully replace mean_ema: {}",
+                state.mean_ema
+            );
+        }
+
+        #[test]
+        fn eprocess_sigma_ema_decay_boundary_one() {
+            let mut state = EProcessState::default();
+            let config = EProcessConfig {
+                sigma_ema_decay: 1.0,
+                warmup_frames: 0,
+                ..Default::default()
+            };
+
+            // With decay=1, EMA never changes from initial
+            state.update(20.0, 16.0, &config);
+            let first_mean = state.mean_ema;
+            state.update(100.0, 16.0, &config);
+
+            assert!(
+                (state.mean_ema - first_mean).abs() < f64::EPSILON,
+                "decay=1 should lock mean_ema at first value: got {}, expected {}",
+                state.mean_ema,
+                first_mean
+            );
+        }
+
+        #[test]
+        fn eprocess_zero_target_no_panic() {
+            let mut state = EProcessState::default();
+            let config = EProcessConfig {
+                warmup_frames: 0,
+                ..Default::default()
+            };
+
+            // Zero target — residual computation divides by sigma (floored), not target
+            let e = state.update(16.0, 0.0, &config);
+            assert!(
+                e.is_finite(),
+                "E-value should be finite with zero target: {}",
+                e
+            );
+        }
+
+        // --- DegradationLevel edge cases ---
+
+        #[test]
+        fn degradation_level_default_is_full() {
+            assert_eq!(DegradationLevel::default(), DegradationLevel::Full);
+        }
+
+        #[test]
+        fn degradation_level_hash_unique() {
+            use std::collections::HashSet;
+            let levels = [
+                DegradationLevel::Full,
+                DegradationLevel::SimpleBorders,
+                DegradationLevel::NoStyling,
+                DegradationLevel::EssentialOnly,
+                DegradationLevel::Skeleton,
+                DegradationLevel::SkipFrame,
+            ];
+            let set: HashSet<DegradationLevel> = levels.iter().copied().collect();
+            assert_eq!(set.len(), 6, "All levels should hash uniquely");
+        }
+
+        #[test]
+        fn degradation_level_widget_queries_full() {
+            let l = DegradationLevel::Full;
+            assert!(l.use_unicode_borders());
+            assert!(l.apply_styling());
+            assert!(l.render_decorative());
+            assert!(l.render_content());
+        }
+
+        #[test]
+        fn degradation_level_widget_queries_simple_borders() {
+            let l = DegradationLevel::SimpleBorders;
+            assert!(!l.use_unicode_borders());
+            assert!(l.apply_styling());
+            assert!(l.render_decorative());
+            assert!(l.render_content());
+        }
+
+        #[test]
+        fn degradation_level_widget_queries_no_styling() {
+            let l = DegradationLevel::NoStyling;
+            assert!(!l.use_unicode_borders());
+            assert!(!l.apply_styling());
+            assert!(l.render_decorative());
+            assert!(l.render_content());
+        }
+
+        #[test]
+        fn degradation_level_widget_queries_essential_only() {
+            let l = DegradationLevel::EssentialOnly;
+            assert!(!l.use_unicode_borders());
+            assert!(!l.apply_styling());
+            assert!(!l.render_decorative());
+            assert!(l.render_content());
+        }
+
+        #[test]
+        fn degradation_level_widget_queries_skeleton() {
+            let l = DegradationLevel::Skeleton;
+            assert!(!l.use_unicode_borders());
+            assert!(!l.apply_styling());
+            assert!(!l.render_decorative());
+            assert!(!l.render_content());
+        }
+
+        #[test]
+        fn degradation_level_widget_queries_skip_frame() {
+            let l = DegradationLevel::SkipFrame;
+            assert!(!l.use_unicode_borders());
+            assert!(!l.apply_styling());
+            assert!(!l.render_decorative());
+            assert!(!l.render_content());
+        }
+
+        #[test]
+        fn degradation_level_partial_ord_consistent() {
+            // PartialOrd should agree with Ord for all pairs
+            let levels = [
+                DegradationLevel::Full,
+                DegradationLevel::SimpleBorders,
+                DegradationLevel::NoStyling,
+                DegradationLevel::EssentialOnly,
+                DegradationLevel::Skeleton,
+                DegradationLevel::SkipFrame,
+            ];
+            for (i, a) in levels.iter().enumerate() {
+                for (j, b) in levels.iter().enumerate() {
+                    let po = a.partial_cmp(b);
+                    let o = a.cmp(b);
+                    assert_eq!(po, Some(o), "PartialOrd != Ord for {:?} vs {:?}", a, b);
+                    if i < j {
+                        assert!(*a < *b, "{:?} should be < {:?}", a, b);
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn degradation_level_clone_eq() {
+            let a = DegradationLevel::NoStyling;
+            let b = a;
+            assert_eq!(a, b);
+        }
+
+        #[test]
+        fn degradation_level_debug() {
+            let s = format!("{:?}", DegradationLevel::EssentialOnly);
+            assert!(s.contains("EssentialOnly"), "Debug output: {}", s);
+        }
+
+        // --- BudgetController accessor edge cases ---
+
+        #[test]
+        fn controller_eprocess_sigma_ms_uses_floor() {
+            let ctrl = BudgetController::new(BudgetControllerConfig {
+                eprocess: EProcessConfig {
+                    sigma_floor_ms: 2.5,
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+
+            // Before any updates, sigma_ema is 0.0, so should return floor
+            assert!(
+                (ctrl.eprocess_sigma_ms() - 2.5).abs() < f64::EPSILON,
+                "Should return sigma_floor_ms when sigma_ema < floor: {}",
+                ctrl.eprocess_sigma_ms()
+            );
+        }
+
+        #[test]
+        fn controller_config_accessor() {
+            let config = BudgetControllerConfig {
+                degrade_threshold: 0.42,
+                ..Default::default()
+            };
+            let ctrl = BudgetController::new(config.clone());
+
+            assert_eq!(ctrl.config().degrade_threshold, 0.42);
+            assert_eq!(ctrl.config().target, Duration::from_millis(16));
+        }
+
+        #[test]
+        fn controller_frames_observed_accessor() {
+            let mut ctrl = BudgetController::new(BudgetControllerConfig::default());
+
+            assert_eq!(ctrl.frames_observed(), 0);
+
+            ctrl.update(Duration::from_millis(16));
+            assert_eq!(ctrl.frames_observed(), 1);
+
+            ctrl.update(Duration::from_millis(16));
+            assert_eq!(ctrl.frames_observed(), 2);
+        }
+
+        // --- RenderBudget edge cases ---
+
+        #[test]
+        fn render_budget_record_frame_time_used_by_next_frame() {
+            let mut budget = RenderBudget::new(Duration::from_millis(1000));
+            budget.degrade();
+
+            // Simulate many frames to pass cooldown
+            for _ in 0..10 {
+                budget.reset();
+            }
+
+            // Record a very fast frame time
+            budget.record_frame_time(Duration::from_millis(1));
+            // Sleep past the budget so start.elapsed() would be large
+            std::thread::sleep(Duration::from_millis(15));
+
+            let before = budget.degradation();
+            budget.next_frame();
+
+            // The recorded frame time (1ms) should trigger upgrade
+            // since remaining_fraction_for_elapsed(1ms) > upgrade_threshold
+            assert!(
+                budget.degradation() < before,
+                "Recorded frame time should enable upgrade: before={:?}, after={:?}",
+                before,
+                budget.degradation()
+            );
+        }
+
+        #[test]
+        fn render_budget_phase_budget_clamped_by_remaining() {
+            // Create a budget that has very little remaining
+            let budget = RenderBudget::new(Duration::from_millis(1));
+            std::thread::sleep(Duration::from_millis(5));
+
+            // Phase budget should be clamped to remaining (0ms)
+            let phase = budget.phase_budget(Phase::Render);
+            assert!(
+                phase.total() <= Duration::from_millis(1),
+                "Phase budget should be clamped by remaining: {:?}",
+                phase.total()
+            );
+        }
+
+        #[test]
+        fn render_budget_exhausted_skipframe_with_no_frame_skip() {
+            let mut budget = RenderBudget::new(Duration::from_millis(1000));
+            budget.allow_frame_skip = false;
+            budget.set_degradation(DegradationLevel::SkipFrame);
+
+            // With allow_frame_skip = false, SkipFrame should NOT cause exhaustion
+            // (only time-based exhaustion matters)
+            assert!(
+                !budget.exhausted(),
+                "SkipFrame should not exhaust when frame skip disabled"
+            );
+        }
+
+        #[test]
+        fn render_budget_remaining_fraction_zero_total() {
+            let budget = RenderBudget::new(Duration::ZERO);
+            assert_eq!(budget.remaining_fraction(), 0.0);
+        }
+
+        #[test]
+        fn render_budget_total_accessor() {
+            let budget = RenderBudget::new(Duration::from_millis(42));
+            assert_eq!(budget.total(), Duration::from_millis(42));
+        }
+
+        #[test]
+        fn render_budget_phase_budgets_accessor() {
+            let budget = RenderBudget::new(Duration::from_millis(16));
+            let pb = budget.phase_budgets();
+            assert_eq!(pb.diff, Duration::from_millis(2));
+            assert_eq!(pb.present, Duration::from_millis(4));
+            assert_eq!(pb.render, Duration::from_millis(8));
+        }
+
+        #[test]
+        fn render_budget_set_degradation_no_op_preserves_cooldown() {
+            let mut budget = RenderBudget::new(Duration::from_millis(16));
+            budget.set_degradation(DegradationLevel::NoStyling);
+            budget.frames_since_change = 7;
+
+            // Setting to same level is a no-op
+            budget.set_degradation(DegradationLevel::NoStyling);
+            assert_eq!(budget.frames_since_change, 7);
+
+            // Setting to different level resets cooldown
+            budget.set_degradation(DegradationLevel::Skeleton);
+            assert_eq!(budget.frames_since_change, 0);
+        }
+
+        #[test]
+        fn render_budget_should_upgrade_false_at_full() {
+            let budget = RenderBudget::new(Duration::from_millis(1000));
+            assert!(!budget.should_upgrade(), "Full level should never upgrade");
+        }
+
+        #[test]
+        fn render_budget_should_upgrade_false_during_cooldown() {
+            let mut budget = RenderBudget::new(Duration::from_millis(1000));
+            budget.degrade();
+            // frames_since_change is 0, cooldown is 3
+            assert!(
+                !budget.should_upgrade(),
+                "Should not upgrade during cooldown"
+            );
+        }
+
+        #[test]
+        fn render_budget_degrade_at_max_stays_at_max() {
+            let mut budget = RenderBudget::new(Duration::from_millis(16));
+            budget.set_degradation(DegradationLevel::SkipFrame);
+            budget.degrade();
+            assert_eq!(budget.degradation(), DegradationLevel::SkipFrame);
+        }
+
+        #[test]
+        fn render_budget_upgrade_at_full_stays_at_full() {
+            let mut budget = RenderBudget::new(Duration::from_millis(16));
+            budget.upgrade();
+            assert_eq!(budget.degradation(), DegradationLevel::Full);
+        }
+
+        // --- Config edge cases ---
+
+        #[test]
+        fn frame_budget_config_partial_eq() {
+            let a = FrameBudgetConfig::default();
+            let b = FrameBudgetConfig::default();
+            assert_eq!(a, b);
+
+            let c = FrameBudgetConfig::strict(Duration::from_millis(16));
+            assert_ne!(a, c, "Different configs should not be equal");
+        }
+
+        #[test]
+        fn phase_budgets_eq_and_copy() {
+            let a = PhaseBudgets::default();
+            let b = a; // Copy
+            assert_eq!(a, b);
+
+            let c = PhaseBudgets {
+                diff: Duration::from_millis(1),
+                ..Default::default()
+            };
+            assert_ne!(a, c);
+        }
+
+        #[test]
+        fn budget_controller_config_partial_eq() {
+            let a = BudgetControllerConfig::default();
+            let b = BudgetControllerConfig::default();
+            assert_eq!(a, b);
+        }
+
+        #[test]
+        fn pid_gains_partial_eq() {
+            let a = PidGains::default();
+            let b = PidGains::default();
+            assert_eq!(a, b);
+        }
+
+        #[test]
+        fn eprocess_config_partial_eq() {
+            let a = EProcessConfig::default();
+            let b = EProcessConfig::default();
+            assert_eq!(a, b);
+        }
+
+        // --- BudgetDecision edge cases ---
+
+        #[test]
+        fn budget_decision_debug_format() {
+            assert!(format!("{:?}", BudgetDecision::Hold).contains("Hold"));
+            assert!(format!("{:?}", BudgetDecision::Degrade).contains("Degrade"));
+            assert!(format!("{:?}", BudgetDecision::Upgrade).contains("Upgrade"));
+        }
+
+        #[test]
+        fn budget_decision_clone_copy() {
+            let d = BudgetDecision::Degrade;
+            let d2 = d;
+            assert_eq!(d, d2);
+        }
+
+        #[test]
+        fn budget_decision_as_str_coverage() {
+            assert_eq!(BudgetDecision::Hold.as_str(), "stay");
+            assert_eq!(BudgetDecision::Degrade.as_str(), "degrade");
+            assert_eq!(BudgetDecision::Upgrade.as_str(), "upgrade");
+        }
+
+        // --- Phase edge cases ---
+
+        #[test]
+        fn phase_eq_and_hash() {
+            use std::collections::HashSet;
+            let mut set = HashSet::new();
+            set.insert(Phase::Diff);
+            set.insert(Phase::Present);
+            set.insert(Phase::Render);
+            assert_eq!(set.len(), 3);
+
+            // Same phase hashes to same bucket
+            set.insert(Phase::Diff);
+            assert_eq!(set.len(), 3);
+        }
+
+        #[test]
+        fn phase_debug() {
+            assert!(format!("{:?}", Phase::Diff).contains("Diff"));
+            assert!(format!("{:?}", Phase::Present).contains("Present"));
+            assert!(format!("{:?}", Phase::Render).contains("Render"));
+        }
+
+        #[test]
+        fn phase_clone_copy() {
+            let p = Phase::Present;
+            let p2 = p;
+            assert_eq!(p, p2);
+        }
+
+        // --- BudgetTelemetry edge cases ---
+
+        #[test]
+        fn budget_telemetry_debug() {
+            let telem = BudgetTelemetry {
+                level: DegradationLevel::Full,
+                pid_output: 0.0,
+                pid_p: 0.0,
+                pid_i: 0.0,
+                pid_d: 0.0,
+                e_value: 1.0,
+                frames_observed: 0,
+                frames_since_change: 0,
+                last_decision: BudgetDecision::Hold,
+                in_warmup: true,
+            };
+            let s = format!("{:?}", telem);
+            assert!(s.contains("BudgetTelemetry"), "Debug output: {}", s);
+        }
+
+        #[test]
+        fn budget_telemetry_partial_eq() {
+            let a = BudgetTelemetry {
+                level: DegradationLevel::Full,
+                pid_output: 0.5,
+                pid_p: 0.3,
+                pid_i: 0.1,
+                pid_d: 0.1,
+                e_value: 1.0,
+                frames_observed: 5,
+                frames_since_change: 2,
+                last_decision: BudgetDecision::Hold,
+                in_warmup: false,
+            };
+            let b = a;
+            assert_eq!(a, b);
+
+            let c = BudgetTelemetry {
+                level: DegradationLevel::SimpleBorders,
+                ..a
+            };
+            assert_ne!(a, c);
+        }
+
+        // --- Controller + RenderBudget integration edge cases ---
+
+        #[test]
+        fn next_frame_without_recorded_time_uses_elapsed() {
+            let mut budget = RenderBudget::new(Duration::from_millis(1000));
+
+            // Don't record frame time — next_frame falls back to start.elapsed()
+            budget.next_frame();
+
+            // Should not panic, remaining should reset
+            assert!(budget.remaining_fraction() > 0.9);
+        }
+
+        #[test]
+        fn controller_at_max_degradation_holds() {
+            let mut ctrl = BudgetController::new(BudgetControllerConfig {
+                eprocess: EProcessConfig {
+                    warmup_frames: 0,
+                    ..Default::default()
+                },
+                cooldown_frames: 0,
+                ..Default::default()
+            });
+
+            // Drive to SkipFrame
+            for _ in 0..500 {
+                ctrl.update(Duration::from_millis(200));
+            }
+            assert_eq!(ctrl.level(), DegradationLevel::SkipFrame);
+
+            // At max level, further overload should Hold (can't degrade further)
+            let d = ctrl.update(Duration::from_millis(200));
+            assert_eq!(d, BudgetDecision::Hold, "At max level, should hold");
+        }
+
+        #[test]
+        fn controller_at_full_level_no_upgrade() {
+            let mut ctrl = BudgetController::new(BudgetControllerConfig {
+                eprocess: EProcessConfig {
+                    warmup_frames: 0,
+                    ..Default::default()
+                },
+                cooldown_frames: 0,
+                ..Default::default()
+            });
+
+            // Feed underload — already at Full, so no upgrade possible
+            for _ in 0..50 {
+                let d = ctrl.update(Duration::from_millis(1));
+                assert_ne!(
+                    d,
+                    BudgetDecision::Upgrade,
+                    "Full level should never upgrade"
+                );
+            }
+        }
+
+        #[test]
+        fn render_budget_full_degrade_cycle_with_controller() {
+            let mut budget = RenderBudget::new(Duration::from_millis(16)).with_controller(
+                BudgetControllerConfig {
+                    eprocess: EProcessConfig {
+                        warmup_frames: 0,
+                        ..Default::default()
+                    },
+                    cooldown_frames: 0,
+                    ..Default::default()
+                },
+            );
+
+            // Overload to degrade via controller
+            for _ in 0..100 {
+                budget.record_frame_time(Duration::from_millis(40));
+                budget.next_frame();
+            }
+            let degraded = budget.degradation();
+            assert!(
+                degraded > DegradationLevel::Full,
+                "Should degrade: {:?}",
+                degraded
+            );
+
+            // Recovery via controller
+            for _ in 0..200 {
+                budget.record_frame_time(Duration::from_millis(4));
+                budget.next_frame();
+            }
+            let recovered = budget.degradation();
+            assert!(
+                recovered < degraded,
+                "Should recover: {:?} -> {:?}",
+                degraded,
+                recovered
+            );
+        }
+
+        #[test]
+        fn render_budget_phase_has_budget_exhausted() {
+            let budget = RenderBudget::new(Duration::from_millis(1));
+            std::thread::sleep(Duration::from_millis(10));
+
+            // All phases should report no budget
+            assert!(!budget.phase_has_budget(Phase::Diff));
+            assert!(!budget.phase_has_budget(Phase::Present));
+            assert!(!budget.phase_has_budget(Phase::Render));
+        }
+
+        #[test]
+        fn render_budget_elapsed_increases() {
+            let budget = RenderBudget::new(Duration::from_millis(1000));
+            let e1 = budget.elapsed();
+            std::thread::sleep(Duration::from_millis(5));
+            let e2 = budget.elapsed();
+            assert!(e2 > e1, "Elapsed should increase: {:?} vs {:?}", e1, e2);
+        }
+
+        #[test]
+        fn controller_pid_integral_accessor() {
+            let mut ctrl = BudgetController::new(BudgetControllerConfig::default());
+
+            assert_eq!(ctrl.pid_integral(), 0.0);
+
+            // Feed overload to accumulate integral
+            ctrl.update(Duration::from_millis(32)); // 2x target
+            assert!(
+                ctrl.pid_integral() > 0.0,
+                "Integral should grow: {}",
+                ctrl.pid_integral()
+            );
+        }
+
+        #[test]
+        fn controller_e_value_accessor() {
+            let ctrl = BudgetController::new(BudgetControllerConfig::default());
+            assert!((ctrl.e_value() - 1.0).abs() < f64::EPSILON);
+        }
+    }
 }
