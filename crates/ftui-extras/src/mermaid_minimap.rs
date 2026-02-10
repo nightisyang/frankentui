@@ -708,4 +708,767 @@ mod tests {
         minimap.render(area, &mut buf, Some(&viewport), Some(0));
         minimap.render(area, &mut buf, Some(&viewport), Some(1));
     }
+
+    // -----------------------------------------------------------------------
+    // fit_aspect_ratio edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn fit_aspect_ratio_negative_diagram() {
+        let (w, h) = fit_aspect_ratio(-10.0, -5.0, 30, 15);
+        // Negative is treated like zero: early return path.
+        assert!(w >= 1);
+        assert!(h >= 1);
+    }
+
+    #[test]
+    fn fit_aspect_ratio_zero_max_w_only() {
+        let (w, h) = fit_aspect_ratio(100.0, 50.0, 0, 15);
+        // max_w == 0 triggers early return.
+        assert!(w >= 1);
+        assert!(h >= 1);
+    }
+
+    #[test]
+    fn fit_aspect_ratio_zero_max_h_only() {
+        let (w, h) = fit_aspect_ratio(100.0, 50.0, 30, 0);
+        assert!(w >= 1);
+        assert!(h >= 1);
+    }
+
+    #[test]
+    fn fit_aspect_ratio_square_diagram() {
+        let (w, h) = fit_aspect_ratio(50.0, 50.0, 30, 15);
+        assert!(w <= 30);
+        assert!(h <= 15);
+        assert!(w >= 3);
+        assert!(h >= 2);
+    }
+
+    #[test]
+    fn fit_aspect_ratio_extreme_wide() {
+        // Very wide diagram: 10000:1 aspect ratio.
+        let (w, h) = fit_aspect_ratio(10_000.0, 1.0, 30, 15);
+        assert!(w <= 30);
+        assert!(h <= 15);
+        assert!(w >= 3);
+        assert!(h >= 2);
+    }
+
+    #[test]
+    fn fit_aspect_ratio_extreme_tall() {
+        let (w, h) = fit_aspect_ratio(1.0, 10_000.0, 30, 15);
+        assert!(w <= 30);
+        assert!(h <= 15);
+    }
+
+    #[test]
+    fn fit_aspect_ratio_one_by_one_max() {
+        let (w, h) = fit_aspect_ratio(50.0, 50.0, 1, 1);
+        // max 1x1, should early-return because both are nonzero but computed
+        // values may clamp.
+        assert!(w >= 1);
+        assert!(h >= 1);
+    }
+
+    #[test]
+    fn fit_aspect_ratio_diagram_zero_height() {
+        let (w, h) = fit_aspect_ratio(50.0, 0.0, 30, 15);
+        assert!(w >= 1);
+        assert!(h >= 1);
+    }
+
+    #[test]
+    fn fit_aspect_ratio_diagram_zero_width() {
+        let (w, h) = fit_aspect_ratio(0.0, 50.0, 30, 15);
+        assert!(w >= 1);
+        assert!(h >= 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // layout_to_px edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn layout_to_px_negative_coordinates() {
+        let bb = LayoutRect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 50.0,
+        };
+        // Point before origin should clamp to (0, 0).
+        let (x, y) = layout_to_px(LayoutPoint { x: -10.0, y: -5.0 }, &bb, 60, 40);
+        assert_eq!(x, 0);
+        assert_eq!(y, 0);
+    }
+
+    #[test]
+    fn layout_to_px_center_point() {
+        let bb = LayoutRect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let (x, y) = layout_to_px(LayoutPoint { x: 50.0, y: 50.0 }, &bb, 101, 101);
+        // Midpoint maps to ~50.
+        assert_eq!(x, 50);
+        assert_eq!(y, 50);
+    }
+
+    #[test]
+    fn layout_to_px_offset_bounding_box() {
+        // Bounding box doesn't start at origin.
+        let bb = LayoutRect {
+            x: 100.0,
+            y: 200.0,
+            width: 50.0,
+            height: 50.0,
+        };
+        let (x, y) = layout_to_px(LayoutPoint { x: 100.0, y: 200.0 }, &bb, 60, 40);
+        assert_eq!((x, y), (0, 0));
+
+        let (x, y) = layout_to_px(LayoutPoint { x: 150.0, y: 250.0 }, &bb, 60, 40);
+        assert_eq!((x, y), (59, 39));
+    }
+
+    #[test]
+    fn layout_to_px_min_pixel_dimensions() {
+        let bb = LayoutRect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        // px_w=1, px_h=1: everything maps to (0, 0).
+        let (x, y) = layout_to_px(LayoutPoint { x: 50.0, y: 50.0 }, &bb, 1, 1);
+        assert_eq!((x, y), (0, 0));
+    }
+
+    #[test]
+    fn layout_to_px_zero_pixel_width() {
+        let bb = LayoutRect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        // px_w=0 triggers saturating_sub(1) wrapping to u16::MAX but result still clamped >= 0.
+        let (x, y) = layout_to_px(LayoutPoint { x: 50.0, y: 50.0 }, &bb, 0, 40);
+        assert!(x >= 0);
+        assert!(y >= 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // recolor_cell edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn recolor_cell_valid() {
+        let mut buf = Buffer::new(10, 10);
+        let orig_char = Cell::from_char('A');
+        buf.set_fast(3, 3, orig_char);
+        let new_color = PackedRgba::rgb(255, 0, 0);
+        recolor_cell(&mut buf, 3, 3, new_color);
+        let cell = buf.get(3, 3).unwrap();
+        assert_eq!(cell.fg, new_color);
+        // Content should be preserved.
+        assert_eq!(cell.content.as_char(), Some('A'));
+    }
+
+    #[test]
+    fn recolor_cell_out_of_bounds() {
+        let mut buf = Buffer::new(10, 10);
+        // Should not panic on out-of-bounds.
+        recolor_cell(&mut buf, 100, 100, PackedRgba::rgb(0, 0, 0));
+    }
+
+    // -----------------------------------------------------------------------
+    // Minimap::is_trivial boundary conditions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn is_trivial_boundary_just_above() {
+        let layout = simple_layout();
+        // max_width=5, max_height=4 → content = 3x2 (5-2, 4-2), just above trivial threshold.
+        let config = MinimapConfig {
+            max_width: 5,
+            max_height: 4,
+            ..MinimapConfig::default()
+        };
+        let minimap = Minimap::new(&layout, config);
+        // Content depends on aspect ratio fit; check that is_trivial is consistent.
+        let (cw, ch) = minimap.content_cells;
+        let expected_trivial = cw < 3 || ch < 2;
+        assert_eq!(minimap.is_trivial(), expected_trivial);
+    }
+
+    #[test]
+    fn is_trivial_large_config() {
+        let layout = simple_layout();
+        let config = MinimapConfig {
+            max_width: 60,
+            max_height: 30,
+            ..MinimapConfig::default()
+        };
+        let minimap = Minimap::new(&layout, config);
+        assert!(!minimap.is_trivial());
+    }
+
+    // -----------------------------------------------------------------------
+    // Minimap::placement edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn placement_with_offset_area() {
+        let layout = simple_layout();
+        let config = MinimapConfig {
+            corner: MinimapCorner::TopLeft,
+            margin: 2,
+            ..MinimapConfig::default()
+        };
+        let minimap = Minimap::new(&layout, config);
+        let area = Rect::new(10, 5, 120, 40);
+        let rect = minimap.placement(area);
+
+        assert_eq!(rect.x, area.x + 2); // margin
+        assert_eq!(rect.y, area.y + 2);
+        assert!(rect.x + rect.width <= area.x + area.width);
+        assert!(rect.y + rect.height <= area.y + area.height);
+    }
+
+    #[test]
+    fn placement_zero_margin() {
+        let layout = simple_layout();
+        let config = MinimapConfig {
+            corner: MinimapCorner::BottomRight,
+            margin: 0,
+            ..MinimapConfig::default()
+        };
+        let minimap = Minimap::new(&layout, config);
+        let area = Rect::new(0, 0, 120, 40);
+        let rect = minimap.placement(area);
+
+        // With margin=0, minimap should be flush against the edge.
+        assert_eq!(rect.x + rect.width, area.x + area.width);
+        assert_eq!(rect.y + rect.height, area.y + area.height);
+    }
+
+    #[test]
+    fn placement_area_exactly_fits() {
+        let layout = simple_layout();
+        let config = MinimapConfig {
+            margin: 0,
+            corner: MinimapCorner::TopLeft,
+            ..MinimapConfig::default()
+        };
+        let minimap = Minimap::new(&layout, config);
+        let (tw, th) = minimap.total_size();
+        // Area is exactly the minimap size.
+        let area = Rect::new(0, 0, tw, th);
+        let rect = minimap.placement(area);
+        assert_eq!(rect, Rect::new(0, 0, tw, th));
+    }
+
+    #[test]
+    fn placement_area_one_short_returns_empty() {
+        let layout = simple_layout();
+        let config = MinimapConfig {
+            margin: 0,
+            ..MinimapConfig::default()
+        };
+        let minimap = Minimap::new(&layout, config);
+        let (tw, th) = minimap.total_size();
+        // Width one short.
+        let area = Rect::new(0, 0, tw - 1, th);
+        let rect = minimap.placement(area);
+        assert!(rect.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Viewport indicator edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_viewport_larger_than_diagram() {
+        let layout = simple_layout();
+        let minimap = Minimap::new(&layout, MinimapConfig::default());
+        let mut buf = Buffer::new(120, 40);
+        let area = Rect::new(0, 0, 120, 40);
+        // Viewport much larger than diagram bounding box.
+        let viewport = LayoutRect {
+            x: -100.0,
+            y: -100.0,
+            width: 500.0,
+            height: 500.0,
+        };
+        minimap.render(area, &mut buf, Some(&viewport), None);
+    }
+
+    #[test]
+    fn render_viewport_outside_diagram() {
+        let layout = simple_layout();
+        let minimap = Minimap::new(&layout, MinimapConfig::default());
+        let mut buf = Buffer::new(120, 40);
+        let area = Rect::new(0, 0, 120, 40);
+        // Viewport entirely outside the diagram bounds.
+        let viewport = LayoutRect {
+            x: 1000.0,
+            y: 1000.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        minimap.render(area, &mut buf, Some(&viewport), None);
+    }
+
+    #[test]
+    fn render_zero_size_viewport() {
+        let layout = simple_layout();
+        let minimap = Minimap::new(&layout, MinimapConfig::default());
+        let mut buf = Buffer::new(120, 40);
+        let area = Rect::new(0, 0, 120, 40);
+        let viewport = LayoutRect {
+            x: 10.0,
+            y: 10.0,
+            width: 0.0,
+            height: 0.0,
+        };
+        minimap.render(area, &mut buf, Some(&viewport), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Edge drawing edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_edge_with_single_waypoint() {
+        // An edge with fewer than 2 waypoints should be silently skipped.
+        let layout = DiagramLayout {
+            nodes: vec![],
+            clusters: vec![],
+            edges: vec![LayoutEdgePath {
+                edge_idx: 0,
+                waypoints: vec![LayoutPoint { x: 5.0, y: 5.0 }],
+                bundle_count: 1,
+                bundle_members: Vec::new(),
+            }],
+            bounding_box: LayoutRect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            stats: LayoutStats {
+                iterations_used: 0,
+                max_iterations: 0,
+                budget_exceeded: false,
+                crossings: 0,
+                ranks: 0,
+                max_rank_width: 0,
+                total_bends: 0,
+                position_variance: 0.0,
+            },
+            degradation: None,
+        };
+
+        let minimap = Minimap::new(&layout, MinimapConfig::default());
+        let mut buf = Buffer::new(80, 24);
+        minimap.render(Rect::new(0, 0, 80, 24), &mut buf, None, None);
+    }
+
+    #[test]
+    fn render_edge_with_many_waypoints() {
+        let layout = DiagramLayout {
+            nodes: vec![],
+            clusters: vec![],
+            edges: vec![LayoutEdgePath {
+                edge_idx: 0,
+                waypoints: vec![
+                    LayoutPoint { x: 0.0, y: 0.0 },
+                    LayoutPoint { x: 10.0, y: 5.0 },
+                    LayoutPoint { x: 20.0, y: 0.0 },
+                    LayoutPoint { x: 30.0, y: 10.0 },
+                    LayoutPoint { x: 40.0, y: 5.0 },
+                ],
+                bundle_count: 1,
+                bundle_members: Vec::new(),
+            }],
+            bounding_box: LayoutRect {
+                x: 0.0,
+                y: 0.0,
+                width: 40.0,
+                height: 10.0,
+            },
+            stats: LayoutStats {
+                iterations_used: 0,
+                max_iterations: 0,
+                budget_exceeded: false,
+                crossings: 0,
+                ranks: 0,
+                max_rank_width: 0,
+                total_bends: 0,
+                position_variance: 0.0,
+            },
+            degradation: None,
+        };
+
+        let minimap = Minimap::new(&layout, MinimapConfig::default());
+        let mut buf = Buffer::new(80, 24);
+        minimap.render(Rect::new(0, 0, 80, 24), &mut buf, None, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Minimap with small nodes (point rendering path)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_tiny_node_draws_point() {
+        // Nodes with tiny rects should trigger the point rendering path.
+        let layout = DiagramLayout {
+            nodes: vec![LayoutNodeBox {
+                node_idx: 0,
+                rect: LayoutRect {
+                    x: 50.0,
+                    y: 50.0,
+                    width: 0.1,
+                    height: 0.1,
+                },
+                label_rect: None,
+                rank: 0,
+                order: 0,
+            }],
+            clusters: vec![],
+            edges: vec![],
+            bounding_box: LayoutRect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 100.0,
+            },
+            stats: LayoutStats {
+                iterations_used: 0,
+                max_iterations: 0,
+                budget_exceeded: false,
+                crossings: 0,
+                ranks: 0,
+                max_rank_width: 0,
+                total_bends: 0,
+                position_variance: 0.0,
+            },
+            degradation: None,
+        };
+
+        let minimap = Minimap::new(&layout, MinimapConfig::default());
+        let mut buf = Buffer::new(80, 24);
+        minimap.render(Rect::new(0, 0, 80, 24), &mut buf, None, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Render into small area (early exit)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_area_too_small_is_noop() {
+        let layout = simple_layout();
+        let minimap = Minimap::new(&layout, MinimapConfig::default());
+        let mut buf = Buffer::new(5, 5);
+        // Area is too small for minimap → placement returns empty → render is noop.
+        minimap.render(Rect::new(0, 0, 5, 5), &mut buf, None, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Custom config colors
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn custom_colors_render_without_panic() {
+        let layout = simple_layout();
+        let config = MinimapConfig {
+            node_color: PackedRgba::rgb(0, 0, 0),
+            edge_color: PackedRgba::rgb(255, 255, 255),
+            viewport_color: PackedRgba::rgb(128, 128, 0),
+            highlight_color: PackedRgba::rgb(0, 255, 0),
+            bg_color: PackedRgba::rgb(255, 0, 255),
+            border_color: PackedRgba::rgb(0, 255, 255),
+            ..MinimapConfig::default()
+        };
+        let minimap = Minimap::new(&layout, config);
+        let mut buf = Buffer::new(120, 40);
+        let area = Rect::new(0, 0, 120, 40);
+        let viewport = LayoutRect {
+            x: 5.0,
+            y: 5.0,
+            width: 20.0,
+            height: 10.0,
+        };
+        minimap.render(area, &mut buf, Some(&viewport), Some(0));
+    }
+
+    // -----------------------------------------------------------------------
+    // Border rendering with exact coordinates
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn border_all_four_corners() {
+        let layout = simple_layout();
+        let minimap = Minimap::new(&layout, MinimapConfig::default());
+        let mut buf = Buffer::new(120, 40);
+        let area = Rect::new(0, 0, 120, 40);
+        minimap.render(area, &mut buf, None, None);
+        let rect = minimap.placement(area);
+        if !rect.is_empty() {
+            let x1 = rect.x;
+            let y1 = rect.y;
+            let x2 = rect.x + rect.width - 1;
+            let y2 = rect.y + rect.height - 1;
+            // All four box-drawing corners.
+            assert_eq!(buf.get(x1, y1).unwrap().content.as_char(), Some('\u{250C}'));
+            assert_eq!(buf.get(x2, y1).unwrap().content.as_char(), Some('\u{2510}'));
+            assert_eq!(buf.get(x1, y2).unwrap().content.as_char(), Some('\u{2514}'));
+            assert_eq!(buf.get(x2, y2).unwrap().content.as_char(), Some('\u{2518}'));
+        }
+    }
+
+    #[test]
+    fn border_horizontal_edges() {
+        let layout = simple_layout();
+        let minimap = Minimap::new(&layout, MinimapConfig::default());
+        let mut buf = Buffer::new(120, 40);
+        let area = Rect::new(0, 0, 120, 40);
+        minimap.render(area, &mut buf, None, None);
+        let rect = minimap.placement(area);
+        if !rect.is_empty() && rect.width > 2 {
+            // First horizontal bar character (top edge, second cell).
+            let cell = buf.get(rect.x + 1, rect.y).unwrap();
+            assert_eq!(cell.content.as_char(), Some('\u{2500}'));
+        }
+    }
+
+    #[test]
+    fn border_vertical_edges() {
+        let layout = simple_layout();
+        let minimap = Minimap::new(&layout, MinimapConfig::default());
+        let mut buf = Buffer::new(120, 40);
+        let area = Rect::new(0, 0, 120, 40);
+        minimap.render(area, &mut buf, None, None);
+        let rect = minimap.placement(area);
+        if !rect.is_empty() && rect.height > 2 {
+            // First vertical bar character (left edge, second row).
+            let cell = buf.get(rect.x, rect.y + 1).unwrap();
+            assert_eq!(cell.content.as_char(), Some('\u{2502}'));
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Background fill verification
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_fills_background_color() {
+        let layout = simple_layout();
+        let bg = PackedRgba::rgb(42, 42, 42);
+        let config = MinimapConfig {
+            bg_color: bg,
+            ..MinimapConfig::default()
+        };
+        let minimap = Minimap::new(&layout, config);
+        let mut buf = Buffer::new(120, 40);
+        let area = Rect::new(0, 0, 120, 40);
+        minimap.render(area, &mut buf, None, None);
+        let rect = minimap.placement(area);
+        if !rect.is_empty() {
+            // Interior cell should have bg_color as background.
+            let cell = buf.get(rect.x + 1, rect.y + 1).unwrap();
+            assert_eq!(cell.bg, bg);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Zero-dimension bounding box in draw_viewport_indicator
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_zero_bounding_box_with_viewport() {
+        let layout = DiagramLayout {
+            nodes: vec![],
+            clusters: vec![],
+            edges: vec![],
+            bounding_box: LayoutRect {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+            },
+            stats: LayoutStats {
+                iterations_used: 0,
+                max_iterations: 0,
+                budget_exceeded: false,
+                crossings: 0,
+                ranks: 0,
+                max_rank_width: 0,
+                total_bends: 0,
+                position_variance: 0.0,
+            },
+            degradation: None,
+        };
+        let minimap = Minimap::new(&layout, MinimapConfig::default());
+        let mut buf = Buffer::new(80, 24);
+        let viewport = LayoutRect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        // Should not panic: draw_viewport_indicator early-returns on zero bb.
+        minimap.render(Rect::new(0, 0, 80, 24), &mut buf, Some(&viewport), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // MinimapCorner variants equality
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn minimap_corner_all_variants_distinct() {
+        let corners = [
+            MinimapCorner::TopLeft,
+            MinimapCorner::TopRight,
+            MinimapCorner::BottomLeft,
+            MinimapCorner::BottomRight,
+        ];
+        for (i, a) in corners.iter().enumerate() {
+            for (j, b) in corners.iter().enumerate() {
+                if i == j {
+                    assert_eq!(a, b);
+                } else {
+                    assert_ne!(a, b);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn minimap_corner_clone() {
+        let corner = MinimapCorner::TopLeft;
+        let cloned = corner;
+        assert_eq!(corner, cloned);
+    }
+
+    // -----------------------------------------------------------------------
+    // MinimapConfig clone and debug
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn config_clone_preserves_values() {
+        let config = MinimapConfig {
+            max_width: 50,
+            max_height: 25,
+            margin: 3,
+            corner: MinimapCorner::TopRight,
+            ..MinimapConfig::default()
+        };
+        let cloned = config;
+        assert_eq!(cloned.max_width, 50);
+        assert_eq!(cloned.max_height, 25);
+        assert_eq!(cloned.margin, 3);
+        assert_eq!(cloned.corner, MinimapCorner::TopRight);
+    }
+
+    // -----------------------------------------------------------------------
+    // Multiple nodes and edges layout
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_dense_layout() {
+        let layout = DiagramLayout {
+            nodes: vec![
+                LayoutNodeBox {
+                    node_idx: 0,
+                    rect: LayoutRect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 20.0,
+                        height: 10.0,
+                    },
+                    label_rect: None,
+                    rank: 0,
+                    order: 0,
+                },
+                LayoutNodeBox {
+                    node_idx: 1,
+                    rect: LayoutRect {
+                        x: 40.0,
+                        y: 0.0,
+                        width: 20.0,
+                        height: 10.0,
+                    },
+                    label_rect: None,
+                    rank: 0,
+                    order: 1,
+                },
+                LayoutNodeBox {
+                    node_idx: 2,
+                    rect: LayoutRect {
+                        x: 20.0,
+                        y: 30.0,
+                        width: 20.0,
+                        height: 10.0,
+                    },
+                    label_rect: None,
+                    rank: 1,
+                    order: 0,
+                },
+            ],
+            clusters: vec![],
+            edges: vec![
+                LayoutEdgePath {
+                    edge_idx: 0,
+                    waypoints: vec![
+                        LayoutPoint { x: 10.0, y: 10.0 },
+                        LayoutPoint { x: 30.0, y: 30.0 },
+                    ],
+                    bundle_count: 1,
+                    bundle_members: Vec::new(),
+                },
+                LayoutEdgePath {
+                    edge_idx: 1,
+                    waypoints: vec![
+                        LayoutPoint { x: 50.0, y: 10.0 },
+                        LayoutPoint { x: 30.0, y: 30.0 },
+                    ],
+                    bundle_count: 1,
+                    bundle_members: Vec::new(),
+                },
+            ],
+            bounding_box: LayoutRect {
+                x: 0.0,
+                y: 0.0,
+                width: 60.0,
+                height: 40.0,
+            },
+            stats: LayoutStats {
+                iterations_used: 5,
+                max_iterations: 50,
+                budget_exceeded: false,
+                crossings: 0,
+                ranks: 2,
+                max_rank_width: 2,
+                total_bends: 0,
+                position_variance: 1.0,
+            },
+            degradation: None,
+        };
+
+        let minimap = Minimap::new(&layout, MinimapConfig::default());
+        let mut buf = Buffer::new(120, 40);
+        let area = Rect::new(0, 0, 120, 40);
+        let viewport = LayoutRect {
+            x: 10.0,
+            y: 5.0,
+            width: 30.0,
+            height: 20.0,
+        };
+        minimap.render(area, &mut buf, Some(&viewport), Some(2));
+        assert!(!minimap.is_trivial());
+    }
 }
