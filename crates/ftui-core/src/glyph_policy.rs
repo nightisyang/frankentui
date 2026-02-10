@@ -463,4 +463,240 @@ mod tests {
 
         assert!(!policy.emoji);
     }
+
+    // ===== glyph_width =====
+
+    #[test]
+    fn glyph_width_ascii_printable() {
+        assert_eq!(glyph_width('a', false), 1);
+        assert_eq!(glyph_width('Z', false), 1);
+        assert_eq!(glyph_width(' ', false), 1);
+        assert_eq!(glyph_width('~', false), 1);
+    }
+
+    #[test]
+    fn glyph_width_ascii_control_chars() {
+        assert_eq!(glyph_width('\t', false), 1);
+        assert_eq!(glyph_width('\n', false), 1);
+        assert_eq!(glyph_width('\r', false), 1);
+        // NUL and other control chars are zero-width.
+        assert_eq!(glyph_width('\0', false), 0);
+        assert_eq!(glyph_width('\x01', false), 0);
+        assert_eq!(glyph_width('\x7f', false), 0); // DEL
+    }
+
+    #[test]
+    fn glyph_width_cjk_ideograph() {
+        // CJK Unified Ideograph (U+4E2D, 中) is double-width.
+        assert_eq!(glyph_width('中', false), 2);
+        assert_eq!(glyph_width('中', true), 2);
+    }
+
+    #[test]
+    fn glyph_width_box_drawing_non_cjk() {
+        // Box drawing chars should be single-width in non-CJK mode.
+        assert_eq!(glyph_width('─', false), 1);
+        assert_eq!(glyph_width('│', false), 1);
+        assert_eq!(glyph_width('┌', false), 1);
+    }
+
+    #[test]
+    fn glyph_width_arrow_non_cjk() {
+        // Arrow chars should be single-width in non-CJK mode.
+        assert_eq!(glyph_width('→', false), 1);
+        assert_eq!(glyph_width('←', false), 1);
+        assert_eq!(glyph_width('↑', false), 1);
+    }
+
+    // ===== glyphs_fit_narrow =====
+
+    #[test]
+    fn line_drawing_glyphs_fit_narrow_non_cjk() {
+        assert!(glyphs_fit_narrow(LINE_DRAWING_GLYPHS, false));
+    }
+
+    #[test]
+    fn arrow_glyphs_fit_narrow_non_cjk() {
+        assert!(glyphs_fit_narrow(ARROW_GLYPHS, false));
+    }
+
+    #[test]
+    fn glyphs_fit_narrow_rejects_wide_char() {
+        // A CJK ideograph is width 2, so a set containing it fails.
+        assert!(!glyphs_fit_narrow(&['中'], false));
+    }
+
+    #[test]
+    fn glyphs_fit_narrow_empty_set() {
+        assert!(glyphs_fit_narrow(&[], false));
+        assert!(glyphs_fit_narrow(&[], true));
+    }
+
+    // ===== detect_mode with terminal profiles =====
+
+    #[test]
+    fn dumb_terminal_defaults_to_ascii() {
+        let env = map_env(&[]);
+        let caps = TerminalCapabilities::dumb();
+        let policy = GlyphPolicy::from_env_with(get_env(&env), &caps);
+
+        assert_eq!(policy.mode, GlyphMode::Ascii);
+    }
+
+    #[test]
+    fn mode_env_override_unicode_on_dumb_term() {
+        let env = map_env(&[(ENV_GLYPH_MODE, "unicode")]);
+        let caps = TerminalCapabilities::dumb();
+        let policy = GlyphPolicy::from_env_with(get_env(&env), &caps);
+
+        assert_eq!(policy.mode, GlyphMode::Unicode);
+    }
+
+    // ===== env_override_bool edge cases =====
+
+    #[test]
+    fn env_override_bool_missing_key_returns_none() {
+        let env = map_env(&[]);
+        assert!(env_override_bool(&get_env(&env), ENV_GLYPH_EMOJI).is_none());
+    }
+
+    #[test]
+    fn env_override_bool_invalid_value_returns_none() {
+        let env = map_env(&[(ENV_GLYPH_EMOJI, "maybe")]);
+        assert!(env_override_bool(&get_env(&env), ENV_GLYPH_EMOJI).is_none());
+    }
+
+    // ===== Line drawing / arrows interaction with CJK width =====
+
+    #[test]
+    fn line_drawing_enabled_with_env_override() {
+        let env = map_env(&[(ENV_GLYPH_LINE_DRAWING, "1")]);
+        let caps = TerminalCapabilities::modern();
+        let policy = GlyphPolicy::from_env_with(get_env(&env), &caps);
+
+        assert!(policy.unicode_line_drawing);
+    }
+
+    #[test]
+    fn arrows_enabled_with_env_override() {
+        let env = map_env(&[(ENV_GLYPH_ARROWS, "1")]);
+        let caps = TerminalCapabilities::modern();
+        let policy = GlyphPolicy::from_env_with(get_env(&env), &caps);
+
+        assert!(policy.unicode_arrows);
+    }
+
+    #[test]
+    fn ascii_mode_forces_line_drawing_off_even_with_override() {
+        let env = map_env(&[(ENV_GLYPH_MODE, "ascii"), (ENV_GLYPH_LINE_DRAWING, "1")]);
+        let caps = TerminalCapabilities::modern();
+        let policy = GlyphPolicy::from_env_with(get_env(&env), &caps);
+
+        assert_eq!(policy.mode, GlyphMode::Ascii);
+        assert!(!policy.unicode_line_drawing);
+    }
+
+    #[test]
+    fn double_width_env_override_true() {
+        let env = map_env(&[(ENV_GLYPH_DOUBLE_WIDTH, "1")]);
+        let mut caps = TerminalCapabilities::modern();
+        caps.double_width = false;
+        let policy = GlyphPolicy::from_env_with(get_env(&env), &caps);
+
+        assert!(policy.double_width);
+    }
+
+    // ===== Default policy with modern caps =====
+
+    #[test]
+    fn default_modern_policy() {
+        let env = map_env(&[]);
+        let caps = TerminalCapabilities::modern();
+        let policy = GlyphPolicy::from_env_with(get_env(&env), &caps);
+
+        assert_eq!(policy.mode, GlyphMode::Unicode);
+        assert!(policy.emoji);
+        assert!(policy.double_width);
+        assert!(policy.unicode_box_drawing);
+        assert!(policy.unicode_line_drawing);
+        assert!(policy.unicode_arrows);
+    }
+
+    // ===== GlyphMode::parse edge cases =====
+
+    #[test]
+    fn glyph_mode_parse_case_insensitive() {
+        assert_eq!(GlyphMode::parse("UNICODE"), Some(GlyphMode::Unicode));
+        assert_eq!(GlyphMode::parse("Unicode"), Some(GlyphMode::Unicode));
+        assert_eq!(GlyphMode::parse("ASCII"), Some(GlyphMode::Ascii));
+        assert_eq!(GlyphMode::parse("Ascii"), Some(GlyphMode::Ascii));
+    }
+
+    #[test]
+    fn glyph_mode_parse_whitespace_trimmed() {
+        assert_eq!(GlyphMode::parse(" unicode "), Some(GlyphMode::Unicode));
+        assert_eq!(GlyphMode::parse("\tascii\n"), Some(GlyphMode::Ascii));
+    }
+
+    #[test]
+    fn glyph_mode_parse_empty_returns_none() {
+        assert_eq!(GlyphMode::parse(""), None);
+    }
+
+    // ===== parse_bool edge cases =====
+
+    #[test]
+    fn parse_bool_case_insensitive() {
+        assert_eq!(parse_bool("TRUE"), Some(true));
+        assert_eq!(parse_bool("True"), Some(true));
+        assert_eq!(parse_bool("FALSE"), Some(false));
+        assert_eq!(parse_bool("False"), Some(false));
+        assert_eq!(parse_bool("YES"), Some(true));
+        assert_eq!(parse_bool("NO"), Some(false));
+    }
+
+    #[test]
+    fn parse_bool_whitespace_trimmed() {
+        assert_eq!(parse_bool(" true "), Some(true));
+        assert_eq!(parse_bool("\t0\n"), Some(false));
+    }
+
+    // ===== to_json =====
+
+    #[test]
+    fn to_json_all_true() {
+        let policy = GlyphPolicy {
+            mode: GlyphMode::Unicode,
+            emoji: true,
+            cjk_width: true,
+            double_width: true,
+            unicode_box_drawing: true,
+            unicode_line_drawing: true,
+            unicode_arrows: true,
+        };
+        let json = policy.to_json();
+        assert!(json.contains(r#""glyph_mode":"unicode""#));
+        assert!(json.contains(r#""emoji":true"#));
+        assert!(json.contains(r#""cjk_width":true"#));
+        assert!(json.contains(r#""double_width":true"#));
+        assert!(json.contains(r#""unicode_box_drawing":true"#));
+        assert!(json.contains(r#""unicode_line_drawing":true"#));
+        assert!(json.contains(r#""unicode_arrows":true"#));
+    }
+
+    #[test]
+    fn to_json_all_false_ascii() {
+        let policy = GlyphPolicy {
+            mode: GlyphMode::Ascii,
+            emoji: false,
+            cjk_width: false,
+            double_width: false,
+            unicode_box_drawing: false,
+            unicode_line_drawing: false,
+            unicode_arrows: false,
+        };
+        let json = policy.to_json();
+        assert!(json.contains(r#""glyph_mode":"ascii""#));
+        assert!(json.contains(r#""emoji":false"#));
+    }
 }
