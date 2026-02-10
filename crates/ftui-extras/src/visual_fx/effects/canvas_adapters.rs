@@ -1647,4 +1647,135 @@ mod tests {
             assert!(count > 0, "Quality {quality:?} should set some pixels");
         }
     }
+
+    #[test]
+    fn plasma_sunset_fast_path_all_quality_levels() {
+        let theme = default_theme();
+        let mut adapter = PlasmaCanvasAdapter::new(PlasmaPalette::Sunset);
+        for quality in [FxQuality::Full, FxQuality::Reduced, FxQuality::Minimal] {
+            let mut p = Painter::new(8, 8, Mode::Braille);
+            adapter.fill(&mut p, 1.0, quality, &theme);
+
+            let mut count = 0;
+            let (w, h) = p.size();
+            for y in 0..h {
+                for x in 0..w {
+                    if p.get(x as i32, y as i32) {
+                        count += 1;
+                    }
+                }
+            }
+            assert!(
+                count > 0,
+                "Sunset fast path should set some pixels for {quality:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn metaballs_all_quality_levels_exercises_step_branches() {
+        let theme = default_theme();
+
+        for (quality, expected_step) in [
+            (FxQuality::Full, 0),
+            (FxQuality::Reduced, 4),
+            (FxQuality::Minimal, 2),
+        ] {
+            let mut adapter = MetaballsCanvasAdapter::new();
+            adapter.prepare(0.5, quality);
+            let mut p = Painter::new(12, 10, Mode::Braille);
+            adapter.fill(&mut p, quality, &theme);
+
+            let mut count = 0;
+            let (w, h) = p.size();
+            for y in 0..h {
+                for x in 0..w {
+                    if p.get(x as i32, y as i32) {
+                        count += 1;
+                    }
+                }
+            }
+            assert!(
+                count > 0,
+                "Metaballs should set some pixels for {quality:?}"
+            );
+
+            if expected_step > 0 {
+                assert_eq!(
+                    adapter.active_step, expected_step,
+                    "expected active step {expected_step} for {quality:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn metaballs_small_ball_count_reduced_minimal_use_step_one() {
+        let theme = default_theme();
+        let mut params = MetaballsParams::default();
+        params.balls.truncate(2);
+
+        for quality in [FxQuality::Reduced, FxQuality::Minimal] {
+            let mut adapter = MetaballsCanvasAdapter::with_params(params.clone());
+            adapter.prepare(0.0, quality);
+            let mut p = Painter::new(8, 8, Mode::Braille);
+            adapter.fill(&mut p, quality, &theme);
+
+            assert_eq!(
+                adapter.active_step, 0,
+                "step should remain 1 (no active indices) for {quality:?} with <=2 balls"
+            );
+        }
+    }
+
+    #[test]
+    fn metaballs_row_skip_and_block_skip_paths_are_exercised() {
+        // Craft parameters so most rows/blocks are provably dark and skipped,
+        // while a small neighborhood near the single ball still renders.
+        let theme = default_theme();
+
+        let params = MetaballsParams {
+            balls: vec![crate::visual_fx::effects::metaballs::Metaball {
+                x: 0.1875, // midpoint for x=1 in an 8-wide grid
+                y: 0.4375, // midpoint for y=3 in an 8-tall grid
+                vx: 0.0,
+                vy: 0.0,
+                radius: 0.20,
+                hue: 0.0,
+                phase: 0.0,
+            }],
+            threshold: 10.0,
+            glow_threshold: 10.0,
+            pulse_amount: 0.0,
+            pulse_speed: 0.0,
+            hue_speed: 0.0,
+            time_scale: 1.0,
+            bounds_min: 0.0,
+            bounds_max: 1.0,
+            radius_min: 0.20,
+            radius_max: 0.20,
+            ..MetaballsParams::default()
+        };
+
+        let mut adapter = MetaballsCanvasAdapter::with_params(params);
+        adapter.prepare(0.0, FxQuality::Full);
+
+        let mut p = Painter::new(8, 8, Mode::Braille);
+        adapter.fill(&mut p, FxQuality::Full, &theme);
+
+        let mut count = 0;
+        let (w, h) = p.size();
+        for y in 0..h {
+            for x in 0..w {
+                if p.get(x as i32, y as i32) {
+                    count += 1;
+                }
+            }
+        }
+        assert!(count > 0, "Should still render near the ball");
+        assert!(
+            count < (w as usize).saturating_mul(h as usize),
+            "Should not render every pixel when skip paths trigger"
+        );
+    }
 }
