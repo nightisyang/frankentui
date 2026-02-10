@@ -79,7 +79,15 @@ fn bench_buffer_set(c: &mut Criterion) {
         })
     });
 
-    // set_fast: inline fast path (requires opaque bg to take the fast path)
+    // set_fast: inline fast path (bg alpha must be 0 or 255 to take the fast path)
+    group.bench_function("set_fast_single_transparent_bg", |b| {
+        let mut buf = Buffer::new(80, 24);
+        b.iter(|| {
+            buf.set_fast(black_box(40), black_box(12), cell);
+            black_box(&buf);
+        })
+    });
+
     let opaque_cell = Cell::from_char('X')
         .with_fg(PackedRgba::rgb(255, 0, 0))
         .with_bg(PackedRgba::rgb(0, 0, 0));
@@ -108,6 +116,26 @@ fn bench_buffer_set(c: &mut Criterion) {
         b.iter(|| {
             for x in 0..80u16 {
                 buf.set(x, 12, cell);
+            }
+            black_box(&buf);
+        })
+    });
+
+    group.bench_function("set_fast_row_80_transparent_bg", |b| {
+        let mut buf = Buffer::new(80, 24);
+        b.iter(|| {
+            for x in 0..80u16 {
+                buf.set_fast(x, 12, cell);
+            }
+            black_box(&buf);
+        })
+    });
+
+    group.bench_function("set_fast_row_80_opaque_bg", |b| {
+        let mut buf = Buffer::new(80, 24);
+        b.iter(|| {
+            for x in 0..80u16 {
+                buf.set_fast(x, 12, opaque_cell);
             }
             black_box(&buf);
         })

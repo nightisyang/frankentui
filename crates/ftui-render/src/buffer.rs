@@ -745,7 +745,8 @@ impl Buffer {
     /// when all of the following hold:
     ///
     /// - The cell is single-width (`width() <= 1`) and not a continuation
-    /// - The cell background is fully opaque (`bg.a() == 255`)
+    /// - The cell background is either fully opaque or fully transparent
+    ///   (`bg.a() == 255 || bg.a() == 0`)
     /// - Only the base scissor is active (no nested push)
     /// - Only the base opacity is active (no nested push)
     /// - The existing cell at the target is also single-width and not a continuation
@@ -754,12 +755,14 @@ impl Buffer {
     /// always identical to calling `set()` directly.
     #[inline]
     pub fn set_fast(&mut self, x: u16, y: u16, cell: Cell) {
-        // Bail to full path for wide, continuation, or semi-transparent bg cells.
+        // Bail to full path for wide, continuation, or non-trivial bg alpha cells.
         // Must use width() not width_hint(): width_hint() returns 1 for all
         // direct chars including CJK, but width() does a proper unicode lookup.
-        // set() always composites bg over the existing cell (src-over), which is
-        // a no-op only when bg alpha is 255.
-        if cell.content.width() > 1 || cell.is_continuation() || cell.bg.a() != 255 {
+        // set() always composites bg over the existing cell (src-over). We can
+        // skip compositing only when bg alpha is 255 (result is bg) or 0 (result
+        // is existing bg).
+        let bg_a = cell.bg.a();
+        if cell.content.width() > 1 || cell.is_continuation() || (bg_a != 255 && bg_a != 0) {
             return self.set(x, y, cell);
         }
 
@@ -776,15 +779,22 @@ impl Buffer {
         // Check that existing cell doesn't need overlap cleanup.
         // Must use width() for the same reason: a CJK direct char at this
         // position would have width() == 2 with a continuation at x+1.
-        let existing = &self.cells[idx];
+        let existing = self.cells[idx];
         if existing.content.width() > 1 || existing.is_continuation() {
             return self.set(x, y, cell);
         }
 
         // All fast-path conditions met: direct write.
-        // bg compositing is safe to skip: cell.bg.a() == 255 means
-        // cell.bg.over(existing_bg) == cell.bg for any existing_bg.
-        self.cells[idx] = cell;
+        //
+        // bg compositing is safe to skip:
+        // - alpha 255: bg.over(existing_bg) == bg
+        // - alpha 0: bg.over(existing_bg) == existing_bg
+        let mut final_cell = cell;
+        if bg_a == 0 {
+            final_cell.bg = existing.bg;
+        }
+
+        self.cells[idx] = final_cell;
         self.mark_dirty_span(y, x, x.saturating_add(1));
     }
 
@@ -1645,6 +1655,37 @@ mod tests {
             result.bg, red,
             "Background should be preserved (composited)"
         );
+    }
+
+    #[test]
+    fn set_fast_matches_set_for_transparent_bg() {
+        let red = PackedRgba::rgb(255, 0, 0);
+        let cell = Cell::from_char('X').with_fg(PackedRgba::rgb(0, 255, 0));
+
+        let mut a = Buffer::new(1, 1);
+        a.set(0, 0, Cell::default().with_bg(red));
+        a.set(0, 0, cell);
+
+        let mut b = Buffer::new(1, 1);
+        b.set(0, 0, Cell::default().with_bg(red));
+        b.set_fast(0, 0, cell);
+
+        assert_eq!(a.get(0, 0), b.get(0, 0));
+    }
+
+    #[test]
+    fn set_fast_matches_set_for_opaque_bg() {
+        let cell = Cell::from_char('X')
+            .with_fg(PackedRgba::rgb(0, 255, 0))
+            .with_bg(PackedRgba::rgb(255, 0, 0));
+
+        let mut a = Buffer::new(1, 1);
+        a.set(0, 0, cell);
+
+        let mut b = Buffer::new(1, 1);
+        b.set_fast(0, 0, cell);
+
+        assert_eq!(a.get(0, 0), b.get(0, 0));
     }
 
     #[test]
