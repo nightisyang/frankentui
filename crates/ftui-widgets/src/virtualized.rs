@@ -2162,4 +2162,818 @@ mod tests {
             large_time
         );
     }
+
+    // ========================================================================
+    // Edge-case tests (bd-2f15w)
+    // ========================================================================
+
+    // ── Virtualized: construction & empty state ─────────────────────────
+
+    #[test]
+    fn new_zero_capacity() {
+        let virt: Virtualized<i32> = Virtualized::new(0);
+        assert_eq!(virt.len(), 0);
+        assert!(virt.is_empty());
+        assert_eq!(virt.scroll_offset(), 0);
+        assert_eq!(virt.visible_count(), 0);
+        assert!(!virt.follow_mode());
+    }
+
+    #[test]
+    fn external_zero_len_zero_cache() {
+        let virt: Virtualized<i32> = Virtualized::external(0, 0);
+        assert_eq!(virt.len(), 0);
+        assert!(virt.is_empty());
+    }
+
+    #[test]
+    fn external_storage_returns_none_for_get() {
+        let virt: Virtualized<i32> = Virtualized::external(100, 10);
+        assert_eq!(virt.get(0), None);
+        assert_eq!(virt.get(50), None);
+    }
+
+    #[test]
+    fn external_storage_returns_none_for_get_mut() {
+        let mut virt: Virtualized<i32> = Virtualized::external(100, 10);
+        assert!(virt.get_mut(0).is_none());
+    }
+
+    #[test]
+    fn push_on_external_is_noop() {
+        let mut virt: Virtualized<i32> = Virtualized::external(5, 10);
+        virt.push(42);
+        // Length unchanged because push only works on Owned
+        assert_eq!(virt.len(), 5);
+    }
+
+    #[test]
+    fn iter_on_external_is_empty() {
+        let virt: Virtualized<i32> = Virtualized::external(100, 10);
+        assert_eq!(virt.iter().count(), 0);
+    }
+
+    #[test]
+    fn set_external_len_on_owned_is_noop() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        virt.push(1);
+        virt.set_external_len(999);
+        assert_eq!(virt.len(), 1); // unchanged
+    }
+
+    // ── Virtualized: visible_range edge cases ───────────────────────────
+
+    #[test]
+    fn visible_range_zero_viewport() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        virt.push(1);
+        let range = virt.visible_range(0);
+        assert_eq!(range, 0..0);
+        assert_eq!(virt.visible_count(), 0);
+    }
+
+    #[test]
+    fn visible_range_empty_container() {
+        let virt: Virtualized<i32> = Virtualized::new(100);
+        let range = virt.visible_range(24);
+        assert_eq!(range, 0..0);
+    }
+
+    #[test]
+    fn visible_range_fixed_height_zero() {
+        // Fixed(0) should not divide by zero; falls through to viewport_height items
+        let mut virt: Virtualized<i32> = Virtualized::new(100).with_fixed_height(0);
+        for i in 0..10 {
+            virt.push(i);
+        }
+        let range = virt.visible_range(5);
+        // ItemHeight::Fixed(0) → viewport_height as usize = 5
+        assert_eq!(range, 0..5);
+    }
+
+    #[test]
+    fn visible_range_fewer_items_than_viewport() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        for i in 0..3 {
+            virt.push(i);
+        }
+        let range = virt.visible_range(24);
+        // Only 3 items, viewport fits 24
+        assert_eq!(range, 0..3);
+    }
+
+    #[test]
+    fn visible_range_single_item() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        virt.push(42);
+        let range = virt.visible_range(1);
+        assert_eq!(range, 0..1);
+    }
+
+    // ── Virtualized: render_range edge cases ────────────────────────────
+
+    #[test]
+    fn render_range_at_start_clamps_overscan() {
+        let mut virt: Virtualized<i32> =
+            Virtualized::new(100).with_fixed_height(1).with_overscan(5);
+        for i in 0..20 {
+            virt.push(i);
+        }
+        // At scroll_offset=0, start.saturating_sub(5) = 0
+        let range = virt.render_range(10);
+        assert_eq!(range.start, 0);
+    }
+
+    #[test]
+    fn render_range_at_end_clamps_overscan() {
+        let mut virt: Virtualized<i32> =
+            Virtualized::new(100).with_fixed_height(1).with_overscan(5);
+        for i in 0..20 {
+            virt.push(i);
+        }
+        virt.set_visible_count(10);
+        virt.scroll_to(10); // offset=10, visible 10..20
+        let range = virt.render_range(10);
+        // end = min(20 + 5, 20) = 20
+        assert_eq!(range.end, 20);
+    }
+
+    #[test]
+    fn render_range_zero_overscan() {
+        let mut virt: Virtualized<i32> =
+            Virtualized::new(100).with_fixed_height(1).with_overscan(0);
+        for i in 0..20 {
+            virt.push(i);
+        }
+        virt.set_visible_count(10);
+        virt.scroll_to(5);
+        let range = virt.render_range(10);
+        // No overscan: render_range == visible_range
+        let visible = virt.visible_range(10);
+        assert_eq!(range, visible);
+    }
+
+    // ── Virtualized: scroll edge cases ──────────────────────────────────
+
+    #[test]
+    fn scroll_on_empty_is_noop() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        virt.scroll(10);
+        assert_eq!(virt.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn scroll_delta_zero_does_not_disable_follow() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100).with_follow(true);
+        virt.push(1);
+        virt.scroll(0);
+        // delta=0 doesn't disable follow_mode
+        assert!(virt.follow_mode());
+    }
+
+    #[test]
+    fn scroll_negative_beyond_start() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        for i in 0..10 {
+            virt.push(i);
+        }
+        virt.scroll(-1);
+        assert_eq!(virt.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn scroll_to_on_empty() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        // scroll_to on empty: idx.min(0.saturating_sub(1)) = idx.min(0) = 0
+        virt.scroll_to(100);
+        assert_eq!(virt.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn scroll_to_top_already_at_top() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        virt.push(1);
+        virt.scroll_to_top();
+        assert_eq!(virt.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn scroll_to_bottom_fewer_items_than_visible() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        virt.set_visible_count(10);
+        for i in 0..3 {
+            virt.push(i);
+        }
+        virt.scroll_to_bottom();
+        // len (3) <= visible_count (10), so offset = 0
+        assert_eq!(virt.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn scroll_to_bottom_visible_count_zero() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        for i in 0..20 {
+            virt.push(i);
+        }
+        // visible_count=0 (default), scroll_to_bottom goes to offset=0
+        virt.scroll_to_bottom();
+        assert_eq!(virt.scroll_offset(), 0);
+    }
+
+    // ── Virtualized: page navigation edge cases ─────────────────────────
+
+    #[test]
+    fn page_up_visible_count_zero_is_noop() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        for i in 0..20 {
+            virt.push(i);
+        }
+        virt.scroll_to(10);
+        // visible_count=0, page_up is no-op
+        virt.page_up();
+        assert_eq!(virt.scroll_offset(), 10);
+    }
+
+    #[test]
+    fn page_down_visible_count_zero_is_noop() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        for i in 0..20 {
+            virt.push(i);
+        }
+        // visible_count=0, page_down is no-op
+        virt.page_down();
+        assert_eq!(virt.scroll_offset(), 0);
+    }
+
+    // ── Virtualized: is_at_bottom edge cases ────────────────────────────
+
+    #[test]
+    fn is_at_bottom_fewer_items_than_visible() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        virt.set_visible_count(10);
+        for i in 0..3 {
+            virt.push(i);
+        }
+        assert!(virt.is_at_bottom());
+    }
+
+    #[test]
+    fn is_at_bottom_empty() {
+        let virt: Virtualized<i32> = Virtualized::new(100);
+        // len=0 <= visible_count=0, so true
+        assert!(virt.is_at_bottom());
+    }
+
+    // ── Virtualized: trim_front edge cases ──────────────────────────────
+
+    #[test]
+    fn trim_front_under_max_returns_zero() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        for i in 0..5 {
+            virt.push(i);
+        }
+        let removed = virt.trim_front(10);
+        assert_eq!(removed, 0);
+        assert_eq!(virt.len(), 5);
+    }
+
+    #[test]
+    fn trim_front_adjusts_scroll_offset() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        for i in 0..20 {
+            virt.push(i);
+        }
+        virt.scroll_to(10);
+        let removed = virt.trim_front(15);
+        assert_eq!(removed, 5);
+        assert_eq!(virt.len(), 15);
+        // scroll_offset adjusted: 10 - 5 = 5
+        assert_eq!(virt.scroll_offset(), 5);
+    }
+
+    #[test]
+    fn trim_front_scroll_offset_saturates_to_zero() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        for i in 0..20 {
+            virt.push(i);
+        }
+        virt.scroll_to(2);
+        let removed = virt.trim_front(10);
+        assert_eq!(removed, 10);
+        // scroll_offset 2 - 10 saturates to 0
+        assert_eq!(virt.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn trim_front_on_external_returns_zero() {
+        let mut virt: Virtualized<i32> = Virtualized::external(100, 10);
+        let removed = virt.trim_front(5);
+        assert_eq!(removed, 0);
+    }
+
+    // ── Virtualized: clear edge cases ───────────────────────────────────
+
+    #[test]
+    fn clear_on_external_resets_scroll() {
+        let mut virt: Virtualized<i32> = Virtualized::external(100, 10);
+        virt.scroll_to(50);
+        virt.clear();
+        assert_eq!(virt.scroll_offset(), 0);
+        // External len unchanged since clear only clears Owned
+        assert_eq!(virt.len(), 100);
+    }
+
+    // ── Virtualized: momentum scrolling edge cases ──────────────────────
+
+    #[test]
+    fn tick_zero_velocity_is_noop() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        for i in 0..20 {
+            virt.push(i);
+        }
+        virt.tick(Duration::from_millis(100));
+        assert_eq!(virt.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn tick_below_threshold_stops_momentum() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        for i in 0..20 {
+            virt.push(i);
+        }
+        virt.fling(0.05); // below 0.1 threshold
+        virt.tick(Duration::from_millis(100));
+        // velocity <= 0.1, so it's zeroed out
+        assert_eq!(virt.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn tick_zero_duration_no_scroll() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        for i in 0..50 {
+            virt.push(i);
+        }
+        virt.fling(100.0);
+        virt.tick(Duration::ZERO);
+        // delta = (100.0 * 0.0) as i32 = 0, no scroll
+        assert_eq!(virt.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn fling_negative_scrolls_up() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        for i in 0..50 {
+            virt.push(i);
+        }
+        virt.scroll(20);
+        let before = virt.scroll_offset();
+        virt.fling(-50.0);
+        virt.tick(Duration::from_millis(100));
+        assert!(virt.scroll_offset() < before);
+    }
+
+    // ── Virtualized: follow mode edge cases ─────────────────────────────
+
+    #[test]
+    fn follow_mode_auto_scrolls_on_push() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100).with_follow(true);
+        virt.set_visible_count(5);
+        for i in 0..20 {
+            virt.push(i);
+        }
+        // With follow mode, should be at bottom
+        assert!(virt.is_at_bottom());
+        assert_eq!(virt.scroll_offset(), 15); // 20 - 5
+    }
+
+    #[test]
+    fn set_follow_false_does_not_scroll() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        virt.set_visible_count(5);
+        for i in 0..20 {
+            virt.push(i);
+        }
+        virt.scroll_to(5);
+        virt.set_follow(false);
+        assert_eq!(virt.scroll_offset(), 5); // unchanged
+    }
+
+    #[test]
+    fn scroll_to_start_disables_follow() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100).with_follow(true);
+        virt.set_visible_count(5);
+        for i in 0..20 {
+            virt.push(i);
+        }
+        virt.scroll_to_start();
+        assert!(!virt.follow_mode());
+        assert_eq!(virt.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn scroll_to_end_enables_follow() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        virt.set_visible_count(5);
+        for i in 0..20 {
+            virt.push(i);
+        }
+        assert!(!virt.follow_mode());
+        virt.scroll_to_end();
+        assert!(virt.follow_mode());
+        assert!(virt.is_at_bottom());
+    }
+
+    #[test]
+    fn external_follow_mode_scrolls_on_set_external_len() {
+        let mut virt: Virtualized<i32> = Virtualized::external(10, 100).with_follow(true);
+        virt.set_visible_count(5);
+        virt.set_external_len(20);
+        assert_eq!(virt.len(), 20);
+        assert!(virt.is_at_bottom());
+    }
+
+    // ── Virtualized: builder chain ──────────────────────────────────────
+
+    #[test]
+    fn builder_chain_all_options() {
+        let virt: Virtualized<i32> = Virtualized::new(100)
+            .with_fixed_height(3)
+            .with_overscan(5)
+            .with_follow(true);
+        assert!(virt.follow_mode());
+        // Verify visible_range uses height=3
+        // (no items, so empty range regardless)
+        let range = virt.visible_range(9);
+        assert_eq!(range, 0..0);
+    }
+
+    // ── HeightCache edge cases ──────────────────────────────────────────
+
+    #[test]
+    fn height_cache_default() {
+        let cache = HeightCache::default();
+        assert_eq!(cache.get(0), 1); // default_height=1
+        assert_eq!(cache.capacity, 1000);
+    }
+
+    #[test]
+    fn height_cache_get_before_base_offset() {
+        let mut cache = HeightCache::new(5, 100);
+        // Set something to push base_offset forward
+        cache.set(200, 10); // This resets window since 200 > capacity
+        // Index 0 < base_offset, returns default
+        assert_eq!(cache.get(0), 5);
+    }
+
+    #[test]
+    fn height_cache_set_before_base_offset_ignored() {
+        let mut cache = HeightCache::new(5, 100);
+        cache.set(200, 10);
+        let base = cache.base_offset;
+        cache.set(0, 99); // before base_offset, should be ignored
+        assert_eq!(cache.get(0), 5); // still default
+        assert_eq!(cache.base_offset, base); // unchanged
+    }
+
+    #[test]
+    fn height_cache_capacity_zero_ignores_all_sets() {
+        let mut cache = HeightCache::new(3, 0);
+        cache.set(0, 10);
+        cache.set(5, 20);
+        // Everything returns default since capacity=0
+        assert_eq!(cache.get(0), 3);
+        assert_eq!(cache.get(5), 3);
+    }
+
+    #[test]
+    fn height_cache_clear_resets_base() {
+        let mut cache = HeightCache::new(1, 100);
+        cache.set(50, 10);
+        cache.clear();
+        assert_eq!(cache.base_offset, 0);
+        assert_eq!(cache.get(50), 1); // back to default
+    }
+
+    #[test]
+    fn height_cache_eviction_trims_oldest() {
+        let mut cache = HeightCache::new(1, 4);
+        // Set indices 0..6 to fill and trigger eviction
+        for i in 0..6 {
+            cache.set(i, (i + 10) as u16);
+        }
+        // Cache capacity=4, so indices 0-1 should be evicted
+        assert!(cache.cache.len() <= cache.capacity);
+        // Recent indices should be accessible
+        assert_eq!(cache.get(5), 15);
+        // Old indices return default
+        assert_eq!(cache.get(0), 1);
+    }
+
+    // ── VariableHeightsFenwick edge cases ───────────────────────────────
+
+    #[test]
+    fn fenwick_default_is_empty() {
+        let tracker = VariableHeightsFenwick::default();
+        assert!(tracker.is_empty());
+        assert_eq!(tracker.len(), 0);
+        assert_eq!(tracker.total_height(), 0);
+        assert_eq!(tracker.default_height(), 1);
+    }
+
+    #[test]
+    fn fenwick_get_beyond_len_returns_default() {
+        let tracker = VariableHeightsFenwick::new(3, 5);
+        assert_eq!(tracker.get(5), 3); // beyond len
+        assert_eq!(tracker.get(100), 3);
+    }
+
+    #[test]
+    fn fenwick_set_beyond_len_resizes() {
+        let mut tracker = VariableHeightsFenwick::new(2, 3);
+        assert_eq!(tracker.len(), 3);
+        tracker.set(10, 7);
+        assert!(tracker.len() > 10);
+        assert_eq!(tracker.get(10), 7);
+    }
+
+    #[test]
+    fn fenwick_offset_of_item_zero_always_zero() {
+        let tracker = VariableHeightsFenwick::new(5, 10);
+        assert_eq!(tracker.offset_of_item(0), 0);
+
+        let empty = VariableHeightsFenwick::new(5, 0);
+        assert_eq!(empty.offset_of_item(0), 0);
+    }
+
+    #[test]
+    fn fenwick_find_item_at_offset_empty() {
+        let tracker = VariableHeightsFenwick::new(1, 0);
+        assert_eq!(tracker.find_item_at_offset(0), 0);
+        assert_eq!(tracker.find_item_at_offset(100), 0);
+    }
+
+    #[test]
+    fn fenwick_visible_count_zero_viewport() {
+        let tracker = VariableHeightsFenwick::new(2, 10);
+        assert_eq!(tracker.visible_count(0, 0), 0);
+    }
+
+    #[test]
+    fn fenwick_visible_count_start_beyond_len() {
+        let tracker = VariableHeightsFenwick::new(2, 5);
+        // start_idx clamped to len
+        let count = tracker.visible_count(100, 10);
+        // start=5 (clamped), offset=total, no items visible
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn fenwick_clear_then_operations() {
+        let mut tracker = VariableHeightsFenwick::new(3, 5);
+        assert_eq!(tracker.total_height(), 15);
+        tracker.clear();
+        assert_eq!(tracker.len(), 0);
+        assert_eq!(tracker.total_height(), 0);
+        assert_eq!(tracker.find_item_at_offset(0), 0);
+    }
+
+    #[test]
+    fn fenwick_rebuild_replaces_data() {
+        let mut tracker = VariableHeightsFenwick::new(1, 10);
+        assert_eq!(tracker.total_height(), 10);
+        tracker.rebuild(&[5, 3, 2]);
+        assert_eq!(tracker.len(), 3);
+        assert_eq!(tracker.total_height(), 10);
+        assert_eq!(tracker.get(0), 5);
+        assert_eq!(tracker.get(1), 3);
+        assert_eq!(tracker.get(2), 2);
+    }
+
+    #[test]
+    fn fenwick_resize_same_size_is_noop() {
+        let mut tracker = VariableHeightsFenwick::new(2, 5);
+        tracker.set(2, 10);
+        tracker.resize(5);
+        // Item 2 still has custom height
+        assert_eq!(tracker.get(2), 10);
+        assert_eq!(tracker.len(), 5);
+    }
+
+    // ── VirtualizedListState edge cases ─────────────────────────────────
+
+    #[test]
+    fn list_state_default_matches_new() {
+        let d = VirtualizedListState::default();
+        let n = VirtualizedListState::new();
+        assert_eq!(d.selected, n.selected);
+        assert_eq!(d.scroll_offset(), n.scroll_offset());
+        assert_eq!(d.visible_count(), n.visible_count());
+        assert_eq!(d.follow_mode(), n.follow_mode());
+    }
+
+    #[test]
+    fn list_state_select_next_on_empty() {
+        let mut state = VirtualizedListState::new();
+        state.select_next(0);
+        assert_eq!(state.selected, None);
+    }
+
+    #[test]
+    fn list_state_select_previous_on_empty() {
+        let mut state = VirtualizedListState::new();
+        state.select_previous(0);
+        assert_eq!(state.selected, None);
+    }
+
+    #[test]
+    fn list_state_select_previous_from_none() {
+        let mut state = VirtualizedListState::new();
+        state.select_previous(10);
+        assert_eq!(state.selected, Some(0));
+    }
+
+    #[test]
+    fn list_state_select_next_from_none() {
+        let mut state = VirtualizedListState::new();
+        state.select_next(10);
+        assert_eq!(state.selected, Some(0));
+    }
+
+    #[test]
+    fn list_state_scroll_zero_items() {
+        let mut state = VirtualizedListState::new();
+        state.scroll(10, 0);
+        assert_eq!(state.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn list_state_scroll_to_clamps() {
+        let mut state = VirtualizedListState::new();
+        state.scroll_to(100, 10);
+        assert_eq!(state.scroll_offset(), 9);
+    }
+
+    #[test]
+    fn list_state_scroll_to_bottom_zero_items() {
+        let mut state = VirtualizedListState::new();
+        state.scroll_to_bottom(0);
+        assert_eq!(state.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn list_state_is_at_bottom_zero_items() {
+        let state = VirtualizedListState::new();
+        assert!(state.is_at_bottom(0));
+    }
+
+    #[test]
+    fn list_state_page_up_visible_count_zero() {
+        let mut state = VirtualizedListState::new();
+        state.scroll_offset = 5;
+        state.page_up(20);
+        // visible_count=0, no-op
+        assert_eq!(state.scroll_offset(), 5);
+    }
+
+    #[test]
+    fn list_state_page_down_visible_count_zero() {
+        let mut state = VirtualizedListState::new();
+        state.page_down(20);
+        // visible_count=0, no-op
+        assert_eq!(state.scroll_offset(), 0);
+    }
+
+    #[test]
+    fn list_state_set_follow_false_no_scroll() {
+        let mut state = VirtualizedListState::new();
+        state.scroll_offset = 5;
+        state.set_follow(false, 20);
+        assert_eq!(state.scroll_offset(), 5); // unchanged
+        assert!(!state.follow_mode());
+    }
+
+    #[test]
+    fn list_state_persistence_id() {
+        let state = VirtualizedListState::new().with_persistence_id("my-list");
+        assert_eq!(state.persistence_id(), Some("my-list"));
+    }
+
+    #[test]
+    fn list_state_persistence_id_none() {
+        let state = VirtualizedListState::new();
+        assert_eq!(state.persistence_id(), None);
+    }
+
+    #[test]
+    fn list_state_momentum_tick_zero_items() {
+        let mut state = VirtualizedListState::new();
+        state.fling(50.0);
+        state.tick(Duration::from_millis(100), 0);
+        // total_items=0, scroll is no-op
+        assert_eq!(state.scroll_offset(), 0);
+    }
+
+    // ── VirtualizedListPersistState edge cases ──────────────────────────
+
+    #[test]
+    fn persist_state_default() {
+        let ps = VirtualizedListPersistState::default();
+        assert_eq!(ps.selected, None);
+        assert_eq!(ps.scroll_offset, 0);
+        assert!(!ps.follow_mode);
+    }
+
+    #[test]
+    fn persist_state_eq() {
+        let a = VirtualizedListPersistState {
+            selected: Some(5),
+            scroll_offset: 10,
+            follow_mode: true,
+        };
+        let b = a.clone();
+        assert_eq!(a, b);
+    }
+
+    // ── Stateful trait impl edge cases ──────────────────────────────────
+
+    #[test]
+    fn stateful_state_key_with_persistence_id() {
+        use crate::stateful::Stateful;
+        let state = VirtualizedListState::new().with_persistence_id("logs");
+        let key = state.state_key();
+        assert_eq!(key.widget_type, "VirtualizedList");
+        assert_eq!(key.instance_id, "logs");
+    }
+
+    #[test]
+    fn stateful_state_key_default_instance() {
+        use crate::stateful::Stateful;
+        let state = VirtualizedListState::new();
+        let key = state.state_key();
+        assert_eq!(key.instance_id, "default");
+    }
+
+    #[test]
+    fn stateful_save_restore_roundtrip() {
+        use crate::stateful::Stateful;
+        let mut state = VirtualizedListState::new();
+        state.selected = Some(7);
+        state.scroll_offset = 15;
+        state.follow_mode = true;
+        state.scroll_velocity = 42.0; // transient — not persisted
+
+        let saved = state.save_state();
+        assert_eq!(saved.selected, Some(7));
+        assert_eq!(saved.scroll_offset, 15);
+        assert!(saved.follow_mode);
+
+        let mut restored = VirtualizedListState::new();
+        restored.scroll_velocity = 99.0;
+        restored.restore_state(saved);
+        assert_eq!(restored.selected, Some(7));
+        assert_eq!(restored.scroll_offset, 15);
+        assert!(restored.follow_mode);
+        // velocity reset to 0 on restore
+        assert_eq!(restored.scroll_velocity, 0.0);
+    }
+
+    // ── VirtualizedList widget edge cases ───────────────────────────────
+
+    #[test]
+    fn virtualized_list_builder() {
+        let items: Vec<String> = vec!["a".into()];
+        let list = VirtualizedList::new(&items)
+            .style(Style::default())
+            .highlight_style(Style::default())
+            .show_scrollbar(false)
+            .fixed_height(3);
+        assert_eq!(list.fixed_height, 3);
+        assert!(!list.show_scrollbar);
+    }
+
+    // ── VirtualizedStorage Debug/Clone ───────────────────────────────────
+
+    #[test]
+    fn virtualized_storage_debug() {
+        let storage: VirtualizedStorage<i32> = VirtualizedStorage::Owned(VecDeque::new());
+        let dbg = format!("{:?}", storage);
+        assert!(dbg.contains("Owned"));
+
+        let ext: VirtualizedStorage<i32> = VirtualizedStorage::External {
+            len: 100,
+            cache_capacity: 10,
+        };
+        let dbg = format!("{:?}", ext);
+        assert!(dbg.contains("External"));
+    }
+
+    #[test]
+    fn virtualized_clone() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        virt.push(1);
+        virt.push(2);
+        let cloned = virt.clone();
+        assert_eq!(cloned.len(), 2);
+        assert_eq!(cloned.get(0), Some(&1));
+    }
 }
