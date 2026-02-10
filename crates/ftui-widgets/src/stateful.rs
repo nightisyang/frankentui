@@ -1458,14 +1458,17 @@ mod tests {
         let state: Box<dyn core::any::Any + Send> = Box::new(ScrollStateV1 { scroll_offset: 1 });
         let result = chain.migrate(state, 1, 2);
         assert!(result.is_err());
-        match result.unwrap_err() {
-            MigrationError::MigrationFailed { from, to, message } => {
-                assert_eq!(from, 1);
-                assert_eq!(to, 2);
-                assert_eq!(message, "data corruption detected");
-            }
-            other => panic!("expected MigrationFailed, got {:?}", other),
-        }
+        let err = result.unwrap_err();
+        assert!(
+            matches!(&err, MigrationError::MigrationFailed { .. }),
+            "expected MigrationFailed, got {err:?}"
+        );
+        let MigrationError::MigrationFailed { from, to, message } = err else {
+            return;
+        };
+        assert_eq!(from, 1);
+        assert_eq!(to, 2);
+        assert_eq!(message, "data corruption detected");
     }
 
     #[test]
@@ -1477,10 +1480,11 @@ mod tests {
         let wrong: Box<dyn core::any::Any + Send> = Box::new("not a state".to_string());
         let result = chain.migrate(wrong, 1, 2);
         assert!(result.is_err());
-        match result.unwrap_err() {
-            MigrationError::MigrationFailed { from: 1, to: 2, .. } => {}
-            other => panic!("expected MigrationFailed, got {:?}", other),
-        }
+        let err = result.unwrap_err();
+        assert!(
+            matches!(&err, MigrationError::MigrationFailed { from: 1, to: 2, .. }),
+            "expected MigrationFailed, got {err:?}"
+        );
     }
 
     // ── Edge-case: RestoreResult ─────────────────────────────────────
@@ -1565,25 +1569,57 @@ mod tests {
 
     #[test]
     fn unpack_with_migration_successful_migration() {
-        let vs = VersionedState::new(1, ScrollStateV1 { scroll_offset: 42 });
+        // `unpack_with_migration` boxes `S`, so migrations must accept/return the same `S`
+        // type for this API. This test exercises the happy path by migrating `ScrollStateV2`
+        // v1 -> v2 (same type, different semantics).
+        struct V1ToV2SameTypeMigration;
+
+        impl ErasedMigration<ScrollStateV2> for V1ToV2SameTypeMigration {
+            fn from_version(&self) -> u32 {
+                1
+            }
+            fn to_version(&self) -> u32 {
+                2
+            }
+            fn migrate_erased(
+                &self,
+                old: Box<dyn core::any::Any + Send>,
+            ) -> Result<Box<dyn core::any::Any + Send>, String> {
+                let mut state = old
+                    .downcast::<ScrollStateV2>()
+                    .map_err(|_| "invalid state type")?;
+                // Mutate a field to prove the migration executed.
+                state.velocity = 1.25;
+                Ok(state)
+            }
+        }
+
+        let vs = VersionedState::new(
+            1,
+            ScrollStateV2 {
+                scroll_offset: 42,
+                velocity: 0.0,
+            },
+        );
 
         let mut chain = MigrationChain::<ScrollStateV2>::new();
-        chain.register(Box::new(V1ToV2Migration));
+        chain.register(Box::new(V1ToV2SameTypeMigration));
 
-        // Note: VersionedState<ScrollStateV1> vs WidgetV2 expects ScrollStateV2
-        // We need to use the same state type. The migration chain works on
-        // Box<dyn Any + Send>, so we box it properly.
-
-        // Actually, unpack_with_migration requires VersionedState<S> where S == Stateful::State.
-        // The version mismatch triggers migration through the chain.
-        // The data field type S must match the widget's State type.
-        // So we construct VersionedState<ScrollStateV2> with version 1 (old),
-        // and the chain migrates from v1 data to v2 data via Box<dyn Any>.
-
-        // BUT: the data IS ScrollStateV2 already (wrong type for v1). The boxed
-        // data is Box<ScrollStateV2>, migration expects Box<ScrollStateV1>.
-        // This will cause a type mismatch in migrate_erased → fallback.
-        // That's actually the correct behavior for a type-mismatch scenario.
+        let result = vs.unpack_with_migration::<WidgetV2>(&chain);
+        assert!(
+            matches!(&result, RestoreResult::Migrated { .. }),
+            "expected Migrated, got {result:?}"
+        );
+        let RestoreResult::Migrated {
+            state,
+            from_version,
+        } = result
+        else {
+            return;
+        };
+        assert_eq!(from_version, 1);
+        assert_eq!(state.scroll_offset, 42);
+        assert_eq!(state.velocity, 1.25);
     }
 
     #[test]
