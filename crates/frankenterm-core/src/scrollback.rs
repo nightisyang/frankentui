@@ -463,4 +463,396 @@ mod tests {
         assert_eq!(empty.len(), 0);
         assert!(empty.is_empty());
     }
+
+    // --- Edge-case tests (bd-33u5g) ---
+
+    #[test]
+    fn push_row_returns_evicted_line() {
+        let mut sb = Scrollback::new(2);
+        assert!(sb.push_row(&make_row("a"), false).is_none());
+        assert!(sb.push_row(&make_row("b"), false).is_none());
+
+        // Third push evicts "a"
+        let evicted = sb.push_row(&make_row("c"), false);
+        assert!(evicted.is_some());
+        let evicted = evicted.unwrap();
+        assert_eq!(row_text(&evicted.cells), "a");
+        assert!(!evicted.wrapped);
+    }
+
+    #[test]
+    fn push_row_evicted_preserves_wrapped_flag() {
+        let mut sb = Scrollback::new(1);
+        sb.push_row(&make_row("first"), true);
+        let evicted = sb.push_row(&make_row("second"), false);
+        let evicted = evicted.unwrap();
+        assert_eq!(row_text(&evicted.cells), "first");
+        assert!(evicted.wrapped);
+    }
+
+    #[test]
+    fn capacity_one_push_evict_cycle() {
+        let mut sb = Scrollback::new(1);
+        sb.push_row(&make_row("x"), false);
+        assert_eq!(sb.len(), 1);
+        assert_eq!(row_text(&sb.get(0).unwrap().cells), "x");
+
+        let evicted = sb.push_row(&make_row("y"), false);
+        assert_eq!(row_text(&evicted.unwrap().cells), "x");
+        assert_eq!(sb.len(), 1);
+        assert_eq!(row_text(&sb.get(0).unwrap().cells), "y");
+    }
+
+    #[test]
+    fn default_scrollback_is_zero_capacity() {
+        let sb = Scrollback::default();
+        assert_eq!(sb.capacity(), 0);
+        assert!(sb.is_empty());
+    }
+
+    #[test]
+    fn clone_independence() {
+        let mut sb = Scrollback::new(10);
+        sb.push_row(&make_row("hello"), false);
+        let cloned = sb.clone();
+        sb.push_row(&make_row("world"), false);
+
+        assert_eq!(sb.len(), 2);
+        assert_eq!(cloned.len(), 1);
+        assert_eq!(row_text(&cloned.get(0).unwrap().cells), "hello");
+    }
+
+    #[test]
+    fn get_out_of_bounds_returns_none() {
+        let sb = Scrollback::new(10);
+        assert!(sb.get(0).is_none());
+        assert!(sb.get(999).is_none());
+
+        let mut sb2 = Scrollback::new(10);
+        sb2.push_row(&make_row("x"), false);
+        assert!(sb2.get(0).is_some());
+        assert!(sb2.get(1).is_none());
+    }
+
+    #[test]
+    fn set_capacity_to_zero_evicts_all() {
+        let mut sb = Scrollback::new(10);
+        for i in 0..5 {
+            sb.push_row(&make_row(&format!("{i}")), false);
+        }
+        sb.set_capacity(0);
+        assert!(sb.is_empty());
+        assert_eq!(sb.capacity(), 0);
+    }
+
+    #[test]
+    fn set_capacity_growing_preserves_lines() {
+        let mut sb = Scrollback::new(3);
+        for i in 0..3 {
+            sb.push_row(&make_row(&format!("{i}")), false);
+        }
+        sb.set_capacity(10);
+        assert_eq!(sb.len(), 3);
+        assert_eq!(sb.capacity(), 10);
+        assert_eq!(row_text(&sb.get(0).unwrap().cells), "0");
+        assert_eq!(row_text(&sb.get(2).unwrap().cells), "2");
+    }
+
+    #[test]
+    fn set_capacity_same_is_noop() {
+        let mut sb = Scrollback::new(3);
+        sb.push_row(&make_row("a"), false);
+        sb.push_row(&make_row("b"), false);
+        sb.set_capacity(3);
+        assert_eq!(sb.len(), 2);
+    }
+
+    #[test]
+    fn push_row_with_empty_cells() {
+        let mut sb = Scrollback::new(10);
+        sb.push_row(&[], false);
+        assert_eq!(sb.len(), 1);
+        let line = sb.get(0).unwrap();
+        assert!(line.is_empty());
+        assert!(!line.wrapped);
+    }
+
+    #[test]
+    fn multiple_evictions_correct_order() {
+        let mut sb = Scrollback::new(2);
+        // Push a, b (fills to capacity)
+        sb.push_row(&make_row("a"), false);
+        sb.push_row(&make_row("b"), false);
+
+        // Push c → evicts a; push d → evicts b; push e → evicts c
+        let ev_a = sb.push_row(&make_row("c"), false).unwrap();
+        let ev_b = sb.push_row(&make_row("d"), false).unwrap();
+        let ev_c = sb.push_row(&make_row("e"), false).unwrap();
+
+        assert_eq!(row_text(&ev_a.cells), "a");
+        assert_eq!(row_text(&ev_b.cells), "b");
+        assert_eq!(row_text(&ev_c.cells), "c");
+
+        // Buffer now contains d, e
+        assert_eq!(row_text(&sb.get(0).unwrap().cells), "d");
+        assert_eq!(row_text(&sb.get(1).unwrap().cells), "e");
+    }
+
+    #[test]
+    fn iter_range_start_beyond_len() {
+        let mut sb = Scrollback::new(10);
+        sb.push_row(&make_row("a"), false);
+        sb.push_row(&make_row("b"), false);
+        sb.push_row(&make_row("c"), false);
+
+        // start beyond len should clamp to empty
+        let items: Vec<_> = sb.iter_range(10..20).collect();
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn iter_range_empty_range() {
+        let mut sb = Scrollback::new(10);
+        sb.push_row(&make_row("a"), false);
+        sb.push_row(&make_row("b"), false);
+
+        // start == end → empty range
+        let items: Vec<_> = sb.iter_range(1..1).collect();
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn iter_range_full() {
+        let mut sb = Scrollback::new(10);
+        sb.push_row(&make_row("a"), false);
+        sb.push_row(&make_row("b"), false);
+        sb.push_row(&make_row("c"), false);
+
+        let texts: Vec<String> = sb.iter_range(0..3).map(|l| row_text(&l.cells)).collect();
+        assert_eq!(texts, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn iter_range_far_beyond_len() {
+        let mut sb = Scrollback::new(10);
+        sb.push_row(&make_row("x"), false);
+
+        let texts: Vec<String> = sb.iter_range(0..1000).map(|l| row_text(&l.cells)).collect();
+        assert_eq!(texts, vec!["x"]);
+    }
+
+    #[test]
+    fn pop_all_then_push() {
+        let mut sb = Scrollback::new(3);
+        sb.push_row(&make_row("a"), false);
+        sb.push_row(&make_row("b"), false);
+
+        // Pop all
+        sb.pop_newest();
+        sb.pop_newest();
+        assert!(sb.is_empty());
+        assert!(sb.pop_newest().is_none());
+
+        // Push again
+        sb.push_row(&make_row("c"), false);
+        assert_eq!(sb.len(), 1);
+        assert_eq!(row_text(&sb.get(0).unwrap().cells), "c");
+    }
+
+    #[test]
+    fn peek_newest_does_not_consume() {
+        let mut sb = Scrollback::new(10);
+        sb.push_row(&make_row("a"), false);
+
+        // Peek multiple times
+        assert_eq!(row_text(&sb.peek_newest().unwrap().cells), "a");
+        assert_eq!(row_text(&sb.peek_newest().unwrap().cells), "a");
+        assert_eq!(sb.len(), 1);
+    }
+
+    #[test]
+    fn peek_newest_empty_returns_none() {
+        let sb = Scrollback::new(10);
+        assert!(sb.peek_newest().is_none());
+    }
+
+    #[test]
+    fn virtualized_window_empty_scrollback() {
+        let sb = Scrollback::new(100);
+        let w = sb.virtualized_window(0, 10, 2);
+        assert_eq!(w.total_lines, 0);
+        assert_eq!(w.max_scroll_offset, 0);
+        assert_eq!(w.viewport_start, 0);
+        assert_eq!(w.viewport_end, 0);
+        assert_eq!(w.render_start, 0);
+        assert_eq!(w.render_end, 0);
+        assert_eq!(w.viewport_len(), 0);
+        assert_eq!(w.render_len(), 0);
+    }
+
+    #[test]
+    fn virtualized_window_zero_viewport() {
+        let mut sb = Scrollback::new(10);
+        for i in 0..5 {
+            sb.push_row(&make_row(&format!("{i}")), false);
+        }
+
+        let w = sb.virtualized_window(0, 0, 2);
+        assert_eq!(w.total_lines, 5);
+        assert_eq!(w.viewport_len(), 0);
+    }
+
+    #[test]
+    fn virtualized_window_zero_overscan() {
+        let mut sb = Scrollback::new(20);
+        for i in 0..10 {
+            sb.push_row(&make_row(&format!("{i}")), false);
+        }
+
+        let w = sb.virtualized_window(0, 4, 0);
+        assert_eq!(w.viewport_range(), 6..10);
+        assert_eq!(w.render_range(), 6..10);
+        assert_eq!(w.viewport_range(), w.render_range());
+    }
+
+    #[test]
+    fn virtualized_window_at_max_scroll_offset() {
+        let mut sb = Scrollback::new(20);
+        for i in 0..10 {
+            sb.push_row(&make_row(&format!("{i}")), false);
+        }
+
+        // viewport=4, so max_scroll_offset = 10 - 4 = 6
+        let w = sb.virtualized_window(6, 4, 0);
+        assert_eq!(w.scroll_offset_from_bottom, 6);
+        assert_eq!(w.viewport_range(), 0..4); // oldest lines
+    }
+
+    #[test]
+    fn virtualized_window_overscan_clamped_to_bounds() {
+        let mut sb = Scrollback::new(20);
+        for i in 0..5 {
+            sb.push_row(&make_row(&format!("{i}")), false);
+        }
+
+        // Overscan of 100 should be clamped to buffer bounds
+        let w = sb.virtualized_window(0, 3, 100);
+        assert_eq!(w.render_start, 0); // Can't go below 0
+        assert_eq!(w.render_end, 5); // Can't exceed total_lines
+    }
+
+    #[test]
+    fn virtualized_window_render_contains_viewport() {
+        let mut sb = Scrollback::new(50);
+        for i in 0..20 {
+            sb.push_row(&make_row(&format!("{i}")), false);
+        }
+
+        for offset in [0, 3, 8, 16] {
+            let w = sb.virtualized_window(offset, 5, 2);
+            assert!(w.render_start <= w.viewport_start);
+            assert!(w.render_end >= w.viewport_end);
+        }
+    }
+
+    #[test]
+    fn virtualized_window_single_line() {
+        let mut sb = Scrollback::new(10);
+        sb.push_row(&make_row("only"), false);
+
+        let w = sb.virtualized_window(0, 5, 2);
+        assert_eq!(w.total_lines, 1);
+        assert_eq!(w.viewport_range(), 0..1);
+        assert_eq!(w.max_scroll_offset, 0);
+    }
+
+    #[test]
+    fn scrollback_line_equality() {
+        let line1 = ScrollbackLine::new(&make_row("abc"), false);
+        let line2 = ScrollbackLine::new(&make_row("abc"), false);
+        let line3 = ScrollbackLine::new(&make_row("abc"), true);
+        let line4 = ScrollbackLine::new(&make_row("xyz"), false);
+
+        assert_eq!(line1, line2);
+        assert_ne!(line1, line3); // Different wrapped flag
+        assert_ne!(line1, line4); // Different content
+    }
+
+    #[test]
+    fn scrollback_line_clone() {
+        let line = ScrollbackLine::new(&make_row("test"), true);
+        let cloned = line.clone();
+        assert_eq!(line, cloned);
+        assert!(cloned.wrapped);
+    }
+
+    #[test]
+    fn scrollback_window_copy_semantics() {
+        let w = ScrollbackWindow {
+            total_lines: 10,
+            max_scroll_offset: 6,
+            scroll_offset_from_bottom: 2,
+            viewport_start: 2,
+            viewport_end: 6,
+            render_start: 0,
+            render_end: 8,
+        };
+        let w2 = w; // Copy
+        assert_eq!(w, w2);
+    }
+
+    #[test]
+    fn scrollback_window_viewport_range_and_len_consistent() {
+        let w = ScrollbackWindow {
+            total_lines: 20,
+            max_scroll_offset: 15,
+            scroll_offset_from_bottom: 3,
+            viewport_start: 12,
+            viewport_end: 17,
+            render_start: 10,
+            render_end: 19,
+        };
+        assert_eq!(w.viewport_range(), 12..17);
+        assert_eq!(w.viewport_len(), 5);
+        assert_eq!(w.render_range(), 10..19);
+        assert_eq!(w.render_len(), 9);
+    }
+
+    #[test]
+    fn large_capacity_capped_prealloc() {
+        // Capacity 1_000_000 should not pre-allocate more than 4096
+        let sb = Scrollback::new(1_000_000);
+        assert_eq!(sb.capacity(), 1_000_000);
+        assert!(sb.is_empty());
+        // VecDeque::with_capacity(4096) — not directly testable, but
+        // construction should not OOM
+    }
+
+    #[test]
+    fn clear_then_push() {
+        let mut sb = Scrollback::new(10);
+        sb.push_row(&make_row("a"), false);
+        sb.push_row(&make_row("b"), false);
+        sb.clear();
+        assert!(sb.is_empty());
+
+        sb.push_row(&make_row("c"), false);
+        assert_eq!(sb.len(), 1);
+        assert_eq!(row_text(&sb.get(0).unwrap().cells), "c");
+    }
+
+    #[test]
+    fn debug_format() {
+        let sb = Scrollback::new(5);
+        let dbg = format!("{sb:?}");
+        assert!(dbg.contains("Scrollback"));
+    }
+
+    #[test]
+    fn scrollback_line_debug_format() {
+        let line = ScrollbackLine::new(&make_row("x"), true);
+        let dbg = format!("{line:?}");
+        assert!(dbg.contains("ScrollbackLine"));
+        assert!(dbg.contains("wrapped: true"));
+    }
 }
