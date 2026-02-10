@@ -29,7 +29,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::{Hash, Hasher};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
