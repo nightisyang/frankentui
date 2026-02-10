@@ -148,6 +148,7 @@ impl ListState {
 
     /// Return the currently selected item index.
     #[inline]
+    #[must_use]
     pub fn selected(&self) -> Option<usize> {
         self.selected
     }
