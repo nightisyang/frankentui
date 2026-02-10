@@ -881,4 +881,83 @@ mod tests {
             Some(Event::Focus(false))
         ));
     }
+
+    #[test]
+    fn map_key_kind_repeat_and_release() {
+        assert_eq!(
+            map_key_kind(ct_event::KeyEventKind::Repeat),
+            KeyEventKind::Repeat
+        );
+        assert_eq!(
+            map_key_kind(ct_event::KeyEventKind::Release),
+            KeyEventKind::Release
+        );
+    }
+
+    #[test]
+    fn map_key_code_escape() {
+        assert_eq!(map_key_code(ct_event::KeyCode::Esc), Some(KeyCode::Escape));
+    }
+
+    #[test]
+    fn map_key_code_unmapped_returns_none() {
+        // These variants exist in crossterm but are intentionally not mapped into ftui.
+        assert_eq!(map_key_code(ct_event::KeyCode::CapsLock), None);
+        assert_eq!(map_key_code(ct_event::KeyCode::ScrollLock), None);
+        assert_eq!(map_key_code(ct_event::KeyCode::NumLock), None);
+        assert_eq!(map_key_code(ct_event::KeyCode::PrintScreen), None);
+        assert_eq!(map_key_code(ct_event::KeyCode::Pause), None);
+        assert_eq!(map_key_code(ct_event::KeyCode::Menu), None);
+        assert_eq!(map_key_code(ct_event::KeyCode::KeypadBegin), None);
+        assert_eq!(
+            map_key_code(ct_event::KeyCode::Modifier(
+                ct_event::ModifierKeyCode::LeftShift
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn map_media_key_known_and_unknown_variants() {
+        // Known mapped variants.
+        assert_eq!(
+            map_media_key(ct_event::MediaKeyCode::Play),
+            Some(KeyCode::MediaPlayPause)
+        );
+        assert_eq!(
+            map_media_key(ct_event::MediaKeyCode::Pause),
+            Some(KeyCode::MediaPlayPause)
+        );
+        assert_eq!(
+            map_media_key(ct_event::MediaKeyCode::PlayPause),
+            Some(KeyCode::MediaPlayPause)
+        );
+        assert_eq!(
+            map_media_key(ct_event::MediaKeyCode::TrackNext),
+            Some(KeyCode::MediaNextTrack)
+        );
+        assert_eq!(
+            map_media_key(ct_event::MediaKeyCode::TrackPrevious),
+            Some(KeyCode::MediaPrevTrack)
+        );
+        assert_eq!(
+            map_media_key(ct_event::MediaKeyCode::Stop),
+            Some(KeyCode::MediaStop)
+        );
+
+        // A representative unmapped variant.
+        assert_eq!(map_media_key(ct_event::MediaKeyCode::Reverse), None);
+    }
+
+    #[test]
+    fn from_crossterm_returns_none_for_unmapped_keys() {
+        let ct_event = ct_event::Event::Key(ct_event::KeyEvent {
+            code: ct_event::KeyCode::CapsLock,
+            modifiers: ct_event::KeyModifiers::NONE,
+            kind: ct_event::KeyEventKind::Press,
+            state: ct_event::KeyEventState::NONE,
+        });
+
+        assert_eq!(Event::from_crossterm(ct_event), None);
+    }
 }
