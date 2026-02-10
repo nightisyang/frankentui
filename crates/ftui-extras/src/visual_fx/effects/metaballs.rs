@@ -1339,4 +1339,498 @@ mod tests {
         let p = MetaballsParams::ocean();
         assert_eq!(p.palette, MetaballsPalette::Ocean);
     }
+
+    // --- Additional edge case tests (bd-2t25d) ---
+
+    #[test]
+    fn pulse_modulates_radius() {
+        let ball = Metaball {
+            x: 0.5,
+            y: 0.5,
+            vx: 0.0,
+            vy: 0.0,
+            radius: 0.2,
+            hue: 0.0,
+            phase: 0.0,
+        };
+        let params = MetaballsParams {
+            balls: vec![ball],
+            pulse_amount: 0.5,
+            pulse_speed: 1.0,
+            ..Default::default()
+        };
+        let mut fx = MetaballsFx::new(params);
+
+        // At time 0 the pulse is 1 + 0.5 * sin(0) = 1.0
+        fx.populate_ball_cache(0.0, FxQuality::Full);
+        let r2_at_0 = fx.ball_cache[0].r2;
+
+        // At time pi/2 the pulse is 1 + 0.5 * sin(pi/2) = 1.5
+        fx.populate_ball_cache(std::f64::consts::FRAC_PI_2, FxQuality::Full);
+        let r2_at_peak = fx.ball_cache[0].r2;
+
+        assert!(
+            r2_at_peak > r2_at_0,
+            "Pulse should increase radius at peak: r2_at_0={r2_at_0}, r2_at_peak={r2_at_peak}"
+        );
+    }
+
+    #[test]
+    fn field_sum_at_ball_center_uses_epsilon_path() {
+        let params = MetaballsParams {
+            balls: vec![Metaball {
+                x: 0.5,
+                y: 0.5,
+                vx: 0.0,
+                vy: 0.0,
+                radius: 0.2,
+                hue: 0.0,
+                phase: 0.0,
+            }],
+            pulse_amount: 0.0,
+            ..Default::default()
+        };
+        let mut fx = MetaballsFx::new(params);
+        fx.populate_ball_cache(0.0, FxQuality::Full);
+
+        // Exactly at ball center, dist_sq < eps, so contribution = 100.0
+        let sum = field_sum_at(&fx, 0.5, 0.5);
+        assert!(
+            (sum - 100.0).abs() < 0.1,
+            "At ball center should use epsilon path yielding ~100: got {sum}"
+        );
+    }
+
+    #[test]
+    fn multiple_ball_field_is_additive() {
+        let ball = Metaball {
+            x: 0.5,
+            y: 0.5,
+            vx: 0.0,
+            vy: 0.0,
+            radius: 0.2,
+            hue: 0.0,
+            phase: 0.0,
+        };
+
+        // Single ball
+        let params_single = MetaballsParams {
+            balls: vec![ball],
+            pulse_amount: 0.0,
+            ..Default::default()
+        };
+        let mut fx_single = MetaballsFx::new(params_single);
+        fx_single.populate_ball_cache(0.0, FxQuality::Full);
+        let sum_single = field_sum_at(&fx_single, 0.7, 0.5);
+
+        // Two identical balls at the same position
+        let params_double = MetaballsParams {
+            balls: vec![ball, ball],
+            pulse_amount: 0.0,
+            ..Default::default()
+        };
+        let mut fx_double = MetaballsFx::new(params_double);
+        fx_double.populate_ball_cache(0.0, FxQuality::Full);
+        let sum_double = field_sum_at(&fx_double, 0.7, 0.5);
+
+        assert!(
+            (sum_double - 2.0 * sum_single).abs() < 1e-6,
+            "Two identical balls should produce double the field: single={sum_single}, double={sum_double}"
+        );
+    }
+
+    #[test]
+    fn gradient_color_at_segment_boundaries() {
+        let stops = [
+            PackedRgba::rgb(255, 0, 0),
+            PackedRgba::rgb(0, 255, 0),
+            PackedRgba::rgb(0, 0, 255),
+            PackedRgba::rgb(255, 255, 255),
+        ];
+
+        // At t=1/3, we're at stop[1] exactly
+        let at_third = gradient_color(&stops, 1.0 / 3.0);
+        assert_eq!(at_third.r(), 0);
+        assert_eq!(at_third.g(), 255);
+        assert_eq!(at_third.b(), 0);
+
+        // At t=2/3, we're at stop[2] exactly
+        let at_two_thirds = gradient_color(&stops, 2.0 / 3.0);
+        assert_eq!(at_two_thirds.r(), 0);
+        assert_eq!(at_two_thirds.g(), 0);
+        assert_eq!(at_two_thirds.b(), 255);
+    }
+
+    #[test]
+    fn render_output_changes_over_time() {
+        let theme = ThemeInputs::default_dark();
+        let mut fx = MetaballsFx::default();
+        let ctx1 = FxContext {
+            width: 12,
+            height: 6,
+            frame: 0,
+            time_seconds: 0.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        let ctx2 = FxContext {
+            width: 12,
+            height: 6,
+            frame: 100,
+            time_seconds: 5.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        let mut out1 = vec![PackedRgba::TRANSPARENT; ctx1.len()];
+        let mut out2 = vec![PackedRgba::TRANSPARENT; ctx2.len()];
+        fx.render(ctx1, &mut out1);
+        fx.render(ctx2, &mut out2);
+        assert_ne!(
+            hash_pixels(&out1),
+            hash_pixels(&out2),
+            "Render should produce different output at different times"
+        );
+    }
+
+    #[test]
+    fn zero_balls_renders_all_transparent() {
+        let theme = ThemeInputs::default_dark();
+        let params = MetaballsParams {
+            balls: vec![],
+            ..Default::default()
+        };
+        let mut fx = MetaballsFx::new(params);
+        let ctx = FxContext {
+            width: 8,
+            height: 4,
+            frame: 0,
+            time_seconds: 0.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        let mut out = vec![PackedRgba::TRANSPARENT; ctx.len()];
+        fx.render(ctx, &mut out);
+        assert!(
+            out.iter().all(|&px| px == PackedRgba::TRANSPARENT),
+            "Zero balls should yield all transparent"
+        );
+    }
+
+    #[test]
+    fn resize_grow_and_shrink_coords() {
+        let mut fx = MetaballsFx::default();
+        fx.resize(10, 10);
+        assert_eq!(fx.x_coords.len(), 10);
+        assert_eq!(fx.y_coords.len(), 10);
+
+        // Grow
+        fx.resize(20, 15);
+        assert_eq!(fx.x_coords.len(), 20);
+        assert_eq!(fx.y_coords.len(), 15);
+
+        // Shrink
+        fx.resize(5, 3);
+        assert_eq!(fx.x_coords.len(), 5);
+        assert_eq!(fx.y_coords.len(), 3);
+    }
+
+    #[test]
+    fn ball_count_for_quality_many_balls() {
+        // With 8 balls: Full=8, Reduced=max(8-2,4)=6, Minimal=max(8-4,3)=4, Off=0
+        let balls: Vec<Metaball> = (0..8)
+            .map(|i| Metaball {
+                x: i as f64 / 8.0,
+                y: 0.5,
+                vx: 0.0,
+                vy: 0.0,
+                radius: 0.1,
+                hue: 0.0,
+                phase: 0.0,
+            })
+            .collect();
+        let params = MetaballsParams {
+            balls,
+            ..Default::default()
+        };
+        assert_eq!(params.ball_count_for_quality(FxQuality::Full), 8);
+        assert_eq!(params.ball_count_for_quality(FxQuality::Reduced), 6);
+        assert_eq!(params.ball_count_for_quality(FxQuality::Minimal), 4);
+        assert_eq!(params.ball_count_for_quality(FxQuality::Off), 0);
+    }
+
+    #[test]
+    fn ball_count_for_quality_three_balls() {
+        // With 3 balls: Full=3, Reduced=max(3-0,4).min(3)=3, Minimal=max(3-1,3).min(3)=3
+        let balls: Vec<Metaball> = (0..3)
+            .map(|i| Metaball {
+                x: i as f64 / 3.0,
+                y: 0.5,
+                vx: 0.0,
+                vy: 0.0,
+                radius: 0.1,
+                hue: 0.0,
+                phase: 0.0,
+            })
+            .collect();
+        let params = MetaballsParams {
+            balls,
+            ..Default::default()
+        };
+        assert_eq!(params.ball_count_for_quality(FxQuality::Full), 3);
+        // Reduced: 3 - 3/4 = 3 - 0 = 3, max(3,4)=4, min(4,3)=3
+        assert_eq!(params.ball_count_for_quality(FxQuality::Reduced), 3);
+        // Minimal: 3 - 3/2 = 3 - 1 = 2, max(2,3)=3, min(3,3)=3
+        assert_eq!(params.ball_count_for_quality(FxQuality::Minimal), 3);
+    }
+
+    #[test]
+    fn lerp_color_identical_colors() {
+        let c = PackedRgba::rgb(42, 84, 126);
+        let result = lerp_color(c, c, 0.5);
+        assert_eq!(result.r(), 42);
+        assert_eq!(result.g(), 84);
+        assert_eq!(result.b(), 126);
+    }
+
+    #[test]
+    fn lerp_color_t_above_one_clamped() {
+        let a = PackedRgba::rgb(10, 20, 30);
+        let b = PackedRgba::rgb(200, 180, 160);
+        let at_one = lerp_color(a, b, 1.0);
+        let above = lerp_color(a, b, 100.0);
+        assert_eq!(at_one, above);
+    }
+
+    #[test]
+    fn ping_pong_reflects_correctly() {
+        // Value exactly at max should return max
+        let at_max = ping_pong(0.9, 0.1, 0.9);
+        assert!((at_max - 0.9).abs() < 1e-6, "at max: {at_max}");
+
+        // Value one range beyond max should reflect back to min
+        let reflected = ping_pong(1.7, 0.1, 0.9);
+        assert!((reflected - 0.1).abs() < 1e-6, "reflected: {reflected}");
+    }
+
+    #[test]
+    fn ping_pong_large_negative() {
+        // Large negative values should still wrap correctly
+        let v = ping_pong(-100.0, 0.0, 1.0);
+        assert!((0.0..=1.0).contains(&v), "ping_pong(-100)={v} out of range");
+    }
+
+    #[test]
+    fn default_and_default_theme_are_equivalent() {
+        let a = MetaballsFx::default();
+        let b = MetaballsFx::default_theme();
+        assert_eq!(a.params.palette, b.params.palette);
+        assert_eq!(a.params.balls.len(), b.params.balls.len());
+        assert_eq!(a.params.threshold, b.params.threshold);
+    }
+
+    #[test]
+    fn ensure_coords_caches_for_same_dimensions() {
+        let mut fx = MetaballsFx::default();
+        fx.ensure_coords(10, 5);
+        let x_ptr = fx.x_coords.as_ptr();
+        let y_ptr = fx.y_coords.as_ptr();
+        // Calling again with same dims should not reallocate
+        fx.ensure_coords(10, 5);
+        assert_eq!(
+            fx.x_coords.as_ptr(),
+            x_ptr,
+            "x_coords should not reallocate"
+        );
+        assert_eq!(
+            fx.y_coords.as_ptr(),
+            y_ptr,
+            "y_coords should not reallocate"
+        );
+    }
+
+    #[test]
+    fn thresholds_very_large_values() {
+        let params = MetaballsParams {
+            glow_threshold: 999.0,
+            threshold: 1000.0,
+            ..Default::default()
+        };
+        let (glow, threshold) = params.thresholds();
+        assert!((glow - 999.0).abs() < 1e-6);
+        assert!((threshold - 1000.0).abs() < 1e-6);
+        assert!(threshold > glow);
+    }
+
+    #[test]
+    fn smooth_step_glow_ramp_partial_intensity() {
+        // Verify that pixels in the glow-threshold zone get partial (non-zero, non-one) intensity.
+        // Set up a single large ball so the glow zone is well-represented.
+        let theme = ThemeInputs::default_dark();
+        let params = MetaballsParams {
+            balls: vec![Metaball {
+                x: 0.5,
+                y: 0.5,
+                vx: 0.0,
+                vy: 0.0,
+                radius: 0.3,
+                hue: 0.0,
+                phase: 0.0,
+            }],
+            glow_threshold: 0.3,
+            threshold: 1.5,
+            pulse_amount: 0.0,
+            ..Default::default()
+        };
+        let mut fx = MetaballsFx::new(params);
+        let ctx = FxContext {
+            width: 24,
+            height: 12,
+            frame: 0,
+            time_seconds: 0.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        let mut out = vec![PackedRgba::TRANSPARENT; ctx.len()];
+        fx.render(ctx, &mut out);
+
+        let transparent_count = out
+            .iter()
+            .filter(|&&px| px == PackedRgba::TRANSPARENT)
+            .count();
+        let non_transparent_count = out.len() - transparent_count;
+        assert!(
+            non_transparent_count > 0,
+            "Should have some visible pixels in glow zone"
+        );
+        assert!(
+            transparent_count > 0,
+            "Should have some transparent pixels outside glow"
+        );
+    }
+
+    #[test]
+    fn gradient_color_clamps_below_zero() {
+        let stops = [
+            PackedRgba::rgb(100, 100, 100),
+            PackedRgba::rgb(0, 255, 0),
+            PackedRgba::rgb(0, 0, 255),
+            PackedRgba::rgb(255, 255, 255),
+        ];
+        let at_zero = gradient_color(&stops, 0.0);
+        let below = gradient_color(&stops, -3.0);
+        assert_eq!(at_zero, below);
+    }
+
+    #[test]
+    fn palette_stops_return_four_colors() {
+        let theme = ThemeInputs::default_dark();
+        for palette in [
+            MetaballsPalette::ThemeAccents,
+            MetaballsPalette::Aurora,
+            MetaballsPalette::Lava,
+            MetaballsPalette::Ocean,
+        ] {
+            let stops = palette.stops(&theme);
+            assert_eq!(stops.len(), 4, "{palette:?} should return 4 stops");
+        }
+    }
+
+    #[test]
+    fn render_with_reduced_quality_produces_output() {
+        let theme = ThemeInputs::default_dark();
+        let mut fx = MetaballsFx::default();
+        let ctx = FxContext {
+            width: 12,
+            height: 6,
+            frame: 0,
+            time_seconds: 0.5,
+            quality: FxQuality::Reduced,
+            theme: &theme,
+        };
+        let mut out = vec![PackedRgba::TRANSPARENT; ctx.len()];
+        fx.render(ctx, &mut out);
+        assert!(
+            out.iter().any(|&px| px != PackedRgba::TRANSPARENT),
+            "Reduced quality should still produce visible output"
+        );
+    }
+
+    #[test]
+    fn render_with_minimal_quality_produces_output() {
+        let theme = ThemeInputs::default_dark();
+        let mut fx = MetaballsFx::default();
+        let ctx = FxContext {
+            width: 12,
+            height: 6,
+            frame: 0,
+            time_seconds: 0.5,
+            quality: FxQuality::Minimal,
+            theme: &theme,
+        };
+        let mut out = vec![PackedRgba::TRANSPARENT; ctx.len()];
+        fx.render(ctx, &mut out);
+        assert!(
+            out.iter().any(|&px| px != PackedRgba::TRANSPARENT),
+            "Minimal quality should still produce visible output"
+        );
+    }
+
+    #[test]
+    fn ball_cache_len_matches_quality_count() {
+        let mut fx = MetaballsFx::default();
+        let total = fx.params.balls.len();
+
+        fx.populate_ball_cache(0.0, FxQuality::Full);
+        assert_eq!(fx.ball_cache.len(), total);
+
+        let reduced_expected = fx.params.ball_count_for_quality(FxQuality::Reduced);
+        fx.populate_ball_cache(0.0, FxQuality::Reduced);
+        assert_eq!(fx.ball_cache.len(), reduced_expected);
+
+        fx.populate_ball_cache(0.0, FxQuality::Off);
+        assert_eq!(fx.ball_cache.len(), 0);
+    }
+
+    #[test]
+    fn palette_hash_and_eq() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(MetaballsPalette::ThemeAccents);
+        set.insert(MetaballsPalette::Aurora);
+        set.insert(MetaballsPalette::Lava);
+        set.insert(MetaballsPalette::Ocean);
+        assert_eq!(set.len(), 4, "All palette variants should be distinct");
+        // Duplicate insert
+        set.insert(MetaballsPalette::Aurora);
+        assert_eq!(set.len(), 4, "Duplicate insert should not change set size");
+    }
+
+    #[test]
+    fn ordered_pair_equal_values() {
+        assert_eq!(ordered_pair(0.5, 0.5), (0.5, 0.5));
+    }
+
+    #[test]
+    fn metaball_debug_format() {
+        let ball = Metaball {
+            x: 0.1,
+            y: 0.2,
+            vx: 0.3,
+            vy: 0.4,
+            radius: 0.5,
+            hue: 0.6,
+            phase: 0.7,
+        };
+        let dbg = format!("{ball:?}");
+        assert!(dbg.contains("Metaball"));
+        assert!(dbg.contains("0.1"));
+    }
+
+    #[test]
+    fn metaballs_fx_clone() {
+        let fx = MetaballsFx::default();
+        let cloned = fx.clone();
+        assert_eq!(fx.params.balls.len(), cloned.params.balls.len());
+        assert_eq!(fx.params.palette, cloned.params.palette);
+    }
 }
