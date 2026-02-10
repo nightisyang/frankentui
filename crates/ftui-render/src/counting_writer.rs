@@ -62,18 +62,21 @@ impl<W> CountingWriter<W> {
 
     /// Get a reference to the underlying writer.
     #[inline]
+    #[must_use]
     pub fn inner(&self) -> &W {
         &self.inner
     }
 
     /// Get a mutable reference to the underlying writer.
     #[inline]
+    #[must_use]
     pub fn inner_mut(&mut self) -> &mut W {
         &mut self.inner
     }
 
     /// Consume the counting writer and return the inner writer.
     #[inline]
+    #[must_use]
     pub fn into_inner(self) -> W {
         self.inner
     }

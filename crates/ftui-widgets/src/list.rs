@@ -26,6 +26,7 @@ pub struct ListItem<'a> {
 
 impl<'a> ListItem<'a> {
     /// Create a new list item with the given content.
+    #[must_use]
     pub fn new(content: impl Into<Text>) -> Self {
         Self {
             content: content.into(),
@@ -35,12 +36,14 @@ impl<'a> ListItem<'a> {
     }
 
     /// Set the style for this list item.
+    #[must_use]
     pub fn style(mut self, style: Style) -> Self {
         self.style = style;
         self
     }
 
     /// Set a prefix marker string for this item.
+    #[must_use]
     pub fn marker(mut self, marker: &'a str) -> Self {
         self.marker = marker;
         self
@@ -69,6 +72,7 @@ pub struct List<'a> {
 
 impl<'a> List<'a> {
     /// Create a new list from the given items.
+    #[must_use]
     pub fn new(items: impl IntoIterator<Item = impl Into<ListItem<'a>>>) -> Self {
         Self {
             block: None,
@@ -82,30 +86,35 @@ impl<'a> List<'a> {
     }
 
     /// Wrap the list in a decorative block.
+    #[must_use]
     pub fn block(mut self, block: Block<'a>) -> Self {
         self.block = Some(block);
         self
     }
 
     /// Set the base style for the list area.
+    #[must_use]
     pub fn style(mut self, style: Style) -> Self {
         self.style = style;
         self
     }
 
     /// Set the style applied to the selected item.
+    #[must_use]
     pub fn highlight_style(mut self, style: Style) -> Self {
         self.highlight_style = style;
         self
     }
 
     /// Set the style applied to the hovered item (mouse move).
+    #[must_use]
     pub fn hover_style(mut self, style: Style) -> Self {
         self.hover_style = style;
         self
     }
 
     /// Set a symbol displayed before the selected item.
+    #[must_use]
     pub fn highlight_symbol(mut self, symbol: &'a str) -> Self {
         self.highlight_symbol = Some(symbol);
         self
@@ -116,6 +125,7 @@ impl<'a> List<'a> {
     /// When set, each list item will register a hit region with the frame's
     /// hit grid (if enabled). The hit data will be the item's index, allowing
     /// click handlers to determine which item was clicked.
+    #[must_use]
     pub fn hit_id(mut self, id: HitId) -> Self {
         self.hit_id = Some(id);
         self

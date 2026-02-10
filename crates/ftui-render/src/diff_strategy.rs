@@ -506,21 +506,25 @@ impl DiffStrategySelector {
     }
 
     /// Get the current configuration.
+    #[must_use]
     pub fn config(&self) -> &DiffStrategyConfig {
         &self.config
     }
 
     /// Get the current posterior parameters.
+    #[must_use]
     pub fn posterior_params(&self) -> (f64, f64) {
         self.estimator.posterior_params()
     }
 
     /// Get the posterior mean E[p].
+    #[must_use]
     pub fn posterior_mean(&self) -> f64 {
         self.estimator.mean()
     }
 
     /// Get the posterior variance Var[p].
+    #[must_use]
     pub fn posterior_variance(&self) -> f64 {
         self.estimator.variance()
     }

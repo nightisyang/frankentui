@@ -226,6 +226,7 @@ pub struct CacheStats {
 
 impl CacheStats {
     /// Cache hit rate as percentage.
+    #[must_use]
     pub fn hit_rate(&self) -> f32 {
         let total = self.hits + self.misses;
         if total == 0 {
@@ -513,6 +514,7 @@ impl SpatialHitIndex {
     }
 
     /// Get diagnostic statistics.
+    #[must_use]
     pub fn stats(&self) -> CacheStats {
         self.stats
     }
@@ -524,12 +526,14 @@ impl SpatialHitIndex {
 
     /// Number of registered widgets.
     #[inline]
+    #[must_use]
     pub fn len(&self) -> usize {
         self.id_to_entry.len()
     }
 
     /// Check if empty.
     #[inline]
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.id_to_entry.is_empty()
     }

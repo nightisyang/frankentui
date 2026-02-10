@@ -378,6 +378,7 @@ pub struct Measurement {
 
 impl Measurement {
     /// Create a fixed-size measurement (min == max).
+    #[must_use]
     pub fn fixed(width: u16, height: u16) -> Self {
         Self {
             min_width: width,
@@ -388,6 +389,7 @@ impl Measurement {
     }
 
     /// Create a flexible measurement with minimum size and no maximum.
+    #[must_use]
     pub fn flexible(min_width: u16, min_height: u16) -> Self {
         Self {
             min_width,
@@ -411,6 +413,7 @@ pub struct Flex {
 
 impl Flex {
     /// Create a new vertical flex layout.
+    #[must_use]
     pub fn vertical() -> Self {
         Self {
             direction: Direction::Vertical,
@@ -419,6 +422,7 @@ impl Flex {
     }
 
     /// Create a new horizontal flex layout.
+    #[must_use]
     pub fn horizontal() -> Self {
         Self {
             direction: Direction::Horizontal,
@@ -427,30 +431,35 @@ impl Flex {
     }
 
     /// Set the layout direction.
+    #[must_use]
     pub fn direction(mut self, direction: Direction) -> Self {
         self.direction = direction;
         self
     }
 
     /// Set the constraints.
+    #[must_use]
     pub fn constraints(mut self, constraints: impl IntoIterator<Item = Constraint>) -> Self {
         self.constraints = constraints.into_iter().collect();
         self
     }
 
     /// Set the margin.
+    #[must_use]
     pub fn margin(mut self, margin: Sides) -> Self {
         self.margin = margin;
         self
     }
 
     /// Set the gap between items.
+    #[must_use]
     pub fn gap(mut self, gap: u16) -> Self {
         self.gap = gap;
         self
     }
 
     /// Set the alignment.
+    #[must_use]
     pub fn alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = alignment;
         self
@@ -461,6 +470,7 @@ impl Flex {
     /// When set to [`FlowDirection::Rtl`](direction::FlowDirection::Rtl),
     /// horizontal layouts are mirrored: the first child appears at the right
     /// edge instead of the left. Vertical layouts are not affected.
+    #[must_use]
     pub fn flow_direction(mut self, flow: direction::FlowDirection) -> Self {
         self.flow_direction = flow;
         self

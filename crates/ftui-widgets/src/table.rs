@@ -27,6 +27,7 @@ pub struct Row {
 
 impl Row {
     /// Create a new row from an iterator of cell contents.
+    #[must_use]
     pub fn new(cells: impl IntoIterator<Item = impl Into<Text>>) -> Self {
         Self {
             cells: cells.into_iter().map(|c| c.into()).collect(),
@@ -37,18 +38,21 @@ impl Row {
     }
 
     /// Set the row height in lines.
+    #[must_use]
     pub fn height(mut self, height: u16) -> Self {
         self.height = height;
         self
     }
 
     /// Set the row style.
+    #[must_use]
     pub fn style(mut self, style: Style) -> Self {
         self.style = style;
         self
     }
 
     /// Set the bottom margin after this row.
+    #[must_use]
     pub fn bottom_margin(mut self, margin: u16) -> Self {
         self.bottom_margin = margin;
         self
@@ -75,6 +79,7 @@ pub struct Table<'a> {
 
 impl<'a> Table<'a> {
     /// Create a new table with the given rows and column width constraints.
+    #[must_use]
     pub fn new(
         rows: impl IntoIterator<Item = Row>,
         widths: impl IntoIterator<Item = Constraint>,
@@ -105,30 +110,35 @@ impl<'a> Table<'a> {
     }
 
     /// Set the header row.
+    #[must_use]
     pub fn header(mut self, header: Row) -> Self {
         self.header = Some(header);
         self
     }
 
     /// Set the surrounding block.
+    #[must_use]
     pub fn block(mut self, block: Block<'a>) -> Self {
         self.block = Some(block);
         self
     }
 
     /// Set the base table style.
+    #[must_use]
     pub fn style(mut self, style: Style) -> Self {
         self.style = style;
         self
     }
 
     /// Set the style for the selected row.
+    #[must_use]
     pub fn highlight_style(mut self, style: Style) -> Self {
         self.highlight_style = style;
         self
     }
 
     /// Set the table theme (base/states/effects).
+    #[must_use]
     pub fn theme(mut self, theme: TableTheme) -> Self {
         self.theme = theme;
         self
@@ -137,12 +147,14 @@ impl<'a> Table<'a> {
     /// Set the explicit animation phase for theme effects.
     ///
     /// Phase is deterministic and should be supplied by the caller (e.g. from tick count).
+    #[must_use]
     pub fn theme_phase(mut self, phase: f32) -> Self {
         self.theme_phase = phase;
         self
     }
 
     /// Set the spacing between columns.
+    #[must_use]
     pub fn column_spacing(mut self, spacing: u16) -> Self {
         self.column_spacing = spacing;
         self
@@ -153,6 +165,7 @@ impl<'a> Table<'a> {
     /// When set, each table row will register a hit region with the frame's
     /// hit grid (if enabled). The hit data will be the row's index, allowing
     /// click handlers to determine which row was clicked.
+    #[must_use]
     pub fn hit_id(mut self, id: HitId) -> Self {
         self.hit_id = Some(id);
         self

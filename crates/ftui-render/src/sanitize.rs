@@ -348,6 +348,7 @@ impl<'a> Text<'a> {
 
     /// Get the inner string slice.
     #[inline]
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             Text::Sanitized(cow) => cow.as_ref(),
@@ -357,12 +358,14 @@ impl<'a> Text<'a> {
 
     /// Check if this text is sanitized.
     #[inline]
+    #[must_use]
     pub fn is_sanitized(&self) -> bool {
         matches!(self, Text::Sanitized(_))
     }
 
     /// Check if this text is trusted.
     #[inline]
+    #[must_use]
     pub fn is_trusted(&self) -> bool {
         matches!(self, Text::Trusted(_))
     }

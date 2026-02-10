@@ -89,24 +89,28 @@ impl Default for DirtySpanConfig {
 
 impl DirtySpanConfig {
     /// Toggle dirty-span tracking.
+    #[must_use]
     pub fn with_enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
     }
 
     /// Set max spans per row before fallback.
+    #[must_use]
     pub fn with_max_spans_per_row(mut self, max_spans: usize) -> Self {
         self.max_spans_per_row = max_spans;
         self
     }
 
     /// Set merge gap threshold.
+    #[must_use]
     pub fn with_merge_gap(mut self, merge_gap: u16) -> Self {
         self.merge_gap = merge_gap;
         self
     }
 
     /// Set guard band expansion (cells).
+    #[must_use]
     pub fn with_guard_band(mut self, guard_band: u16) -> Self {
         self.guard_band = guard_band;
         self

@@ -377,6 +377,7 @@ impl Cell {
 
     /// Set the cell content to a character, preserving other fields.
     #[inline]
+    #[must_use]
     pub const fn with_char(mut self, c: char) -> Self {
         self.content = CellContent::from_char(c);
         self
@@ -384,6 +385,7 @@ impl Cell {
 
     /// Set the foreground color.
     #[inline]
+    #[must_use]
     pub const fn with_fg(mut self, fg: PackedRgba) -> Self {
         self.fg = fg;
         self
@@ -391,6 +393,7 @@ impl Cell {
 
     /// Set the background color.
     #[inline]
+    #[must_use]
     pub const fn with_bg(mut self, bg: PackedRgba) -> Self {
         self.bg = bg;
         self
@@ -398,6 +401,7 @@ impl Cell {
 
     /// Set the style attributes.
     #[inline]
+    #[must_use]
     pub const fn with_attrs(mut self, attrs: CellAttrs) -> Self {
         self.attrs = attrs;
         self
@@ -500,6 +504,7 @@ impl PackedRgba {
     /// Stored as straight alpha, so we compute the exact rational form and round at the end
     /// (avoids accumulating rounding error across intermediate steps).
     #[inline]
+    #[must_use]
     pub fn over(self, dst: Self) -> Self {
         let s_a = self.a() as u64;
         if s_a == 255 {
@@ -543,6 +548,7 @@ impl PackedRgba {
 
     /// Apply uniform opacity in `[0.0, 1.0]` by scaling alpha.
     #[inline]
+    #[must_use]
     pub fn with_opacity(self, opacity: f32) -> Self {
         let opacity = opacity.clamp(0.0, 1.0);
         let a = ((self.a() as f32) * opacity).round().clamp(0.0, 255.0) as u8;
@@ -614,12 +620,14 @@ impl CellAttrs {
 
     /// Return a copy with different style flags.
     #[inline]
+    #[must_use]
     pub fn with_flags(self, flags: StyleFlags) -> Self {
         Self((self.0 & 0x00FF_FFFF) | ((flags.bits() as u32) << 24))
     }
 
     /// Return a copy with a different hyperlink ID.
     #[inline]
+    #[must_use]
     pub fn with_link(self, link_id: u32) -> Self {
         debug_assert!(
             link_id <= Self::LINK_ID_MAX,

@@ -103,11 +103,13 @@ impl HeadlessTerm {
     }
 
     /// Access the underlying `TerminalModel` for advanced queries.
+    #[must_use]
     pub fn model(&self) -> &TerminalModel {
         &self.model
     }
 
     /// Access all captured output bytes (everything passed to `process`).
+    #[must_use]
     pub fn captured_output(&self) -> &[u8] {
         &self.captured_output
     }

@@ -21,6 +21,7 @@ pub struct Paragraph<'a> {
 
 impl<'a> Paragraph<'a> {
     /// Create a new paragraph from the given text.
+    #[must_use]
     pub fn new(text: impl Into<Text>) -> Self {
         Self {
             text: text.into(),
@@ -33,30 +34,35 @@ impl<'a> Paragraph<'a> {
     }
 
     /// Set the surrounding block.
+    #[must_use]
     pub fn block(mut self, block: Block<'a>) -> Self {
         self.block = Some(block);
         self
     }
 
     /// Set the base text style.
+    #[must_use]
     pub fn style(mut self, style: Style) -> Self {
         self.style = style;
         self
     }
 
     /// Set the text wrapping mode.
+    #[must_use]
     pub fn wrap(mut self, wrap: WrapMode) -> Self {
         self.wrap = Some(wrap);
         self
     }
 
     /// Set the text alignment.
+    #[must_use]
     pub fn alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = alignment;
         self
     }
 
     /// Set the scroll offset as (vertical, horizontal).
+    #[must_use]
     pub fn scroll(mut self, offset: (u16, u16)) -> Self {
         self.scroll = offset;
         self

@@ -344,12 +344,14 @@ impl Default for TileDiffConfig {
 
 impl TileDiffConfig {
     /// Toggle tile-based skipping.
+    #[must_use]
     pub fn with_enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
         self
     }
 
     /// Set tile size in cells (clamped during build).
+    #[must_use]
     pub fn with_tile_size(mut self, tile_w: u16, tile_h: u16) -> Self {
         self.tile_w = tile_w;
         self.tile_h = tile_h;
@@ -357,30 +359,35 @@ impl TileDiffConfig {
     }
 
     /// Set minimum cell count required before tiles are considered.
+    #[must_use]
     pub fn with_min_cells_for_tiles(mut self, min_cells: usize) -> Self {
         self.min_cells_for_tiles = min_cells;
         self
     }
 
     /// Toggle skipping clean rows during tile build.
+    #[must_use]
     pub fn with_skip_clean_rows(mut self, skip: bool) -> Self {
         self.skip_clean_rows = skip;
         self
     }
 
     /// Set dense cell ratio threshold for falling back to non-tile diff.
+    #[must_use]
     pub fn with_dense_cell_ratio(mut self, ratio: f64) -> Self {
         self.dense_cell_ratio = ratio;
         self
     }
 
     /// Set dense tile ratio threshold for falling back to non-tile diff.
+    #[must_use]
     pub fn with_dense_tile_ratio(mut self, ratio: f64) -> Self {
         self.dense_tile_ratio = ratio;
         self
     }
 
     /// Set SAT build budget via maximum tiles allowed.
+    #[must_use]
     pub fn with_max_tiles(mut self, max_tiles: usize) -> Self {
         self.max_tiles = max_tiles;
         self

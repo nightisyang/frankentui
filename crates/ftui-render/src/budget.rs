@@ -579,6 +579,7 @@ impl BudgetController {
 
     /// Get a reference to the controller configuration.
     #[inline]
+    #[must_use]
     pub fn config(&self) -> &BudgetControllerConfig {
         &self.config
     }
@@ -639,6 +640,7 @@ impl DegradationLevel {
     ///
     /// Returns `SkipFrame` if already at maximum degradation.
     #[inline]
+    #[must_use]
     pub fn next(self) -> Self {
         match self {
             Self::Full => Self::SimpleBorders,
@@ -653,6 +655,7 @@ impl DegradationLevel {
     ///
     /// Returns `Full` if already at minimum degradation.
     #[inline]
+    #[must_use]
     pub fn prev(self) -> Self {
         match self {
             Self::SkipFrame => Self::Skeleton,
@@ -884,6 +887,7 @@ impl RenderBudget {
     /// let budget = RenderBudget::new(Duration::from_millis(16))
     ///     .with_controller(BudgetControllerConfig::default());
     /// ```
+    #[must_use]
     pub fn with_controller(mut self, config: BudgetControllerConfig) -> Self {
         self.controller = Some(BudgetController::new(config));
         self
@@ -1086,6 +1090,7 @@ impl RenderBudget {
 
     /// Get the phase budgets.
     #[inline]
+    #[must_use]
     pub fn phase_budgets(&self) -> &PhaseBudgets {
         &self.phase_budgets
     }
@@ -1103,6 +1108,7 @@ impl RenderBudget {
     /// Create a sub-budget for a specific phase.
     ///
     /// The sub-budget shares the same start time but has a phase-specific total.
+    #[must_use]
     pub fn phase_budget(&self, phase: Phase) -> Self {
         let phase_total = match phase {
             Phase::Diff => self.phase_budgets.diff,

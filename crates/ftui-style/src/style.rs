@@ -63,6 +63,7 @@ impl StyleFlags {
 
     /// Combine two flag sets (OR operation).
     #[inline]
+    #[must_use]
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
@@ -129,6 +130,7 @@ impl Style {
 
     /// Set foreground color.
     #[inline]
+    #[must_use]
     pub fn fg<C: Into<PackedRgba>>(mut self, color: C) -> Self {
         self.fg = Some(color.into());
         self
@@ -136,6 +138,7 @@ impl Style {
 
     /// Set background color.
     #[inline]
+    #[must_use]
     pub fn bg<C: Into<PackedRgba>>(mut self, color: C) -> Self {
         self.bg = Some(color.into());
         self
@@ -143,60 +146,70 @@ impl Style {
 
     /// Add bold attribute.
     #[inline]
+    #[must_use]
     pub fn bold(self) -> Self {
         self.add_attr(StyleFlags::BOLD)
     }
 
     /// Add italic attribute.
     #[inline]
+    #[must_use]
     pub fn italic(self) -> Self {
         self.add_attr(StyleFlags::ITALIC)
     }
 
     /// Add underline attribute.
     #[inline]
+    #[must_use]
     pub fn underline(self) -> Self {
         self.add_attr(StyleFlags::UNDERLINE)
     }
 
     /// Add dim attribute.
     #[inline]
+    #[must_use]
     pub fn dim(self) -> Self {
         self.add_attr(StyleFlags::DIM)
     }
 
     /// Add reverse video attribute.
     #[inline]
+    #[must_use]
     pub fn reverse(self) -> Self {
         self.add_attr(StyleFlags::REVERSE)
     }
 
     /// Add strikethrough attribute.
     #[inline]
+    #[must_use]
     pub fn strikethrough(self) -> Self {
         self.add_attr(StyleFlags::STRIKETHROUGH)
     }
 
     /// Add blink attribute.
     #[inline]
+    #[must_use]
     pub fn blink(self) -> Self {
         self.add_attr(StyleFlags::BLINK)
     }
 
     /// Add hidden attribute.
     #[inline]
+    #[must_use]
     pub fn hidden(self) -> Self {
         self.add_attr(StyleFlags::HIDDEN)
     }
 
     /// Add double underline attribute.
     #[inline]
+    #[must_use]
     pub fn double_underline(self) -> Self {
         self.add_attr(StyleFlags::DOUBLE_UNDERLINE)
     }
 
     /// Add curly underline attribute.
     #[inline]
+    #[must_use]
     pub fn curly_underline(self) -> Self {
         self.add_attr(StyleFlags::CURLY_UNDERLINE)
     }
@@ -213,6 +226,7 @@ impl Style {
 
     /// Set underline color.
     #[inline]
+    #[must_use]
     pub const fn underline_color(mut self, color: PackedRgba) -> Self {
         self.underline_color = Some(color);
         self
@@ -220,6 +234,7 @@ impl Style {
 
     /// Set attributes directly.
     #[inline]
+    #[must_use]
     pub const fn attrs(mut self, attrs: StyleFlags) -> Self {
         self.attrs = Some(attrs);
         self

@@ -158,6 +158,7 @@ mod cost_model {
 
     impl RowPlan {
         #[inline]
+        #[must_use]
         pub fn spans(&self) -> &[RowSpan] {
             &self.spans
         }

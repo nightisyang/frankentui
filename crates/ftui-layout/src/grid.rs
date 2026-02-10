@@ -72,6 +72,7 @@ pub struct GridArea {
 impl GridArea {
     /// Create a single-cell area.
     #[inline]
+    #[must_use]
     pub fn cell(row: usize, col: usize) -> Self {
         Self {
             row,
@@ -83,6 +84,7 @@ impl GridArea {
 
     /// Create a spanning area.
     #[inline]
+    #[must_use]
     pub fn span(row: usize, col: usize, rowspan: usize, colspan: usize) -> Self {
         Self {
             row,
@@ -115,35 +117,41 @@ pub struct GridLayout {
 impl Grid {
     /// Create a new empty grid.
     #[inline]
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Set the row constraints.
+    #[must_use]
     pub fn rows(mut self, constraints: impl IntoIterator<Item = Constraint>) -> Self {
         self.row_constraints = constraints.into_iter().collect();
         self
     }
 
     /// Set the column constraints.
+    #[must_use]
     pub fn columns(mut self, constraints: impl IntoIterator<Item = Constraint>) -> Self {
         self.col_constraints = constraints.into_iter().collect();
         self
     }
 
     /// Set the gap between rows.
+    #[must_use]
     pub fn row_gap(mut self, gap: u16) -> Self {
         self.row_gap = gap;
         self
     }
 
     /// Set the gap between columns.
+    #[must_use]
     pub fn col_gap(mut self, gap: u16) -> Self {
         self.col_gap = gap;
         self
     }
 
     /// Set uniform gap for both rows and columns.
+    #[must_use]
     pub fn gap(self, gap: u16) -> Self {
         self.row_gap(gap).col_gap(gap)
     }
@@ -159,6 +167,7 @@ impl Grid {
     ///     .area("content", GridArea::cell(0, 1))        // Top right
     ///     .area("footer", GridArea::cell(1, 1));        // Bottom right
     /// ```
+    #[must_use]
     pub fn area(mut self, name: impl Into<String>, area: GridArea) -> Self {
         self.named_areas.insert(name.into(), area);
         self

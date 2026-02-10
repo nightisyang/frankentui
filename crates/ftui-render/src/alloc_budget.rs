@@ -345,6 +345,7 @@ impl AllocLeakDetector {
     }
 
     /// Access the full evidence ledger.
+    #[must_use]
     pub fn ledger(&self) -> &[EvidenceEntry] {
         &self.ledger
     }

@@ -191,26 +191,31 @@ impl TerminalModel {
     }
 
     /// Get the terminal width.
+    #[must_use]
     pub fn width(&self) -> usize {
         self.width
     }
 
     /// Get the terminal height.
+    #[must_use]
     pub fn height(&self) -> usize {
         self.height
     }
 
     /// Get the cursor position as (x, y).
+    #[must_use]
     pub fn cursor(&self) -> (usize, usize) {
         (self.cursor_x, self.cursor_y)
     }
 
     /// Get the current SGR state.
+    #[must_use]
     pub fn sgr_state(&self) -> &SgrState {
         &self.sgr
     }
 
     /// Get the current mode flags.
+    #[must_use]
     pub fn modes(&self) -> &ModeFlags {
         &self.modes
     }

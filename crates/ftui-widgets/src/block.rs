@@ -36,28 +36,33 @@ pub enum Alignment {
 
 impl<'a> Block<'a> {
     /// Create a new block with default settings.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Create a block with all borders enabled.
+    #[must_use]
     pub fn bordered() -> Self {
         Self::default().borders(Borders::ALL)
     }
 
     /// Set which borders to render.
+    #[must_use]
     pub fn borders(mut self, borders: Borders) -> Self {
         self.borders = borders;
         self
     }
 
     /// Set the style applied to border characters.
+    #[must_use]
     pub fn border_style(mut self, style: Style) -> Self {
         self.border_style = style;
         self
     }
 
     /// Set the border character set (e.g. square, rounded, double).
+    #[must_use]
     pub fn border_type(mut self, border_type: BorderType) -> Self {
         self.border_type = border_type;
         self
@@ -69,24 +74,28 @@ impl<'a> Block<'a> {
     }
 
     /// Set the block title displayed on the top border.
+    #[must_use]
     pub fn title(mut self, title: &'a str) -> Self {
         self.title = Some(title);
         self
     }
 
     /// Set the horizontal alignment of the title.
+    #[must_use]
     pub fn title_alignment(mut self, alignment: Alignment) -> Self {
         self.title_alignment = alignment;
         self
     }
 
     /// Set the background style for the entire block area.
+    #[must_use]
     pub fn style(mut self, style: Style) -> Self {
         self.style = style;
         self
     }
 
     /// Compute the inner area inside the block's borders.
+    #[must_use]
     pub fn inner(&self, area: Rect) -> Rect {
         let mut inner = area;
 
@@ -112,6 +121,7 @@ impl<'a> Block<'a> {
     ///
     /// Returns `(horizontal_chrome, vertical_chrome)` representing the
     /// total width and height consumed by borders.
+    #[must_use]
     pub fn chrome_size(&self) -> (u16, u16) {
         let horizontal = self.borders.contains(Borders::LEFT) as u16
             + self.borders.contains(Borders::RIGHT) as u16;

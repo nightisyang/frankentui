@@ -63,23 +63,27 @@ impl<'a> Default for Rule<'a> {
 
 impl<'a> Rule<'a> {
     /// Create a new rule with default settings (square horizontal line, no title).
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Set the title text.
+    #[must_use]
     pub fn title(mut self, title: &'a str) -> Self {
         self.title = Some(title);
         self
     }
 
     /// Set the title alignment.
+    #[must_use]
     pub fn title_alignment(mut self, alignment: Alignment) -> Self {
         self.title_alignment = alignment;
         self
     }
 
     /// Set the style for the rule line.
+    #[must_use]
     pub fn style(mut self, style: Style) -> Self {
         self.style = style;
         self
@@ -88,12 +92,14 @@ impl<'a> Rule<'a> {
     /// Set a separate style for the title text.
     ///
     /// If not set, the rule's main style is used for the title.
+    #[must_use]
     pub fn title_style(mut self, style: Style) -> Self {
         self.title_style = Some(style);
         self
     }
 
     /// Set the border type (determines the line character).
+    #[must_use]
     pub fn border_type(mut self, border_type: BorderType) -> Self {
         self.border_type = border_type;
         self

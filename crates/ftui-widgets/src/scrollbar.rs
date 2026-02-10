@@ -50,6 +50,7 @@ pub struct Scrollbar<'a> {
 
 impl<'a> Scrollbar<'a> {
     /// Create a new scrollbar with the given orientation.
+    #[must_use]
     pub fn new(orientation: ScrollbarOrientation) -> Self {
         Self {
             orientation,
@@ -64,18 +65,21 @@ impl<'a> Scrollbar<'a> {
     }
 
     /// Set the style for the thumb (draggable indicator).
+    #[must_use]
     pub fn thumb_style(mut self, style: Style) -> Self {
         self.thumb_style = style;
         self
     }
 
     /// Set the style for the track background.
+    #[must_use]
     pub fn track_style(mut self, style: Style) -> Self {
         self.track_style = style;
         self
     }
 
     /// Set custom symbols for track, thumb, begin, and end markers.
+    #[must_use]
     pub fn symbols(
         mut self,
         track: &'a str,
@@ -91,6 +95,7 @@ impl<'a> Scrollbar<'a> {
     }
 
     /// Set a hit ID for mouse interaction.
+    #[must_use]
     pub fn hit_id(mut self, id: HitId) -> Self {
         self.hit_id = Some(id);
         self
@@ -110,6 +115,7 @@ pub struct ScrollbarState {
 
 impl ScrollbarState {
     /// Create a new scrollbar state with given content, position, and viewport sizes.
+    #[must_use]
     pub fn new(content_length: usize, position: usize, viewport_length: usize) -> Self {
         Self {
             content_length,

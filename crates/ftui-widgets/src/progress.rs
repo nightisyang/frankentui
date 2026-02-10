@@ -22,35 +22,41 @@ pub struct ProgressBar<'a> {
 
 impl<'a> ProgressBar<'a> {
     /// Create a new progress bar with default settings.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Set the surrounding block.
+    #[must_use]
     pub fn block(mut self, block: Block<'a>) -> Self {
         self.block = Some(block);
         self
     }
 
     /// Set the progress ratio (clamped to 0.0..=1.0).
+    #[must_use]
     pub fn ratio(mut self, ratio: f64) -> Self {
         self.ratio = ratio.clamp(0.0, 1.0);
         self
     }
 
     /// Set the centered label text.
+    #[must_use]
     pub fn label(mut self, label: &'a str) -> Self {
         self.label = Some(label);
         self
     }
 
     /// Set the base style.
+    #[must_use]
     pub fn style(mut self, style: Style) -> Self {
         self.style = style;
         self
     }
 
     /// Set the filled portion style.
+    #[must_use]
     pub fn gauge_style(mut self, style: Style) -> Self {
         self.gauge_style = style;
         self

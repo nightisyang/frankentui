@@ -59,6 +59,7 @@ pub struct Sparkline<'a> {
 
 impl<'a> Sparkline<'a> {
     /// Create a new sparkline from data slice.
+    #[must_use]
     pub fn new(data: &'a [f64]) -> Self {
         Self {
             data,
@@ -73,6 +74,7 @@ impl<'a> Sparkline<'a> {
     /// Set explicit minimum value for scaling.
     ///
     /// If not set, minimum is auto-detected from data.
+    #[must_use]
     pub fn min(mut self, min: f64) -> Self {
         self.min = Some(min);
         self
@@ -81,12 +83,14 @@ impl<'a> Sparkline<'a> {
     /// Set explicit maximum value for scaling.
     ///
     /// If not set, maximum is auto-detected from data.
+    #[must_use]
     pub fn max(mut self, max: f64) -> Self {
         self.max = Some(max);
         self
     }
 
     /// Set min and max bounds together.
+    #[must_use]
     pub fn bounds(mut self, min: f64, max: f64) -> Self {
         self.min = Some(min);
         self.max = Some(max);
@@ -94,6 +98,7 @@ impl<'a> Sparkline<'a> {
     }
 
     /// Set the base style (foreground color, etc.).
+    #[must_use]
     pub fn style(mut self, style: Style) -> Self {
         self.style = style;
         self
@@ -103,6 +108,7 @@ impl<'a> Sparkline<'a> {
     ///
     /// Low values get `low_color`, high values get `high_color`,
     /// with linear interpolation between.
+    #[must_use]
     pub fn gradient(mut self, low_color: PackedRgba, high_color: PackedRgba) -> Self {
         self.gradient = Some((low_color, high_color));
         self
@@ -112,6 +118,7 @@ impl<'a> Sparkline<'a> {
     ///
     /// Values at or below baseline show as empty space.
     /// Default is 0.0.
+    #[must_use]
     pub fn baseline(mut self, baseline: f64) -> Self {
         self.baseline = baseline;
         self
