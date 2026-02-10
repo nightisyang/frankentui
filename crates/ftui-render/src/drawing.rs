@@ -147,13 +147,13 @@ pub trait Draw {
 impl Draw for Buffer {
     fn draw_horizontal_line(&mut self, x: u16, y: u16, width: u16, cell: Cell) {
         for i in 0..width {
-            self.set(x.saturating_add(i), y, cell);
+            self.set_fast(x.saturating_add(i), y, cell);
         }
     }
 
     fn draw_vertical_line(&mut self, x: u16, y: u16, height: u16, cell: Cell) {
         for i in 0..height {
-            self.set(x, y.saturating_add(i), cell);
+            self.set_fast(x, y.saturating_add(i), cell);
         }
     }
 
@@ -240,7 +240,7 @@ impl Draw for Buffer {
                 bg: base_cell.bg,
                 attrs: base_cell.attrs,
             };
-            self.set(cx, y, cell);
+            self.set_fast(cx, y, cell);
 
             // If we preserved extra display width (e.g., VS16 emoji sequences like "⚙️"),
             // explicitly clear the trailing cells with spaces in the same style.
@@ -252,7 +252,7 @@ impl Draw for Buffer {
                     attrs: base_cell.attrs,
                 };
                 for offset in rendered_width..width {
-                    self.set(cx.saturating_add(offset as u16), y, filler);
+                    self.set_fast(cx.saturating_add(offset as u16), y, filler);
                 }
             }
 
@@ -280,35 +280,35 @@ impl Draw for Buffer {
 
         // Top edge
         for x in rect.left()..rect.right() {
-            self.set(x, rect.top(), h_cell);
+            self.set_fast(x, rect.top(), h_cell);
         }
 
         // Bottom edge
         if rect.height > 1 {
             for x in rect.left()..rect.right() {
-                self.set(x, rect.bottom().saturating_sub(1), h_cell);
+                self.set_fast(x, rect.bottom().saturating_sub(1), h_cell);
             }
         }
 
         // Left edge (excluding corners)
         if rect.height > 2 {
             for y in (rect.top().saturating_add(1))..(rect.bottom().saturating_sub(1)) {
-                self.set(rect.left(), y, v_cell);
+                self.set_fast(rect.left(), y, v_cell);
             }
         }
 
         // Right edge (excluding corners)
         if rect.width > 1 && rect.height > 2 {
             for y in (rect.top().saturating_add(1))..(rect.bottom().saturating_sub(1)) {
-                self.set(rect.right().saturating_sub(1), y, v_cell);
+                self.set_fast(rect.right().saturating_sub(1), y, v_cell);
             }
         }
 
         // Corners (drawn last to overwrite edge chars at corners)
-        self.set(rect.left(), rect.top(), make_cell(chars.top_left));
+        self.set_fast(rect.left(), rect.top(), make_cell(chars.top_left));
 
         if rect.width > 1 {
-            self.set(
+            self.set_fast(
                 rect.right().saturating_sub(1),
                 rect.top(),
                 make_cell(chars.top_right),
@@ -316,7 +316,7 @@ impl Draw for Buffer {
         }
 
         if rect.height > 1 {
-            self.set(
+            self.set_fast(
                 rect.left(),
                 rect.bottom().saturating_sub(1),
                 make_cell(chars.bottom_left),
@@ -324,7 +324,7 @@ impl Draw for Buffer {
         }
 
         if rect.width > 1 && rect.height > 1 {
-            self.set(
+            self.set_fast(
                 rect.right().saturating_sub(1),
                 rect.bottom().saturating_sub(1),
                 make_cell(chars.bottom_right),

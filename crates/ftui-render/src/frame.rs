@@ -682,7 +682,7 @@ impl<'a> Draw for Frame<'a> {
                 bg: base_cell.bg,
                 attrs: base_cell.attrs,
             };
-            self.buffer.set(cx, y, cell);
+            self.buffer.set_fast(cx, y, cell);
 
             cx = cx.saturating_add(width as u16);
         }
