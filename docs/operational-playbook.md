@@ -6,6 +6,53 @@ This document encodes the process and quality gates that keep FrankenTUI on trac
 
 ---
 
+## 0. Codebase Map (Contributor Quickstart)
+
+If you are changing behavior, start from the pipeline and follow the file pointers:
+
+Pipeline (runtime path):
+`TerminalSession`/backend -> `Event` -> `Program`/`Model` -> `Frame`/`Buffer` -> `BufferDiff` -> `Presenter` -> `TerminalWriter`
+
+High-signal entry points:
+
+- Terminal lifecycle (RAII, raw mode, cleanup): `crates/ftui-core/src/terminal_session.rs`
+  - Native backend implementation: `crates/ftui-tty/src/lib.rs`
+- Canonical events (the runtime speaks these): `crates/ftui-core/src/event.rs`
+- Runtime loop (Elm-style) + command execution: `crates/ftui-runtime/src/program.rs`
+- Output coordination (screen modes, one-writer rule, diff selection, ANSI emission): `crates/ftui-runtime/src/terminal_writer.rs`
+- Render kernel: `crates/ftui-render/src/{cell.rs,buffer.rs,frame.rs,diff.rs,presenter.rs}`
+
+Crate boundaries (skim):
+
+- Public facade: `crates/ftui`
+- Input/capabilities/lifecycle: `crates/ftui-core`
+- Render kernel: `crates/ftui-render`
+- Runtime: `crates/ftui-runtime`
+- Widgets: `crates/ftui-widgets`
+- Backends:
+  - Traits: `crates/ftui-backend`
+  - Native (Unix-first): `crates/ftui-tty`
+  - Web/WASM primitives: `crates/ftui-web`
+- Harnesses:
+  - Snapshot/PTY utilities: `crates/ftui-harness`, `crates/ftui-pty`
+  - Reference app + snapshots: `crates/ftui-demo-showcase`
+
+Key invariants (and where enforced/validated):
+
+- 16-byte `Cell` layout is non-negotiable: `crates/ftui-render/src/cell.rs`
+- One-writer rule (single stdout owner): `crates/ftui-runtime/src/terminal_writer.rs` and `docs/one-writer-rule.md`
+- Inline mode cursor/scrollback contract: `docs/concepts/screen-modes.md` and `docs/adr/ADR-001-inline-mode.md`
+- Buffer shape + scissor/opacity stacks: `crates/ftui-render/src/buffer.rs`
+- Diff correctness + dirty tracking: `crates/ftui-render/src/diff.rs`
+
+Where to look for tests:
+
+- Snapshot/integration harness: `crates/ftui-harness/tests/` (plus `crates/ftui-harness/src/time_travel.rs`)
+- Demo snapshots: `crates/ftui-demo-showcase/tests/`
+- PTY/E2E scripts: `tests/e2e/scripts/`
+
+For deeper design context (avoid re-deriving): `docs/adr/`, `docs/spec/`, and `README.md` "Key Docs".
+
 ## 1. Merge-Gate Rules
 
 Any change touching the following **critical paths** must include appropriate tests and cite which invariants are preserved:
