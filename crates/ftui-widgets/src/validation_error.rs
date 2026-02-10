@@ -39,7 +39,7 @@
 //! | Very narrow area | Truncates message with ellipsis |
 //! | Animation overflow | Saturates at 0.0 or 1.0 |
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use ftui_core::geometry::Rect;
 use ftui_render::cell::PackedRgba;

@@ -19,7 +19,7 @@
 //!     .duration(Duration::from_secs(3));
 //! ```
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use crate::{Widget, set_style_area};
 use ftui_core::geometry::Rect;

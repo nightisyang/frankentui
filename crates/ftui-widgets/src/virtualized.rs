@@ -328,7 +328,8 @@ impl<T> Virtualized<T> {
     pub fn page_up(&mut self) {
         let visible_count = self.visible_count.get();
         if visible_count > 0 {
-            self.scroll(-(visible_count as i32));
+            let delta = i32::try_from(visible_count).unwrap_or(i32::MAX);
+            self.scroll(-delta);
         }
     }
 
@@ -336,7 +337,8 @@ impl<T> Virtualized<T> {
     pub fn page_down(&mut self) {
         let visible_count = self.visible_count.get();
         if visible_count > 0 {
-            self.scroll(visible_count as i32);
+            let delta = i32::try_from(visible_count).unwrap_or(i32::MAX);
+            self.scroll(delta);
         }
     }
 
@@ -897,14 +899,16 @@ impl VirtualizedListState {
     /// Page up (scroll by visible count).
     pub fn page_up(&mut self, total_items: usize) {
         if self.visible_count > 0 {
-            self.scroll(-(self.visible_count as i32), total_items);
+            let delta = i32::try_from(self.visible_count).unwrap_or(i32::MAX);
+            self.scroll(-delta, total_items);
         }
     }
 
     /// Page down (scroll by visible count).
     pub fn page_down(&mut self, total_items: usize) {
         if self.visible_count > 0 {
-            self.scroll(self.visible_count as i32, total_items);
+            let delta = i32::try_from(self.visible_count).unwrap_or(i32::MAX);
+            self.scroll(delta, total_items);
         }
     }
 

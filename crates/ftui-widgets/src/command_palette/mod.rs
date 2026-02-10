@@ -51,9 +51,9 @@ use ftui_text::{display_width, grapheme_width, graphemes};
 use crate::Widget;
 
 #[cfg(feature = "tracing")]
-use std::time::Instant;
-#[cfg(feature = "tracing")]
 use tracing::{debug, info};
+#[cfg(feature = "tracing")]
+use web_time::Instant;
 
 #[cfg(feature = "tracing")]
 const TELEMETRY_TARGET: &str = "ftui_widgets::command_palette";

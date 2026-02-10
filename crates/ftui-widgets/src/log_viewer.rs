@@ -401,7 +401,8 @@ impl LogViewer {
         if self.filtered_indices.is_some() {
             self.filtered_scroll_offset = self.filtered_scroll_offset.saturating_sub(lines);
         } else {
-            self.virt.scroll(-(lines as i32));
+            let delta = i32::try_from(lines).unwrap_or(i32::MAX);
+            self.virt.scroll(-delta);
         }
     }
 
@@ -418,7 +419,8 @@ impl LogViewer {
                 }
             }
         } else {
-            self.virt.scroll(lines as i32);
+            let delta = i32::try_from(lines).unwrap_or(i32::MAX);
+            self.virt.scroll(delta);
             if self.virt.is_at_bottom() {
                 self.virt.set_follow(true);
             }

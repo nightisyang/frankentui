@@ -6,7 +6,7 @@
 //! and displays a fallback error indicator instead of crashing the application.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::time::Instant;
+use web_time::Instant;
 
 use ftui_core::geometry::Rect;
 use ftui_render::cell::{Cell, PackedRgba};
