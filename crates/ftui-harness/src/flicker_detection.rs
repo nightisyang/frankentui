@@ -758,7 +758,7 @@ impl FlickerAnalysis {
             msg.push_str("\nFull JSONL log:\n");
             msg.push_str(&self.jsonl);
 
-            panic!("{msg}");
+            assert!(self.flicker_free, "{msg}");
         }
     }
 }
@@ -886,6 +886,15 @@ mod tests {
     }
 
     #[test]
+    fn sync_end_without_begin_is_ignored() {
+        let analysis = analyze_stream(SYNC_END);
+        assert!(analysis.flicker_free);
+        assert_eq!(analysis.stats.total_frames, 0);
+        assert_eq!(analysis.stats.complete_frames, 0);
+        assert_eq!(analysis.stats.sync_gaps, 0);
+    }
+
+    #[test]
     fn output_before_sync_causes_gap() {
         let mut stream = b"Pre-sync content".to_vec();
         stream.extend(make_synced_frame(b"Synced content"));
@@ -975,6 +984,24 @@ mod tests {
 
         let analysis = analyze_stream(&frame);
         assert_eq!(analysis.stats.partial_clears, 0);
+    }
+
+    #[test]
+    fn partial_erase_mode_one_detected_for_ed_and_el() {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(SYNC_BEGIN);
+        frame.extend_from_slice(b"\x1b[1J"); // ED mode 1
+        frame.extend_from_slice(b"\x1b[1K"); // EL mode 1
+        frame.extend_from_slice(SYNC_END);
+
+        let analysis = analyze_stream(&frame);
+        assert_eq!(analysis.stats.partial_clears, 2);
+        assert!(
+            analysis
+                .issues
+                .iter()
+                .any(|e| e.details.clear_mode == Some(1))
+        );
     }
 
     #[test]
@@ -1121,6 +1148,19 @@ mod tests {
     }
 
     #[test]
+    fn private_mode_with_extra_params_still_toggles_sync() {
+        let mut stream = Vec::new();
+        stream.extend_from_slice(b"\x1b[?1;2026h");
+        stream.extend_from_slice(b"payload");
+        stream.extend_from_slice(b"\x1b[?1;2026l");
+
+        let analysis = analyze_stream(&stream);
+        assert!(analysis.flicker_free);
+        assert_eq!(analysis.stats.total_frames, 1);
+        assert_eq!(analysis.stats.complete_frames, 1);
+    }
+
+    #[test]
     fn write_jsonl_to_file() {
         let frame = make_synced_frame(b"Test");
         let mut detector = FlickerDetector::new("file-test");
@@ -1140,6 +1180,27 @@ mod tests {
         let d2 = FlickerDetector::with_random_id();
         // Very unlikely to be equal given nanosecond precision
         assert_ne!(d1.run_id(), d2.run_id());
+    }
+
+    #[test]
+    fn analysis_complete_severity_tracks_health() {
+        let clean = analyze_stream(&make_synced_frame(b"ok"));
+        let clean_last = clean
+            .jsonl
+            .lines()
+            .last()
+            .expect("analysis should emit at least one event");
+        assert!(clean_last.contains("\"event_type\":\"analysis_complete\""));
+        assert!(clean_last.contains("\"severity\":\"info\""));
+
+        let noisy = analyze_stream(b"gap");
+        let noisy_last = noisy
+            .jsonl
+            .lines()
+            .last()
+            .expect("analysis should emit at least one event");
+        assert!(noisy_last.contains("\"event_type\":\"analysis_complete\""));
+        assert!(noisy_last.contains("\"severity\":\"warning\""));
     }
 
     #[test]
@@ -1215,5 +1276,869 @@ mod tests {
         let checksum = compute_text_checksum(&analysis.jsonl);
         const EXPECTED: &str = "sha256:985ca693598f4559";
         assert_eq!(checksum, EXPECTED, "golden JSONL checksum drifted");
+    }
+
+    #[test]
+    fn feed_str_matches_feed_bytes() {
+        let stream = "\x1b[?2026hHello\x1b[?2026l";
+
+        let mut from_str = FlickerDetector::new("from-str");
+        from_str.feed_str(stream);
+        from_str.finalize();
+
+        let mut from_bytes = FlickerDetector::new("from-bytes");
+        from_bytes.feed(stream.as_bytes());
+        from_bytes.finalize();
+
+        assert_eq!(
+            from_str.stats().total_frames,
+            from_bytes.stats().total_frames
+        );
+        assert_eq!(
+            from_str.stats().complete_frames,
+            from_bytes.stats().complete_frames
+        );
+        assert_eq!(from_str.stats().sync_gaps, from_bytes.stats().sync_gaps);
+        assert_eq!(
+            from_str.stats().partial_clears,
+            from_bytes.stats().partial_clears
+        );
+    }
+
+    // ================================================================
+    // Edge-case tests (bd-1nz1c)
+    // ================================================================
+
+    // --- Severity ---
+
+    #[test]
+    fn severity_display_all_variants() {
+        assert_eq!(Severity::Info.to_string(), "info");
+        assert_eq!(Severity::Warning.to_string(), "warning");
+        assert_eq!(Severity::Error.to_string(), "error");
+    }
+
+    #[test]
+    fn severity_clone_copy_eq_hash() {
+        let s = Severity::Warning;
+        let s2 = s; // Copy
+        assert_eq!(s, s2);
+        let s3 = s.clone();
+        assert_eq!(s, s3);
+        // Hash consistency
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(Severity::Info);
+        set.insert(Severity::Warning);
+        set.insert(Severity::Error);
+        assert_eq!(set.len(), 3);
+        set.insert(Severity::Info); // duplicate
+        assert_eq!(set.len(), 3);
+    }
+
+    #[test]
+    fn severity_debug() {
+        let dbg = format!("{:?}", Severity::Error);
+        assert!(dbg.contains("Error"));
+    }
+
+    // --- EventType ---
+
+    #[test]
+    fn event_type_display_all_variants() {
+        assert_eq!(EventType::FrameStart.to_string(), "frame_start");
+        assert_eq!(EventType::FrameEnd.to_string(), "frame_end");
+        assert_eq!(EventType::SyncGap.to_string(), "sync_gap");
+        assert_eq!(EventType::PartialClear.to_string(), "partial_clear");
+        assert_eq!(EventType::IncompleteFrame.to_string(), "incomplete_frame");
+        assert_eq!(
+            EventType::InterleavedWrites.to_string(),
+            "interleaved_writes"
+        );
+        assert_eq!(
+            EventType::SuspiciousCursorMove.to_string(),
+            "suspicious_cursor_move"
+        );
+        assert_eq!(EventType::AnalysisComplete.to_string(), "analysis_complete");
+    }
+
+    #[test]
+    fn event_type_clone_eq_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(EventType::FrameStart.clone());
+        set.insert(EventType::FrameEnd.clone());
+        set.insert(EventType::SyncGap.clone());
+        set.insert(EventType::PartialClear.clone());
+        set.insert(EventType::IncompleteFrame.clone());
+        set.insert(EventType::InterleavedWrites.clone());
+        set.insert(EventType::SuspiciousCursorMove.clone());
+        set.insert(EventType::AnalysisComplete.clone());
+        assert_eq!(set.len(), 8);
+    }
+
+    #[test]
+    fn event_type_debug() {
+        let dbg = format!("{:?}", EventType::SyncGap);
+        assert!(dbg.contains("SyncGap"));
+    }
+
+    // --- EventContext ---
+
+    #[test]
+    fn event_context_default_fields() {
+        let ctx = EventContext::default();
+        assert_eq!(ctx.frame_id, 0);
+        assert_eq!(ctx.byte_offset, 0);
+        assert_eq!(ctx.line, 0);
+        assert_eq!(ctx.column, 0);
+    }
+
+    #[test]
+    fn event_context_clone_debug() {
+        let ctx = EventContext {
+            frame_id: 42,
+            byte_offset: 100,
+            line: 5,
+            column: 10,
+        };
+        let ctx2 = ctx.clone();
+        assert_eq!(ctx2.frame_id, 42);
+        assert_eq!(ctx2.byte_offset, 100);
+        let dbg = format!("{:?}", ctx);
+        assert!(dbg.contains("42"));
+    }
+
+    // --- EventDetails ---
+
+    #[test]
+    fn event_details_default_fields() {
+        let d = EventDetails::default();
+        assert!(d.message.is_empty());
+        assert!(d.trigger_bytes.is_none());
+        assert!(d.bytes_outside_sync.is_none());
+        assert!(d.clear_type.is_none());
+        assert!(d.clear_mode.is_none());
+        assert!(d.affected_rows.is_none());
+        assert!(d.stats.is_none());
+    }
+
+    #[test]
+    fn event_details_clone_debug() {
+        let d = EventDetails {
+            message: "test".into(),
+            trigger_bytes: Some(vec![0x1b, 0x5b]),
+            bytes_outside_sync: Some(10),
+            clear_type: Some(0),
+            clear_mode: Some(2),
+            affected_rows: Some(vec![1, 2, 3]),
+            stats: Some(AnalysisStats {
+                total_frames: 5,
+                complete_frames: 5,
+                ..Default::default()
+            }),
+        };
+        let d2 = d.clone();
+        assert_eq!(d2.message, "test");
+        assert_eq!(d2.trigger_bytes.as_ref().unwrap().len(), 2);
+        assert_eq!(d2.affected_rows.as_ref().unwrap().len(), 3);
+        let dbg = format!("{:?}", d);
+        assert!(dbg.contains("test"));
+    }
+
+    // --- AnalysisStats ---
+
+    #[test]
+    fn analysis_stats_default() {
+        let s = AnalysisStats::default();
+        assert_eq!(s.total_frames, 0);
+        assert_eq!(s.complete_frames, 0);
+        assert_eq!(s.sync_gaps, 0);
+        assert_eq!(s.partial_clears, 0);
+        assert_eq!(s.bytes_total, 0);
+        assert_eq!(s.bytes_in_sync, 0);
+    }
+
+    #[test]
+    fn analysis_stats_is_flicker_free_combinations() {
+        // All zeros → flicker-free
+        assert!(AnalysisStats::default().is_flicker_free());
+
+        // sync_gaps > 0 → not flicker-free
+        assert!(
+            !AnalysisStats {
+                sync_gaps: 1,
+                ..Default::default()
+            }
+            .is_flicker_free()
+        );
+
+        // partial_clears > 0 → not flicker-free
+        assert!(
+            !AnalysisStats {
+                partial_clears: 1,
+                ..Default::default()
+            }
+            .is_flicker_free()
+        );
+
+        // Incomplete frames → not flicker-free
+        assert!(
+            !AnalysisStats {
+                total_frames: 3,
+                complete_frames: 2,
+                ..Default::default()
+            }
+            .is_flicker_free()
+        );
+
+        // All frames complete, no gaps or clears → flicker-free
+        assert!(
+            AnalysisStats {
+                total_frames: 10,
+                complete_frames: 10,
+                bytes_total: 500,
+                bytes_in_sync: 400,
+                ..Default::default()
+            }
+            .is_flicker_free()
+        );
+    }
+
+    #[test]
+    fn analysis_stats_sync_coverage_partial() {
+        let s = AnalysisStats {
+            bytes_total: 200,
+            bytes_in_sync: 50,
+            ..Default::default()
+        };
+        assert!((s.sync_coverage() - 25.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn analysis_stats_sync_coverage_full() {
+        let s = AnalysisStats {
+            bytes_total: 100,
+            bytes_in_sync: 100,
+            ..Default::default()
+        };
+        assert!((s.sync_coverage() - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn analysis_stats_clone_debug() {
+        let s = AnalysisStats {
+            total_frames: 7,
+            complete_frames: 5,
+            sync_gaps: 2,
+            partial_clears: 1,
+            bytes_total: 1000,
+            bytes_in_sync: 800,
+        };
+        let s2 = s.clone();
+        assert_eq!(s2.total_frames, 7);
+        let dbg = format!("{:?}", s);
+        assert!(dbg.contains("1000"));
+    }
+
+    // --- escape_json ---
+
+    #[test]
+    fn escape_json_empty() {
+        assert_eq!(escape_json(""), "");
+    }
+
+    #[test]
+    fn escape_json_no_special_chars() {
+        assert_eq!(escape_json("hello world 123"), "hello world 123");
+    }
+
+    #[test]
+    fn escape_json_quotes_and_backslash() {
+        assert_eq!(escape_json(r#"say "hi""#), r#"say \"hi\""#);
+        assert_eq!(escape_json(r"back\slash"), r"back\\slash");
+    }
+
+    #[test]
+    fn escape_json_newline_cr_tab() {
+        assert_eq!(escape_json("a\nb"), "a\\nb");
+        assert_eq!(escape_json("a\rb"), "a\\rb");
+        assert_eq!(escape_json("a\tb"), "a\\tb");
+    }
+
+    #[test]
+    fn escape_json_control_chars() {
+        // NUL, BEL, BS
+        let s = "\x00\x07\x08";
+        let escaped = escape_json(s);
+        assert!(escaped.contains("\\u0000"));
+        assert!(escaped.contains("\\u0007"));
+        assert!(escaped.contains("\\u0008"));
+    }
+
+    #[test]
+    fn escape_json_unicode_passthrough() {
+        assert_eq!(escape_json("日本語"), "日本語");
+        assert_eq!(escape_json("emoji 🎉"), "emoji 🎉");
+    }
+
+    // --- FlickerEvent to_jsonl ---
+
+    #[test]
+    fn flicker_event_to_jsonl_all_optional_fields() {
+        let event = FlickerEvent {
+            run_id: "full".into(),
+            timestamp_ns: 999,
+            event_type: EventType::PartialClear,
+            severity: Severity::Warning,
+            context: EventContext {
+                frame_id: 3,
+                byte_offset: 42,
+                line: 2,
+                column: 5,
+            },
+            details: EventDetails {
+                message: "test partial".into(),
+                trigger_bytes: Some(vec![0x1b, 0x5b, 0x4a]),
+                bytes_outside_sync: Some(17),
+                clear_type: Some(0),
+                clear_mode: Some(1),
+                affected_rows: Some(vec![0, 1]),
+                stats: Some(AnalysisStats {
+                    total_frames: 10,
+                    complete_frames: 9,
+                    sync_gaps: 1,
+                    partial_clears: 2,
+                    bytes_total: 500,
+                    bytes_in_sync: 450,
+                }),
+            },
+        };
+
+        let json = event.to_jsonl();
+        assert!(json.starts_with('{'));
+        assert!(json.ends_with('}'));
+        assert!(json.contains("\"run_id\":\"full\""));
+        assert!(json.contains("\"timestamp_ns\":999"));
+        assert!(json.contains("\"event_type\":\"partial_clear\""));
+        assert!(json.contains("\"severity\":\"warning\""));
+        assert!(json.contains("\"frame_id\":3"));
+        assert!(json.contains("\"byte_offset\":42"));
+        assert!(json.contains("\"line\":2"));
+        assert!(json.contains("\"column\":5"));
+        assert!(json.contains("\"trigger_bytes\":[27,91,74]"));
+        assert!(json.contains("\"bytes_outside_sync\":17"));
+        assert!(json.contains("\"clear_type\":0"));
+        assert!(json.contains("\"clear_mode\":1"));
+        assert!(json.contains("\"affected_rows\":[0,1]"));
+        assert!(json.contains("\"total_frames\":10"));
+        assert!(json.contains("\"complete_frames\":9"));
+        assert!(json.contains("\"flicker_free\":false"));
+    }
+
+    #[test]
+    fn flicker_event_to_jsonl_minimal() {
+        let event = FlickerEvent {
+            run_id: "min".into(),
+            timestamp_ns: 0,
+            event_type: EventType::FrameStart,
+            severity: Severity::Info,
+            context: EventContext::default(),
+            details: EventDetails::default(),
+        };
+
+        let json = event.to_jsonl();
+        assert!(json.contains("\"run_id\":\"min\""));
+        assert!(json.contains("\"message\":\"\""));
+        // No optional fields
+        assert!(!json.contains("trigger_bytes"));
+        assert!(!json.contains("bytes_outside_sync"));
+        assert!(!json.contains("clear_type"));
+        assert!(!json.contains("affected_rows"));
+        assert!(!json.contains("stats"));
+    }
+
+    #[test]
+    fn flicker_event_clone_debug() {
+        let event = FlickerEvent {
+            run_id: "clone-test".into(),
+            timestamp_ns: 42,
+            event_type: EventType::SyncGap,
+            severity: Severity::Warning,
+            context: EventContext::default(),
+            details: EventDetails::default(),
+        };
+        let e2 = event.clone();
+        assert_eq!(e2.run_id, "clone-test");
+        assert_eq!(e2.timestamp_ns, 42);
+        let dbg = format!("{:?}", event);
+        assert!(dbg.contains("clone-test"));
+    }
+
+    // --- FlickerDetector ---
+
+    #[test]
+    fn detector_default_impl() {
+        let d = FlickerDetector::default();
+        assert_eq!(d.run_id(), "default");
+        assert!(d.events().is_empty());
+        assert!(d.is_flicker_free());
+    }
+
+    #[test]
+    fn detector_run_id_accessor() {
+        let d = FlickerDetector::new("my-run-123");
+        assert_eq!(d.run_id(), "my-run-123");
+    }
+
+    #[test]
+    fn detector_stats_accessor() {
+        let d = FlickerDetector::new("test");
+        let stats = d.stats();
+        assert_eq!(stats.total_frames, 0);
+        assert_eq!(stats.bytes_total, 0);
+    }
+
+    #[test]
+    fn detector_feed_str_independently() {
+        let sync_begin = "\x1b[?2026h";
+        let sync_end = "\x1b[?2026l";
+        let mut d = FlickerDetector::new("str-test");
+        d.feed_str(sync_begin);
+        d.feed_str("Content");
+        d.feed_str(sync_end);
+        d.finalize();
+        assert!(d.is_flicker_free());
+        assert_eq!(d.stats().total_frames, 1);
+        assert_eq!(d.stats().complete_frames, 1);
+    }
+
+    #[test]
+    fn detector_incremental_feed() {
+        // Feed frame one byte at a time
+        let frame = make_synced_frame(b"Hello");
+        let mut d = FlickerDetector::new("incr");
+        for &byte in &frame {
+            d.feed(&[byte]);
+        }
+        d.finalize();
+        assert!(d.is_flicker_free());
+        assert_eq!(d.stats().total_frames, 1);
+    }
+
+    #[test]
+    fn detector_bytes_tracking() {
+        let frame = make_synced_frame(b"AB");
+        let mut d = FlickerDetector::new("bytes");
+        d.feed(&frame);
+        d.finalize();
+        // SYNC_BEGIN=8 + "AB"=2 + SYNC_END=8 = 18 bytes total
+        assert_eq!(d.stats().bytes_total, 18);
+        // bytes_in_sync: counted while sync_active=true
+        assert!(d.stats().bytes_in_sync > 0);
+        assert!(d.stats().bytes_in_sync < d.stats().bytes_total);
+    }
+
+    #[test]
+    fn detector_finalize_emits_analysis_complete() {
+        let mut d = FlickerDetector::new("fin");
+        d.finalize();
+        let last = d.events().last().unwrap();
+        assert!(matches!(last.event_type, EventType::AnalysisComplete));
+        assert!(matches!(last.severity, Severity::Info)); // flicker-free
+    }
+
+    #[test]
+    fn detector_finalize_incomplete_frame_severity() {
+        let mut d = FlickerDetector::new("inc");
+        d.feed(SYNC_BEGIN);
+        d.feed(b"dangling content");
+        d.finalize();
+        let incomplete: Vec<_> = d
+            .events()
+            .iter()
+            .filter(|e| matches!(e.event_type, EventType::IncompleteFrame))
+            .collect();
+        assert_eq!(incomplete.len(), 1);
+        assert!(matches!(incomplete[0].severity, Severity::Error));
+        let complete_evt = d.events().last().unwrap();
+        assert!(matches!(
+            complete_evt.event_type,
+            EventType::AnalysisComplete
+        ));
+        assert!(matches!(complete_evt.severity, Severity::Warning));
+    }
+
+    #[test]
+    fn detector_sync_end_without_start() {
+        let mut d = FlickerDetector::new("no-start");
+        d.feed(SYNC_END);
+        d.finalize();
+        assert_eq!(d.stats().total_frames, 0);
+        assert_eq!(d.stats().complete_frames, 0);
+    }
+
+    #[test]
+    fn detector_multiple_partial_clears() {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(SYNC_BEGIN);
+        frame.extend_from_slice(b"\x1b[0J"); // Partial ED to-end
+        frame.extend_from_slice(b"\x1b[1J"); // Partial ED to-start
+        frame.extend_from_slice(b"\x1b[0K"); // Partial EL to-end
+        frame.extend_from_slice(b"\x1b[1K"); // Partial EL to-start
+        frame.extend_from_slice(SYNC_END);
+
+        let analysis = analyze_stream(&frame);
+        assert_eq!(analysis.stats.partial_clears, 4);
+    }
+
+    #[test]
+    fn detector_ed_mode2_inside_sync_no_partial_clear() {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(SYNC_BEGIN);
+        frame.extend_from_slice(b"\x1b[2J");
+        frame.extend_from_slice(b"Content");
+        frame.extend_from_slice(SYNC_END);
+
+        let analysis = analyze_stream(&frame);
+        assert_eq!(analysis.stats.partial_clears, 0);
+    }
+
+    #[test]
+    fn detector_el_mode2_inside_sync_no_partial_clear() {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(SYNC_BEGIN);
+        frame.extend_from_slice(b"\x1b[2K");
+        frame.extend_from_slice(b"Content");
+        frame.extend_from_slice(SYNC_END);
+
+        let analysis = analyze_stream(&frame);
+        assert_eq!(analysis.stats.partial_clears, 0);
+    }
+
+    #[test]
+    fn detector_ed_mode1_partial_clear() {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(SYNC_BEGIN);
+        frame.extend_from_slice(b"\x1b[1J");
+        frame.extend_from_slice(SYNC_END);
+
+        let analysis = analyze_stream(&frame);
+        assert_eq!(analysis.stats.partial_clears, 1);
+    }
+
+    #[test]
+    fn detector_el_outside_sync_not_partial_clear() {
+        let mut stream = Vec::new();
+        stream.extend_from_slice(b"\x1b[0K");
+        stream.extend(make_synced_frame(b"Ok"));
+
+        let analysis = analyze_stream(&stream);
+        assert_eq!(analysis.stats.partial_clears, 0);
+    }
+
+    #[test]
+    fn detector_ed_outside_sync_not_partial_clear() {
+        let mut stream = Vec::new();
+        stream.extend_from_slice(b"\x1b[0J");
+        stream.extend(make_synced_frame(b"Ok"));
+
+        let analysis = analyze_stream(&stream);
+        assert_eq!(analysis.stats.partial_clears, 0);
+    }
+
+    #[test]
+    fn detector_line_column_tracking() {
+        let mut d = FlickerDetector::new("lc");
+        d.feed(b"AB\nCD\nEF");
+        d.finalize();
+        let last = d.events().last().unwrap();
+        assert_eq!(last.context.line, 2);
+        assert_eq!(last.context.column, 2);
+    }
+
+    #[test]
+    fn detector_only_visible_chars_are_gap_bytes() {
+        let mut d = FlickerDetector::new("gap");
+        d.feed(b"\x00\x01\x02\x03");
+        d.finalize();
+        assert!(d.is_flicker_free());
+    }
+
+    #[test]
+    fn detector_gap_bytes_accumulated_across_regions() {
+        let mut stream = Vec::new();
+        stream.extend_from_slice(b"ABC");
+        stream.extend(make_synced_frame(b"F1"));
+        stream.extend_from_slice(b"DE");
+        stream.extend(make_synced_frame(b"F2"));
+
+        let analysis = analyze_stream(&stream);
+        assert_eq!(analysis.stats.sync_gaps, 2);
+    }
+
+    #[test]
+    fn detector_timestamp_monotonic() {
+        let frame = make_synced_frame(b"Hi");
+        let mut d = FlickerDetector::new("ts");
+        d.feed(&frame);
+        d.finalize();
+        let timestamps: Vec<u64> = d.events().iter().map(|e| e.timestamp_ns).collect();
+        for window in timestamps.windows(2) {
+            assert!(
+                window[1] > window[0],
+                "Timestamps not monotonic: {:?}",
+                timestamps
+            );
+        }
+    }
+
+    #[test]
+    fn detector_write_jsonl_empty() {
+        let d = FlickerDetector::new("empty");
+        let mut output = Vec::new();
+        d.write_jsonl(&mut output).unwrap();
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn detector_to_jsonl_empty() {
+        let d = FlickerDetector::new("empty");
+        assert!(d.to_jsonl().is_empty());
+    }
+
+    // --- Convenience functions ---
+
+    #[test]
+    fn analyze_str_convenience() {
+        let sync_begin = "\x1b[?2026h";
+        let sync_end = "\x1b[?2026l";
+        let input = format!("{sync_begin}Hello{sync_end}");
+        let analysis = analyze_str(&input);
+        assert!(analysis.flicker_free);
+    }
+
+    #[test]
+    fn analyze_stream_with_id_custom_id() {
+        let frame = make_synced_frame(b"Test");
+        let analysis = analyze_stream_with_id("custom-42", &frame);
+        assert!(analysis.flicker_free);
+        assert!(analysis.jsonl.contains("custom-42"));
+    }
+
+    #[test]
+    fn analyze_stream_default_id() {
+        let frame = make_synced_frame(b"T");
+        let analysis = analyze_stream(&frame);
+        assert!(analysis.jsonl.contains("\"run_id\":\"analysis\""));
+    }
+
+    // --- FlickerAnalysis ---
+
+    #[test]
+    fn flicker_analysis_debug() {
+        let analysis = analyze_stream(b"");
+        let dbg = format!("{:?}", analysis);
+        assert!(dbg.contains("flicker_free"));
+        assert!(dbg.contains("stats"));
+    }
+
+    #[test]
+    fn flicker_analysis_issues_only_warnings_and_errors() {
+        let mut stream = Vec::new();
+        stream.extend(make_synced_frame(b"Frame"));
+        stream.extend_from_slice(b"Gap");
+        stream.extend(make_synced_frame(b"Frame2"));
+
+        let analysis = analyze_stream(&stream);
+        for issue in &analysis.issues {
+            assert!(
+                matches!(issue.severity, Severity::Warning | Severity::Error),
+                "Issue should be Warning or Error, got {:?}",
+                issue.severity
+            );
+        }
+        assert!(!analysis.issues.is_empty());
+    }
+
+    // --- CSI parsing ---
+
+    #[test]
+    fn csi_with_semicolons_multi_param() {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(SYNC_BEGIN);
+        frame.extend_from_slice(b"\x1b[1;31m");
+        frame.extend_from_slice(b"Red");
+        frame.extend_from_slice(b"\x1b[0m");
+        frame.extend_from_slice(SYNC_END);
+
+        let analysis = analyze_stream(&frame);
+        assert!(analysis.flicker_free);
+    }
+
+    #[test]
+    fn csi_cursor_movement_in_sync() {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(SYNC_BEGIN);
+        frame.extend_from_slice(b"\x1b[5A"); // Up 5
+        frame.extend_from_slice(b"\x1b[3B"); // Down 3
+        frame.extend_from_slice(b"\x1b[10C"); // Right 10
+        frame.extend_from_slice(b"\x1b[2D"); // Left 2
+        frame.extend_from_slice(b"\x1b[s"); // Save
+        frame.extend_from_slice(b"\x1b[u"); // Restore
+        frame.extend_from_slice(SYNC_END);
+
+        let analysis = analyze_stream(&frame);
+        assert!(analysis.flicker_free);
+    }
+
+    #[test]
+    fn csi_cursor_position_with_params() {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(SYNC_BEGIN);
+        frame.extend_from_slice(b"\x1b[10;20H");
+        frame.extend_from_slice(b"At position");
+        frame.extend_from_slice(b"\x1b[5;15f");
+        frame.extend_from_slice(SYNC_END);
+
+        let analysis = analyze_stream(&frame);
+        assert!(analysis.flicker_free);
+    }
+
+    #[test]
+    fn csi_unknown_final_byte() {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(SYNC_BEGIN);
+        frame.extend_from_slice(b"\x1b[42z");
+        frame.extend_from_slice(b"\x1b[0~");
+        frame.extend_from_slice(SYNC_END);
+
+        let analysis = analyze_stream(&frame);
+        assert!(analysis.flicker_free);
+    }
+
+    #[test]
+    fn csi_dec_private_non_sync_mode() {
+        let mut stream = Vec::new();
+        stream.extend_from_slice(b"\x1b[?25l"); // Hide cursor
+        stream.extend(make_synced_frame(b"Content"));
+        stream.extend_from_slice(b"\x1b[?25h"); // Show cursor
+
+        let analysis = analyze_stream(&stream);
+        assert!(analysis.flicker_free);
+    }
+
+    // --- Edge cases ---
+
+    #[test]
+    fn only_escape_sequences_no_content() {
+        let mut frame = Vec::new();
+        frame.extend_from_slice(SYNC_BEGIN);
+        frame.extend_from_slice(b"\x1b[H\x1b[2J\x1b[1;1H");
+        frame.extend_from_slice(SYNC_END);
+
+        let analysis = analyze_stream(&frame);
+        assert!(analysis.flicker_free);
+    }
+
+    #[test]
+    fn very_long_frame_content() {
+        let content: Vec<u8> = (0..10_000).map(|i| b'A' + (i % 26) as u8).collect();
+        let frame = make_synced_frame(&content);
+        let analysis = analyze_stream(&frame);
+        assert!(analysis.flicker_free);
+        assert_eq!(analysis.stats.total_frames, 1);
+    }
+
+    #[test]
+    fn many_small_frames() {
+        let mut stream = Vec::new();
+        for _ in 0..100 {
+            stream.extend(make_synced_frame(b"X"));
+        }
+        let analysis = analyze_stream(&stream);
+        assert!(analysis.flicker_free);
+        assert_eq!(analysis.stats.total_frames, 100);
+        assert_eq!(analysis.stats.complete_frames, 100);
+    }
+
+    #[test]
+    fn escape_at_end_of_stream() {
+        let mut d = FlickerDetector::new("esc-end");
+        d.feed(b"\x1b");
+        d.finalize();
+        assert_eq!(d.stats().total_frames, 0);
+    }
+
+    #[test]
+    fn csi_at_end_of_stream() {
+        let mut d = FlickerDetector::new("csi-end");
+        d.feed(b"\x1b[42");
+        d.finalize();
+        assert_eq!(d.stats().total_frames, 0);
+    }
+
+    #[test]
+    fn csi_private_at_end_of_stream() {
+        let mut d = FlickerDetector::new("dec-end");
+        d.feed(b"\x1b[?2026");
+        d.finalize();
+        assert_eq!(d.stats().total_frames, 0);
+    }
+
+    #[test]
+    fn multiple_gap_regions_correct_count() {
+        let mut stream = Vec::new();
+        stream.extend_from_slice(b"Gap1");
+        stream.extend(make_synced_frame(b"F1"));
+        stream.extend_from_slice(b"Gap2");
+        stream.extend(make_synced_frame(b"F2"));
+        stream.extend_from_slice(b"Gap3");
+
+        let analysis = analyze_stream(&stream);
+        assert_eq!(analysis.stats.sync_gaps, 3);
+    }
+
+    #[test]
+    fn flicker_event_to_jsonl_escaped_message() {
+        let event = FlickerEvent {
+            run_id: "esc".into(),
+            timestamp_ns: 1,
+            event_type: EventType::SyncGap,
+            severity: Severity::Warning,
+            context: EventContext::default(),
+            details: EventDetails {
+                message: "has \"quotes\" and\nnewlines".into(),
+                ..Default::default()
+            },
+        };
+        let json = event.to_jsonl();
+        assert!(json.contains("\\\"quotes\\\""));
+        assert!(json.contains("\\n"));
+    }
+
+    #[test]
+    fn flicker_event_to_jsonl_stats_flicker_free_true() {
+        let event = FlickerEvent {
+            run_id: "ok".into(),
+            timestamp_ns: 1,
+            event_type: EventType::AnalysisComplete,
+            severity: Severity::Info,
+            context: EventContext::default(),
+            details: EventDetails {
+                message: "done".into(),
+                stats: Some(AnalysisStats {
+                    total_frames: 5,
+                    complete_frames: 5,
+                    sync_gaps: 0,
+                    partial_clears: 0,
+                    bytes_total: 100,
+                    bytes_in_sync: 80,
+                }),
+                ..Default::default()
+            },
+        };
+        let json = event.to_jsonl();
+        assert!(json.contains("\"flicker_free\":true"));
     }
 }
