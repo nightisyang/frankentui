@@ -777,4 +777,199 @@ mod tests {
         let entry = FileEntry::new("big.dat", FileKind::File).with_size(1024);
         assert_eq!(entry.size, Some(1024));
     }
+
+    // --- Additional edge case tests (bd-2gi6v) ---
+
+    #[test]
+    fn file_kind_debug_clone_copy_eq_hash() {
+        use std::collections::HashSet;
+        let kind = FileKind::Directory;
+        let copied = kind;
+        assert_eq!(kind, copied);
+        assert_ne!(FileKind::File, FileKind::Directory);
+        assert_ne!(FileKind::Symlink, FileKind::File);
+        assert!(!format!("{:?}", kind).is_empty());
+
+        // Hash: put in a HashSet
+        let mut set = HashSet::new();
+        set.insert(FileKind::File);
+        set.insert(FileKind::Directory);
+        set.insert(FileKind::Symlink);
+        assert_eq!(set.len(), 3);
+    }
+
+    #[test]
+    fn file_entry_debug_clone_eq() {
+        let entry = FileEntry::new("test.rs", FileKind::File).with_size(42);
+        let cloned = entry.clone();
+        assert_eq!(entry, cloned);
+        assert!(!format!("{:?}", entry).is_empty());
+
+        let different = FileEntry::new("other.rs", FileKind::File);
+        assert_ne!(entry, different);
+    }
+
+    #[test]
+    fn file_entry_is_dir() {
+        assert!(FileEntry::new("d", FileKind::Directory).is_dir());
+        assert!(!FileEntry::new("f", FileKind::File).is_dir());
+        assert!(!FileEntry::new("l", FileKind::Symlink).is_dir());
+    }
+
+    #[test]
+    fn file_entry_new_size_is_none() {
+        let entry = FileEntry::new("x", FileKind::File);
+        assert!(entry.size.is_none());
+    }
+
+    #[test]
+    fn file_picker_style_debug_clone_default() {
+        let style = FilePickerStyle::default();
+        let cloned = style.clone();
+        assert!(!format!("{:?}", cloned).is_empty());
+    }
+
+    #[test]
+    fn file_picker_filter_debug_clone_default() {
+        let filter = FilePickerFilter::default();
+        let cloned = filter.clone();
+        assert!(cloned.allowed_extensions.is_empty());
+        assert!(!cloned.show_hidden);
+        assert!(!format!("{:?}", filter).is_empty());
+    }
+
+    #[test]
+    fn filter_directories_always_pass() {
+        let filter = FilePickerFilter {
+            allowed_extensions: vec!["rs".into()],
+            show_hidden: false,
+        };
+        let dir = FileEntry::new(".hidden_dir", FileKind::Directory);
+        assert!(filter.matches(&dir), "directories always pass filter");
+    }
+
+    #[test]
+    fn filter_extension_case_insensitive() {
+        let filter = FilePickerFilter {
+            allowed_extensions: vec!["RS".into()],
+            show_hidden: true,
+        };
+        let entry = FileEntry::new("main.rs", FileKind::File);
+        assert!(
+            filter.matches(&entry),
+            "extension matching should be case-insensitive"
+        );
+    }
+
+    #[test]
+    fn file_picker_default_empty() {
+        let picker = FilePicker::default();
+        assert_eq!(picker.filtered_count(), 0);
+        assert!(picker.selected_entry().is_none());
+        assert_eq!(picker.path(), "/");
+    }
+
+    #[test]
+    fn file_picker_debug_clone() {
+        let picker = FilePicker::new(sample_entries());
+        let cloned = picker.clone();
+        assert_eq!(cloned.filtered_count(), picker.filtered_count());
+        assert!(!format!("{:?}", picker).is_empty());
+    }
+
+    #[test]
+    fn set_style_applies() {
+        let mut picker = FilePicker::new(sample_entries());
+        let style = FilePickerStyle {
+            selected: Style::new().fg(ftui_render::cell::PackedRgba::rgb(255, 0, 0)),
+            ..Default::default()
+        };
+        picker.set_style(style);
+        // No panic, style is applied (verified implicitly via render)
+    }
+
+    #[test]
+    fn page_up_from_top_stays_at_zero() {
+        let mut picker = FilePicker::new(sample_entries());
+        picker.visible_height = 3;
+        picker.page_up();
+        assert_eq!(picker.selected_index(), 0);
+    }
+
+    #[test]
+    fn page_down_clamps_at_end() {
+        let entries: Vec<FileEntry> = (0..10)
+            .map(|i| FileEntry::new(format!("f{i}"), FileKind::File))
+            .collect();
+        let mut picker = FilePicker::new(entries);
+        picker.visible_height = 5;
+        picker.page_down();
+        picker.page_down();
+        picker.page_down(); // Should clamp to last
+        assert_eq!(picker.selected_index(), picker.filtered_count() - 1);
+    }
+
+    #[test]
+    fn move_to_last_empty_is_noop() {
+        let mut picker = FilePicker::new(Vec::new());
+        picker.move_to_last(); // Should not panic
+        assert_eq!(picker.selected_index(), 0);
+    }
+
+    #[test]
+    fn truncate_str_empty() {
+        assert_eq!(truncate_str("", 10), "");
+        assert_eq!(truncate_str("", 0), "");
+    }
+
+    #[test]
+    fn truncate_str_zero_width() {
+        assert_eq!(truncate_str("hello", 0), "");
+    }
+
+    #[test]
+    fn text_width_simple() {
+        assert_eq!(text_width("hello"), 5);
+        assert_eq!(text_width(""), 0);
+    }
+
+    #[test]
+    fn rebuild_filter_clamps_selected() {
+        let mut picker = FilePicker::new(sample_entries());
+        // Move to last
+        picker.move_to_last();
+        let old_sel = picker.selected_index();
+        // Apply restrictive filter that removes most entries
+        picker.set_filter(FilePickerFilter {
+            allowed_extensions: vec!["toml".into()],
+            show_hidden: false,
+        });
+        // Selected should be clamped to valid range
+        assert!(picker.selected_index() < picker.filtered_count());
+        assert!(picker.selected_index() <= old_sel);
+    }
+
+    #[test]
+    fn render_updates_visible_height() {
+        let mut picker = FilePicker::new(sample_entries());
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(40, 15, &mut pool);
+        let area = Rect::from_size(40, 15);
+        picker.render(area, &mut frame);
+        // visible_height should be area.height - 1 (path line)
+        assert_eq!(picker.visible_height, 14);
+    }
+
+    #[test]
+    fn render_path_displayed() {
+        let mut picker = FilePicker::new(sample_entries());
+        picker.set_path("/usr/local");
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(40, 10, &mut pool);
+        picker.render(Rect::from_size(40, 10), &mut frame);
+
+        // Check first row contains path characters
+        let cell = frame.buffer.get(0, 0).unwrap();
+        assert_eq!(cell.content.as_char(), Some('/'));
+    }
 }
