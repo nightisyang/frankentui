@@ -346,7 +346,9 @@ mod tests {
     use std::sync::Arc;
     use std::sync::Mutex;
 
-    /// Helper to create a test command with a shared buffer.
+    /// Helper to create a test command that is **pre-executed**.
+    ///
+    /// Use this with APIs that expect an executed command (e.g. `add_executed`).
     fn make_cmd(buffer: Arc<Mutex<String>>, text: &str) -> Box<dyn UndoableCmd> {
         let b1 = buffer.clone();
         let b2 = buffer.clone();
@@ -361,7 +363,8 @@ mod tests {
             })
             .with_remove(move |_, _, _| {
                 let mut buf = b2.lock().unwrap();
-                buf.drain(..text_clone.len());
+                let new_len = buf.len().saturating_sub(text_clone.len());
+                buf.truncate(new_len);
                 Ok(())
             });
 
@@ -458,13 +461,14 @@ mod tests {
             let mut scope = TransactionScope::new(&mut history);
             scope.begin("Scope Test");
 
-            scope.execute(make_cmd(buffer.clone(), "a")).unwrap();
-            scope.execute(make_cmd(buffer.clone(), "b")).unwrap();
+            scope.execute(make_scope_cmd(buffer.clone(), "a")).unwrap();
+            scope.execute(make_scope_cmd(buffer.clone(), "b")).unwrap();
 
             scope.commit().unwrap();
         }
 
         assert_eq!(history.undo_depth(), 1);
+        assert_eq!(*buffer.lock().unwrap(), "ab");
     }
 
     #[test]
@@ -477,19 +481,26 @@ mod tests {
 
             // Outer transaction
             scope.begin("Outer");
-            scope.execute(make_cmd(buffer.clone(), "outer1")).unwrap();
+            scope
+                .execute(make_scope_cmd(buffer.clone(), "outer1"))
+                .unwrap();
 
             // Inner transaction
             scope.begin("Inner");
-            scope.execute(make_cmd(buffer.clone(), "inner")).unwrap();
+            scope
+                .execute(make_scope_cmd(buffer.clone(), "inner"))
+                .unwrap();
             scope.commit().unwrap();
 
-            scope.execute(make_cmd(buffer.clone(), "outer2")).unwrap();
+            scope
+                .execute(make_scope_cmd(buffer.clone(), "outer2"))
+                .unwrap();
             scope.commit().unwrap();
         }
 
         // Both transactions committed as one (nested was added to parent)
         assert_eq!(history.undo_depth(), 1);
+        assert_eq!(*buffer.lock().unwrap(), "outer1innerouter2");
     }
 
     #[test]
@@ -501,14 +512,15 @@ mod tests {
             let mut scope = TransactionScope::new(&mut history);
             scope.begin("Rollback");
 
-            scope.execute(make_cmd(buffer.clone(), "a")).unwrap();
-            scope.execute(make_cmd(buffer.clone(), "b")).unwrap();
+            scope.execute(make_scope_cmd(buffer.clone(), "a")).unwrap();
+            scope.execute(make_scope_cmd(buffer.clone(), "b")).unwrap();
 
             scope.rollback().unwrap();
         }
 
         // Nothing should be in history
         assert_eq!(history.undo_depth(), 0);
+        assert_eq!(*buffer.lock().unwrap(), "");
     }
 
     #[test]
@@ -519,12 +531,15 @@ mod tests {
         {
             let mut scope = TransactionScope::new(&mut history);
             scope.begin("Will be dropped");
-            scope.execute(make_cmd(buffer.clone(), "test")).unwrap();
+            scope
+                .execute(make_scope_cmd(buffer.clone(), "test"))
+                .unwrap();
             // scope drops without commit
         }
 
         // Should have auto-rolled back
         assert_eq!(history.undo_depth(), 0);
+        assert_eq!(*buffer.lock().unwrap(), "");
     }
 
     #[test]
@@ -598,7 +613,7 @@ mod tests {
         let mut txn = Transaction::begin("Finalized");
         txn.rollback();
 
-        let result = txn.execute(make_cmd(buffer, "test"));
+        let result = txn.execute(make_scope_cmd(buffer, "test"));
         assert!(result.is_err());
     }
 
@@ -657,10 +672,13 @@ mod tests {
         {
             let mut scope = TransactionScope::new(&mut history);
             // Execute without begin() - should go directly to history
-            scope.execute(make_cmd(buffer.clone(), "direct")).unwrap();
+            scope
+                .execute(make_scope_cmd(buffer.clone(), "direct"))
+                .unwrap();
         }
 
         assert_eq!(history.undo_depth(), 1);
+        assert_eq!(*buffer.lock().unwrap(), "direct");
     }
 
     #[test]
@@ -732,23 +750,25 @@ mod tests {
     #[test]
     fn test_scope_drop_with_multiple_uncommitted() {
         let mut history = HistoryManager::new(HistoryConfig::unlimited());
+        let buf_a = Arc::new(Mutex::new(String::new()));
+        let buf_b = Arc::new(Mutex::new(String::new()));
 
         {
             let mut scope = TransactionScope::new(&mut history);
             scope.begin("Outer");
             // Use separate buffers to avoid cross-transaction interference
-            let buf_a = Arc::new(Mutex::new(String::new()));
-            scope.execute(make_cmd(buf_a, "a")).unwrap();
+            scope.execute(make_scope_cmd(buf_a.clone(), "a")).unwrap();
 
             scope.begin("Inner");
-            let buf_b = Arc::new(Mutex::new(String::new()));
-            scope.execute(make_cmd(buf_b, "b")).unwrap();
+            scope.execute(make_scope_cmd(buf_b.clone(), "b")).unwrap();
 
             // Drop without committing either transaction
         }
 
         // Both should have been rolled back — nothing in history
         assert_eq!(history.undo_depth(), 0);
+        assert_eq!(*buf_a.lock().unwrap(), "");
+        assert_eq!(*buf_b.lock().unwrap(), "");
     }
 
     #[test]
@@ -761,14 +781,19 @@ mod tests {
 
             // Outer transaction
             scope.begin("Outer");
-            scope.execute(make_cmd(buffer.clone(), "outer")).unwrap();
+            scope
+                .execute(make_scope_cmd(buffer.clone(), "outer"))
+                .unwrap();
 
             // Inner transaction
             scope.begin("Inner");
-            scope.execute(make_cmd(buffer.clone(), "inner")).unwrap();
+            scope
+                .execute(make_scope_cmd(buffer.clone(), "inner"))
+                .unwrap();
             scope.rollback().unwrap(); // Roll back inner only
 
             assert_eq!(scope.depth(), 1); // Outer still active
+            assert_eq!(*buffer.lock().unwrap(), "outer");
 
             // Commit outer
             scope.commit().unwrap();
@@ -865,12 +890,12 @@ mod tests {
 
             // First transaction
             scope.begin("First");
-            scope.execute(make_cmd(buffer.clone(), "a")).unwrap();
+            scope.execute(make_scope_cmd(buffer.clone(), "a")).unwrap();
             scope.commit().unwrap();
 
             // Second transaction in same scope
             scope.begin("Second");
-            scope.execute(make_cmd(buffer.clone(), "b")).unwrap();
+            scope.execute(make_scope_cmd(buffer.clone(), "b")).unwrap();
             scope.commit().unwrap();
         }
 
@@ -918,19 +943,19 @@ mod tests {
             // First: commit
             scope.begin("Committed");
             let buf1 = Arc::new(Mutex::new(String::new()));
-            scope.execute(make_cmd(buf1, "ok")).unwrap();
+            scope.execute(make_scope_cmd(buf1, "ok")).unwrap();
             scope.commit().unwrap();
 
             // Second: rollback
             scope.begin("Rolled back");
             let buf2 = Arc::new(Mutex::new(String::new()));
-            scope.execute(make_cmd(buf2, "no")).unwrap();
+            scope.execute(make_scope_cmd(buf2, "no")).unwrap();
             scope.rollback().unwrap();
 
             // Third: commit
             scope.begin("Also committed");
             let buf3 = Arc::new(Mutex::new(String::new()));
-            scope.execute(make_cmd(buf3, "yes")).unwrap();
+            scope.execute(make_scope_cmd(buf3, "yes")).unwrap();
             scope.commit().unwrap();
         }
 
@@ -1014,15 +1039,16 @@ mod tests {
 
             // Transaction
             scope.begin("Txn");
-            scope.execute(make_cmd(buffer.clone(), "a")).unwrap();
+            scope.execute(make_scope_cmd(buffer.clone(), "a")).unwrap();
             scope.commit().unwrap();
 
             // Direct execute (no active transaction) goes to history
-            scope.execute(make_cmd(buffer.clone(), "b")).unwrap();
+            scope.execute(make_scope_cmd(buffer.clone(), "b")).unwrap();
         }
 
         // One from transaction, one from direct execute
         assert_eq!(history.undo_depth(), 2);
+        assert_eq!(*buffer.lock().unwrap(), "ab");
     }
 
     #[test]
@@ -1080,7 +1106,8 @@ mod tests {
                 })
                 .with_remove(move |_, _, _| {
                     let mut buf = b2.lock().unwrap();
-                    buf.drain(..text_clone.len());
+                    let new_len = buf.len().saturating_sub(text_clone.len());
+                    buf.truncate(new_len);
                     Ok(())
                 }),
         )
