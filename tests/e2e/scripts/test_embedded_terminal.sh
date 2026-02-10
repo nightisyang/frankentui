@@ -32,6 +32,7 @@ mkdir -p "$(dirname "$E2E_JSONL_LOG")"
 
 ALL_CASES=(
     term_pty_spawn_success
+    term_pty_dev_tty_openable
     term_pty_env_inheritance
     term_pty_working_directory
     term_pty_clean_termination
@@ -170,6 +171,29 @@ term_pty_spawn_success() {
 
     # Verify marker appears in output
     grep -a -q "PTY_SPAWN_SUCCESS_MARKER" "$output_file" || return 1
+}
+
+# Test: /dev/tty is openable inside the child (requires controlling TTY)
+term_pty_dev_tty_openable() {
+    LOG_FILE="$E2E_LOG_DIR/term_pty_dev_tty.log"
+    local output_file="$E2E_LOG_DIR/term_pty_dev_tty.pty"
+
+    log_test_start "term_pty_dev_tty_openable"
+
+    # `: > /dev/tty` forces an open of the controlling TTY; it should fail with
+    # ENXIO if the child has no controlling terminal. We then print a marker to
+    # stdout so the assertion is deterministic.
+    PTY_COLS=80 \
+    PTY_ROWS=24 \
+    PTY_TIMEOUT=3 \
+        pty_run "$output_file" sh -c 'set -e; : > /dev/tty; echo DEV_TTY_OPEN_OK'
+
+    local size
+    size=$(wc -c < "$output_file" | tr -d ' ')
+    jsonl_log "output" "term_pty_dev_tty" "size_bytes" "$size"
+    [[ "$size" -gt 10 ]] || return 1
+
+    grep -a -q "DEV_TTY_OPEN_OK" "$output_file" || return 1
 }
 
 # Test: Environment variables are inherited by child
@@ -705,6 +729,7 @@ FAILURES=0
 
 # PTY Management
 run_case "term_pty_spawn_success" term_pty_spawn_success || FAILURES=$((FAILURES + 1))
+run_case "term_pty_dev_tty_openable" term_pty_dev_tty_openable || FAILURES=$((FAILURES + 1))
 run_case "term_pty_env_inheritance" term_pty_env_inheritance || FAILURES=$((FAILURES + 1))
 run_case "term_pty_working_directory" term_pty_working_directory || FAILURES=$((FAILURES + 1))
 run_case "term_pty_clean_termination" term_pty_clean_termination || FAILURES=$((FAILURES + 1))
