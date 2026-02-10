@@ -114,6 +114,7 @@ impl TextInput {
     }
 
     /// Set whether the input is focused (builder).
+    #[must_use]
     pub fn with_focused(mut self, focused: bool) -> Self {
         self.focused = focused;
         self
