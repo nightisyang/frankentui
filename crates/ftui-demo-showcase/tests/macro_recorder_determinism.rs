@@ -131,8 +131,6 @@ fn capture_macro_events() -> (tracing::dispatcher::DefaultGuard, Arc<Mutex<Vec<S
     let events = log.events.clone();
     let subscriber = tracing_subscriber::registry().with(log);
     let guard = tracing::subscriber::set_default(subscriber);
-    // Ensure callsite interest is re-evaluated in parallel test runs.
-    tracing::callsite::rebuild_interest_cache();
     (guard, events)
 }
 
@@ -282,7 +280,6 @@ fn timing_drift_within_tolerance() {
 
 #[test]
 #[serial]
-#[ignore = "flaky in parallel test runs due to global tracing subscriber state"]
 fn tracing_emits_macro_events_in_order() {
     let (_guard, events) = capture_macro_events();
 
