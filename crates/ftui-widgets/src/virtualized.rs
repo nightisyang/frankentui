@@ -670,10 +670,8 @@ impl VariableHeightsFenwick {
         // If prefix(i) <= offset, then offset is at or past the end of item i,
         // so offset is in item i+1.
         //
-        // We use offset - 1 to check: if prefix(i) <= offset - 1, then offset > prefix(i),
-        // meaning we're strictly past item i.
-        // But we also need to handle the case where offset == prefix(i) exactly
-        // (offset is first row of item i+1).
+        // We use `offset` directly (not `offset - 1`). When `offset == prefix(i)` exactly,
+        // `find_prefix` returns `i`, and we correctly map that to item `i+1` below.
         match self.tree.find_prefix(offset) {
             Some(i) => {
                 // prefix(i) <= offset
@@ -688,9 +686,11 @@ impl VariableHeightsFenwick {
         }
     }
 
-    /// Count how many items fit within a viewport starting at `start_idx`. O(log n).
+    /// Count how many items are visible within a viewport starting at `start_idx`. O(log n).
     ///
-    /// Returns the number of items that fit completely within `viewport_height`.
+    /// Returns the number of items that fit completely within `viewport_height`,
+    /// except that it returns **at least 1** when `start_idx < len` and
+    /// `viewport_height > 0`, even if the first item is taller than the viewport.
     #[must_use]
     pub fn visible_count(&self, start_idx: usize, viewport_height: u16) -> usize {
         if self.len == 0 || viewport_height == 0 {
@@ -698,16 +698,21 @@ impl VariableHeightsFenwick {
         }
         let start = start_idx.min(self.len);
         let start_offset = self.offset_of_item(start);
-        let end_offset = start_offset + u32::from(viewport_height);
+        let end_offset = start_offset.saturating_add(u32::from(viewport_height));
 
         // Find last item that fits
         let end_idx = self.find_item_at_offset(end_offset);
 
         // Count items from start to end (exclusive of partially visible)
         if end_idx > start {
+            // `find_item_at_offset` returns `len` when `end_offset` is at/after the end
+            // of the list. In that case, everything from `start` to the end fits.
+            if end_idx >= self.len {
+                return self.len.saturating_sub(start);
+            }
             // Check if end_idx item is fully visible
             let end_item_start = self.offset_of_item(end_idx);
-            if end_item_start + u32::from(self.get(end_idx)) <= end_offset {
+            if end_item_start.saturating_add(u32::from(self.get(end_idx))) <= end_offset {
                 end_idx - start + 1
             } else {
                 end_idx - start
@@ -2040,6 +2045,17 @@ mod tests {
 
         // From item 2, viewport 6: item 2 (h=5) + item 3 (h=1) = 6
         assert_eq!(tracker.visible_count(2, 6), 2);
+    }
+
+    #[test]
+    fn test_variable_heights_fenwick_visible_count_viewport_beyond_total_height() {
+        let heights = vec![1, 1, 1];
+        let tracker = VariableHeightsFenwick::from_heights(&heights, 1);
+
+        // Viewport extends past the end: must never overcount.
+        assert_eq!(tracker.visible_count(0, 10), 3);
+        assert_eq!(tracker.visible_count(1, 10), 2);
+        assert_eq!(tracker.visible_count(2, 10), 1);
     }
 
     #[test]

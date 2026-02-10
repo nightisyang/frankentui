@@ -849,4 +849,272 @@ mod tests {
         }
         assert_eq!(history.undo_depth(), 0);
     }
+
+    // ====================================================================
+    // Additional coverage: sequential scopes, deep nesting, edge cases
+    // (bd-1o6q1)
+    // ====================================================================
+
+    #[test]
+    fn test_scope_sequential_transactions() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let mut history = HistoryManager::new(HistoryConfig::unlimited());
+
+        {
+            let mut scope = TransactionScope::new(&mut history);
+
+            // First transaction
+            scope.begin("First");
+            scope.execute(make_cmd(buffer.clone(), "a")).unwrap();
+            scope.commit().unwrap();
+
+            // Second transaction in same scope
+            scope.begin("Second");
+            scope.execute(make_cmd(buffer.clone(), "b")).unwrap();
+            scope.commit().unwrap();
+        }
+
+        // Both should be separate history entries
+        assert_eq!(history.undo_depth(), 2);
+    }
+
+    #[test]
+    fn test_scope_three_level_nesting() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let mut history = HistoryManager::new(HistoryConfig::unlimited());
+
+        {
+            let mut scope = TransactionScope::new(&mut history);
+
+            scope.begin("Level 1");
+            scope.execute(make_scope_cmd(buffer.clone(), "a")).unwrap();
+
+            scope.begin("Level 2");
+            scope.execute(make_scope_cmd(buffer.clone(), "b")).unwrap();
+
+            scope.begin("Level 3");
+            scope.execute(make_scope_cmd(buffer.clone(), "c")).unwrap();
+            assert_eq!(scope.depth(), 3);
+
+            scope.commit().unwrap();
+            scope.commit().unwrap();
+            scope.commit().unwrap();
+        }
+
+        assert_eq!(history.undo_depth(), 1);
+        assert_eq!(*buffer.lock().unwrap(), "abc");
+
+        history.undo();
+        assert_eq!(*buffer.lock().unwrap(), "");
+    }
+
+    #[test]
+    fn test_scope_alternating_commit_rollback() {
+        let mut history = HistoryManager::new(HistoryConfig::unlimited());
+
+        {
+            let mut scope = TransactionScope::new(&mut history);
+
+            // First: commit
+            scope.begin("Committed");
+            let buf1 = Arc::new(Mutex::new(String::new()));
+            scope.execute(make_cmd(buf1, "ok")).unwrap();
+            scope.commit().unwrap();
+
+            // Second: rollback
+            scope.begin("Rolled back");
+            let buf2 = Arc::new(Mutex::new(String::new()));
+            scope.execute(make_cmd(buf2, "no")).unwrap();
+            scope.rollback().unwrap();
+
+            // Third: commit
+            scope.begin("Also committed");
+            let buf3 = Arc::new(Mutex::new(String::new()));
+            scope.execute(make_cmd(buf3, "yes")).unwrap();
+            scope.commit().unwrap();
+        }
+
+        // Two committed, one rolled back
+        assert_eq!(history.undo_depth(), 2);
+    }
+
+    #[test]
+    fn test_scope_rollback_then_new_transaction() {
+        let buf_bad = Arc::new(Mutex::new(String::new()));
+        let buf_good = Arc::new(Mutex::new(String::new()));
+        let mut history = HistoryManager::new(HistoryConfig::unlimited());
+
+        {
+            let mut scope = TransactionScope::new(&mut history);
+
+            scope.begin("Failed attempt");
+            scope
+                .execute(make_scope_cmd(buf_bad.clone(), "bad"))
+                .unwrap();
+            scope.rollback().unwrap();
+
+            scope.begin("Retry");
+            scope
+                .execute(make_scope_cmd(buf_good.clone(), "good"))
+                .unwrap();
+            scope.commit().unwrap();
+        }
+
+        assert_eq!(history.undo_depth(), 1);
+        assert_eq!(*buf_bad.lock().unwrap(), "");
+        assert_eq!(*buf_good.lock().unwrap(), "good");
+    }
+
+    #[test]
+    fn test_transaction_len_after_execute() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let b1 = buffer.clone();
+        let b2 = buffer.clone();
+
+        let cmd = TextInsertCmd::new(WidgetId::new(1), 0, "x")
+            .with_apply(move |_, _, txt| {
+                b1.lock().unwrap().push_str(txt);
+                Ok(())
+            })
+            .with_remove(move |_, _, _| {
+                b2.lock().unwrap().drain(..1);
+                Ok(())
+            });
+
+        let mut txn = Transaction::begin("Len Test");
+        assert_eq!(txn.len(), 0);
+
+        txn.execute(Box::new(cmd)).unwrap();
+        assert_eq!(txn.len(), 1);
+    }
+
+    #[test]
+    fn test_transaction_many_commands() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let mut txn = Transaction::begin("Many Commands");
+
+        for _ in 0..20 {
+            txn.add_executed(make_cmd(buffer.clone(), ".")).unwrap();
+        }
+
+        assert_eq!(txn.len(), 20);
+        assert_eq!(buffer.lock().unwrap().len(), 20);
+
+        txn.rollback();
+        assert_eq!(*buffer.lock().unwrap(), "");
+    }
+
+    #[test]
+    fn test_scope_execute_after_all_committed() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let mut history = HistoryManager::new(HistoryConfig::unlimited());
+
+        {
+            let mut scope = TransactionScope::new(&mut history);
+
+            // Transaction
+            scope.begin("Txn");
+            scope.execute(make_cmd(buffer.clone(), "a")).unwrap();
+            scope.commit().unwrap();
+
+            // Direct execute (no active transaction) goes to history
+            scope.execute(make_cmd(buffer.clone(), "b")).unwrap();
+        }
+
+        // One from transaction, one from direct execute
+        assert_eq!(history.undo_depth(), 2);
+    }
+
+    #[test]
+    fn test_scope_inner_commit_empty_outer_has_content() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let mut history = HistoryManager::new(HistoryConfig::unlimited());
+
+        {
+            let mut scope = TransactionScope::new(&mut history);
+
+            scope.begin("Outer with content");
+            scope
+                .execute(make_scope_cmd(buffer.clone(), "outer"))
+                .unwrap();
+
+            scope.begin("Empty inner");
+            scope.commit().unwrap();
+
+            scope.commit().unwrap();
+        }
+
+        assert_eq!(history.undo_depth(), 1);
+        assert_eq!(*buffer.lock().unwrap(), "outer");
+    }
+
+    #[test]
+    fn test_drop_transaction_without_finalize_rolls_back() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+
+        {
+            let mut txn = Transaction::begin("Will be dropped");
+            txn.add_executed(make_cmd(buffer.clone(), "dropped"))
+                .unwrap();
+            assert_eq!(*buffer.lock().unwrap(), "dropped");
+            // txn dropped here without commit or rollback
+        }
+
+        // Drop should auto-rollback
+        assert_eq!(*buffer.lock().unwrap(), "");
+    }
+
+    /// Helper creating a command that is NOT pre-executed (for scope.execute).
+    fn make_scope_cmd(buffer: Arc<Mutex<String>>, text: &str) -> Box<dyn UndoableCmd> {
+        let b1 = buffer.clone();
+        let b2 = buffer.clone();
+        let text = text.to_string();
+        let text_clone = text.clone();
+
+        Box::new(
+            TextInsertCmd::new(WidgetId::new(1), 0, text)
+                .with_apply(move |_, _, txt| {
+                    let mut buf = b1.lock().unwrap();
+                    buf.push_str(txt);
+                    Ok(())
+                })
+                .with_remove(move |_, _, _| {
+                    let mut buf = b2.lock().unwrap();
+                    buf.drain(..text_clone.len());
+                    Ok(())
+                }),
+        )
+    }
+
+    #[test]
+    fn test_scope_nested_rollback_preserves_outer() {
+        let buf_outer = Arc::new(Mutex::new(String::new()));
+        let buf_inner = Arc::new(Mutex::new(String::new()));
+        let mut history = HistoryManager::new(HistoryConfig::unlimited());
+
+        {
+            let mut scope = TransactionScope::new(&mut history);
+
+            scope.begin("Outer");
+            scope
+                .execute(make_scope_cmd(buf_outer.clone(), "A"))
+                .unwrap();
+            assert_eq!(*buf_outer.lock().unwrap(), "A");
+
+            scope.begin("Inner (will rollback)");
+            scope
+                .execute(make_scope_cmd(buf_inner.clone(), "B"))
+                .unwrap();
+            assert_eq!(*buf_inner.lock().unwrap(), "B");
+
+            scope.rollback().unwrap();
+            assert_eq!(*buf_inner.lock().unwrap(), "");
+            assert_eq!(*buf_outer.lock().unwrap(), "A");
+
+            scope.commit().unwrap();
+        }
+
+        assert_eq!(history.undo_depth(), 1);
+        assert_eq!(*buf_outer.lock().unwrap(), "A");
+    }
 }
