@@ -616,6 +616,127 @@ mod tests {
         }
     }
 
+    // ================================================================
+    // Edge-case tests (bd-2kidr)
+    // ================================================================
+
+    #[test]
+    fn debug_formatting() {
+        let fb = DoomFramebuffer::new(2, 2);
+        let dbg = format!("{:?}", fb);
+        assert!(dbg.contains("DoomFramebuffer"));
+        assert!(dbg.contains("width: 2"));
+        assert!(dbg.contains("height: 2"));
+    }
+
+    #[test]
+    fn clone_independence() {
+        let mut original = DoomFramebuffer::new(3, 3);
+        original.set_pixel(1, 1, PackedRgba::RED);
+        let mut cloned = original.clone();
+        cloned.set_pixel(1, 1, PackedRgba::GREEN);
+        // Original unaffected
+        assert_eq!(original.get_pixel(1, 1), PackedRgba::RED);
+        assert_eq!(cloned.get_pixel(1, 1), PackedRgba::GREEN);
+    }
+
+    #[test]
+    fn blit_to_painter_zero_framebuffer() {
+        let fb = DoomFramebuffer::new(0, 0);
+        let mut painter = Painter::new(5, 4, Mode::HalfBlock);
+        fb.blit_to_painter(&mut painter, 1);
+        // Should not panic
+    }
+
+    #[test]
+    fn blit_to_painter_zero_painter() {
+        let fb = DoomFramebuffer::new(5, 5);
+        let mut painter = Painter::new(0, 0, Mode::HalfBlock);
+        fb.blit_to_painter(&mut painter, 1);
+        // Should not panic
+    }
+
+    #[test]
+    fn set_pixel_on_zero_sized_fb() {
+        let mut fb = DoomFramebuffer::new(0, 0);
+        fb.set_pixel(0, 0, PackedRgba::RED); // Out of bounds, should not panic
+        assert_eq!(fb.get_pixel(0, 0), PackedRgba::BLACK);
+    }
+
+    #[test]
+    fn clear_on_zero_sized_fb() {
+        let mut fb = DoomFramebuffer::new(0, 0);
+        fb.clear(); // No panic on empty pixels vec
+        assert_eq!(fb.pixels.len(), 0);
+    }
+
+    #[test]
+    fn resize_from_zero_to_nonzero() {
+        let mut fb = DoomFramebuffer::new(0, 0);
+        fb.resize(3, 3);
+        assert_eq!(fb.pixels.len(), 9);
+        fb.set_pixel(2, 2, PackedRgba::RED);
+        assert_eq!(fb.get_pixel(2, 2), PackedRgba::RED);
+    }
+
+    #[test]
+    fn resize_then_draw_column() {
+        let mut fb = DoomFramebuffer::new(2, 2);
+        fb.resize(5, 5);
+        fb.draw_column(3, 0, 5, PackedRgba::GREEN);
+        for y in 0..5 {
+            assert_eq!(fb.get_pixel(3, y), PackedRgba::GREEN, "y={y}");
+        }
+    }
+
+    #[test]
+    fn draw_column_zero_zero_range() {
+        let mut fb = DoomFramebuffer::new(5, 5);
+        fb.draw_column(0, 0, 0, PackedRgba::RED);
+        // Empty range, nothing drawn
+        for y in 0..5 {
+            assert_eq!(fb.get_pixel(0, y), PackedRgba::BLACK, "y={y}");
+        }
+    }
+
+    #[test]
+    fn draw_column_shaded_y_both_beyond_height() {
+        let mut fb = DoomFramebuffer::new(5, 5);
+        // Both y_top and y_bottom beyond framebuffer height
+        fb.draw_column_shaded(0, 10, 20, 200, 200, 200, 1.0, 1.0);
+        // Nothing should be drawn, no panic
+        for y in 0..5 {
+            assert_eq!(fb.get_pixel(0, y), PackedRgba::BLACK, "y={y}");
+        }
+    }
+
+    #[test]
+    fn sequential_operations() {
+        let mut fb = DoomFramebuffer::new(4, 4);
+        // Set, clear, resize, set again
+        fb.set_pixel(0, 0, PackedRgba::RED);
+        fb.clear();
+        assert_eq!(fb.get_pixel(0, 0), PackedRgba::BLACK);
+        fb.resize(6, 6);
+        fb.set_pixel(5, 5, PackedRgba::GREEN);
+        assert_eq!(fb.get_pixel(5, 5), PackedRgba::GREEN);
+        fb.draw_column(3, 0, 6, PackedRgba::BLUE);
+        for y in 0..6 {
+            assert_eq!(fb.get_pixel(3, y), PackedRgba::BLUE);
+        }
+    }
+
+    #[test]
+    fn resize_same_dimensions() {
+        let mut fb = DoomFramebuffer::new(5, 5);
+        fb.set_pixel(2, 2, PackedRgba::RED);
+        fb.resize(5, 5);
+        // Dimensions unchanged, but Vec::resize keeps existing data
+        assert_eq!(fb.width, 5);
+        assert_eq!(fb.height, 5);
+        assert_eq!(fb.pixels.len(), 25);
+    }
+
     #[test]
     fn blit_to_painter_scales_x_non_even_ratio() {
         let mut fb = DoomFramebuffer::new(3, 2);
