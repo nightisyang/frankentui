@@ -300,7 +300,7 @@ fn events_emitted_on_focus_changes() {
 fn events_emitted_on_navigation() {
     let mut fm = grid_2x2();
     fm.focus(1);
-    fm.take_focus_event(); // consume FocusGained
+    let _ = fm.take_focus_event(); // consume FocusGained
 
     fm.navigate(NavDirection::Right);
     assert_eq!(
@@ -313,7 +313,7 @@ fn events_emitted_on_navigation() {
 fn events_emitted_on_tab_navigation() {
     let mut fm = grid_2x2();
     fm.focus_first();
-    fm.take_focus_event(); // consume
+    let _ = fm.take_focus_event(); // consume
 
     fm.focus_next();
     assert_eq!(
@@ -327,7 +327,7 @@ fn events_emitted_on_focus_back() {
     let mut fm = grid_2x2();
     fm.focus(1);
     fm.focus(2);
-    fm.take_focus_event();
+    let _ = fm.take_focus_event();
 
     fm.focus_back();
     assert_eq!(

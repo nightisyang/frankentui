@@ -1507,7 +1507,6 @@ impl Default for Shadow {
 
 impl Shadow {
     /// Create a new shadow with the given offset.
-    #[must_use]
     pub const fn new(dx: i8, dy: i8) -> Self {
         Self {
             dx,
@@ -1518,14 +1517,12 @@ impl Shadow {
     }
 
     /// Set the shadow color.
-    #[must_use]
     pub const fn color(mut self, color: PackedRgba) -> Self {
         self.color = color;
         self
     }
 
     /// Set the shadow opacity (0.0-1.0).
-    #[must_use]
     pub fn opacity(mut self, opacity: f64) -> Self {
         self.opacity = opacity.clamp(0.0, 1.0);
         self
@@ -1607,7 +1604,6 @@ impl Default for GlowConfig {
 
 impl GlowConfig {
     /// Create a new glow configuration with the given color.
-    #[must_use]
     pub const fn new(color: PackedRgba) -> Self {
         Self {
             color,
@@ -1618,21 +1614,18 @@ impl GlowConfig {
     }
 
     /// Set the glow intensity (0.0-1.0).
-    #[must_use]
     pub fn intensity(mut self, intensity: f64) -> Self {
         self.intensity = intensity.clamp(0.0, 1.0);
         self
     }
 
     /// Set the number of glow layers (1-5).
-    #[must_use]
     pub fn layers(mut self, layers: u8) -> Self {
         self.layers = layers.clamp(1, 5);
         self
     }
 
     /// Set the opacity falloff per layer (0.1-0.9).
-    #[must_use]
     pub fn falloff(mut self, falloff: f64) -> Self {
         self.falloff = falloff.clamp(0.1, 0.9);
         self
@@ -1763,7 +1756,6 @@ impl Default for OutlineConfig {
 
 impl OutlineConfig {
     /// Create a new outline configuration with the given color.
-    #[must_use]
     pub const fn new(color: PackedRgba) -> Self {
         Self {
             color,
@@ -1774,21 +1766,18 @@ impl OutlineConfig {
     }
 
     /// Set the outline thickness (1-3).
-    #[must_use]
     pub fn thickness(mut self, thickness: u8) -> Self {
         self.thickness = thickness.clamp(1, 3);
         self
     }
 
     /// Set the outline style.
-    #[must_use]
     pub fn style(mut self, style: OutlineStyle) -> Self {
         self.style = style;
         self
     }
 
     /// Set whether to use the text character or block character for outline.
-    #[must_use]
     pub const fn use_text_char(mut self, use_text_char: bool) -> Self {
         self.use_text_char = use_text_char;
         self
@@ -3183,7 +3172,6 @@ impl StyledText {
     }
 
     /// Get the configured shadows.
-    #[must_use]
     pub fn get_shadows(&self) -> &[Shadow] {
         &self.shadows
     }
