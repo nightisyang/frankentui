@@ -631,6 +631,7 @@ impl Buffer {
     ///
     /// Returns `None` if coordinates are out of bounds.
     #[inline]
+    #[must_use]
     pub fn get(&self, x: u16, y: u16) -> Option<&Cell> {
         self.index(x, y).map(|i| &self.cells[i])
     }
@@ -640,6 +641,7 @@ impl Buffer {
     /// Returns `None` if coordinates are out of bounds.
     /// Proactively marks the row dirty since the caller may mutate the cell.
     #[inline]
+    #[must_use]
     pub fn get_mut(&mut self, x: u16, y: u16) -> Option<&mut Cell> {
         let idx = self.index(x, y)?;
         self.mark_dirty_span(y, x, x.saturating_add(1));

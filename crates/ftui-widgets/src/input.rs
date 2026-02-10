@@ -168,6 +168,7 @@ impl TextInput {
     }
 
     /// Get selected text, if any.
+    #[must_use]
     pub fn selected_text(&self) -> Option<&str> {
         let anchor = self.selection_anchor?;
         let (start, end) = self.selection_range(anchor);

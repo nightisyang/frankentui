@@ -404,6 +404,7 @@ impl SpatialHitIndex {
     ///
     /// - O(1) average case with cache hit
     /// - O(k) where k = widgets overlapping the bucket cell
+    #[must_use]
     pub fn hit_test(&mut self, x: u16, y: u16) -> Option<(HitId, HitRegion, HitData)> {
         // Bounds check
         if x >= self.width || y >= self.height {
@@ -469,6 +470,7 @@ impl SpatialHitIndex {
     }
 
     /// Hit test without modifying cache (for read-only queries).
+    #[must_use]
     pub fn hit_test_readonly(&self, x: u16, y: u16) -> Option<(HitId, HitRegion, HitData)> {
         if x >= self.width || y >= self.height {
             return None;

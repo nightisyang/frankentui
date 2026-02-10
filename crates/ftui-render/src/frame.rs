@@ -158,12 +158,14 @@ impl HitGrid {
 
     /// Get the hit cell at (x, y).
     #[inline]
+    #[must_use]
     pub fn get(&self, x: u16, y: u16) -> Option<&HitCell> {
         self.index(x, y).map(|i| &self.cells[i])
     }
 
     /// Get mutable reference to hit cell at (x, y).
     #[inline]
+    #[must_use]
     pub fn get_mut(&mut self, x: u16, y: u16) -> Option<&mut HitCell> {
         self.index(x, y).map(|i| &mut self.cells[i])
     }
@@ -196,6 +198,7 @@ impl HitGrid {
     /// Hit test at the given position.
     ///
     /// Returns the hit tuple if a region is registered at (x, y).
+    #[must_use]
     pub fn hit_test(&self, x: u16, y: u16) -> Option<(HitId, HitRegion, HitData)> {
         self.get(x, y)
             .and_then(|cell| cell.widget_id.map(|id| (id, cell.region, cell.data)))
@@ -611,6 +614,7 @@ impl<'a> Frame<'a> {
     }
 
     /// Hit test at the given position (if hit grid is enabled).
+    #[must_use]
     pub fn hit_test(&self, x: u16, y: u16) -> Option<(HitId, HitRegion, HitData)> {
         self.hit_grid.as_ref().and_then(|grid| grid.hit_test(x, y))
     }

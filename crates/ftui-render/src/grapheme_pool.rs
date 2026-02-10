@@ -165,6 +165,7 @@ impl GraphemePool {
     /// Get the string for a grapheme ID.
     ///
     /// Returns `None` if the ID is invalid or has been freed.
+    #[must_use]
     pub fn get(&self, id: GraphemeId) -> Option<&str> {
         self.slots
             .get(id.slot())

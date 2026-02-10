@@ -745,7 +745,7 @@ impl SnapshotPlayer {
         for (i, ch) in frame_label.chars().enumerate() {
             let x = i as u16;
             if x < buf.width() {
-                buf.set(x, 0, Cell::from_char(ch));
+                buf.set_fast(x, 0, Cell::from_char(ch));
             }
         }
 
@@ -765,7 +765,7 @@ impl SnapshotPlayer {
                     _ => theme::fg::SECONDARY,
                 };
                 let cell = Cell::from_char(ch).with_fg(fg_color.into());
-                buf.set(x, y, cell);
+                buf.set_fast(x, y, cell);
             }
         }
 
@@ -773,7 +773,7 @@ impl SnapshotPlayer {
         let cursor_x = ((frame_idx * 2) % (buf.width() as usize)) as u16;
         let cursor_y = buf.height().saturating_sub(2);
         if cursor_y < buf.height() {
-            buf.set(cursor_x, cursor_y, Cell::from_char('█'));
+            buf.set_fast(cursor_x, cursor_y, Cell::from_char('█'));
         }
 
         // Draw progress bar at bottom
@@ -781,7 +781,7 @@ impl SnapshotPlayer {
         let bar_width = (buf.width() as f64 * progress) as u16;
         let bar_y = buf.height().saturating_sub(1);
         for x in 0..bar_width.min(buf.width()) {
-            buf.set(x, bar_y, Cell::from_char('━'));
+            buf.set_fast(x, bar_y, Cell::from_char('━'));
         }
     }
 
@@ -1984,10 +1984,10 @@ mod tests {
 
         let mut buf_a = Buffer::new(4, 2);
         let mut buf_b = Buffer::new(4, 2);
-        buf_a.set(0, 0, Cell::from_char('A'));
-        buf_b.set(0, 0, Cell::from_char('B')); // content diff
-        buf_a.set(1, 0, Cell::from_char('Z'));
-        buf_b.set(
+        buf_a.set_fast(0, 0, Cell::from_char('A'));
+        buf_b.set_fast(0, 0, Cell::from_char('B')); // content diff
+        buf_a.set_fast(1, 0, Cell::from_char('Z'));
+        buf_b.set_fast(
             1,
             0,
             Cell::from_char('Z').with_fg(theme::accent::ERROR.into()),
@@ -2281,7 +2281,7 @@ mod tests {
         for i in 0..5 {
             let mut buf = Buffer::new(10, 5);
             // Mark each buffer distinctly
-            buf.set(0, 0, Cell::from_char((b'A' + i as u8) as char));
+            buf.set_fast(0, 0, Cell::from_char((b'A' + i as u8) as char));
             player.record_frame(&buf);
         }
 
@@ -2563,7 +2563,7 @@ mod proptests {
 
             let mut buf = Buffer::new(width, height);
             // Put some content in the buffer
-            buf.set(0, 0, Cell::from_char('X'));
+            buf.set_fast(0, 0, Cell::from_char('X'));
 
             player.record_frame(&buf);
 

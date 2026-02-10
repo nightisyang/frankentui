@@ -70,6 +70,7 @@ impl LinkRegistry {
     }
 
     /// Get the URL for a link ID.
+    #[must_use]
     pub fn get(&self, id: u32) -> Option<&str> {
         self.links
             .get(id as usize)

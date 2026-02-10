@@ -526,6 +526,7 @@ impl DiffStrategySelector {
     }
 
     /// Get the last decision evidence.
+    #[must_use]
     pub fn last_evidence(&self) -> Option<&StrategyEvidence> {
         self.last_evidence.as_ref()
     }

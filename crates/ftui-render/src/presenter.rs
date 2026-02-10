@@ -994,6 +994,7 @@ impl<W: Write> Presenter<W> {
     /// Get the inner writer (consuming the presenter).
     ///
     /// Flushes any buffered data before returning the writer.
+    #[must_use]
     pub fn into_inner(self) -> Result<W, io::Error> {
         self.writer
             .into_inner() // CountingWriter -> BufWriter<W>

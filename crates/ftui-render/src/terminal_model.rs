@@ -216,6 +216,7 @@ impl TerminalModel {
     }
 
     /// Get the cell at (x, y). Returns None if out of bounds.
+    #[must_use]
     pub fn cell(&self, x: usize, y: usize) -> Option<&ModelCell> {
         if x < self.width && y < self.height {
             Some(&self.cells[y * self.width + x])
@@ -234,6 +235,7 @@ impl TerminalModel {
     }
 
     /// Get the current cell under the cursor.
+    #[must_use]
     pub fn current_cell(&self) -> Option<&ModelCell> {
         self.cell(self.cursor_x, self.cursor_y)
     }
@@ -244,6 +246,7 @@ impl TerminalModel {
     }
 
     /// Get a row of cells.
+    #[must_use]
     pub fn row(&self, y: usize) -> Option<&[ModelCell]> {
         if y < self.height {
             let start = y * self.width;
@@ -254,6 +257,7 @@ impl TerminalModel {
     }
 
     /// Extract the text content of a row as a string (trimmed of trailing spaces).
+    #[must_use]
     pub fn row_text(&self, y: usize) -> Option<String> {
         self.row(y).map(|cells| {
             let s: String = cells.iter().map(|c| c.text.as_str()).collect();
@@ -262,6 +266,7 @@ impl TerminalModel {
     }
 
     /// Get the URL for a link ID.
+    #[must_use]
     pub fn link_url(&self, link_id: u32) -> Option<&str> {
         self.links.get(link_id as usize).map(|s| s.as_str())
     }
@@ -947,6 +952,7 @@ impl TerminalModel {
     }
 
     /// Compare two grids and return a diff description for debugging.
+    #[must_use]
     pub fn diff_grid(&self, expected: &[ModelCell]) -> Option<String> {
         if self.cells.len() != expected.len() {
             return Some(format!(
