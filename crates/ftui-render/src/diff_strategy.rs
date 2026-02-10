@@ -1648,4 +1648,692 @@ mod tests {
             "Conservative costs should be >= normal costs"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // Edge-case tests (bd-2az7m)
+    // -----------------------------------------------------------------------
+
+    mod edge_case_tests {
+        use super::super::*;
+        use super::strategy_costs;
+
+        // --- ChangeRateEstimator edge cases ---
+
+        #[test]
+        fn estimator_observe_zero_scanned_with_min_one() {
+            // Default min_observation_cells=1, so scanned=0 is filtered out
+            let mut est = ChangeRateEstimator::new(1.0, 19.0, 0.95, 1);
+            let initial = est.mean();
+            est.observe(0, 0);
+            assert!(
+                (est.mean() - initial).abs() < 1e-12,
+                "Zero scanned should be filtered: mean changed"
+            );
+        }
+
+        #[test]
+        fn estimator_observe_all_unchanged() {
+            let mut est = ChangeRateEstimator::new(1.0, 19.0, 0.95, 0);
+            for _ in 0..100 {
+                est.observe(1000, 0);
+            }
+            // With 100% unchanged observations, mean should be very low
+            assert!(
+                est.mean() < 0.01,
+                "All-unchanged observations should drive mean near zero: {}",
+                est.mean()
+            );
+        }
+
+        #[test]
+        fn estimator_observe_all_changed() {
+            let mut est = ChangeRateEstimator::new(1.0, 19.0, 0.95, 0);
+            for _ in 0..100 {
+                est.observe(1000, 1000);
+            }
+            // With 100% changed observations, mean should be very high
+            assert!(
+                est.mean() > 0.99,
+                "All-changed observations should drive mean near 1.0: {}",
+                est.mean()
+            );
+        }
+
+        #[test]
+        fn estimator_rapid_decay_forgets_quickly() {
+            let mut est = ChangeRateEstimator::new(1.0, 19.0, 0.1, 0);
+            // Observe high change rate
+            for _ in 0..50 {
+                est.observe(100, 90);
+            }
+            let high_mean = est.mean();
+
+            // Now observe low change rate — with decay=0.1, should adapt fast
+            for _ in 0..10 {
+                est.observe(100, 1);
+            }
+            let low_mean = est.mean();
+
+            assert!(
+                low_mean < high_mean * 0.5,
+                "Rapid decay should forget quickly: high={high_mean:.4}, low={low_mean:.4}"
+            );
+        }
+
+        #[test]
+        fn estimator_alternating_observations() {
+            let mut est = ChangeRateEstimator::new(1.0, 19.0, 0.95, 0);
+            for i in 0..100 {
+                if i % 2 == 0 {
+                    est.observe(100, 100); // All changed
+                } else {
+                    est.observe(100, 0); // Nothing changed
+                }
+            }
+            // Mean should settle around 0.5
+            let mean = est.mean();
+            assert!(
+                mean > 0.3 && mean < 0.7,
+                "Alternating observations should settle near 0.5: {mean:.4}"
+            );
+        }
+
+        #[test]
+        fn estimator_upper_quantile_at_extreme_low() {
+            let est = ChangeRateEstimator::new(1.0, 19.0, 1.0, 0);
+            let q01 = est.upper_quantile(0.01);
+            assert!(
+                q01 >= 0.0,
+                "Lower quantile should be non-negative: {q01:.4}"
+            );
+            assert!(
+                q01 < est.mean(),
+                "1st percentile should be below mean: q01={q01:.4}, mean={:.4}",
+                est.mean()
+            );
+        }
+
+        #[test]
+        fn estimator_upper_quantile_at_extreme_high() {
+            let est = ChangeRateEstimator::new(1.0, 19.0, 1.0, 0);
+            let q99 = est.upper_quantile(0.99);
+            assert!(q99 <= 1.0, "Upper quantile should be <= 1.0: {q99:.4}");
+            assert!(
+                q99 > est.mean(),
+                "99th percentile should be above mean: q99={q99:.4}, mean={:.4}",
+                est.mean()
+            );
+        }
+
+        #[test]
+        fn estimator_upper_quantile_tight_posterior() {
+            // With lots of data, posterior is tight → quantiles near mean
+            let mut est = ChangeRateEstimator::new(1.0, 19.0, 1.0, 0);
+            for _ in 0..10000 {
+                est.observe(100, 5);
+            }
+            let mean = est.mean();
+            let q95 = est.upper_quantile(0.95);
+            assert!(
+                (q95 - mean).abs() < 0.01,
+                "Tight posterior should have quantile near mean: q95={q95:.4}, mean={mean:.4}"
+            );
+        }
+
+        #[test]
+        fn estimator_upper_quantile_clamped_output() {
+            // Even with extreme inputs, output should be in [0, 1]
+            let est = ChangeRateEstimator::new(1e-6, 1e-6, 1.0, 0);
+            for q in [0.01, 0.1, 0.5, 0.9, 0.99] {
+                let val = est.upper_quantile(q);
+                assert!(
+                    (0.0..=1.0).contains(&val),
+                    "Quantile({q}) = {val} should be in [0,1]"
+                );
+            }
+        }
+
+        #[test]
+        fn estimator_variance_formula_correct() {
+            let est = ChangeRateEstimator::new(3.0, 7.0, 1.0, 0);
+            let (a, b) = est.posterior_params();
+            let expected_var = (a * b) / ((a + b).powi(2) * (a + b + 1.0));
+            assert!(
+                (est.variance() - expected_var).abs() < 1e-12,
+                "Variance formula: got {}, expected {}",
+                est.variance(),
+                expected_var
+            );
+        }
+
+        #[test]
+        fn estimator_mean_formula_correct() {
+            let est = ChangeRateEstimator::new(3.0, 7.0, 1.0, 0);
+            let (a, b) = est.posterior_params();
+            let expected_mean = a / (a + b);
+            assert!(
+                (est.mean() - expected_mean).abs() < 1e-12,
+                "Mean formula: got {}, expected {}",
+                est.mean(),
+                expected_mean
+            );
+        }
+
+        // --- DiffStrategySelector edge cases ---
+
+        #[test]
+        fn select_dirty_rows_exceeds_height() {
+            let mut selector = DiffStrategySelector::with_defaults();
+            // dirty_rows > height shouldn't panic
+            let strategy = selector.select(80, 24, 100);
+            assert!(matches!(
+                strategy,
+                DiffStrategy::Full | DiffStrategy::DirtyRows | DiffStrategy::FullRedraw
+            ));
+        }
+
+        #[test]
+        fn select_large_dimensions() {
+            let mut selector = DiffStrategySelector::with_defaults();
+            // u16::MAX width and height
+            let strategy = selector.select(u16::MAX, u16::MAX, 1);
+            assert!(matches!(
+                strategy,
+                DiffStrategy::Full | DiffStrategy::DirtyRows | DiffStrategy::FullRedraw
+            ));
+            let ev = selector.last_evidence().unwrap();
+            assert!(ev.cost_full.is_finite());
+            assert!(ev.cost_dirty.is_finite());
+            assert!(ev.cost_redraw.is_finite());
+        }
+
+        #[test]
+        fn multiple_selects_without_observe() {
+            let mut selector = DiffStrategySelector::with_defaults();
+            let initial_mean = selector.posterior_mean();
+
+            for _ in 0..50 {
+                selector.select(80, 24, 5);
+            }
+
+            // Posterior should not change without observations
+            assert!(
+                (selector.posterior_mean() - initial_mean).abs() < 1e-12,
+                "Mean should not change without observations"
+            );
+            assert_eq!(selector.frame_count(), 50);
+        }
+
+        #[test]
+        fn conservative_with_zero_dirty_rows() {
+            let mut selector = DiffStrategySelector::new(DiffStrategyConfig {
+                conservative: true,
+                ..Default::default()
+            });
+            let strategy = selector.select(80, 24, 0);
+            assert_eq!(strategy, DiffStrategy::DirtyRows);
+            let ev = selector.last_evidence().unwrap();
+            assert_eq!(ev.guard_reason, "zero_dirty_rows");
+        }
+
+        #[test]
+        fn uncertainty_guard_with_fullredraw_hysteresis() {
+            // When uncertainty guard is active and previous strategy was FullRedraw,
+            // hysteresis should NOT prevent switching away from FullRedraw
+            let mut selector = DiffStrategySelector::new(DiffStrategyConfig {
+                c_scan: 10.0,
+                c_emit: 1.0,
+                uncertainty_guard_variance: 1e-6,
+                hysteresis_ratio: 0.99, // Very high hysteresis
+                ..Default::default()
+            });
+
+            // First select — likely FullRedraw since c_scan is high
+            selector.select(80, 24, 24);
+
+            // Second select — uncertainty guard should override hysteresis for FullRedraw
+            let strategy = selector.select(80, 24, 24);
+            // Under uncertainty guard, FullRedraw is avoided
+            assert_ne!(
+                strategy,
+                DiffStrategy::FullRedraw,
+                "Uncertainty guard should override hysteresis for FullRedraw"
+            );
+        }
+
+        #[test]
+        fn select_with_scan_estimate_zero_cells() {
+            let mut selector = DiffStrategySelector::with_defaults();
+            // Zero scan cells makes DirtyRows very cheap
+            let strategy = selector.select_with_scan_estimate(80, 24, 5, 0);
+            assert_eq!(strategy, DiffStrategy::DirtyRows);
+        }
+
+        #[test]
+        fn hysteresis_prevents_switch_near_boundary() {
+            let config = DiffStrategyConfig {
+                hysteresis_ratio: 0.5, // 50% — very sticky
+                uncertainty_guard_variance: 0.0,
+                ..Default::default()
+            };
+            let mut selector = DiffStrategySelector::new(config);
+
+            // First select establishes a strategy
+            let first = selector.select(80, 24, 5);
+
+            // Second select with slightly different params — hysteresis should hold
+            let second = selector.select(80, 24, 6);
+            assert_eq!(
+                first, second,
+                "High hysteresis should prevent switching on small changes"
+            );
+        }
+
+        #[test]
+        fn reset_clears_frame_count_and_evidence() {
+            let mut selector = DiffStrategySelector::with_defaults();
+            selector.observe(100, 10);
+            selector.select(80, 24, 5);
+            selector.select(80, 24, 5);
+
+            assert_eq!(selector.frame_count(), 2);
+            assert!(selector.last_evidence().is_some());
+
+            selector.reset();
+
+            assert_eq!(selector.frame_count(), 0);
+            assert!(selector.last_evidence().is_none());
+            assert!(
+                (selector.posterior_mean() - 0.05).abs() < 1e-9,
+                "Reset should restore prior mean"
+            );
+        }
+
+        #[test]
+        fn posterior_variance_after_reset() {
+            let mut selector = DiffStrategySelector::with_defaults();
+            let initial_var = selector.posterior_variance();
+
+            selector.observe(100, 10);
+            assert!(selector.posterior_variance() != initial_var);
+
+            selector.reset();
+            assert!(
+                (selector.posterior_variance() - initial_var).abs() < 1e-12,
+                "Reset should restore prior variance"
+            );
+        }
+
+        // --- Normalization edge cases ---
+
+        #[test]
+        fn normalize_positive_rejects_infinity() {
+            assert!(
+                (normalize_positive(f64::INFINITY, 5.0) - 5.0).abs() < 1e-9,
+                "Infinity should be rejected"
+            );
+            assert!(
+                (normalize_positive(f64::NEG_INFINITY, 5.0) - 5.0).abs() < 1e-9,
+                "Negative infinity should be rejected"
+            );
+        }
+
+        #[test]
+        fn normalize_cost_rejects_neg_infinity() {
+            assert!(
+                (normalize_cost(f64::NEG_INFINITY, 5.0) - 5.0).abs() < 1e-9,
+                "Negative infinity should be rejected"
+            );
+        }
+
+        #[test]
+        fn normalize_cost_accepts_positive_infinity() {
+            // Positive infinity is not finite, so should be rejected
+            assert!(
+                (normalize_cost(f64::INFINITY, 5.0) - 5.0).abs() < 1e-9,
+                "Positive infinity should be rejected"
+            );
+        }
+
+        #[test]
+        fn normalize_ratio_rejects_infinity() {
+            assert!(
+                (normalize_ratio(f64::INFINITY, 0.1) - 0.1).abs() < 1e-9,
+                "Infinity should use fallback"
+            );
+            assert!(
+                (normalize_ratio(f64::NEG_INFINITY, 0.1) - 0.1).abs() < 1e-9,
+                "Negative infinity should use fallback"
+            );
+        }
+
+        #[test]
+        fn normalize_decay_rejects_neg_infinity() {
+            assert!(
+                (normalize_decay(f64::NEG_INFINITY) - 1.0).abs() < 1e-9,
+                "Negative infinity should use fallback"
+            );
+        }
+
+        // --- Strategy cost ordering edge cases ---
+
+        #[test]
+        fn cost_redraw_independent_of_dirty_rows() {
+            let mut sel1 = DiffStrategySelector::with_defaults();
+            let mut sel2 = DiffStrategySelector::with_defaults();
+
+            sel1.select(80, 24, 0);
+            sel2.select(80, 24, 24);
+
+            let ev1 = sel1.last_evidence().unwrap();
+            let ev2 = sel2.last_evidence().unwrap();
+
+            // FullRedraw cost = c_emit * N, independent of dirty rows
+            assert!(
+                (ev1.cost_redraw - ev2.cost_redraw).abs() < 1e-6,
+                "FullRedraw cost should not depend on dirty rows"
+            );
+        }
+
+        #[test]
+        fn cost_full_increases_with_dirty_rows() {
+            let config = DiffStrategyConfig::default();
+            // With more dirty rows, Full cost increases (more scan cost)
+            let (cost_full_2, _, _) = strategy_costs(&config, 80, 24, 2, 0.05);
+            let (cost_full_20, _, _) = strategy_costs(&config, 80, 24, 20, 0.05);
+            assert!(
+                cost_full_20 > cost_full_2,
+                "More dirty rows should increase Full cost: 2={cost_full_2:.2}, 20={cost_full_20:.2}"
+            );
+        }
+
+        #[test]
+        fn cost_dirty_increases_with_dirty_rows() {
+            let config = DiffStrategyConfig::default();
+            let (_, cost_dirty_2, _) = strategy_costs(&config, 80, 24, 2, 0.05);
+            let (_, cost_dirty_20, _) = strategy_costs(&config, 80, 24, 20, 0.05);
+            assert!(
+                cost_dirty_20 > cost_dirty_2,
+                "More dirty rows should increase DirtyRows cost"
+            );
+        }
+
+        // --- Strategy evidence field completeness ---
+
+        #[test]
+        fn evidence_all_fields_populated() {
+            let mut selector = DiffStrategySelector::with_defaults();
+            selector.observe(100, 10);
+            selector.select(200, 60, 15);
+
+            let ev = selector.last_evidence().unwrap();
+            assert_eq!(ev.total_rows, 60);
+            assert_eq!(ev.total_cells, 200 * 60);
+            assert_eq!(ev.dirty_rows, 15);
+            assert!(ev.cost_full >= 0.0);
+            assert!(ev.cost_dirty >= 0.0);
+            assert!(ev.cost_redraw >= 0.0);
+            assert!((0.0..=1.0).contains(&ev.posterior_mean));
+            assert!(ev.posterior_variance >= 0.0);
+            assert!(ev.alpha > 0.0);
+            assert!(ev.beta > 0.0);
+            assert!(!ev.guard_reason.is_empty());
+            assert!(ev.hysteresis_ratio >= 0.0);
+        }
+
+        #[test]
+        fn evidence_display_format() {
+            let mut selector = DiffStrategySelector::with_defaults();
+            selector.select(80, 24, 5);
+            let ev = selector.last_evidence().unwrap();
+            let display = format!("{ev}");
+
+            // Should contain key sections
+            assert!(display.contains("Strategy:"));
+            assert!(display.contains("Costs:"));
+            assert!(display.contains("Posterior:"));
+            assert!(display.contains("Dirty:"));
+            assert!(display.contains("Guard:"));
+        }
+
+        // --- DiffStrategy enum completeness ---
+
+        #[test]
+        fn diff_strategy_all_variants_distinct() {
+            let variants = [
+                DiffStrategy::Full,
+                DiffStrategy::DirtyRows,
+                DiffStrategy::FullRedraw,
+            ];
+            for (i, a) in variants.iter().enumerate() {
+                for (j, b) in variants.iter().enumerate() {
+                    if i == j {
+                        assert_eq!(a, b);
+                    } else {
+                        assert_ne!(a, b);
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn diff_strategy_copy() {
+            let a = DiffStrategy::DirtyRows;
+            let b = a; // Copy
+            let _c = a; // Still valid — a was copied, not moved
+            assert_eq!(a, b);
+        }
+
+        // --- Selector with custom priors ---
+
+        #[test]
+        fn custom_prior_high_alpha_favors_dirty_rows_less() {
+            // High prior alpha → expect more changes → Full/FullRedraw more likely
+            let mut selector = DiffStrategySelector::new(DiffStrategyConfig {
+                prior_alpha: 50.0,
+                prior_beta: 1.0, // E[p] ≈ 0.98
+                ..Default::default()
+            });
+            selector.select(80, 24, 24);
+            let ev = selector.last_evidence().unwrap();
+            // With p≈0.98 and all dirty, FullRedraw should be competitive
+            assert!(
+                ev.cost_redraw <= ev.cost_full * 1.5,
+                "High change rate should make redraw competitive"
+            );
+        }
+
+        #[test]
+        fn custom_prior_high_beta_favors_dirty_rows() {
+            // High prior beta → expect few changes → DirtyRows efficient
+            let mut selector = DiffStrategySelector::new(DiffStrategyConfig {
+                prior_alpha: 1.0,
+                prior_beta: 1000.0, // E[p] ≈ 0.001
+                ..Default::default()
+            });
+            let strategy = selector.select(80, 24, 5);
+            assert_eq!(
+                strategy,
+                DiffStrategy::DirtyRows,
+                "Very low expected change rate should favor DirtyRows"
+            );
+        }
+
+        // --- Decay boundary behavior ---
+
+        #[test]
+        fn decay_zero_sanitizes_to_one() {
+            // decay=0 is invalid (non-positive), sanitized() should set it to 1.0
+            let config = DiffStrategyConfig {
+                decay: 0.0,
+                ..Default::default()
+            };
+            let selector = DiffStrategySelector::new(config);
+            // With decay=1.0 (sanitized from 0.0), accumulation should work
+            assert!(
+                (selector.config().decay - 1.0).abs() < 1e-9,
+                "Decay=0.0 should be sanitized to 1.0"
+            );
+        }
+
+        #[test]
+        fn decay_one_no_forgetting() {
+            let mut est = ChangeRateEstimator::new(1.0, 19.0, 1.0, 0);
+            est.observe(100, 10);
+            let (a1, b1) = est.posterior_params();
+            // With decay=1.0: alpha = 1.0*1.0 + 10 = 11.0, beta = 1.0*19.0 + 90 = 109.0
+            assert!(
+                (a1 - 11.0).abs() < 1e-9,
+                "No-decay alpha: expected 11.0, got {a1}"
+            );
+            assert!(
+                (b1 - 109.0).abs() < 1e-9,
+                "No-decay beta: expected 109.0, got {b1}"
+            );
+        }
+
+        // --- Selector determinism across multiple frames ---
+
+        #[test]
+        fn determinism_across_long_trace() {
+            let trace: Vec<(u16, u16, usize, usize, usize)> = (0..200)
+                .map(|i| {
+                    let dirty = (i * 3 % 24) + 1;
+                    let scanned = 80 * dirty;
+                    let changed = (i * 7 % scanned.max(1)).max(1);
+                    (80u16, 24u16, dirty, scanned, changed)
+                })
+                .collect();
+
+            let mut sel1 = DiffStrategySelector::with_defaults();
+            let mut sel2 = DiffStrategySelector::with_defaults();
+
+            for (w, h, dirty, scanned, changed) in &trace {
+                let s1 = sel1.select(*w, *h, *dirty);
+                let s2 = sel2.select(*w, *h, *dirty);
+                assert_eq!(s1, s2, "Determinism violated");
+
+                sel1.observe(*scanned, *changed);
+                sel2.observe(*scanned, *changed);
+
+                assert!(
+                    (sel1.posterior_mean() - sel2.posterior_mean()).abs() < 1e-12,
+                    "Posterior diverged"
+                );
+            }
+        }
+
+        // --- Override edge cases ---
+
+        #[test]
+        fn override_changes_strategy_and_clears_hysteresis() {
+            let mut selector = DiffStrategySelector::with_defaults();
+            selector.select(80, 24, 5);
+
+            let original = selector.last_evidence().unwrap().strategy;
+            let target = if original == DiffStrategy::FullRedraw {
+                DiffStrategy::Full
+            } else {
+                DiffStrategy::FullRedraw
+            };
+
+            selector.override_last_strategy(target, "forced_override");
+            let ev = selector.last_evidence().unwrap();
+
+            assert_eq!(ev.strategy, target, "Override should change strategy");
+            assert_eq!(ev.guard_reason, "forced_override");
+            assert!(!ev.hysteresis_applied, "Override should clear hysteresis");
+        }
+
+        // --- Config sanitization edge cases ---
+
+        #[test]
+        fn sanitize_preserves_valid_config() {
+            let config = DiffStrategyConfig {
+                c_scan: 2.0,
+                c_emit: 8.0,
+                c_row: 0.5,
+                prior_alpha: 3.0,
+                prior_beta: 17.0,
+                decay: 0.9,
+                conservative: true,
+                conservative_quantile: 0.9,
+                min_observation_cells: 5,
+                hysteresis_ratio: 0.1,
+                uncertainty_guard_variance: 0.005,
+            };
+            let selector = DiffStrategySelector::new(config);
+            let c = selector.config();
+            assert!((c.c_scan - 2.0).abs() < 1e-9);
+            assert!((c.c_emit - 8.0).abs() < 1e-9);
+            assert!((c.c_row - 0.5).abs() < 1e-9);
+            assert!((c.prior_alpha - 3.0).abs() < 1e-9);
+            assert!((c.prior_beta - 17.0).abs() < 1e-9);
+            assert!((c.decay - 0.9).abs() < 1e-9);
+            assert!(c.conservative);
+            assert!((c.conservative_quantile - 0.9).abs() < 1e-9);
+            assert_eq!(c.min_observation_cells, 5);
+            assert!((c.hysteresis_ratio - 0.1).abs() < 1e-9);
+        }
+
+        #[test]
+        fn sanitize_all_nan_uses_defaults() {
+            let config = DiffStrategyConfig {
+                c_scan: f64::NAN,
+                c_emit: f64::NAN,
+                c_row: f64::NAN,
+                prior_alpha: f64::NAN,
+                prior_beta: f64::NAN,
+                decay: f64::NAN,
+                conservative: false,
+                conservative_quantile: f64::NAN,
+                min_observation_cells: 0,
+                hysteresis_ratio: f64::NAN,
+                uncertainty_guard_variance: f64::NAN,
+            };
+            let selector = DiffStrategySelector::new(config);
+            let c = selector.config();
+            // All should be sanitized to defaults
+            assert!((c.c_scan - 1.0).abs() < 1e-9);
+            assert!((c.c_emit - 6.0).abs() < 1e-9);
+            assert!((c.c_row - 0.1).abs() < 1e-9);
+            assert!((c.prior_alpha - 1.0).abs() < 1e-9);
+            assert!((c.prior_beta - 19.0).abs() < 1e-9);
+            assert!((c.decay - 1.0).abs() < 1e-9);
+            assert!((c.hysteresis_ratio - 0.05).abs() < 1e-9);
+            assert!((c.uncertainty_guard_variance - 0.002).abs() < 1e-9);
+        }
+
+        // --- Cost model correctness ---
+
+        #[test]
+        fn zero_change_rate_costs() {
+            let config = DiffStrategyConfig::default();
+            let (cost_full, cost_dirty, cost_redraw) = strategy_costs(&config, 80, 24, 5, 0.0);
+            // With p=0: Full = c_row*H + c_scan*D*W, Dirty = c_scan*D*W, Redraw = c_emit*N
+            let expected_full = config.c_row * 24.0 + config.c_scan * 5.0 * 80.0;
+            let expected_dirty = config.c_scan * 5.0 * 80.0;
+            let expected_redraw = config.c_emit * 80.0 * 24.0;
+
+            assert!((cost_full - expected_full).abs() < 1e-6);
+            assert!((cost_dirty - expected_dirty).abs() < 1e-6);
+            assert!((cost_redraw - expected_redraw).abs() < 1e-6);
+        }
+
+        #[test]
+        fn full_change_rate_costs() {
+            let config = DiffStrategyConfig::default();
+            let (cost_full, cost_dirty, cost_redraw) = strategy_costs(&config, 80, 24, 24, 1.0);
+            // With p=1.0 and all dirty: Full and Dirty both include c_emit*N
+            // Redraw = c_emit*N, which should be cheapest since no scan cost
+            assert!(
+                cost_redraw <= cost_full,
+                "At p=1.0, redraw should be <= full"
+            );
+            assert!(
+                cost_redraw <= cost_dirty,
+                "At p=1.0, redraw should be <= dirty"
+            );
+        }
+    }
 }
