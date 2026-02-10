@@ -881,4 +881,227 @@ mod tests {
         show_cursor(&mut buf).unwrap();
         assert_eq!(String::from_utf8_lossy(&buf), "\x1b[?25h");
     }
+
+    // --- Additional edge case tests (bd-1kziq) ---
+
+    #[test]
+    fn carriage_return_writes_escape() {
+        let mut buf = Vec::new();
+        carriage_return(&mut buf).unwrap();
+        assert_eq!(String::from_utf8_lossy(&buf), "\r");
+    }
+
+    #[test]
+    fn with_config_custom_values() {
+        let w = TestWriter::new();
+        let config = LiveConfig {
+            max_height: 10,
+            overflow: VerticalOverflow::Crop,
+            transient: false,
+            refresh_per_second: 30.0,
+        };
+        let live = Live::with_config(Box::new(w), 120, config);
+        assert!(!live.is_started());
+        assert_eq!(live.width, 120);
+        assert_eq!(live.config.max_height, 10);
+        assert_eq!(live.config.overflow, VerticalOverflow::Crop);
+        assert!(!live.config.transient);
+    }
+
+    #[test]
+    fn auto_refresh_ignores_nan_rate() {
+        let w = TestWriter::new();
+        let cfg = LiveConfig {
+            refresh_per_second: f64::NAN,
+            ..Default::default()
+        };
+        let live = Live::with_config(Box::new(w), 80, cfg);
+        live.start_auto_refresh(|| {});
+        let refresh = live.refresh_thread.lock().unwrap();
+        assert!(refresh.is_none(), "NaN rate should not spawn thread");
+    }
+
+    #[test]
+    fn auto_refresh_ignores_negative_rate() {
+        let w = TestWriter::new();
+        let cfg = LiveConfig {
+            refresh_per_second: -5.0,
+            ..Default::default()
+        };
+        let live = Live::with_config(Box::new(w), 80, cfg);
+        live.start_auto_refresh(|| {});
+        let refresh = live.refresh_thread.lock().unwrap();
+        assert!(refresh.is_none(), "negative rate should not spawn thread");
+    }
+
+    #[test]
+    fn auto_refresh_ignores_infinity_rate() {
+        let w = TestWriter::new();
+        let cfg = LiveConfig {
+            refresh_per_second: f64::INFINITY,
+            ..Default::default()
+        };
+        let live = Live::with_config(Box::new(w), 80, cfg);
+        live.start_auto_refresh(|| {});
+        let refresh = live.refresh_thread.lock().unwrap();
+        assert!(refresh.is_none(), "infinite rate should not spawn thread");
+    }
+
+    #[test]
+    fn update_shrinks_height_erases_extra() {
+        let w = TestWriter::new();
+        let live = Live::new(Box::new(w.clone()), 80);
+        live.start().unwrap();
+
+        // First: 3 lines
+        live.update(|console| {
+            console.print(Segment::text("A"));
+            console.newline();
+            console.print(Segment::text("B"));
+            console.newline();
+            console.print(Segment::text("C"));
+            console.newline();
+        });
+
+        w.clear();
+
+        // Second: 1 line (shrink)
+        live.update(|console| {
+            console.print(Segment::text("Only"));
+            console.newline();
+        });
+
+        let output = w.output();
+        assert!(output.contains("Only"));
+        // Should contain erase escapes for the extra lines
+        assert!(output.contains("\x1b[2K"), "Should erase extra lines");
+        live.stop().unwrap();
+    }
+
+    #[test]
+    fn empty_update_writes_nothing() {
+        let w = TestWriter::new();
+        let live = Live::new(Box::new(w.clone()), 80);
+        live.start().unwrap();
+        w.clear();
+
+        live.update(|_console| {
+            // Write nothing
+        });
+
+        // Even with empty content, the function may write erase sequences,
+        // but should not panic or produce text content
+        live.stop().unwrap();
+    }
+
+    #[test]
+    fn max_height_zero_means_unlimited() {
+        let w = TestWriter::new();
+        let config = LiveConfig {
+            max_height: 0,
+            overflow: VerticalOverflow::Crop,
+            ..Default::default()
+        };
+        let live = Live::with_config(Box::new(w.clone()), 80, config);
+        live.start().unwrap();
+        w.clear();
+
+        live.update(|console| {
+            for i in 0..10 {
+                console.print(Segment::text(format!("Line {i}")));
+                console.newline();
+            }
+        });
+
+        let output = w.output();
+        // All 10 lines should appear (max_height=0 means no limit)
+        assert!(output.contains("Line 0"));
+        assert!(output.contains("Line 9"));
+        live.stop().unwrap();
+    }
+
+    #[test]
+    fn overflow_ellipsis_max_height_1() {
+        let w = TestWriter::new();
+        let config = LiveConfig {
+            max_height: 1,
+            overflow: VerticalOverflow::Ellipsis,
+            ..Default::default()
+        };
+        let live = Live::with_config(Box::new(w.clone()), 80, config);
+        live.start().unwrap();
+        w.clear();
+
+        live.update(|console| {
+            console.print(Segment::text("Line 1"));
+            console.newline();
+            console.print(Segment::text("Line 2"));
+            console.newline();
+        });
+
+        let output = w.output();
+        // With max_height=1 and ellipsis, should show "..."
+        assert!(output.contains("..."));
+        assert!(!output.contains("Line 1"), "Should be truncated");
+        live.stop().unwrap();
+    }
+
+    #[test]
+    fn overflow_crop_max_height_1() {
+        let w = TestWriter::new();
+        let config = LiveConfig {
+            max_height: 1,
+            overflow: VerticalOverflow::Crop,
+            ..Default::default()
+        };
+        let live = Live::with_config(Box::new(w.clone()), 80, config);
+        live.start().unwrap();
+        w.clear();
+
+        live.update(|console| {
+            console.print(Segment::text("First"));
+            console.newline();
+            console.print(Segment::text("Second"));
+            console.newline();
+        });
+
+        let output = w.output();
+        assert!(output.contains("First"));
+        assert!(!output.contains("Second"), "Should be cropped at 1");
+        live.stop().unwrap();
+    }
+
+    #[test]
+    fn live_config_clone() {
+        let cfg = LiveConfig {
+            max_height: 5,
+            overflow: VerticalOverflow::Crop,
+            transient: false,
+            refresh_per_second: 10.0,
+        };
+        let cloned = cfg.clone();
+        assert_eq!(cloned.max_height, 5);
+        assert_eq!(cloned.overflow, VerticalOverflow::Crop);
+        assert!(!cloned.transient);
+    }
+
+    #[test]
+    fn live_config_debug() {
+        let cfg = LiveConfig::default();
+        let dbg = format!("{cfg:?}");
+        assert!(dbg.contains("LiveConfig"));
+    }
+
+    #[test]
+    fn vertical_overflow_debug() {
+        let dbg = format!("{:?}", VerticalOverflow::Ellipsis);
+        assert!(dbg.contains("Ellipsis"));
+    }
+
+    #[test]
+    fn vertical_overflow_eq() {
+        assert_eq!(VerticalOverflow::Crop, VerticalOverflow::Crop);
+        assert_ne!(VerticalOverflow::Crop, VerticalOverflow::Ellipsis);
+        assert_ne!(VerticalOverflow::Visible, VerticalOverflow::Crop);
+    }
 }
