@@ -1172,4 +1172,526 @@ mod tests {
         batch.undo().unwrap();
         assert_eq!(*buf.lock().unwrap(), "");
     }
+
+    // ====================================================================
+    // TextDeleteCmd execute/undo coverage
+    // ====================================================================
+
+    #[test]
+    fn test_text_delete_execute_and_undo_with_callbacks() {
+        let buf = Arc::new(Mutex::new(String::from("Hello World")));
+        let b1 = buf.clone();
+        let b2 = buf.clone();
+
+        let mut cmd = TextDeleteCmd::new(WidgetId::new(1), 5, " World")
+            .with_remove(move |_, pos, len| {
+                let mut b = b1.lock().unwrap();
+                b.drain(pos..pos + len);
+                Ok(())
+            })
+            .with_insert(move |_, pos, text| {
+                let mut b = b2.lock().unwrap();
+                b.insert_str(pos, text);
+                Ok(())
+            });
+
+        cmd.execute().unwrap();
+        assert_eq!(*buf.lock().unwrap(), "Hello");
+
+        cmd.undo().unwrap();
+        assert_eq!(*buf.lock().unwrap(), "Hello World");
+    }
+
+    #[test]
+    fn test_text_delete_execute_without_callback_errors() {
+        let mut cmd = TextDeleteCmd::new(WidgetId::new(1), 0, "x");
+        let err = cmd.execute().unwrap_err();
+        assert!(matches!(err, CommandError::InvalidState(_)));
+    }
+
+    #[test]
+    fn test_text_delete_undo_without_callback_errors() {
+        let mut cmd = TextDeleteCmd::new(WidgetId::new(1), 0, "x");
+        let err = cmd.undo().unwrap_err();
+        assert!(matches!(err, CommandError::InvalidState(_)));
+    }
+
+    #[test]
+    fn test_text_delete_size_bytes() {
+        let cmd = TextDeleteCmd::new(WidgetId::new(1), 0, "abc");
+        let size = cmd.size_bytes();
+        assert!(size >= std::mem::size_of::<TextDeleteCmd>() + 3);
+    }
+
+    #[test]
+    fn test_text_delete_description() {
+        let cmd = TextDeleteCmd::new(WidgetId::new(1), 0, "x");
+        assert_eq!(cmd.description(), "Delete text");
+    }
+
+    #[test]
+    fn test_text_delete_merge_text() {
+        let cmd = TextDeleteCmd::new(WidgetId::new(1), 5, "xyz");
+        assert_eq!(cmd.merge_text(), Some("xyz"));
+    }
+
+    #[test]
+    fn test_text_delete_debug() {
+        let cmd = TextDeleteCmd::new(WidgetId::new(1), 3, "abc");
+        let s = format!("{:?}", cmd);
+        assert!(s.contains("TextDeleteCmd"));
+        assert!(s.contains("abc"));
+    }
+
+    #[test]
+    fn test_text_delete_debug_name() {
+        let cmd = TextDeleteCmd::new(WidgetId::new(1), 0, "x");
+        assert_eq!(cmd.debug_name(), "TextDeleteCmd");
+    }
+
+    // ====================================================================
+    // TextDeleteCmd merge edge cases
+    // ====================================================================
+
+    #[test]
+    fn test_text_delete_no_merge_different_widget() {
+        let cmd1 = TextDeleteCmd::new(WidgetId::new(1), 5, "a");
+        let mut cmd2 = TextDeleteCmd::new(WidgetId::new(2), 5, "b");
+        cmd2.metadata.timestamp = cmd1.metadata.timestamp;
+
+        let config = MergeConfig::default();
+        assert!(!cmd1.can_merge(&cmd2, &config));
+    }
+
+    #[test]
+    fn test_text_delete_no_merge_non_adjacent() {
+        let cmd1 = TextDeleteCmd::new(WidgetId::new(1), 5, "a");
+        let mut cmd2 = TextDeleteCmd::new(WidgetId::new(1), 10, "b");
+        cmd2.metadata.timestamp = cmd1.metadata.timestamp;
+
+        let config = MergeConfig::default();
+        assert!(!cmd1.can_merge(&cmd2, &config));
+    }
+
+    #[test]
+    fn test_text_delete_no_merge_exceeds_max_size() {
+        let long_text = "a".repeat(600);
+        let cmd1 = TextDeleteCmd::new(WidgetId::new(1), 600, &long_text);
+        let mut cmd2 = TextDeleteCmd::new(WidgetId::new(1), 600, &long_text);
+        cmd2.metadata.timestamp = cmd1.metadata.timestamp;
+
+        let config = MergeConfig::default(); // max_merged_size = 1024
+        assert!(!cmd1.can_merge(&cmd2, &config));
+    }
+
+    #[test]
+    fn test_text_delete_accept_merge_non_adjacent_returns_false() {
+        let mut cmd1 = TextDeleteCmd::new(WidgetId::new(1), 5, "a");
+        let cmd2 = TextDeleteCmd::new(WidgetId::new(1), 10, "b");
+        assert!(!cmd1.accept_merge(&cmd2));
+    }
+
+    #[test]
+    fn test_text_delete_accept_merge_wrong_type_returns_false() {
+        let mut cmd1 = TextDeleteCmd::new(WidgetId::new(1), 5, "a");
+        let cmd2 = TextInsertCmd::new(WidgetId::new(1), 5, "b");
+        assert!(!cmd1.accept_merge(&cmd2));
+    }
+
+    // ====================================================================
+    // TextInsertCmd merge edge cases
+    // ====================================================================
+
+    #[test]
+    fn test_text_insert_no_merge_across_word_boundary() {
+        let cmd1 = TextInsertCmd::new(WidgetId::new(1), 0, "hello ");
+        let mut cmd2 = TextInsertCmd::new(WidgetId::new(1), 6, "world");
+        cmd2.metadata.timestamp = cmd1.metadata.timestamp;
+
+        let config = MergeConfig::default(); // merge_across_words = false
+        assert!(!cmd1.can_merge(&cmd2, &config));
+    }
+
+    #[test]
+    fn test_text_insert_merge_across_word_boundary_when_configured() {
+        let cmd1 = TextInsertCmd::new(WidgetId::new(1), 0, "hello ");
+        let mut cmd2 = TextInsertCmd::new(WidgetId::new(1), 6, "world");
+        cmd2.metadata.timestamp = cmd1.metadata.timestamp;
+
+        let config = MergeConfig {
+            merge_across_words: true,
+            ..MergeConfig::default()
+        };
+        assert!(cmd1.can_merge(&cmd2, &config));
+    }
+
+    #[test]
+    fn test_text_insert_no_merge_exceeds_max_size() {
+        let long_text = "a".repeat(600);
+        let cmd1 = TextInsertCmd::new(WidgetId::new(1), 0, &long_text);
+        let mut cmd2 = TextInsertCmd::new(WidgetId::new(1), 600, &long_text);
+        cmd2.metadata.timestamp = cmd1.metadata.timestamp;
+
+        let config = MergeConfig::default(); // max_merged_size = 1024
+        assert!(!cmd1.can_merge(&cmd2, &config));
+    }
+
+    #[test]
+    fn test_text_insert_accept_merge_wrong_type_returns_false() {
+        let mut cmd1 = TextInsertCmd::new(WidgetId::new(1), 0, "a");
+        let cmd2 = TextDeleteCmd::new(WidgetId::new(1), 0, "b");
+        assert!(!cmd1.accept_merge(&cmd2));
+    }
+
+    #[test]
+    fn test_text_insert_size_bytes() {
+        let cmd = TextInsertCmd::new(WidgetId::new(1), 0, "hello");
+        let size = cmd.size_bytes();
+        assert!(size >= std::mem::size_of::<TextInsertCmd>() + 5);
+    }
+
+    #[test]
+    fn test_text_insert_description() {
+        let cmd = TextInsertCmd::new(WidgetId::new(1), 0, "x");
+        assert_eq!(cmd.description(), "Insert text");
+    }
+
+    #[test]
+    fn test_text_insert_debug_name() {
+        let cmd = TextInsertCmd::new(WidgetId::new(1), 0, "x");
+        assert_eq!(cmd.debug_name(), "TextInsertCmd");
+    }
+
+    // ====================================================================
+    // TextReplaceCmd full coverage
+    // ====================================================================
+
+    #[test]
+    fn test_text_replace_execute_and_undo_with_callbacks() {
+        let buf = Arc::new(Mutex::new(String::from("Hello World")));
+        let b1 = buf.clone();
+        let b2 = buf.clone();
+
+        let mut cmd = TextReplaceCmd::new(WidgetId::new(1), 6, "World", "Rust").with_replace(
+            move |_, pos, old_len, new_text| {
+                let mut b = b1.lock().unwrap();
+                b.drain(pos..pos + old_len);
+                b.insert_str(pos, new_text);
+                Ok(())
+            },
+        );
+
+        // Also need clone for undo path (same callback)
+        cmd.execute().unwrap();
+        assert_eq!(*buf.lock().unwrap(), "Hello Rust");
+
+        cmd.undo().unwrap();
+        assert_eq!(*buf.lock().unwrap(), "Hello World");
+    }
+
+    #[test]
+    fn test_text_replace_execute_without_callback_errors() {
+        let mut cmd = TextReplaceCmd::new(WidgetId::new(1), 0, "old", "new");
+        let err = cmd.execute().unwrap_err();
+        assert!(matches!(err, CommandError::InvalidState(_)));
+    }
+
+    #[test]
+    fn test_text_replace_undo_without_callback_errors() {
+        let mut cmd = TextReplaceCmd::new(WidgetId::new(1), 0, "old", "new");
+        let err = cmd.undo().unwrap_err();
+        assert!(matches!(err, CommandError::InvalidState(_)));
+    }
+
+    #[test]
+    fn test_text_replace_target() {
+        let cmd = TextReplaceCmd::new(WidgetId::new(99), 0, "a", "b");
+        assert_eq!(cmd.target(), Some(WidgetId::new(99)));
+    }
+
+    #[test]
+    fn test_text_replace_description() {
+        let cmd = TextReplaceCmd::new(WidgetId::new(1), 0, "a", "b");
+        assert_eq!(cmd.description(), "Replace text");
+    }
+
+    #[test]
+    fn test_text_replace_metadata() {
+        let cmd = TextReplaceCmd::new(WidgetId::new(1), 0, "a", "b");
+        assert_eq!(cmd.metadata().description, "Replace text");
+        assert_eq!(cmd.metadata().source, CommandSource::User);
+    }
+
+    #[test]
+    fn test_text_replace_debug() {
+        let cmd = TextReplaceCmd::new(WidgetId::new(1), 3, "old", "new");
+        let s = format!("{:?}", cmd);
+        assert!(s.contains("TextReplaceCmd"));
+        assert!(s.contains("old"));
+        assert!(s.contains("new"));
+    }
+
+    #[test]
+    fn test_text_replace_debug_name() {
+        let cmd = TextReplaceCmd::new(WidgetId::new(1), 0, "a", "b");
+        assert_eq!(cmd.debug_name(), "TextReplaceCmd");
+    }
+
+    // ====================================================================
+    // CommandBatch edge cases
+    // ====================================================================
+
+    #[test]
+    fn test_command_batch_execute_rollback_on_failure() {
+        let buf = Arc::new(Mutex::new(String::new()));
+        let b1 = buf.clone();
+        let b2 = buf.clone();
+
+        let mut batch = CommandBatch::new("Rollback test");
+
+        // First command succeeds
+        let cmd1 = TextInsertCmd::new(WidgetId::new(1), 0, "OK")
+            .with_apply(move |_, pos, text| {
+                let mut b = b1.lock().unwrap();
+                b.insert_str(pos, text);
+                Ok(())
+            })
+            .with_remove(move |_, pos, len| {
+                let mut b = b2.lock().unwrap();
+                b.drain(pos..pos + len);
+                Ok(())
+            });
+
+        // Second command always fails (no callback)
+        let cmd2 = TextInsertCmd::new(WidgetId::new(1), 2, " FAIL");
+
+        batch.push(Box::new(cmd1));
+        batch.push(Box::new(cmd2));
+
+        // Execute should fail
+        let err = batch.execute().unwrap_err();
+        assert!(matches!(err, CommandError::InvalidState(_)));
+
+        // First command should have been rolled back
+        assert_eq!(*buf.lock().unwrap(), "");
+    }
+
+    #[test]
+    fn test_command_batch_redo() {
+        let buf = Arc::new(Mutex::new(String::new()));
+        let b1 = buf.clone();
+        let b2 = buf.clone();
+
+        let mut batch = CommandBatch::new("Redo test");
+        let cmd = TextInsertCmd::new(WidgetId::new(1), 0, "Hi")
+            .with_apply(move |_, pos, text| {
+                let mut b = b1.lock().unwrap();
+                b.insert_str(pos, text);
+                Ok(())
+            })
+            .with_remove(move |_, pos, len| {
+                let mut b = b2.lock().unwrap();
+                b.drain(pos..pos + len);
+                Ok(())
+            });
+        batch.push(Box::new(cmd));
+
+        batch.execute().unwrap();
+        assert_eq!(*buf.lock().unwrap(), "Hi");
+
+        batch.undo().unwrap();
+        assert_eq!(*buf.lock().unwrap(), "");
+
+        batch.redo().unwrap();
+        assert_eq!(*buf.lock().unwrap(), "Hi");
+    }
+
+    #[test]
+    fn test_command_batch_size_bytes() {
+        let batch = CommandBatch::new("Size test");
+        let size = batch.size_bytes();
+        assert!(size >= std::mem::size_of::<CommandBatch>());
+    }
+
+    #[test]
+    fn test_command_batch_size_bytes_with_commands() {
+        let mut batch = CommandBatch::new("Size test");
+        batch.push(Box::new(TextInsertCmd::new(WidgetId::new(1), 0, "hello")));
+        let size = batch.size_bytes();
+        // Must include the inner command's size
+        let inner_size = TextInsertCmd::new(WidgetId::new(1), 0, "hello").size_bytes();
+        assert!(size > inner_size);
+    }
+
+    #[test]
+    fn test_command_batch_metadata() {
+        let batch = CommandBatch::new("Meta test");
+        assert_eq!(batch.metadata().description, "Meta test");
+    }
+
+    #[test]
+    fn test_command_batch_debug_name() {
+        let batch = CommandBatch::new("test");
+        assert_eq!(batch.debug_name(), "CommandBatch");
+    }
+
+    #[test]
+    fn test_command_batch_can_merge_default_false() {
+        let batch = CommandBatch::new("test");
+        let other = CommandBatch::new("other");
+        let config = MergeConfig::default();
+        assert!(!batch.can_merge(&other, &config));
+    }
+
+    #[test]
+    fn test_command_batch_undo_empty() {
+        let mut batch = CommandBatch::new("Empty undo");
+        // executed_to is 0, so undo should be a no-op
+        batch.undo().unwrap();
+    }
+
+    // ====================================================================
+    // dyn UndoableCmd Debug impl
+    // ====================================================================
+
+    #[test]
+    fn test_dyn_undoable_cmd_debug() {
+        let cmd: Box<dyn UndoableCmd> = Box::new(TextInsertCmd::new(WidgetId::new(1), 0, "test"));
+        let s = format!("{:?}", cmd);
+        assert!(s.contains("TextInsertCmd"));
+        assert!(s.contains("Insert text"));
+    }
+
+    // ====================================================================
+    // CommandError trait coverage
+    // ====================================================================
+
+    #[test]
+    fn test_command_error_invalid_state_display() {
+        let err = CommandError::InvalidState("bad state".to_string());
+        let s = err.to_string();
+        assert!(s.contains("bad state"));
+    }
+
+    #[test]
+    fn test_command_error_is_std_error() {
+        let err: Box<dyn std::error::Error> = Box::new(CommandError::Other("test".to_string()));
+        // Verify it implements std::error::Error
+        assert!(err.to_string().contains("test"));
+    }
+
+    // ====================================================================
+    // WidgetId additional coverage
+    // ====================================================================
+
+    #[test]
+    fn test_widget_id_equality() {
+        let a = WidgetId::new(1);
+        let b = WidgetId::new(1);
+        let c = WidgetId::new(2);
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_widget_id_hash() {
+        use std::collections::HashSet;
+        let mut set = HashSet::new();
+        set.insert(WidgetId::new(1));
+        set.insert(WidgetId::new(1));
+        set.insert(WidgetId::new(2));
+        assert_eq!(set.len(), 2);
+    }
+
+    #[test]
+    fn test_widget_id_debug() {
+        let id = WidgetId::new(42);
+        let s = format!("{:?}", id);
+        assert!(s.contains("42"));
+    }
+
+    // ====================================================================
+    // TextInsertCmd redo (default delegates to execute)
+    // ====================================================================
+
+    #[test]
+    fn test_text_insert_redo() {
+        let buf = Arc::new(Mutex::new(String::new()));
+        let b1 = buf.clone();
+        let b2 = buf.clone();
+
+        let mut cmd = TextInsertCmd::new(WidgetId::new(1), 0, "Hi")
+            .with_apply(move |_, pos, text| {
+                let mut b = b1.lock().unwrap();
+                b.insert_str(pos, text);
+                Ok(())
+            })
+            .with_remove(move |_, pos, len| {
+                let mut b = b2.lock().unwrap();
+                b.drain(pos..pos + len);
+                Ok(())
+            });
+
+        cmd.execute().unwrap();
+        cmd.undo().unwrap();
+        assert_eq!(*buf.lock().unwrap(), "");
+
+        cmd.redo().unwrap();
+        assert_eq!(*buf.lock().unwrap(), "Hi");
+    }
+
+    // ====================================================================
+    // TextDeleteCmd redo
+    // ====================================================================
+
+    #[test]
+    fn test_text_delete_redo() {
+        let buf = Arc::new(Mutex::new(String::from("Hello")));
+        let b1 = buf.clone();
+        let b2 = buf.clone();
+
+        let mut cmd = TextDeleteCmd::new(WidgetId::new(1), 0, "Hello")
+            .with_remove(move |_, pos, len| {
+                let mut b = b1.lock().unwrap();
+                b.drain(pos..pos + len);
+                Ok(())
+            })
+            .with_insert(move |_, pos, text| {
+                let mut b = b2.lock().unwrap();
+                b.insert_str(pos, text);
+                Ok(())
+            });
+
+        cmd.execute().unwrap();
+        assert_eq!(*buf.lock().unwrap(), "");
+
+        cmd.undo().unwrap();
+        assert_eq!(*buf.lock().unwrap(), "Hello");
+
+        cmd.redo().unwrap();
+        assert_eq!(*buf.lock().unwrap(), "");
+    }
+
+    // ====================================================================
+    // CommandMetadata edge cases
+    // ====================================================================
+
+    #[test]
+    fn test_command_metadata_all_sources() {
+        for source in [
+            CommandSource::User,
+            CommandSource::Programmatic,
+            CommandSource::Macro,
+            CommandSource::External,
+        ] {
+            let meta = CommandMetadata::new("test").with_source(source);
+            assert_eq!(meta.source, source);
+        }
+    }
+
+    #[test]
+    fn test_command_metadata_empty_description() {
+        let meta = CommandMetadata::new("");
+        assert_eq!(meta.size_bytes(), std::mem::size_of::<CommandMetadata>());
+    }
 }
