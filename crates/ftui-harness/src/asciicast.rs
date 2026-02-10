@@ -942,4 +942,402 @@ mod tests {
         recorder.resize(80, 24);
         assert_eq!(recorder.dimensions(), (80, 24));
     }
+
+    // ─── Edge-case tests (bd-h2a0p) ─────────────────────────────
+
+    #[test]
+    fn record_config_defaults() {
+        let config = RecordConfig::new(80, 24);
+        assert_eq!(config.width, 80);
+        assert_eq!(config.height, 24);
+        assert!(config.title.is_none());
+        assert!(config.env_shell.is_none());
+        assert!(config.env_term.is_none());
+        assert!(!config.record_input);
+        assert!(config.idle_time_limit.is_none());
+    }
+
+    #[test]
+    fn record_config_builder_chain() {
+        let config = RecordConfig::new(120, 40)
+            .with_title("test")
+            .with_env_shell("/bin/zsh")
+            .with_env_term("xterm")
+            .with_input_recording(true)
+            .with_idle_time_limit(5.0);
+
+        assert_eq!(config.width, 120);
+        assert_eq!(config.height, 40);
+        assert_eq!(config.title.as_deref(), Some("test"));
+        assert_eq!(config.env_shell.as_deref(), Some("/bin/zsh"));
+        assert_eq!(config.env_term.as_deref(), Some("xterm"));
+        assert!(config.record_input);
+        assert_eq!(config.idle_time_limit, Some(5.0));
+    }
+
+    #[test]
+    fn record_config_debug() {
+        let config = RecordConfig::new(80, 24);
+        let debug = format!("{config:?}");
+        assert!(debug.contains("RecordConfig"));
+    }
+
+    #[test]
+    fn record_config_clone() {
+        let config = RecordConfig::new(80, 24).with_title("cloned");
+        let cloned = config.clone();
+        assert_eq!(cloned.title.as_deref(), Some("cloned"));
+        assert_eq!(cloned.width, 80);
+    }
+
+    #[test]
+    fn asciicast_event_debug_clone() {
+        let event = AsciicastEvent {
+            time: 1.5,
+            event_type: "o".to_string(),
+            data: b"hello".to_vec(),
+        };
+        let debug = format!("{event:?}");
+        assert!(debug.contains("AsciicastEvent"));
+
+        let cloned = event.clone();
+        assert_eq!(cloned.time, 1.5);
+        assert_eq!(cloned.event_type, "o");
+        assert_eq!(cloned.data, b"hello");
+    }
+
+    #[test]
+    fn asciicast_header_debug_clone() {
+        let header = AsciicastHeader {
+            version: 2,
+            width: 80,
+            height: 24,
+            timestamp: Some(1234567890),
+            title: Some("test".to_string()),
+            idle_time_limit: None,
+        };
+        let debug = format!("{header:?}");
+        assert!(debug.contains("AsciicastHeader"));
+
+        let cloned = header.clone();
+        assert_eq!(cloned.version, 2);
+        assert_eq!(cloned.title.as_deref(), Some("test"));
+    }
+
+    #[test]
+    fn recorder_empty_output() {
+        let mut output = Cursor::new(Vec::new());
+        let config = RecordConfig::new(80, 24);
+        let recorder = AsciicastRecorder::new(&mut output, config).unwrap();
+
+        let count = recorder.finish().unwrap();
+        assert_eq!(count, 0);
+
+        let data = String::from_utf8(output.into_inner()).unwrap();
+        let lines: Vec<&str> = data.lines().collect();
+        assert_eq!(lines.len(), 1, "should only have header");
+    }
+
+    #[test]
+    fn recorder_event_count_starts_at_zero() {
+        let mut output = Cursor::new(Vec::new());
+        let config = RecordConfig::new(80, 24);
+        let recorder = AsciicastRecorder::new(&mut output, config).unwrap();
+        assert_eq!(recorder.event_count(), 0);
+    }
+
+    #[test]
+    fn recorder_elapsed_positive() {
+        let mut output = Cursor::new(Vec::new());
+        let config = RecordConfig::new(80, 24);
+        let recorder = AsciicastRecorder::new(&mut output, config).unwrap();
+        // Elapsed should be near-zero but non-negative
+        let elapsed = recorder.elapsed();
+        assert!(elapsed < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn recorder_output_at_specific_time() {
+        let mut output = Cursor::new(Vec::new());
+        let config = RecordConfig::new(80, 24);
+        let mut recorder = AsciicastRecorder::new(&mut output, config).unwrap();
+
+        recorder
+            .record_output_at(Duration::from_millis(500), b"first")
+            .unwrap();
+        recorder
+            .record_output_at(Duration::from_secs(1), b"second")
+            .unwrap();
+        let count = recorder.finish().unwrap();
+        assert_eq!(count, 2);
+
+        let data = String::from_utf8(output.into_inner()).unwrap();
+        let lines: Vec<&str> = data.lines().collect();
+        assert_eq!(lines.len(), 3); // header + 2 events
+        assert!(lines[1].starts_with("[0.500000"));
+        assert!(lines[2].starts_with("[1.000000"));
+    }
+
+    #[test]
+    fn recorder_resize_does_not_write_event() {
+        let mut output = Cursor::new(Vec::new());
+        let config = RecordConfig::new(80, 24);
+        let mut recorder = AsciicastRecorder::new(&mut output, config).unwrap();
+
+        recorder.resize(120, 40);
+        let count = recorder.finish().unwrap();
+        assert_eq!(count, 0, "resize should not produce an event");
+    }
+
+    #[test]
+    fn recorder_header_only_shell_env() {
+        let mut output = Cursor::new(Vec::new());
+        let config = RecordConfig::new(80, 24).with_env_shell("/bin/fish");
+        let _recorder = AsciicastRecorder::new(&mut output, config).unwrap();
+
+        let data = String::from_utf8(output.into_inner()).unwrap();
+        assert!(data.contains("\"SHELL\":\"/bin/fish\""));
+        assert!(!data.contains("\"TERM\""));
+    }
+
+    #[test]
+    fn recorder_header_only_term_env() {
+        let mut output = Cursor::new(Vec::new());
+        let config = RecordConfig::new(80, 24).with_env_term("alacritty");
+        let _recorder = AsciicastRecorder::new(&mut output, config).unwrap();
+
+        let data = String::from_utf8(output.into_inner()).unwrap();
+        assert!(data.contains("\"TERM\":\"alacritty\""));
+        assert!(!data.contains("\"SHELL\""));
+    }
+
+    #[test]
+    fn recorder_header_no_env_when_none_set() {
+        let mut output = Cursor::new(Vec::new());
+        let config = RecordConfig::new(80, 24);
+        let _recorder = AsciicastRecorder::new(&mut output, config).unwrap();
+
+        let data = String::from_utf8(output.into_inner()).unwrap();
+        assert!(!data.contains("\"env\""));
+    }
+
+    #[test]
+    fn recorder_header_title_with_special_chars() {
+        let mut output = Cursor::new(Vec::new());
+        let config = RecordConfig::new(80, 24).with_title("My \"Session\" 1");
+        let _recorder = AsciicastRecorder::new(&mut output, config).unwrap();
+
+        let data = String::from_utf8(output.into_inner()).unwrap();
+        assert!(data.contains("\\\"Session\\\""));
+    }
+
+    #[test]
+    fn loader_invalid_version() {
+        let data = "{\"version\":1,\"width\":80,\"height\":24}\n";
+        let result = AsciicastLoader::new(data.as_bytes());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn loader_invalid_header_not_json() {
+        let data = "not json\n";
+        let result = AsciicastLoader::new(data.as_bytes());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn loader_invalid_event_not_array() {
+        let data = "{\"version\":2,\"width\":80,\"height\":24}\n\
+                    not an event\n";
+        let mut loader = AsciicastLoader::new(data.as_bytes()).unwrap();
+        let result = loader.next_event();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn loader_empty_events() {
+        let data = "{\"version\":2,\"width\":80,\"height\":24}\n";
+        let mut loader = AsciicastLoader::new(data.as_bytes()).unwrap();
+        assert!(loader.next_event().unwrap().is_none());
+    }
+
+    #[test]
+    fn loader_double_next_event_returns_none() {
+        let data = "{\"version\":2,\"width\":80,\"height\":24}\n\
+                    [0.1,\"o\",\"A\"]\n";
+        let mut loader = AsciicastLoader::new(data.as_bytes()).unwrap();
+        let _ = loader.next_event().unwrap().unwrap();
+        assert!(loader.next_event().unwrap().is_none());
+        assert!(loader.next_event().unwrap().is_none()); // double call
+    }
+
+    #[test]
+    fn loader_with_title_and_idle_limit() {
+        let data = "{\"version\":2,\"width\":80,\"height\":24,\"title\":\"test\",\"idle_time_limit\":3.5}\n";
+        let loader = AsciicastLoader::new(data.as_bytes()).unwrap();
+        let header = loader.header();
+        assert_eq!(header.title.as_deref(), Some("test"));
+        assert_eq!(header.idle_time_limit, Some(3.5));
+    }
+
+    #[test]
+    fn loader_with_input_events() {
+        let data = "{\"version\":2,\"width\":80,\"height\":24}\n\
+                    [0.1,\"i\",\"cmd\"]\n\
+                    [0.2,\"o\",\"output\"]\n";
+        let mut loader = AsciicastLoader::new(data.as_bytes()).unwrap();
+        let events = loader.load_all().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, "i");
+        assert_eq!(events[1].event_type, "o");
+    }
+
+    #[test]
+    fn escape_json_string_empty() {
+        assert_eq!(escape_json_string(""), "");
+    }
+
+    #[test]
+    fn escape_json_string_carriage_return() {
+        assert_eq!(escape_json_string("a\rb"), "a\\rb");
+    }
+
+    #[test]
+    fn escape_json_string_control_chars() {
+        // BEL (0x07) should be \u escaped
+        let s = "\x07";
+        let escaped = escape_json_string(s);
+        assert_eq!(escaped, "\\u0007");
+    }
+
+    #[test]
+    fn escape_json_string_unicode() {
+        assert_eq!(escape_json_string("hello 世界"), "hello 世界");
+    }
+
+    #[test]
+    fn escape_bytes_to_json_valid_utf8() {
+        let escaped = escape_bytes_to_json(b"hello world");
+        assert_eq!(escaped, "hello world");
+    }
+
+    #[test]
+    fn escape_bytes_to_json_empty() {
+        let escaped = escape_bytes_to_json(b"");
+        assert_eq!(escaped, "");
+    }
+
+    #[test]
+    fn escape_bytes_to_json_all_invalid() {
+        let escaped = escape_bytes_to_json(&[0xFF, 0xFE]);
+        assert!(escaped.contains("\\u00ff"));
+        assert!(escaped.contains("\\u00fe"));
+    }
+
+    #[test]
+    fn escape_bytes_mixed_valid_invalid() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"ok");
+        data.push(0xFF);
+        data.extend_from_slice(b"end");
+        let escaped = escape_bytes_to_json(&data);
+        assert!(escaped.contains("ok"));
+        assert!(escaped.contains("\\u00ff"));
+        assert!(escaped.contains("end"));
+    }
+
+    #[test]
+    fn unescape_json_string_backslash_at_end() {
+        let result = unescape_json_string("hello\\").unwrap();
+        assert_eq!(result, "hello\\");
+    }
+
+    #[test]
+    fn unescape_json_string_escape_sequences() {
+        assert_eq!(unescape_json_string("\\r\"").unwrap(), "\r");
+        assert_eq!(unescape_json_string("\\t\"").unwrap(), "\t");
+        assert_eq!(unescape_json_string("\\\\\"").unwrap(), "\\");
+        assert_eq!(unescape_json_string("\\/\"").unwrap(), "/");
+    }
+
+    #[test]
+    fn unescape_json_string_unknown_escape() {
+        // Unknown escape \x should be preserved as \x
+        let result = unescape_json_string("\\x\"").unwrap();
+        assert_eq!(result, "\\x");
+    }
+
+    #[test]
+    fn unescape_json_string_empty() {
+        let result = unescape_json_string("\"").unwrap();
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn roundtrip_with_input_events() {
+        let mut output = Cursor::new(Vec::new());
+        let config = RecordConfig::new(80, 24).with_input_recording(true);
+        let mut recorder = AsciicastRecorder::new(&mut output, config).unwrap();
+
+        recorder
+            .record_output_at(Duration::from_millis(100), b"prompt$ ")
+            .unwrap();
+        recorder.record_input(b"ls\n").unwrap();
+        recorder
+            .record_output_at(Duration::from_millis(300), b"file.txt\n")
+            .unwrap();
+        recorder.finish().unwrap();
+
+        let data = output.into_inner();
+        let mut loader = AsciicastLoader::new(data.as_slice()).unwrap();
+        let events = loader.load_all().unwrap();
+
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].event_type, "o");
+        assert_eq!(events[1].event_type, "i");
+        assert_eq!(events[2].event_type, "o");
+    }
+
+    #[test]
+    fn recorder_multiple_events_increasing_timestamps() {
+        let mut output = Cursor::new(Vec::new());
+        let config = RecordConfig::new(80, 24);
+        let mut recorder = AsciicastRecorder::new(&mut output, config).unwrap();
+
+        for i in 0..5 {
+            recorder
+                .record_output_at(Duration::from_millis(i * 100), b"data")
+                .unwrap();
+        }
+        recorder.finish().unwrap();
+
+        let data = output.into_inner();
+        let mut loader = AsciicastLoader::new(data.as_slice()).unwrap();
+        let events = loader.load_all().unwrap();
+        assert_eq!(events.len(), 5);
+
+        // Timestamps should be increasing
+        for window in events.windows(2) {
+            assert!(
+                window[1].time >= window[0].time,
+                "timestamps should be non-decreasing"
+            );
+        }
+    }
+
+    #[test]
+    fn loader_header_default_dimensions() {
+        // Header without width/height should use defaults (80x24)
+        let data = "{\"version\":2}\n";
+        let loader = AsciicastLoader::new(data.as_bytes()).unwrap();
+        assert_eq!(loader.header().width, 80);
+        assert_eq!(loader.header().height, 24);
+    }
+
+    #[test]
+    fn loader_header_no_timestamp() {
+        let data = "{\"version\":2,\"width\":80,\"height\":24}\n";
+        let loader = AsciicastLoader::new(data.as_bytes()).unwrap();
+        assert!(loader.header().timestamp.is_none());
+    }
 }
