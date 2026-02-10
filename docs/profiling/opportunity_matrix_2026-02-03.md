@@ -326,6 +326,42 @@ determinism; global pass target (>=30% p95 on two heavy effects) is still unmet.
 
 ---
 
+### VFX Pass: 2026-02-10 (bd-3e1t.5.3.15)
+
+This pass re-ran deterministic PTY harness measurements for the heavy effects
+(`plasma`, `metaballs`) at `120x40` and `200x60` after the 2026-02-10 lands.
+
+Harness args:
+- `--vfx-harness --vfx-tick-ms=16 --vfx-frames=180 --vfx-seed=12345 --vfx-perf`
+
+Artifacts:
+- `.scratch/vfx/bd-3e1t.5.3.15_plasma_120x40_pty.jsonl`
+- `.scratch/vfx/bd-3e1t.5.3.15_plasma_200x60_pty.jsonl`
+- `.scratch/vfx/bd-3e1t.5.3.15_metaballs_120x40_pty.jsonl`
+- `.scratch/vfx/bd-3e1t.5.3.15_metaballs_200x60_pty.jsonl`
+
+`total_ms_{p50,p95,p99}` (`vfx_perf_summary`):
+
+| Effect/Size | Frames | total_ms_p50 | total_ms_p95 | total_ms_p99 |
+|---|---:|---:|---:|---:|
+| plasma 120x40 | 182 | 1.502 | 2.143 | 3.259 |
+| plasma 200x60 | 181 | 12.163 | 21.209 | 26.494 |
+| metaballs 120x40 | 182 | 2.209 | 3.073 | 3.581 |
+| metaballs 200x60 | 182 | 4.808 | 6.004 | 7.332 |
+
+Phase p95 breakdown (for hotspot directionality):
+
+| Effect/Size | render_ms_p95 | diff_ms_p95 | present_ms_p95 | top_phase |
+|---|---:|---:|---:|---|
+| plasma 120x40 | 1.091 | 0.037 | 1.191 | present |
+| plasma 200x60 | 6.626 | 0.297 | 16.502 | present |
+| metaballs 120x40 | 1.709 | 0.036 | 1.704 | render |
+| metaballs 200x60 | 3.759 | 0.071 | 2.305 | render |
+
+Note: at `200x60`, plasma is I/O-bound in this run (present dominates).
+
+---
+
 ## Hotspots Identified
 
 1. **Buffer::fill** - Largest time consumer for full-screen operations
