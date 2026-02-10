@@ -1082,4 +1082,485 @@ mod tests {
         assert!(delta.change_count() < full.change_count());
         assert!(delta.memory_size() < full.memory_size());
     }
+
+    // ─── Edge-case tests (bd-3127i) ─────────────────────────────
+
+    #[test]
+    fn frame_metadata_defaults() {
+        let meta = FrameMetadata::new(5, Duration::from_millis(10));
+        assert_eq!(meta.frame_number, 5);
+        assert_eq!(meta.render_time, Duration::from_millis(10));
+        assert_eq!(meta.event_count, 0);
+        assert!(meta.model_hash.is_none());
+    }
+
+    #[test]
+    fn frame_metadata_builder_chain() {
+        let meta = FrameMetadata::new(1, Duration::from_millis(2))
+            .with_events(10)
+            .with_model_hash(0xBEEF);
+        assert_eq!(meta.frame_number, 1);
+        assert_eq!(meta.event_count, 10);
+        assert_eq!(meta.model_hash, Some(0xBEEF));
+    }
+
+    #[test]
+    fn frame_metadata_debug() {
+        let meta = FrameMetadata::new(0, Duration::ZERO);
+        let debug = format!("{meta:?}");
+        assert!(debug.contains("FrameMetadata"));
+    }
+
+    #[test]
+    fn frame_metadata_clone() {
+        let meta = FrameMetadata::new(7, Duration::from_millis(3)).with_model_hash(42);
+        let cloned = meta.clone();
+        assert_eq!(cloned.frame_number, 7);
+        assert_eq!(cloned.model_hash, Some(42));
+    }
+
+    #[test]
+    fn compressed_frame_with_cursor() {
+        let buf = Buffer::new(3, 1);
+        let cf = CompressedFrame::full(&buf).with_cursor(Some((1, 0)));
+        assert_eq!(cf.cursor, Some((1, 0)));
+    }
+
+    #[test]
+    fn compressed_frame_with_cursor_none() {
+        let buf = Buffer::new(3, 1);
+        let cf = CompressedFrame::full(&buf).with_cursor(None);
+        assert_eq!(cf.cursor, None);
+    }
+
+    #[test]
+    fn compressed_frame_empty_buffer() {
+        let buf = Buffer::new(5, 3);
+        let cf = CompressedFrame::full(&buf);
+        assert_eq!(cf.change_count(), 0, "empty buffer has no changes");
+        assert_eq!(cf.width, 5);
+        assert_eq!(cf.height, 3);
+    }
+
+    #[test]
+    fn compressed_frame_delta_identical_buffers() {
+        let mut buf = Buffer::new(5, 3);
+        buf.set(0, 0, Cell::from_char('X'));
+        buf.set(2, 1, Cell::from_char('Y'));
+
+        let delta = CompressedFrame::delta(&buf, &buf);
+        assert_eq!(delta.change_count(), 0, "identical buffers have no delta");
+    }
+
+    #[test]
+    fn compressed_frame_memory_size() {
+        let mut buf = Buffer::new(5, 1);
+        buf.set(0, 0, Cell::from_char('A'));
+        buf.set(1, 0, Cell::from_char('B'));
+
+        let cf = CompressedFrame::full(&buf);
+        assert_eq!(cf.change_count(), 2);
+        let size = cf.memory_size();
+        // Should be at least: struct size + 2 * sizeof(CellChange)
+        assert!(
+            size >= std::mem::size_of::<CompressedFrame>() + 2 * std::mem::size_of::<CellChange>()
+        );
+    }
+
+    #[test]
+    fn compressed_frame_debug() {
+        let buf = Buffer::new(3, 1);
+        let cf = CompressedFrame::full(&buf);
+        let debug = format!("{cf:?}");
+        assert!(debug.contains("CompressedFrame"));
+    }
+
+    #[test]
+    fn compressed_frame_clone() {
+        let mut buf = Buffer::new(3, 1);
+        buf.set(0, 0, Cell::from_char('X'));
+        let cf = CompressedFrame::full(&buf);
+        let cloned = cf.clone();
+        assert_eq!(cloned.change_count(), cf.change_count());
+        assert_eq!(cloned.width, cf.width);
+    }
+
+    #[test]
+    fn cell_change_debug_clone_copy_eq() {
+        let change = CellChange {
+            x: 5,
+            y: 3,
+            cell: Cell::from_char('Q'),
+        };
+        // Debug
+        let debug = format!("{change:?}");
+        assert!(debug.contains("CellChange"));
+
+        // Clone + Copy
+        let cloned = change;
+        let copied = change; // Copy
+        assert_eq!(change, cloned);
+        assert_eq!(change, copied);
+
+        // PartialEq with different
+        let other = CellChange {
+            x: 5,
+            y: 3,
+            cell: Cell::from_char('R'),
+        };
+        assert_ne!(change, other);
+    }
+
+    #[test]
+    fn time_travel_debug() {
+        let tt = TimeTravel::new(10);
+        let debug = format!("{tt:?}");
+        assert!(debug.contains("TimeTravel"));
+    }
+
+    #[test]
+    fn capacity_one() {
+        let mut tt = TimeTravel::new(1);
+        let mut buf = Buffer::new(3, 1);
+
+        buf.set(0, 0, Cell::from_char('A'));
+        tt.record(&buf, make_metadata(0));
+        assert_eq!(tt.len(), 1);
+
+        buf.set(1, 0, Cell::from_char('B'));
+        tt.record(&buf, make_metadata(1));
+        assert_eq!(tt.len(), 1, "capacity 1 should keep only latest");
+        assert_eq!(tt.frame_counter(), 2);
+
+        // The retained frame should be the latest
+        let latest = tt.rewind(0).unwrap();
+        assert_eq!(latest.get(0, 0).unwrap().content.as_char(), Some('A'));
+        assert_eq!(latest.get(1, 0).unwrap().content.as_char(), Some('B'));
+    }
+
+    #[test]
+    fn clear_preserves_capacity() {
+        let mut tt = TimeTravel::new(50);
+        let buf = Buffer::new(3, 1);
+        tt.record(&buf, make_metadata(0));
+
+        tt.clear();
+        assert_eq!(tt.capacity(), 50);
+        assert!(tt.is_empty());
+    }
+
+    #[test]
+    fn clear_then_record() {
+        let mut tt = TimeTravel::new(10);
+        let mut buf = Buffer::new(3, 1);
+
+        buf.set(0, 0, Cell::from_char('A'));
+        tt.record(&buf, make_metadata(0));
+        tt.clear();
+
+        buf.set(0, 0, Cell::from_char('B'));
+        tt.record(&buf, make_metadata(1));
+        assert_eq!(tt.len(), 1);
+
+        let frame = tt.rewind(0).unwrap();
+        assert_eq!(frame.get(0, 0).unwrap().content.as_char(), Some('B'));
+    }
+
+    #[test]
+    fn record_different_buffer_sizes_accepted() {
+        let mut tt = TimeTravel::new(10);
+
+        let mut buf1 = Buffer::new(5, 3);
+        buf1.set(0, 0, Cell::from_char('A'));
+        tt.record(&buf1, make_metadata(0));
+
+        // Different size buffer → should trigger full snapshot (not panic)
+        let mut buf2 = Buffer::new(10, 5);
+        buf2.set(0, 0, Cell::from_char('B'));
+        tt.record(&buf2, make_metadata(1));
+
+        assert_eq!(tt.len(), 2);
+        assert_eq!(tt.frame_counter(), 2);
+
+        // First frame (same-size) is still accessible
+        let frame0 = tt.get(0).unwrap();
+        assert_eq!(frame0.get(0, 0).unwrap().content.as_char(), Some('A'));
+    }
+
+    #[test]
+    fn frame_counter_cumulative_through_eviction() {
+        let mut tt = TimeTravel::new(2);
+        let buf = Buffer::new(3, 1);
+
+        for i in 0..10u64 {
+            tt.record(&buf, make_metadata(i));
+        }
+        assert_eq!(tt.frame_counter(), 10);
+        assert_eq!(tt.len(), 2);
+    }
+
+    #[test]
+    fn frame_counter_does_not_reset_on_clear() {
+        let mut tt = TimeTravel::new(10);
+        let buf = Buffer::new(3, 1);
+        tt.record(&buf, make_metadata(0));
+        tt.record(&buf, make_metadata(1));
+        assert_eq!(tt.frame_counter(), 2);
+
+        tt.clear();
+        // frame_counter should still be 2 (it's cumulative)
+        assert_eq!(tt.frame_counter(), 2);
+    }
+
+    #[test]
+    fn find_by_hash_returns_first_match() {
+        let mut tt = TimeTravel::new(10);
+        let buf = Buffer::new(3, 1);
+
+        tt.record(
+            &buf,
+            FrameMetadata::new(0, Duration::ZERO).with_model_hash(42),
+        );
+        tt.record(
+            &buf,
+            FrameMetadata::new(1, Duration::ZERO).with_model_hash(42),
+        );
+
+        // Should return the first occurrence
+        assert_eq!(tt.find_by_hash(42), Some(0));
+    }
+
+    #[test]
+    fn find_by_hash_no_hashes() {
+        let mut tt = TimeTravel::new(10);
+        let buf = Buffer::new(3, 1);
+
+        tt.record(&buf, FrameMetadata::new(0, Duration::ZERO));
+        tt.record(&buf, FrameMetadata::new(1, Duration::ZERO));
+
+        assert_eq!(tt.find_by_hash(0), None);
+        assert_eq!(tt.find_by_hash(42), None);
+    }
+
+    #[test]
+    fn metadata_out_of_range() {
+        let mut tt = TimeTravel::new(10);
+        let buf = Buffer::new(3, 1);
+        tt.record(&buf, make_metadata(0));
+
+        assert!(tt.metadata(0).is_some());
+        assert!(tt.metadata(1).is_none());
+        assert!(tt.metadata(999).is_none());
+    }
+
+    #[test]
+    fn latest_metadata_after_eviction() {
+        let mut tt = TimeTravel::new(2);
+        let buf = Buffer::new(3, 1);
+
+        tt.record(&buf, make_metadata(0));
+        tt.record(&buf, make_metadata(1));
+        tt.record(&buf, make_metadata(2));
+
+        assert_eq!(tt.latest_metadata().unwrap().frame_number, 2);
+    }
+
+    #[test]
+    fn rewind_after_eviction() {
+        let mut tt = TimeTravel::new(3);
+        let mut buf = Buffer::new(5, 1);
+
+        for i in 0..6u64 {
+            buf.set(i as u16 % 5, 0, Cell::from_char(char::from(b'A' + i as u8)));
+            tt.record(&buf, make_metadata(i));
+        }
+
+        // Only frames 3, 4, 5 retained
+        assert_eq!(tt.len(), 3);
+
+        // rewind(0) should be latest (frame 5)
+        let latest = tt.rewind(0).unwrap();
+        // Frame 5 should have A, B, C, D, F (E at index 0 was overwritten by F)
+        assert_eq!(latest.get(0, 0).unwrap().content.as_char(), Some('F'));
+
+        // rewind too far
+        assert!(tt.rewind(3).is_none());
+    }
+
+    #[test]
+    fn multiple_eviction_cycles() {
+        let mut tt = TimeTravel::new(3);
+        let mut buf = Buffer::new(3, 1);
+
+        // Record 20 frames, each with a unique character at position 0
+        for i in 0..20u64 {
+            let ch = char::from(b'A' + (i % 26) as u8);
+            buf.set(0, 0, Cell::from_char(ch));
+            tt.record(&buf, make_metadata(i));
+        }
+
+        assert_eq!(tt.len(), 3);
+        assert_eq!(tt.frame_counter(), 20);
+
+        // Latest frame should have 'T' (index 19 % 26 = 19 → 'T')
+        let latest = tt.rewind(0).unwrap();
+        assert_eq!(latest.get(0, 0).unwrap().content.as_char(), Some('T'));
+    }
+
+    #[test]
+    fn record_when_paused_does_not_increment_counter() {
+        let mut tt = TimeTravel::new(10);
+        let buf = Buffer::new(3, 1);
+
+        tt.set_recording(false);
+        tt.record(&buf, make_metadata(0));
+        assert_eq!(tt.frame_counter(), 0);
+        assert!(tt.is_empty());
+    }
+
+    #[test]
+    fn is_empty_after_record() {
+        let mut tt = TimeTravel::new(10);
+        assert!(tt.is_empty());
+
+        let buf = Buffer::new(3, 1);
+        tt.record(&buf, make_metadata(0));
+        assert!(!tt.is_empty());
+    }
+
+    #[test]
+    fn export_empty_recording() {
+        let dir = std::env::temp_dir().join("ftui_tt_empty_export");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("empty.fttr");
+
+        let tt = TimeTravel::new(10);
+        tt.export(&path).unwrap();
+
+        let loaded = TimeTravel::import(&path).unwrap();
+        assert!(loaded.is_empty());
+        assert_eq!(loaded.len(), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_import_preserves_styles() {
+        let dir = std::env::temp_dir().join("ftui_tt_style_rt");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("styled.fttr");
+
+        let mut tt = TimeTravel::new(10);
+        let mut buf = Buffer::new(3, 1);
+        let styled = Cell::from_char('Z')
+            .with_fg(PackedRgba::rgb(100, 200, 50))
+            .with_bg(PackedRgba::rgb(10, 20, 30))
+            .with_attrs(CellAttrs::new(StyleFlags::BOLD | StyleFlags::UNDERLINE, 7));
+        buf.set_raw(0, 0, styled);
+        tt.record(&buf, make_metadata(0));
+
+        tt.export(&path).unwrap();
+        let loaded = TimeTravel::import(&path).unwrap();
+
+        let frame = loaded.get(0).unwrap();
+        let cell = frame.get(0, 0).unwrap();
+        assert_eq!(cell.content.as_char(), Some('Z'));
+        assert_eq!(cell.fg, PackedRgba::rgb(100, 200, 50));
+        assert_eq!(cell.bg, PackedRgba::rgb(10, 20, 30));
+        assert!(cell.attrs.has_flag(StyleFlags::BOLD));
+        assert!(cell.attrs.has_flag(StyleFlags::UNDERLINE));
+        assert_eq!(cell.attrs.link_id(), 7);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn export_import_no_model_hash() {
+        let dir = std::env::temp_dir().join("ftui_tt_no_hash");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("no_hash.fttr");
+
+        let mut tt = TimeTravel::new(10);
+        let buf = Buffer::new(3, 1);
+        tt.record(&buf, FrameMetadata::new(0, Duration::from_millis(5)));
+
+        tt.export(&path).unwrap();
+        let loaded = TimeTravel::import(&path).unwrap();
+
+        assert!(loaded.metadata(0).unwrap().model_hash.is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn memory_usage_positive() {
+        let tt = TimeTravel::new(10);
+        assert!(
+            tt.memory_usage() > 0,
+            "empty recorder should still have base size"
+        );
+    }
+
+    #[test]
+    fn memory_usage_grows_with_frames() {
+        let mut tt = TimeTravel::new(100);
+        let base = tt.memory_usage();
+
+        let mut buf = Buffer::new(10, 5);
+        buf.set(0, 0, Cell::from_char('A'));
+        tt.record(&buf, make_metadata(0));
+
+        let after_one = tt.memory_usage();
+        assert!(after_one > base, "memory should grow after recording");
+    }
+
+    #[test]
+    fn get_all_frames_after_eviction() {
+        let mut tt = TimeTravel::new(3);
+        let mut buf = Buffer::new(3, 1);
+
+        // Record 5 frames: A, B, C, D, E
+        for i in 0..5u64 {
+            buf.set(0, 0, Cell::from_char(char::from(b'A' + i as u8)));
+            tt.record(&buf, make_metadata(i));
+        }
+
+        // Only 3 retained: frames 2(C), 3(D), 4(E)
+        assert_eq!(tt.len(), 3);
+
+        // All 3 frames should be retrievable
+        for i in 0..3 {
+            assert!(tt.get(i).is_some(), "frame {i} should be retrievable");
+        }
+        assert!(tt.get(3).is_none());
+    }
+
+    #[test]
+    fn cell_change_serialized_size() {
+        assert_eq!(CellChange::SERIALIZED_SIZE, 20);
+    }
+
+    #[test]
+    fn compressed_frame_all_cells_changed() {
+        let mut buf1 = Buffer::new(3, 2);
+        for y in 0..2u16 {
+            for x in 0..3u16 {
+                buf1.set(x, y, Cell::from_char('.'));
+            }
+        }
+
+        let mut buf2 = Buffer::new(3, 2);
+        for y in 0..2u16 {
+            for x in 0..3u16 {
+                buf2.set(x, y, Cell::from_char('#'));
+            }
+        }
+
+        let delta = CompressedFrame::delta(&buf2, &buf1);
+        // All 6 cells changed
+        assert_eq!(delta.change_count(), 6);
+    }
 }
