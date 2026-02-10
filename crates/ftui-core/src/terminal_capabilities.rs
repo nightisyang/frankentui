@@ -686,7 +686,6 @@ impl TerminalCapabilities {
     /// Create a builder for custom capability profiles.
     ///
     /// Start with all capabilities disabled and enable what you need.
-    #[must_use]
     pub fn builder() -> CapabilityProfileBuilder {
         CapabilityProfileBuilder::new()
     }
@@ -717,6 +716,7 @@ impl TerminalCapabilities {
 /// assert!(profile.true_color);
 /// ```
 #[derive(Debug, Clone)]
+#[must_use]
 pub struct CapabilityProfileBuilder {
     caps: TerminalCapabilities,
 }
@@ -729,7 +729,6 @@ impl Default for CapabilityProfileBuilder {
 
 impl CapabilityProfileBuilder {
     /// Create a new builder with all capabilities disabled.
-    #[must_use]
     pub fn new() -> Self {
         Self {
             caps: TerminalCapabilities {
@@ -755,7 +754,6 @@ impl CapabilityProfileBuilder {
     }
 
     /// Start from an existing profile.
-    #[must_use]
     pub fn from_profile(profile: TerminalProfile) -> Self {
         let mut caps = TerminalCapabilities::from_profile(profile);
         caps.profile = TerminalProfile::Custom;
@@ -771,14 +769,12 @@ impl CapabilityProfileBuilder {
     // ── Color Capabilities ─────────────────────────────────────────────
 
     /// Set true color (24-bit RGB) support.
-    #[must_use]
     pub const fn true_color(mut self, enabled: bool) -> Self {
         self.caps.true_color = enabled;
         self
     }
 
     /// Set 256-color palette support.
-    #[must_use]
     pub const fn colors_256(mut self, enabled: bool) -> Self {
         self.caps.colors_256 = enabled;
         self
@@ -787,21 +783,18 @@ impl CapabilityProfileBuilder {
     // ── Advanced Features ──────────────────────────────────────────────
 
     /// Set synchronized output (DEC mode 2026) support.
-    #[must_use]
     pub const fn sync_output(mut self, enabled: bool) -> Self {
         self.caps.sync_output = enabled;
         self
     }
 
     /// Set OSC 8 hyperlinks support.
-    #[must_use]
     pub const fn osc8_hyperlinks(mut self, enabled: bool) -> Self {
         self.caps.osc8_hyperlinks = enabled;
         self
     }
 
     /// Set scroll region (DECSTBM) support.
-    #[must_use]
     pub const fn scroll_region(mut self, enabled: bool) -> Self {
         self.caps.scroll_region = enabled;
         self
@@ -810,21 +803,18 @@ impl CapabilityProfileBuilder {
     // ── Multiplexer Flags ──────────────────────────────────────────────
 
     /// Set whether running inside tmux.
-    #[must_use]
     pub const fn in_tmux(mut self, enabled: bool) -> Self {
         self.caps.in_tmux = enabled;
         self
     }
 
     /// Set whether running inside GNU screen.
-    #[must_use]
     pub const fn in_screen(mut self, enabled: bool) -> Self {
         self.caps.in_screen = enabled;
         self
     }
 
     /// Set whether running inside Zellij.
-    #[must_use]
     pub const fn in_zellij(mut self, enabled: bool) -> Self {
         self.caps.in_zellij = enabled;
         self
@@ -833,28 +823,24 @@ impl CapabilityProfileBuilder {
     // ── Input Features ─────────────────────────────────────────────────
 
     /// Set Kitty keyboard protocol support.
-    #[must_use]
     pub const fn kitty_keyboard(mut self, enabled: bool) -> Self {
         self.caps.kitty_keyboard = enabled;
         self
     }
 
     /// Set focus event reporting support.
-    #[must_use]
     pub const fn focus_events(mut self, enabled: bool) -> Self {
         self.caps.focus_events = enabled;
         self
     }
 
     /// Set bracketed paste mode support.
-    #[must_use]
     pub const fn bracketed_paste(mut self, enabled: bool) -> Self {
         self.caps.bracketed_paste = enabled;
         self
     }
 
     /// Set SGR mouse protocol support.
-    #[must_use]
     pub const fn mouse_sgr(mut self, enabled: bool) -> Self {
         self.caps.mouse_sgr = enabled;
         self
@@ -863,7 +849,6 @@ impl CapabilityProfileBuilder {
     // ── Optional Features ──────────────────────────────────────────────
 
     /// Set OSC 52 clipboard support.
-    #[must_use]
     pub const fn osc52_clipboard(mut self, enabled: bool) -> Self {
         self.caps.osc52_clipboard = enabled;
         self

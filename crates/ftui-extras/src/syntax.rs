@@ -2283,6 +2283,7 @@ impl HighlightTheme {
 
 /// Builder for constructing custom highlight themes.
 #[derive(Debug, Clone, Default)]
+#[must_use]
 pub struct HighlightThemeBuilder {
     theme: HighlightTheme,
 }
@@ -2299,36 +2300,42 @@ impl HighlightThemeBuilder {
     }
 
     /// Set the keyword style.
+    #[must_use]
     pub fn keyword(mut self, style: Style) -> Self {
         self.theme.keyword = style;
         self
     }
 
     /// Set the control keyword style.
+    #[must_use]
     pub fn keyword_control(mut self, style: Style) -> Self {
         self.theme.keyword_control = style;
         self
     }
 
     /// Set the type keyword style.
+    #[must_use]
     pub fn keyword_type(mut self, style: Style) -> Self {
         self.theme.keyword_type = style;
         self
     }
 
     /// Set the string literal style.
+    #[must_use]
     pub fn string(mut self, style: Style) -> Self {
         self.theme.string = style;
         self
     }
 
     /// Set the number literal style.
+    #[must_use]
     pub fn number(mut self, style: Style) -> Self {
         self.theme.number = style;
         self
     }
 
     /// Set the comment style (applies to all comment variants).
+    #[must_use]
     pub fn comment(mut self, style: Style) -> Self {
         self.theme.comment = style;
         self.theme.comment_block = style;
@@ -2337,24 +2344,28 @@ impl HighlightThemeBuilder {
     }
 
     /// Set the type name style.
+    #[must_use]
     pub fn type_name(mut self, style: Style) -> Self {
         self.theme.type_name = style;
         self
     }
 
     /// Set the function name style.
+    #[must_use]
     pub fn function(mut self, style: Style) -> Self {
         self.theme.function = style;
         self
     }
 
     /// Set the operator style.
+    #[must_use]
     pub fn operator(mut self, style: Style) -> Self {
         self.theme.operator = style;
         self
     }
 
     /// Set the error style.
+    #[must_use]
     pub fn error(mut self, style: Style) -> Self {
         self.theme.error = style;
         self

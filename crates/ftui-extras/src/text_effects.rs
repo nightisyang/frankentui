@@ -211,6 +211,7 @@ impl OkLab {
     }
 
     /// Linearly interpolate between two OkLab colors.
+    #[must_use]
     #[inline]
     pub fn lerp(self, other: Self, t: f64) -> Self {
         let t = t.clamp(0.0, 1.0);
@@ -1420,6 +1421,7 @@ impl CharacterOffset {
     /// Clamp offset to terminal bounds.
     ///
     /// Ensures that when applied to position (x, y), the result stays within bounds.
+    #[must_use]
     #[inline]
     pub fn clamp_for_position(self, x: u16, y: u16, width: u16, height: u16) -> Self {
         let min_dx = -(x as i16);
@@ -2971,6 +2973,7 @@ impl StyledText {
     ///     .effect(TextEffect::RainbowGradient { speed: 0.1 })
     ///     .effect(TextEffect::Pulse { speed: 2.0, min_alpha: 0.3 })
     /// ```
+    #[must_use]
     pub fn effect(mut self, effect: TextEffect) -> Self {
         if !matches!(effect, TextEffect::None) && self.effects.len() < MAX_EFFECTS {
             self.effects.push(effect);
@@ -2982,6 +2985,7 @@ impl StyledText {
     ///
     /// Convenience method for chaining several effects. Only adds up to
     /// [`MAX_EFFECTS`] total effects.
+    #[must_use]
     pub fn effects(mut self, effects: impl IntoIterator<Item = TextEffect>) -> Self {
         for effect in effects {
             if matches!(effect, TextEffect::None) {
@@ -2996,6 +3000,7 @@ impl StyledText {
     }
 
     /// Clear all effects, returning to plain text rendering.
+    #[must_use]
     pub fn clear_effects(mut self) -> Self {
         self.effects.clear();
         self
@@ -3016,6 +3021,7 @@ impl StyledText {
     /// The easing function affects animations like Pulse, ColorWave,
     /// AnimatedGradient, and PulsingGlow. It does not affect static
     /// effects or progress-based effects (FadeIn, FadeOut, Typewriter).
+    #[must_use]
     pub fn easing(mut self, easing: Easing) -> Self {
         self.easing = easing;
         self
@@ -3180,42 +3186,49 @@ impl StyledText {
     }
 
     /// Set the base text color.
+    #[must_use]
     pub fn base_color(mut self, color: PackedRgba) -> Self {
         self.base_color = color;
         self
     }
 
     /// Set the background color.
+    #[must_use]
     pub fn bg_color(mut self, color: PackedRgba) -> Self {
         self.bg_color = Some(color);
         self
     }
 
     /// Make text bold.
+    #[must_use]
     pub fn bold(mut self) -> Self {
         self.bold = true;
         self
     }
 
     /// Make text italic.
+    #[must_use]
     pub fn italic(mut self) -> Self {
         self.italic = true;
         self
     }
 
     /// Make text underlined.
+    #[must_use]
     pub fn underline(mut self) -> Self {
         self.underline = true;
         self
     }
 
     /// Set the animation time (for time-based effects).
+    #[must_use]
     pub fn time(mut self, time: f64) -> Self {
         self.time = time;
         self
     }
 
     /// Set random seed for scramble/glitch effects.
+    #[must_use]
     pub fn seed(mut self, seed: u64) -> Self {
         self.seed = seed;
         self
@@ -4564,30 +4577,35 @@ impl TransitionOverlay {
     }
 
     /// Set progress (0.0 = invisible, 0.5 = peak, 1.0 = invisible).
+    #[must_use]
     pub fn progress(mut self, progress: f64) -> Self {
         self.progress = progress.clamp(0.0, 1.0);
         self
     }
 
     /// Set the primary (title) color.
+    #[must_use]
     pub fn primary_color(mut self, color: PackedRgba) -> Self {
         self.primary_color = color;
         self
     }
 
     /// Set the secondary (subtitle) color.
+    #[must_use]
     pub fn secondary_color(mut self, color: PackedRgba) -> Self {
         self.secondary_color = color;
         self
     }
 
     /// Use an animated gradient for the title.
+    #[must_use]
     pub fn gradient(mut self, gradient: ColorGradient) -> Self {
         self.gradient = Some(gradient);
         self
     }
 
     /// Set animation time.
+    #[must_use]
     pub fn time(mut self, time: f64) -> Self {
         self.time = time;
         self
@@ -5163,6 +5181,7 @@ impl EffectSequence {
 
 /// Builder for constructing effect sequences fluently.
 #[derive(Debug, Clone, Default)]
+#[must_use]
 pub struct EffectSequenceBuilder {
     steps: Vec<SequenceStep>,
     loop_mode: LoopMode,
@@ -5176,12 +5195,14 @@ impl EffectSequenceBuilder {
     }
 
     /// Add a step with the given effect and duration.
+    #[must_use]
     pub fn step(mut self, effect: TextEffect, duration_secs: f64) -> Self {
         self.steps.push(SequenceStep::new(effect, duration_secs));
         self
     }
 
     /// Add a step with custom easing.
+    #[must_use]
     pub fn step_with_easing(
         mut self,
         effect: TextEffect,
@@ -5194,12 +5215,14 @@ impl EffectSequenceBuilder {
     }
 
     /// Set the loop mode for the sequence.
+    #[must_use]
     pub fn loop_mode(mut self, mode: LoopMode) -> Self {
         self.loop_mode = mode;
         self
     }
 
     /// Set the global easing function (used when steps don't specify their own).
+    #[must_use]
     pub fn easing(mut self, easing: Easing) -> Self {
         self.global_easing = easing;
         self
@@ -9175,12 +9198,14 @@ impl AsciiArtText {
     }
 
     /// Set text color.
+    #[must_use]
     pub fn color(mut self, color: PackedRgba) -> Self {
         self.color = Some(color);
         self
     }
 
     /// Use a gradient for coloring.
+    #[must_use]
     pub fn gradient(mut self, gradient: ColorGradient) -> Self {
         self.gradient = Some(gradient);
         self
@@ -9678,6 +9703,7 @@ impl StyledMultiLine {
     }
 
     /// Add a text effect.
+    #[must_use]
     pub fn effect(mut self, effect: TextEffect) -> Self {
         if self.effects.len() < MAX_EFFECTS {
             self.effects.push(effect);
@@ -9686,6 +9712,7 @@ impl StyledMultiLine {
     }
 
     /// Add multiple effects.
+    #[must_use]
     pub fn effects(mut self, effects: impl IntoIterator<Item = TextEffect>) -> Self {
         for e in effects {
             if self.effects.len() >= MAX_EFFECTS {
@@ -9697,48 +9724,56 @@ impl StyledMultiLine {
     }
 
     /// Set the base foreground color.
+    #[must_use]
     pub fn base_color(mut self, color: PackedRgba) -> Self {
         self.base_color = color;
         self
     }
 
     /// Set an optional background color.
+    #[must_use]
     pub fn bg_color(mut self, color: PackedRgba) -> Self {
         self.bg_color = Some(color);
         self
     }
 
     /// Enable bold style.
+    #[must_use]
     pub fn bold(mut self) -> Self {
         self.bold = true;
         self
     }
 
     /// Enable italic style.
+    #[must_use]
     pub fn italic(mut self) -> Self {
         self.italic = true;
         self
     }
 
     /// Set animation time.
+    #[must_use]
     pub fn time(mut self, time: f64) -> Self {
         self.time = time;
         self
     }
 
     /// Set deterministic seed for effects like Scramble/Glitch.
+    #[must_use]
     pub fn seed(mut self, seed: u64) -> Self {
         self.seed = seed;
         self
     }
 
     /// Set easing function for effects.
+    #[must_use]
     pub fn easing(mut self, easing: Easing) -> Self {
         self.easing = easing;
         self
     }
 
     /// Enable reflection below the text block.
+    #[must_use]
     pub fn reflection(mut self, reflection: Reflection) -> Self {
         self.reflection = Some(reflection);
         self

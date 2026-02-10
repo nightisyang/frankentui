@@ -775,6 +775,7 @@ impl<T: ?Sized> fmt::Debug for Any<T> {
 /// assert!(validator.validate("alice").is_valid());
 /// assert!(!validator.validate("ab").is_valid());
 /// ```
+#[must_use]
 pub struct ValidatorBuilder<T: ?Sized> {
     validators: Vec<Box<dyn Validator<T>>>,
     _phantom: PhantomData<T>,

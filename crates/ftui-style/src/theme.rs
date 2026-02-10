@@ -263,6 +263,7 @@ pub struct ResolvedTheme {
 
 /// Builder for creating custom themes.
 #[derive(Debug, Clone)]
+#[must_use]
 pub struct ThemeBuilder {
     theme: Theme,
 }
@@ -281,133 +282,114 @@ impl ThemeBuilder {
     }
 
     /// Set the primary color.
-    #[must_use]
     pub fn primary(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.primary = color.into();
         self
     }
 
     /// Set the secondary color.
-    #[must_use]
     pub fn secondary(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.secondary = color.into();
         self
     }
 
     /// Set the accent color.
-    #[must_use]
     pub fn accent(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.accent = color.into();
         self
     }
 
     /// Set the background color.
-    #[must_use]
     pub fn background(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.background = color.into();
         self
     }
 
     /// Set the surface color.
-    #[must_use]
     pub fn surface(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.surface = color.into();
         self
     }
 
     /// Set the overlay color.
-    #[must_use]
     pub fn overlay(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.overlay = color.into();
         self
     }
 
     /// Set the text color.
-    #[must_use]
     pub fn text(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.text = color.into();
         self
     }
 
     /// Set the muted text color.
-    #[must_use]
     pub fn text_muted(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.text_muted = color.into();
         self
     }
 
     /// Set the subtle text color.
-    #[must_use]
     pub fn text_subtle(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.text_subtle = color.into();
         self
     }
 
     /// Set the success color.
-    #[must_use]
     pub fn success(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.success = color.into();
         self
     }
 
     /// Set the warning color.
-    #[must_use]
     pub fn warning(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.warning = color.into();
         self
     }
 
     /// Set the error color.
-    #[must_use]
     pub fn error(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.error = color.into();
         self
     }
 
     /// Set the info color.
-    #[must_use]
     pub fn info(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.info = color.into();
         self
     }
 
     /// Set the border color.
-    #[must_use]
     pub fn border(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.border = color.into();
         self
     }
 
     /// Set the focused border color.
-    #[must_use]
     pub fn border_focused(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.border_focused = color.into();
         self
     }
 
     /// Set the selection background color.
-    #[must_use]
     pub fn selection_bg(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.selection_bg = color.into();
         self
     }
 
     /// Set the selection foreground color.
-    #[must_use]
     pub fn selection_fg(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.selection_fg = color.into();
         self
     }
 
     /// Set the scrollbar track color.
-    #[must_use]
     pub fn scrollbar_track(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.scrollbar_track = color.into();
         self
     }
 
     /// Set the scrollbar thumb color.
-    #[must_use]
     pub fn scrollbar_thumb(mut self, color: impl Into<AdaptiveColor>) -> Self {
         self.theme.scrollbar_thumb = color.into();
         self

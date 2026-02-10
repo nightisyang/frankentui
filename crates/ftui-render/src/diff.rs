@@ -466,6 +466,7 @@ pub struct TileDiffStats {
 
 /// Reusable builder for tile counts and SAT.
 #[derive(Debug, Default, Clone)]
+#[must_use]
 pub struct TileDiffBuilder {
     tile_counts: Vec<u32>,
     sat: Vec<u32>,

@@ -731,90 +731,105 @@ impl ProgramConfig {
     }
 
     /// Enable mouse support.
+    #[must_use]
     pub fn with_mouse(mut self) -> Self {
         self.mouse = true;
         self
     }
 
     /// Set the budget configuration.
+    #[must_use]
     pub fn with_budget(mut self, budget: FrameBudgetConfig) -> Self {
         self.budget = budget;
         self
     }
 
     /// Set the diff strategy configuration for the terminal writer.
+    #[must_use]
     pub fn with_diff_config(mut self, diff_config: RuntimeDiffConfig) -> Self {
         self.diff_config = diff_config;
         self
     }
 
     /// Set the evidence JSONL sink configuration.
+    #[must_use]
     pub fn with_evidence_sink(mut self, config: EvidenceSinkConfig) -> Self {
         self.evidence_sink = config;
         self
     }
 
     /// Set the render-trace recorder configuration.
+    #[must_use]
     pub fn with_render_trace(mut self, config: RenderTraceConfig) -> Self {
         self.render_trace = config;
         self
     }
 
     /// Set a frame timing sink for per-frame profiling.
+    #[must_use]
     pub fn with_frame_timing(mut self, config: FrameTimingConfig) -> Self {
         self.frame_timing = Some(config);
         self
     }
 
     /// Enable conformal frame-time risk gating with the given config.
+    #[must_use]
     pub fn with_conformal_config(mut self, config: ConformalConfig) -> Self {
         self.conformal_config = Some(config);
         self
     }
 
     /// Disable conformal frame-time risk gating.
+    #[must_use]
     pub fn without_conformal(mut self) -> Self {
         self.conformal_config = None;
         self
     }
 
     /// Set the locale context used for rendering.
+    #[must_use]
     pub fn with_locale_context(mut self, locale_context: LocaleContext) -> Self {
         self.locale_context = locale_context;
         self
     }
 
     /// Set the base locale used for rendering.
+    #[must_use]
     pub fn with_locale(mut self, locale: impl Into<crate::locale::Locale>) -> Self {
         self.locale_context = LocaleContext::new(locale);
         self
     }
 
     /// Set the widget refresh selection configuration.
+    #[must_use]
     pub fn with_widget_refresh(mut self, config: WidgetRefreshConfig) -> Self {
         self.widget_refresh = config;
         self
     }
 
     /// Set the effect queue scheduling configuration.
+    #[must_use]
     pub fn with_effect_queue(mut self, config: EffectQueueConfig) -> Self {
         self.effect_queue = config;
         self
     }
 
     /// Set the resize coalescer configuration.
+    #[must_use]
     pub fn with_resize_coalescer(mut self, config: CoalescerConfig) -> Self {
         self.resize_coalescer = config;
         self
     }
 
     /// Set the resize handling behavior.
+    #[must_use]
     pub fn with_resize_behavior(mut self, behavior: ResizeBehavior) -> Self {
         self.resize_behavior = behavior;
         self
     }
 
     /// Force a fixed terminal size (cols, rows). Resize events are ignored.
+    #[must_use]
     pub fn with_forced_size(mut self, width: u16, height: u16) -> Self {
         let width = width.max(1);
         let height = height.max(1);
@@ -823,12 +838,14 @@ impl ProgramConfig {
     }
 
     /// Clear any forced terminal size override.
+    #[must_use]
     pub fn without_forced_size(mut self) -> Self {
         self.forced_size = None;
         self
     }
 
     /// Toggle legacy immediate-resize behavior for migration.
+    #[must_use]
     pub fn with_legacy_resize(mut self, enabled: bool) -> Self {
         if enabled {
             self.resize_behavior = ResizeBehavior::Immediate;
@@ -837,24 +854,28 @@ impl ProgramConfig {
     }
 
     /// Set the persistence configuration.
+    #[must_use]
     pub fn with_persistence(mut self, persistence: PersistenceConfig) -> Self {
         self.persistence = persistence;
         self
     }
 
     /// Enable persistence with the given registry.
+    #[must_use]
     pub fn with_registry(mut self, registry: std::sync::Arc<StateRegistry>) -> Self {
         self.persistence = PersistenceConfig::with_registry(registry);
         self
     }
 
     /// Enable inline auto UI height remeasurement with the given policy.
+    #[must_use]
     pub fn with_inline_auto_remeasure(mut self, config: InlineAutoRemeasureConfig) -> Self {
         self.inline_auto_remeasure = Some(config);
         self
     }
 
     /// Disable inline auto UI height remeasurement.
+    #[must_use]
     pub fn without_inline_auto_remeasure(mut self) -> Self {
         self.inline_auto_remeasure = None;
         self
@@ -3173,6 +3194,7 @@ impl App {
 }
 
 /// Builder for configuring and running programs.
+#[must_use]
 pub struct AppBuilder<M: Model> {
     model: M,
     config: ProgramConfig,

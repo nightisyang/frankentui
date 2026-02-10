@@ -68,6 +68,7 @@ impl DialogButton {
     }
 
     /// Mark as primary button.
+    #[must_use]
     pub fn primary(mut self) -> Self {
         self.primary = true;
         self
@@ -275,6 +276,7 @@ impl Dialog {
     }
 
     /// Set the hit ID for mouse interaction.
+    #[must_use]
     pub fn hit_id(mut self, id: HitId) -> Self {
         self.hit_id = Some(id);
         self.config.modal_config = self.config.modal_config.hit_id(id);
@@ -282,24 +284,28 @@ impl Dialog {
     }
 
     /// Set the modal configuration.
+    #[must_use]
     pub fn modal_config(mut self, config: ModalConfig) -> Self {
         self.config.modal_config = config;
         self
     }
 
     /// Set button style.
+    #[must_use]
     pub fn button_style(mut self, style: Style) -> Self {
         self.config.button_style = style;
         self
     }
 
     /// Set primary button style.
+    #[must_use]
     pub fn primary_button_style(mut self, style: Style) -> Self {
         self.config.primary_button_style = style;
         self
     }
 
     /// Set focused button style.
+    #[must_use]
     pub fn focused_button_style(mut self, style: Style) -> Self {
         self.config.focused_button_style = style;
         self
@@ -738,6 +744,7 @@ impl Widget for DialogContent<'_> {
 
 /// Builder for custom dialogs.
 #[derive(Debug, Clone)]
+#[must_use]
 pub struct DialogBuilder {
     title: String,
     message: String,
