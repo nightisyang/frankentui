@@ -798,4 +798,412 @@ mod tests {
         tl.seek(Duration::ZERO);
         assert_eq!(tl.current_time(), Duration::ZERO);
     }
+
+    // ── Edge-case tests (bd-nq7yt) ──────────────────────────────────
+
+    #[test]
+    fn default_trait() {
+        let tl = Timeline::default();
+        assert_eq!(tl.event_count(), 0);
+        assert_eq!(tl.state(), PlaybackState::Idle);
+        assert_eq!(tl.progress(), 1.0); // empty timeline is immediately complete
+    }
+
+    #[test]
+    fn zero_duration_clamped_to_1ns() {
+        let tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_100))
+            .set_duration(Duration::ZERO);
+        assert_eq!(tl.duration(), Duration::from_nanos(1));
+    }
+
+    #[test]
+    fn then_on_empty_timeline_uses_zero_offset() {
+        let tl = Timeline::new().then(Fade::new(MS_100));
+        assert_eq!(tl.event_count(), 1);
+        // Auto-computed duration from a single event at offset 0 → 1ns.
+        assert_eq!(tl.duration(), Duration::from_nanos(1));
+    }
+
+    #[test]
+    fn pause_when_not_playing_is_noop() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_100))
+            .set_duration(MS_100);
+
+        // Pause from Idle → still Idle.
+        tl.pause();
+        assert_eq!(tl.state(), PlaybackState::Idle);
+
+        // Pause from Finished → still Finished.
+        tl.play();
+        tl.tick(MS_100);
+        assert_eq!(tl.state(), PlaybackState::Finished);
+        tl.pause();
+        assert_eq!(tl.state(), PlaybackState::Finished);
+    }
+
+    #[test]
+    fn resume_when_not_paused_is_noop() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_100))
+            .set_duration(MS_100);
+
+        // Resume from Idle → still Idle.
+        tl.resume();
+        assert_eq!(tl.state(), PlaybackState::Idle);
+
+        // Resume from Playing → still Playing.
+        tl.play();
+        tl.resume();
+        assert_eq!(tl.state(), PlaybackState::Playing);
+    }
+
+    #[test]
+    fn seek_from_idle_transitions_to_paused() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_500))
+            .set_duration(MS_500);
+
+        assert_eq!(tl.state(), PlaybackState::Idle);
+        tl.seek(MS_250);
+        assert_eq!(tl.state(), PlaybackState::Paused);
+        assert_eq!(tl.current_time(), MS_250);
+    }
+
+    #[test]
+    fn seek_from_finished_transitions_to_paused() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_500))
+            .set_duration(MS_500);
+
+        tl.play();
+        tl.tick(MS_500);
+        assert_eq!(tl.state(), PlaybackState::Finished);
+
+        tl.seek(MS_250);
+        assert_eq!(tl.state(), PlaybackState::Paused);
+        assert_eq!(tl.current_time(), MS_250);
+    }
+
+    #[test]
+    fn seek_from_playing_stays_playing() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_500))
+            .set_duration(MS_500);
+
+        tl.play();
+        tl.tick(MS_100);
+        assert_eq!(tl.state(), PlaybackState::Playing);
+
+        tl.seek(MS_300);
+        // Seek doesn't change Playing state.
+        assert_eq!(tl.state(), PlaybackState::Playing);
+    }
+
+    #[test]
+    fn overshoot_when_finished() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_100))
+            .set_duration(MS_100);
+
+        tl.play();
+        tl.tick(MS_100);
+        assert!(tl.is_complete());
+        // LoopCount::Once clamps current_time to duration, so overshoot is 0.
+        assert_eq!(tl.overshoot(), Duration::ZERO);
+    }
+
+    #[test]
+    fn tick_when_idle_does_not_advance() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_500))
+            .set_duration(MS_500);
+
+        tl.tick(MS_250);
+        assert_eq!(tl.current_time(), Duration::ZERO);
+        assert_eq!(tl.state(), PlaybackState::Idle);
+    }
+
+    #[test]
+    fn tick_when_paused_does_not_advance() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(SEC_1))
+            .set_duration(SEC_1);
+
+        tl.play();
+        tl.tick(MS_250);
+        tl.pause();
+        let paused_time = tl.current_time();
+
+        tl.tick(MS_500);
+        assert_eq!(tl.current_time(), paused_time);
+    }
+
+    #[test]
+    fn tick_when_finished_does_not_advance() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_100))
+            .set_duration(MS_100);
+
+        tl.play();
+        tl.tick(MS_100);
+        assert!(tl.is_complete());
+
+        let time_at_finish = tl.current_time();
+        tl.tick(MS_500);
+        assert_eq!(tl.current_time(), time_at_finish);
+    }
+
+    #[test]
+    fn multiple_events_at_same_offset() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_200))
+            .add(Duration::ZERO, Fade::new(MS_200))
+            .add(Duration::ZERO, Fade::new(MS_200))
+            .set_duration(MS_200);
+
+        assert_eq!(tl.event_count(), 3);
+        tl.play();
+        tl.tick(MS_100);
+
+        // All three should be at ~50%.
+        for i in 0..3 {
+            assert!(
+                (tl.event_value_at(i).unwrap() - 0.5).abs() < 0.02,
+                "event {i} should be at ~50%"
+            );
+        }
+    }
+
+    #[test]
+    fn auto_computed_duration_uses_max_offset() {
+        let tl = Timeline::new()
+            .add(MS_100, Fade::new(MS_100))
+            .add(MS_500, Fade::new(MS_100))
+            .add(MS_300, Fade::new(MS_100));
+
+        // Events sorted by offset: 100, 300, 500.
+        // Duration should be max offset = 500ms.
+        assert_eq!(tl.duration(), MS_500);
+    }
+
+    #[test]
+    fn explicit_duration_overrides_auto() {
+        let tl = Timeline::new()
+            .add(MS_100, Fade::new(MS_100))
+            .add(MS_500, Fade::new(MS_100))
+            .set_duration(SEC_1);
+
+        assert_eq!(tl.duration(), SEC_1);
+    }
+
+    #[test]
+    fn seek_label_on_empty_timeline() {
+        let mut tl = Timeline::new();
+        assert!(!tl.seek_label("foo"));
+    }
+
+    #[test]
+    fn event_value_at_on_empty_timeline() {
+        let tl = Timeline::new();
+        assert!(tl.event_value_at(0).is_none());
+    }
+
+    #[test]
+    fn loop_times_zero_plays_once() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_100))
+            .set_duration(MS_100)
+            .set_loop_count(LoopCount::Times(0));
+
+        tl.play();
+        tl.tick(MS_100);
+        assert!(tl.is_complete());
+    }
+
+    #[test]
+    fn loop_count_eq() {
+        assert_eq!(LoopCount::Once, LoopCount::Once);
+        assert_eq!(LoopCount::Times(5), LoopCount::Times(5));
+        assert_ne!(LoopCount::Times(5), LoopCount::Times(3));
+        assert_eq!(LoopCount::Infinite, LoopCount::Infinite);
+        assert_ne!(LoopCount::Once, LoopCount::Infinite);
+    }
+
+    #[test]
+    fn playback_state_eq() {
+        assert_eq!(PlaybackState::Idle, PlaybackState::Idle);
+        assert_eq!(PlaybackState::Playing, PlaybackState::Playing);
+        assert_eq!(PlaybackState::Paused, PlaybackState::Paused);
+        assert_eq!(PlaybackState::Finished, PlaybackState::Finished);
+        assert_ne!(PlaybackState::Idle, PlaybackState::Playing);
+    }
+
+    #[test]
+    fn loop_count_clone() {
+        let lc = LoopCount::Times(3);
+        let lc2 = lc;
+        assert_eq!(lc, lc2);
+    }
+
+    #[test]
+    fn playback_state_clone() {
+        let ps = PlaybackState::Paused;
+        let ps2 = ps;
+        assert_eq!(ps, ps2);
+    }
+
+    #[test]
+    fn play_after_stop_resets() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_500))
+            .set_duration(MS_500);
+
+        tl.play();
+        tl.tick(MS_250);
+        tl.stop();
+        assert_eq!(tl.state(), PlaybackState::Idle);
+
+        tl.play();
+        assert_eq!(tl.state(), PlaybackState::Playing);
+        assert_eq!(tl.current_time(), Duration::ZERO);
+    }
+
+    #[test]
+    fn seek_past_end_then_resume_and_tick_finishes() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_100))
+            .set_duration(MS_100);
+
+        tl.play();
+        tl.seek(MS_100); // Seek to end, stays Playing.
+        tl.resume(); // No-op if already playing.
+
+        // Tick should detect we're at duration and finish.
+        tl.tick(Duration::from_nanos(1));
+        assert!(tl.is_complete());
+    }
+
+    #[test]
+    fn progress_clamps_to_zero_one() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_100))
+            .set_duration(MS_100);
+
+        // Before play: progress 0.0.
+        assert!(tl.progress() >= 0.0);
+        assert!(tl.progress() <= 1.0);
+
+        tl.play();
+        tl.tick(MS_100);
+        assert!(tl.progress() >= 0.0);
+        assert!(tl.progress() <= 1.0);
+    }
+
+    #[test]
+    fn animation_trait_is_complete_false_while_playing() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_500))
+            .set_duration(MS_500);
+
+        tl.play();
+        tl.tick(MS_250);
+        assert!(!tl.is_complete());
+    }
+
+    #[test]
+    fn reset_from_finished() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_100))
+            .set_duration(MS_100);
+
+        tl.play();
+        tl.tick(MS_100);
+        assert!(tl.is_complete());
+
+        tl.reset();
+        assert_eq!(tl.state(), PlaybackState::Idle);
+        assert_eq!(tl.current_time(), Duration::ZERO);
+        assert!(!tl.is_complete());
+    }
+
+    #[test]
+    fn reset_from_paused() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_500))
+            .set_duration(MS_500);
+
+        tl.play();
+        tl.tick(MS_250);
+        tl.pause();
+        assert_eq!(tl.state(), PlaybackState::Paused);
+
+        tl.reset();
+        assert_eq!(tl.state(), PlaybackState::Idle);
+        assert_eq!(tl.current_time(), Duration::ZERO);
+    }
+
+    #[test]
+    fn labeled_event_value() {
+        let mut tl = Timeline::new()
+            .add_labeled("fade", Duration::ZERO, Fade::new(MS_200))
+            .set_duration(MS_200);
+
+        tl.play();
+        tl.tick(MS_100);
+
+        let v = tl.event_value("fade").unwrap();
+        assert!((v - 0.5).abs() < 0.02);
+    }
+
+    #[test]
+    fn events_sorted_by_offset_on_insert() {
+        let tl = Timeline::new()
+            .add(MS_500, Fade::new(MS_100))
+            .add(MS_100, Fade::new(MS_100))
+            .add(MS_300, Fade::new(MS_100));
+
+        // Event at index 0 should be the one at smallest offset.
+        // After ticking past 100ms, event_value_at(0) should advance.
+        let mut tl = tl.set_duration(MS_500);
+        tl.play();
+        tl.tick(Duration::from_millis(150));
+
+        // Event 0 (offset 100ms): should be at 50ms into its 100ms fade = 50%.
+        let v = tl.event_value_at(0).unwrap();
+        assert!((v - 0.5).abs() < 0.02);
+
+        // Event 1 (offset 300ms): not started yet.
+        let v = tl.event_value_at(1).unwrap();
+        assert!(v < 0.01);
+    }
+
+    #[test]
+    fn debug_format_includes_fields() {
+        let tl = Timeline::new()
+            .add_labeled("intro", Duration::ZERO, Fade::new(MS_100))
+            .set_duration(MS_100);
+
+        let dbg = format!("{:?}", tl);
+        assert!(dbg.contains("event_count"));
+        assert!(dbg.contains("total_duration"));
+        assert!(dbg.contains("state"));
+    }
+
+    #[test]
+    fn loop_finite_with_overshoot_tick() {
+        let mut tl = Timeline::new()
+            .add(Duration::ZERO, Fade::new(MS_100))
+            .set_duration(MS_100)
+            .set_loop_count(LoopCount::Times(1));
+
+        tl.play();
+        // Tick 150ms in one go — overshoots first play by 50ms.
+        tl.tick(Duration::from_millis(150));
+        // Should be in second play (first loop), not finished.
+        assert!(!tl.is_complete());
+        // Current time should be 50ms into the second play.
+        assert!(tl.current_time() <= MS_100);
+    }
 }
