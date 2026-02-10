@@ -360,12 +360,13 @@ impl<'a> StatefulWidget for Scrollbar<'a> {
                     y,
                     symbol,
                     style,
-                    x.saturating_add(symbol_width as u16),
+                    area.right(),
                 );
 
                 if let Some(id) = self.hit_id {
                     let data = (part << 56) | (i as u64);
-                    let hit_w = symbol_width.max(1) as u16;
+                    // Never register hits outside the widget area (even if the symbol is wide).
+                    let hit_w = (symbol_width.max(1) as u16).min(area.right().saturating_sub(x));
                     frame.register_hit(Rect::new(x, y, hit_w, 1), id, HitRegion::Scrollbar, data);
                 }
             }
@@ -713,6 +714,25 @@ mod tests {
         assert!(!r1_c0.is_empty() && !r1_c0.is_continuation()); // Head
         let r1_c1 = frame.buffer.get(1, 1).unwrap();
         assert!(r1_c1.is_continuation()); // Tail
+    }
+
+    #[test]
+    fn scrollbar_wide_symbol_clips_drawing_and_hits_to_area() {
+        // Regression: wide symbols must not draw/register hit cells outside the widget area.
+        let sb = Scrollbar::new(ScrollbarOrientation::HorizontalBottom)
+            .symbols("🔴", "👍", None, None)
+            .hit_id(HitId::new(1));
+        let area = Rect::new(0, 0, 3, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::with_hit_grid(5, 1, &mut pool);
+        let mut state = ScrollbarState::new(3, 0, 3); // Thumb fills the track.
+
+        StatefulWidget::render(&sb, area, &mut frame, &mut state);
+
+        // x=3 is outside the widget area (area.right() == 3). It must remain untouched.
+        let outside = frame.buffer.get(3, 0).unwrap();
+        assert!(outside.is_empty(), "cell outside area should remain empty");
+        assert!(frame.hit_test(3, 0).is_none(), "no hit outside area");
     }
 
     // --- Mouse handling tests ---
