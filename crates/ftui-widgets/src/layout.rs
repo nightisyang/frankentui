@@ -534,6 +534,216 @@ mod tests {
         assert!(r.width > 0 && r.height > 0);
     }
 
+    // ─── Edge-case tests (bd-x93m1) ────────────────────────────────────
+
+    #[test]
+    fn render_in_1x1_area() {
+        let (rec, rects) = Recorder::new();
+        let layout = Layout::new()
+            .rows([Constraint::Min(0)])
+            .columns([Constraint::Min(0)])
+            .cell(rec, 0, 0);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 10, &mut pool);
+        layout.render(Rect::new(3, 3, 1, 1), &mut frame);
+
+        let r = rects.borrow()[0];
+        assert_eq!(r, Rect::new(3, 3, 1, 1));
+    }
+
+    #[test]
+    fn no_constraints_with_children() {
+        let (rec, rects) = Recorder::new();
+        // No rows() or columns() called — empty constraint vecs
+        let layout = Layout::new().cell(rec, 0, 0);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 10, &mut pool);
+        layout.render(Rect::new(0, 0, 10, 10), &mut frame);
+
+        // Grid with empty constraints → no cells → child skipped (empty rect)
+        // Just verify it doesn't panic
+        let _ = rects.borrow().len();
+    }
+
+    #[test]
+    fn fixed_constraints_exceed_area() {
+        let (a, a_rects) = Recorder::new();
+        let (b, b_rects) = Recorder::new();
+        // Two columns of Fixed(10) in a width=8 area
+        let layout = Layout::new()
+            .rows([Constraint::Fixed(1)])
+            .columns([Constraint::Fixed(10), Constraint::Fixed(10)])
+            .cell(a, 0, 0)
+            .cell(b, 0, 1);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 5, &mut pool);
+        layout.render(Rect::new(0, 0, 8, 1), &mut frame);
+
+        // Both should get some allocation even if constraints can't all be satisfied
+        let a_r = a_rects.borrow();
+        let b_r = b_rects.borrow();
+        assert!(!a_r.is_empty());
+        // At least one child should have been rendered
+        assert!(a_r[0].width > 0 || !b_r.is_empty());
+    }
+
+    #[test]
+    fn gap_larger_than_area() {
+        let (rec, rects) = Recorder::new();
+        let layout = Layout::new()
+            .rows([Constraint::Fixed(1), Constraint::Fixed(1)])
+            .columns([Constraint::Min(0)])
+            .row_gap(100) // gap >> area height
+            .cell(rec, 0, 0);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 5, &mut pool);
+        layout.render(Rect::new(0, 0, 10, 5), &mut frame);
+
+        // Should not panic; child may or may not get space depending on solver
+        let _ = rects.borrow().len();
+    }
+
+    #[test]
+    fn is_essential_mixed_children() {
+        struct Essential;
+        impl Widget for Essential {
+            fn render(&self, _: Rect, _: &mut Frame) {}
+            fn is_essential(&self) -> bool {
+                true
+            }
+        }
+
+        // One non-essential + one essential = essential
+        let layout = Layout::new()
+            .rows([Constraint::Fixed(1), Constraint::Fixed(1)])
+            .columns([Constraint::Min(0)])
+            .cell(Fill('X'), 0, 0)
+            .cell(Essential, 1, 0);
+        assert!(layout.is_essential());
+    }
+
+    #[test]
+    fn is_essential_all_non_essential() {
+        let layout = Layout::new()
+            .rows([Constraint::Fixed(1)])
+            .columns([Constraint::Min(0)])
+            .cell(Fill('X'), 0, 0)
+            .cell(Fill('Y'), 0, 0);
+        assert!(!layout.is_essential());
+    }
+
+    #[test]
+    fn multiple_flexible_rows_share_space() {
+        let (a, a_rects) = Recorder::new();
+        let (b, b_rects) = Recorder::new();
+
+        let layout = Layout::new()
+            .rows([Constraint::Min(0), Constraint::Min(0)])
+            .columns([Constraint::Min(0)])
+            .cell(a, 0, 0)
+            .cell(b, 1, 0);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 10, &mut pool);
+        layout.render(Rect::new(0, 0, 10, 10), &mut frame);
+
+        let a_h = a_rects.borrow()[0].height;
+        let b_h = b_rects.borrow()[0].height;
+        assert_eq!(a_h + b_h, 10);
+        assert!(a_h > 0 && b_h > 0);
+    }
+
+    #[test]
+    fn col_gap_with_single_column() {
+        let (rec, rects) = Recorder::new();
+        // col_gap shouldn't matter with only 1 column
+        let layout = Layout::new()
+            .rows([Constraint::Min(0)])
+            .columns([Constraint::Min(0)])
+            .col_gap(5)
+            .cell(rec, 0, 0);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 5, &mut pool);
+        layout.render(Rect::new(0, 0, 10, 5), &mut frame);
+
+        let r = rects.borrow()[0];
+        assert_eq!(r.width, 10, "single column should get full width");
+    }
+
+    #[test]
+    fn row_gap_with_single_row() {
+        let (rec, rects) = Recorder::new();
+        let layout = Layout::new()
+            .rows([Constraint::Min(0)])
+            .columns([Constraint::Min(0)])
+            .row_gap(5)
+            .cell(rec, 0, 0);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 5, &mut pool);
+        layout.render(Rect::new(0, 0, 10, 5), &mut frame);
+
+        let r = rects.borrow()[0];
+        assert_eq!(r.height, 5, "single row should get full height");
+    }
+
+    #[test]
+    fn layout_debug_no_children() {
+        let layout = Layout::new()
+            .rows([Constraint::Fixed(1)])
+            .columns([Constraint::Fixed(2)]);
+        let dbg = format!("{layout:?}");
+        assert!(dbg.contains("Layout"));
+        assert!(dbg.contains("children"));
+    }
+
+    #[test]
+    fn child_beyond_grid_bounds() {
+        let (rec, rects) = Recorder::new();
+        // 1x1 grid but child at row=5, col=5
+        let layout = Layout::new()
+            .rows([Constraint::Fixed(3)])
+            .columns([Constraint::Fixed(3)])
+            .cell(rec, 5, 5);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 10, &mut pool);
+        layout.render(Rect::new(0, 0, 10, 10), &mut frame);
+
+        // Child beyond grid bounds — grid.span() returns empty or default rect
+        // Either not rendered or rendered with zero/minimal area
+        let borrowed = rects.borrow();
+        if !borrowed.is_empty() {
+            // If rendered, it should have gotten an area (possibly empty)
+            let r = borrowed[0];
+            // Just verify no panic occurred
+            let _ = r;
+        }
+    }
+
+    #[test]
+    fn many_children_same_cell_last_wins() {
+        let layout = Layout::new()
+            .rows([Constraint::Fixed(1)])
+            .columns([Constraint::Fixed(3)])
+            .cell(Fill('A'), 0, 0)
+            .cell(Fill('B'), 0, 0)
+            .cell(Fill('C'), 0, 0);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(3, 1, &mut pool);
+        layout.render(Rect::new(0, 0, 3, 1), &mut frame);
+
+        assert_eq!(buf_to_lines(&frame.buffer), vec!["CCC"]);
+    }
+
+    // ─── End edge-case tests (bd-x93m1) ──────────────────────────────
+
     #[test]
     fn layout_child_debug() {
         let layout = Layout::new()
