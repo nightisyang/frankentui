@@ -754,11 +754,13 @@ impl InspectorState {
     }
 
     /// Get the diagnostic log (for testing).
+    #[must_use]
     pub fn diagnostic_log(&self) -> Option<&DiagnosticLog> {
         self.diagnostic_log.as_ref()
     }
 
     /// Get mutable diagnostic log (for testing).
+    #[must_use]
     pub fn diagnostic_log_mut(&mut self) -> Option<&mut DiagnosticLog> {
         self.diagnostic_log.as_mut()
     }

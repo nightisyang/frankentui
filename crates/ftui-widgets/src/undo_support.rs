@@ -357,6 +357,7 @@ impl fmt::Debug for WidgetTextEditCmd {
 
 impl WidgetTextEditCmd {
     /// Execute the command.
+    #[must_use = "handle the result; errors indicate the edit was not applied"]
     pub fn execute(&mut self) -> Result<(), String> {
         if let Some(ref apply_fn) = self.apply_fn {
             apply_fn(self.widget_id, &self.operation)?;
@@ -366,6 +367,7 @@ impl WidgetTextEditCmd {
     }
 
     /// Undo the command.
+    #[must_use = "handle the result; errors indicate the undo was not applied"]
     pub fn undo(&mut self) -> Result<(), String> {
         if let Some(ref undo_fn) = self.undo_fn {
             undo_fn(self.widget_id, &self.operation)?;
@@ -375,6 +377,7 @@ impl WidgetTextEditCmd {
     }
 
     /// Redo the command (same as execute).
+    #[must_use = "handle the result; errors indicate the redo was not applied"]
     pub fn redo(&mut self) -> Result<(), String> {
         self.execute()
     }

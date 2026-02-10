@@ -863,16 +863,16 @@ mod tests {
         );
 
         // First query - miss
-        idx.hit_test(5, 5);
+        let _ = idx.hit_test(5, 5);
         assert_eq!(idx.stats().misses, 1);
         assert_eq!(idx.stats().hits, 0);
 
         // Second query at same position - hit
-        idx.hit_test(5, 5);
+        let _ = idx.hit_test(5, 5);
         assert_eq!(idx.stats().hits, 1);
 
         // Query at different position - miss
-        idx.hit_test(7, 7);
+        let _ = idx.hit_test(7, 7);
         assert_eq!(idx.stats().misses, 2);
     }
 
@@ -894,14 +894,14 @@ mod tests {
         );
 
         // Prime cache
-        idx.hit_test(5, 5);
+        let _ = idx.hit_test(5, 5);
 
         // Register overlapping widget
         idx.register_simple(HitId::new(2), Rect::new(0, 0, 10, 10), HitRegion::Button, 1);
 
         // Cache should be invalidated, so next query is a miss
         let hits_before = idx.stats().hits;
-        idx.hit_test(5, 5);
+        let _ = idx.hit_test(5, 5);
         // Due to dirty tracking, cache is invalidated in overlapping region
         assert_eq!(idx.stats().hits, hits_before);
     }
@@ -1045,7 +1045,7 @@ mod tests {
         );
 
         // Prime cache
-        idx.hit_test(5, 5);
+        let _ = idx.hit_test(5, 5);
         assert!(idx.cache.valid);
 
         // Invalidate region that includes cached position
@@ -1063,7 +1063,7 @@ mod tests {
             0,
         );
 
-        idx.hit_test(5, 5);
+        let _ = idx.hit_test(5, 5);
         assert!(idx.cache.valid);
 
         idx.invalidate_all();
@@ -1159,7 +1159,7 @@ mod tests {
             HitRegion::Content,
             0,
         );
-        idx.hit_test(5, 5);
+        let _ = idx.hit_test(5, 5);
         assert!(idx.cache.valid);
         // Invalidate a region that doesn't overlap the cached point
         idx.invalidate_region(Rect::new(50, 50, 10, 10));
@@ -1199,8 +1199,8 @@ mod tests {
             HitRegion::Content,
             0,
         );
-        idx.hit_test(5, 5);
-        idx.hit_test(5, 5); // cache hit
+        let _ = idx.hit_test(5, 5);
+        let _ = idx.hit_test(5, 5); // cache hit
         let stats = idx.stats();
         assert!(stats.hits > 0 || stats.misses > 0);
         idx.reset_stats();
@@ -1666,7 +1666,7 @@ mod tests {
         assert_eq!(idx.stats().misses, 2);
 
         // Back to first position - miss (cache only stores one position)
-        idx.hit_test(5, 5);
+        let _ = idx.hit_test(5, 5);
         assert_eq!(idx.stats().misses, 3);
     }
 
@@ -1688,13 +1688,13 @@ mod tests {
         );
 
         // Prime cache
-        idx.hit_test(5, 5);
+        let _ = idx.hit_test(5, 5);
         assert_eq!(idx.stats().misses, 1);
         assert_eq!(idx.stats().hits, 0);
 
         // Invalidate all then query same position
         idx.invalidate_all();
-        idx.hit_test(5, 5);
+        let _ = idx.hit_test(5, 5);
         // Should be a miss since cache was invalidated
         assert_eq!(idx.stats().misses, 2);
     }
@@ -1717,12 +1717,12 @@ mod tests {
         );
 
         // readonly doesn't update cache
-        idx.hit_test_readonly(5, 5);
+        let _ = idx.hit_test_readonly(5, 5);
         assert_eq!(idx.stats().hits, 0);
         assert_eq!(idx.stats().misses, 0);
 
         // mutable query at same position should be a miss
-        idx.hit_test(5, 5);
+        let _ = idx.hit_test(5, 5);
         assert_eq!(idx.stats().misses, 1);
     }
 
@@ -1737,7 +1737,7 @@ mod tests {
             HitRegion::Content,
             0,
         );
-        idx.hit_test(5, 5);
+        let _ = idx.hit_test(5, 5);
         assert!(idx.cache.valid);
 
         // Zero-size rect shouldn't invalidate anything
@@ -1754,7 +1754,7 @@ mod tests {
             HitRegion::Content,
             0,
         );
-        idx.hit_test(5, 5);
+        let _ = idx.hit_test(5, 5);
         assert!(idx.cache.valid);
 
         // Region outside screen
