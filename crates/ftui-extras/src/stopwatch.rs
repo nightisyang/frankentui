@@ -427,4 +427,267 @@ mod tests {
         assert_eq!(sw.elapsed(), Duration::ZERO);
         assert!(!sw.running());
     }
+
+    // ── Builder / accessor coverage ──────────────────────────────────
+
+    #[test]
+    fn format_builder_returns_self() {
+        let sw = Stopwatch::new().format(DisplayFormat::Clock);
+        assert_eq!(sw.view(), "00:00");
+    }
+
+    #[test]
+    fn interval_accessor_after_new() {
+        let sw = Stopwatch::new();
+        assert_eq!(sw.interval(), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn elapsed_accessor_after_tick() {
+        let mut sw = Stopwatch::new();
+        sw.start();
+        sw.tick(Duration::from_secs(42));
+        assert_eq!(sw.elapsed(), Duration::from_secs(42));
+    }
+
+    // ── Start / stop / toggle edge cases ─────────────────────────────
+
+    #[test]
+    fn start_idempotent() {
+        let mut sw = Stopwatch::new();
+        sw.start();
+        sw.start(); // already running
+        assert!(sw.running());
+        sw.tick(Duration::from_secs(1));
+        assert_eq!(sw.elapsed(), Duration::from_secs(1));
+    }
+
+    #[test]
+    fn stop_idempotent() {
+        let mut sw = Stopwatch::new();
+        sw.stop(); // already stopped
+        assert!(!sw.running());
+    }
+
+    #[test]
+    fn toggle_three_times() {
+        let mut sw = Stopwatch::new();
+        sw.toggle(); // running
+        sw.toggle(); // stopped
+        sw.toggle(); // running
+        assert!(sw.running());
+    }
+
+    #[test]
+    fn reset_while_stopped() {
+        let mut sw = Stopwatch::new();
+        sw.start();
+        sw.tick(Duration::from_secs(10));
+        sw.stop();
+        sw.reset();
+        assert_eq!(sw.elapsed(), Duration::ZERO);
+        assert!(!sw.running()); // reset preserves stopped state
+    }
+
+    #[test]
+    fn multiple_start_stop_cycles_accumulate() {
+        let mut sw = Stopwatch::new();
+
+        sw.start();
+        sw.tick(Duration::from_secs(5));
+        sw.stop();
+
+        sw.start();
+        sw.tick(Duration::from_secs(3));
+        sw.stop();
+
+        assert_eq!(sw.elapsed(), Duration::from_secs(8));
+    }
+
+    // ── tick_once with custom interval ───────────────────────────────
+
+    #[test]
+    fn tick_once_custom_interval() {
+        let mut sw = Stopwatch::with_interval(Duration::from_millis(100));
+        sw.start();
+        sw.tick_once();
+        assert_eq!(sw.elapsed(), Duration::from_millis(100));
+        sw.tick_once();
+        assert_eq!(sw.elapsed(), Duration::from_millis(200));
+    }
+
+    #[test]
+    fn tick_once_returns_false_when_stopped() {
+        let mut sw = Stopwatch::new();
+        let changed = sw.tick_once();
+        assert!(!changed);
+    }
+
+    #[test]
+    fn tick_returns_true_when_running() {
+        let mut sw = Stopwatch::new();
+        sw.start();
+        assert!(sw.tick(Duration::from_secs(1)));
+    }
+
+    // ── View on stopped stopwatch ────────────────────────────────────
+
+    #[test]
+    fn view_after_stop() {
+        let mut sw = Stopwatch::new();
+        sw.start();
+        sw.tick(Duration::from_secs(30));
+        sw.stop();
+        assert_eq!(sw.view(), "30s");
+    }
+
+    #[test]
+    fn view_after_reset() {
+        let mut sw = Stopwatch::new();
+        sw.start();
+        sw.tick(Duration::from_secs(100));
+        sw.reset();
+        assert_eq!(sw.view(), "0s");
+    }
+
+    // ── Compact format (additional) ──────────────────────────────────
+
+    #[test]
+    fn compact_exactly_one_second() {
+        assert_eq!(format_compact(Duration::from_secs(1)), "1s");
+    }
+
+    #[test]
+    fn compact_fractional_micros() {
+        // 1500ns = 1.5µs
+        assert_eq!(format_compact(Duration::from_nanos(1_500)), "1.5\u{00B5}s");
+    }
+
+    #[test]
+    fn compact_fractional_millis() {
+        // 1500µs = 1.5ms
+        assert_eq!(format_compact(Duration::from_micros(1_500)), "1.5ms");
+    }
+
+    #[test]
+    fn compact_exact_millis() {
+        assert_eq!(format_compact(Duration::from_millis(250)), "250ms");
+    }
+
+    #[test]
+    fn compact_exact_micros() {
+        assert_eq!(format_compact(Duration::from_micros(42)), "42\u{00B5}s");
+    }
+
+    #[test]
+    fn compact_one_nanosecond() {
+        assert_eq!(format_compact(Duration::from_nanos(1)), "1ns");
+    }
+
+    #[test]
+    fn compact_999_nanoseconds() {
+        assert_eq!(format_compact(Duration::from_nanos(999)), "999ns");
+    }
+
+    #[test]
+    fn compact_exactly_one_minute() {
+        assert_eq!(format_compact(Duration::from_secs(60)), "1m0s");
+    }
+
+    #[test]
+    fn compact_exactly_one_hour() {
+        assert_eq!(format_compact(Duration::from_secs(3600)), "1h0m0s");
+    }
+
+    #[test]
+    fn compact_large_hours() {
+        assert_eq!(format_compact(Duration::from_secs(360_000)), "100h0m0s");
+    }
+
+    #[test]
+    fn compact_seconds_with_nanos() {
+        // 1 second + 1 nanosecond
+        assert_eq!(format_compact(Duration::new(1, 1)), "1.000000001s");
+    }
+
+    // ── Clock format (additional) ────────────────────────────────────
+
+    #[test]
+    fn clock_exactly_one_minute() {
+        assert_eq!(format_clock(Duration::from_secs(60)), "01:00");
+    }
+
+    #[test]
+    fn clock_exactly_one_hour() {
+        assert_eq!(format_clock(Duration::from_secs(3600)), "1:00:00");
+    }
+
+    #[test]
+    fn clock_large_hours() {
+        assert_eq!(format_clock(Duration::from_secs(360_000)), "100:00:00");
+    }
+
+    #[test]
+    fn clock_max_minutes_seconds() {
+        // 59 minutes, 59 seconds
+        assert_eq!(format_clock(Duration::from_secs(3599)), "59:59");
+    }
+
+    #[test]
+    fn clock_one_second() {
+        assert_eq!(format_clock(Duration::from_secs(1)), "00:01");
+    }
+
+    // ── with_interval edge cases ─────────────────────────────────────
+
+    #[test]
+    fn with_interval_zero() {
+        let mut sw = Stopwatch::with_interval(Duration::ZERO);
+        sw.start();
+        sw.tick_once();
+        // Ticking with zero interval doesn't advance
+        assert_eq!(sw.elapsed(), Duration::ZERO);
+    }
+
+    #[test]
+    fn with_interval_sub_millisecond() {
+        let mut sw = Stopwatch::with_interval(Duration::from_micros(100));
+        sw.start();
+        for _ in 0..10 {
+            sw.tick_once();
+        }
+        assert_eq!(sw.elapsed(), Duration::from_micros(1000));
+    }
+
+    // ── Derive trait tests ───────────────────────────────────────────
+
+    #[test]
+    fn display_format_debug_clone_copy_eq() {
+        let fmt = DisplayFormat::Compact;
+        let copied = fmt;
+        assert_eq!(fmt, copied);
+        assert_eq!(format!("{fmt:?}"), "Compact");
+        assert_eq!(format!("{:?}", DisplayFormat::Clock), "Clock");
+        assert_ne!(DisplayFormat::Compact, DisplayFormat::Clock);
+    }
+
+    #[test]
+    fn stopwatch_debug_and_clone() {
+        let mut sw = Stopwatch::new();
+        sw.start();
+        sw.tick(Duration::from_secs(5));
+        let cloned = sw.clone();
+        assert_eq!(cloned.elapsed(), Duration::from_secs(5));
+        assert!(cloned.running());
+        let _ = format!("{sw:?}");
+    }
+
+    #[test]
+    fn stopwatch_default_equals_new() {
+        let def = Stopwatch::default();
+        let new = Stopwatch::new();
+        assert_eq!(def.elapsed(), new.elapsed());
+        assert_eq!(def.running(), new.running());
+        assert_eq!(def.interval(), new.interval());
+    }
 }
