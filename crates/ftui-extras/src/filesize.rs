@@ -342,4 +342,294 @@ mod tests {
             binary_with_precision(max, 2)
         );
     }
+
+    // ── All decimal unit levels ──────────────────────────────────────
+
+    #[test]
+    fn decimal_all_unit_levels() {
+        let fmt = SizeFormat::decimal();
+        assert_eq!(format_size(1_000, fmt), "1.0 KB");
+        assert_eq!(format_size(1_000_000, fmt), "1.0 MB");
+        assert_eq!(format_size(1_000_000_000, fmt), "1.0 GB");
+        assert_eq!(format_size(1_000_000_000_000, fmt), "1.0 TB");
+        assert_eq!(format_size(1_000_000_000_000_000, fmt), "1.0 PB");
+        assert_eq!(format_size(1_000_000_000_000_000_000, fmt), "1.0 EB");
+    }
+
+    #[test]
+    fn binary_all_unit_levels() {
+        let fmt = SizeFormat::binary();
+        assert_eq!(format_size(1_024, fmt), "1.0 KiB");
+        assert_eq!(format_size(1_048_576, fmt), "1.0 MiB");
+        assert_eq!(format_size(1_073_741_824, fmt), "1.0 GiB");
+        assert_eq!(format_size(1_099_511_627_776, fmt), "1.0 TiB");
+        assert_eq!(format_size(1_125_899_906_842_624, fmt), "1.0 PiB");
+        assert_eq!(format_size(1_152_921_504_606_846_976, fmt), "1.0 EiB");
+    }
+
+    // ── Long unit names at all levels ────────────────────────────────
+
+    #[test]
+    fn long_decimal_all_levels() {
+        let fmt = SizeFormat::decimal().long();
+        assert_eq!(format_size(42, fmt), "42 bytes");
+        assert_eq!(format_size(1_500, fmt), "1.5 kilobytes");
+        assert_eq!(format_size(1_500_000, fmt), "1.5 megabytes");
+        assert_eq!(format_size(1_500_000_000, fmt), "1.5 gigabytes");
+        assert_eq!(format_size(1_500_000_000_000, fmt), "1.5 terabytes");
+        assert_eq!(format_size(1_500_000_000_000_000, fmt), "1.5 petabytes");
+        assert_eq!(format_size(1_500_000_000_000_000_000, fmt), "1.5 exabytes");
+    }
+
+    #[test]
+    fn long_binary_all_levels() {
+        let fmt = SizeFormat::binary().long();
+        assert_eq!(format_size(42, fmt), "42 bytes");
+        assert_eq!(format_size(1_536, fmt), "1.5 kibibytes");
+        assert_eq!(format_size(1_572_864, fmt), "1.5 mebibytes");
+        assert_eq!(format_size(1_610_612_736, fmt), "1.5 gibibytes");
+        assert_eq!(format_size(1_649_267_441_664, fmt), "1.5 tebibytes");
+        assert_eq!(format_size(1_688_849_860_263_936, fmt), "1.5 pebibytes");
+        assert_eq!(format_size(1_729_382_256_910_270_464, fmt), "1.5 exbibytes");
+    }
+
+    // ── Negative sizes at various levels ─────────────────────────────
+
+    #[test]
+    fn negative_decimal_various_levels() {
+        let fmt = SizeFormat::decimal();
+        assert_eq!(format_size(-1, fmt), "-1 B");
+        assert_eq!(format_size(-1_000, fmt), "-1.0 KB");
+        assert_eq!(format_size(-1_500_000, fmt), "-1.5 MB");
+        assert_eq!(format_size(-2_000_000_000, fmt), "-2.0 GB");
+    }
+
+    #[test]
+    fn negative_binary_various_levels() {
+        let fmt = SizeFormat::binary();
+        assert_eq!(format_size(-1, fmt), "-1 B");
+        assert_eq!(format_size(-1_024, fmt), "-1.0 KiB");
+        assert_eq!(format_size(-1_048_576, fmt), "-1.0 MiB");
+        assert_eq!(format_size(-1_073_741_824, fmt), "-1.0 GiB");
+    }
+
+    #[test]
+    fn negative_long_style() {
+        let fmt = SizeFormat::decimal().long();
+        assert_eq!(format_size(-500, fmt), "-500 bytes");
+        assert_eq!(format_size(-1_500_000, fmt), "-1.5 megabytes");
+    }
+
+    #[test]
+    fn negative_with_precision() {
+        let fmt = SizeFormat::decimal().with_precision(3);
+        assert_eq!(format_size(-1_234_567, fmt), "-1.235 MB");
+    }
+
+    // ── i64::MIN ─────────────────────────────────────────────────────
+
+    #[test]
+    fn i64_min_does_not_panic() {
+        let result = format_size(i64::MIN, SizeFormat::binary());
+        assert!(result.starts_with('-'));
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn i64_max_formats() {
+        let result = format_size(i64::MAX, SizeFormat::decimal());
+        assert!(!result.is_empty());
+        // i64::MAX = 9_223_372_036_854_775_807 ≈ 9.2 EB
+        assert!(
+            result.contains("EB"),
+            "i64::MAX should be in EB range: {result}"
+        );
+    }
+
+    // ── Boundary values ──────────────────────────────────────────────
+
+    #[test]
+    fn decimal_just_under_threshold() {
+        let fmt = SizeFormat::decimal();
+        assert_eq!(format_size(999, fmt), "999 B");
+        assert_eq!(format_size(1000, fmt), "1.0 KB");
+        assert_eq!(format_size(999_999, fmt), "1000.0 KB");
+        assert_eq!(format_size(1_000_000, fmt), "1.0 MB");
+    }
+
+    #[test]
+    fn binary_just_under_threshold() {
+        let fmt = SizeFormat::binary();
+        assert_eq!(format_size(1023, fmt), "1023 B");
+        assert_eq!(format_size(1024, fmt), "1.0 KiB");
+    }
+
+    #[test]
+    fn decimal_fractional_kb() {
+        let fmt = SizeFormat::decimal().with_precision(2);
+        assert_eq!(format_size(1_500, fmt), "1.50 KB");
+        assert_eq!(format_size(1_999, fmt), "2.00 KB");
+        assert_eq!(format_size(1_001, fmt), "1.00 KB");
+    }
+
+    // ── Precision edge cases ─────────────────────────────────────────
+
+    #[test]
+    fn precision_zero_at_byte_level() {
+        let fmt = SizeFormat::decimal().with_precision(0);
+        // Bytes always render without decimals regardless of precision
+        assert_eq!(format_size(500, fmt), "500 B");
+    }
+
+    #[test]
+    fn high_precision() {
+        let fmt = SizeFormat::decimal().with_precision(6);
+        assert_eq!(format_size(1_234_567, fmt), "1.234567 MB");
+    }
+
+    #[test]
+    fn precision_zero_rounds_up() {
+        let fmt = SizeFormat::decimal().with_precision(0);
+        assert_eq!(format_size(1_500_000, fmt), "2 MB");
+    }
+
+    #[test]
+    fn precision_zero_rounds_down() {
+        let fmt = SizeFormat::decimal().with_precision(0);
+        assert_eq!(format_size(1_400_000, fmt), "1 MB");
+    }
+
+    // ── All 4 unit×style combinations ────────────────────────────────
+
+    #[test]
+    fn all_unit_style_combinations() {
+        let size = 1_048_576_i64; // 1 MiB = 1.048576 MB
+
+        assert_eq!(format_size(size, SizeFormat::binary().short()), "1.0 MiB");
+        assert_eq!(
+            format_size(size, SizeFormat::binary().long()),
+            "1.0 mebibytes"
+        );
+        assert_eq!(format_size(size, SizeFormat::decimal().short()), "1.0 MB");
+        assert_eq!(
+            format_size(size, SizeFormat::decimal().long()),
+            "1.0 megabytes"
+        );
+    }
+
+    // ── Convenience function edge cases ──────────────────────────────
+
+    #[test]
+    fn binary_with_precision_zero() {
+        assert_eq!(binary_with_precision(1_048_576, 0), "1 MiB");
+    }
+
+    #[test]
+    fn binary_with_precision_high() {
+        assert_eq!(binary_with_precision(1_572_864, 4), "1.5000 MiB");
+    }
+
+    #[test]
+    fn decimal_with_precision_zero() {
+        assert_eq!(decimal_with_precision(1_500_000, 0), "2 MB");
+    }
+
+    #[test]
+    fn decimal_with_precision_high() {
+        assert_eq!(decimal_with_precision(1_234_567, 5), "1.23457 MB");
+    }
+
+    // ── Derive trait tests ───────────────────────────────────────────
+
+    #[test]
+    fn size_unit_debug_clone_copy_eq() {
+        let unit = SizeUnit::Binary;
+        let cloned = unit;
+        assert_eq!(unit, cloned);
+        assert_eq!(format!("{unit:?}"), "Binary");
+        assert_eq!(format!("{:?}", SizeUnit::Decimal), "Decimal");
+        assert_ne!(SizeUnit::Binary, SizeUnit::Decimal);
+    }
+
+    #[test]
+    fn unit_style_debug_clone_copy_eq() {
+        let style = UnitStyle::Short;
+        let cloned = style;
+        assert_eq!(style, cloned);
+        assert_eq!(format!("{style:?}"), "Short");
+        assert_eq!(format!("{:?}", UnitStyle::Long), "Long");
+        assert_ne!(UnitStyle::Short, UnitStyle::Long);
+    }
+
+    #[test]
+    fn size_format_debug_clone_copy_eq() {
+        let fmt = SizeFormat::decimal();
+        let cloned = fmt;
+        assert_eq!(fmt, cloned);
+        let _ = format!("{fmt:?}");
+
+        // Different precision should differ
+        assert_ne!(
+            SizeFormat::decimal().with_precision(1),
+            SizeFormat::decimal().with_precision(2)
+        );
+    }
+
+    // ── Builder method coverage ──────────────────────────────────────
+
+    #[test]
+    fn short_builder_overrides_long() {
+        let fmt = SizeFormat::binary().long().short();
+        assert_eq!(fmt.style, UnitStyle::Short);
+    }
+
+    #[test]
+    fn long_builder_overrides_short() {
+        let fmt = SizeFormat::decimal().short().long();
+        assert_eq!(fmt.style, UnitStyle::Long);
+    }
+
+    #[test]
+    fn with_precision_overrides_default() {
+        let fmt = SizeFormat::binary().with_precision(5);
+        assert_eq!(fmt.precision, 5);
+    }
+
+    // ── Specific rounding scenarios ──────────────────────────────────
+
+    #[test]
+    fn decimal_rounding_at_half() {
+        // 1.55 MB should round to 1.6 with precision 1
+        assert_eq!(decimal(1_550_000), "1.6 MB");
+    }
+
+    #[test]
+    fn binary_rounding_boundary() {
+        // 1.5 * 1024 = 1536
+        assert_eq!(binary(1_536), "1.5 KiB");
+    }
+
+    #[test]
+    fn format_size_single_byte() {
+        let fmt = SizeFormat::decimal().long();
+        // "1 bytes" — grammatically awkward but consistent with array-based approach
+        assert_eq!(format_size(1, fmt), "1 bytes");
+    }
+
+    // ── Constant array length verification ───────────────────────────
+
+    #[test]
+    fn unit_arrays_consistent_length() {
+        assert_eq!(BINARY_UNITS_SHORT.len(), BINARY_UNITS_LONG.len());
+        assert_eq!(DECIMAL_UNITS_SHORT.len(), DECIMAL_UNITS_LONG.len());
+        assert_eq!(BINARY_UNITS_SHORT.len(), DECIMAL_UNITS_SHORT.len());
+    }
+
+    #[test]
+    fn unit_arrays_start_with_bytes() {
+        assert_eq!(BINARY_UNITS_SHORT[0], "B");
+        assert_eq!(DECIMAL_UNITS_SHORT[0], "B");
+        assert_eq!(BINARY_UNITS_LONG[0], "bytes");
+        assert_eq!(DECIMAL_UNITS_LONG[0], "bytes");
+    }
 }
