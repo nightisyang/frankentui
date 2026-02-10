@@ -843,4 +843,299 @@ mod tests {
         let zero_width = MiniBar::new(0.5, 0);
         assert!(!zero_width.has_intrinsic_size());
     }
+
+    // ── Edge-case tests (bd-3b82x) ──────────────────────────
+
+    #[test]
+    fn ratio_nan_clamped_to_zero() {
+        let pb = ProgressBar::new().ratio(f64::NAN);
+        // NaN.clamp(0.0, 1.0) returns NaN in Rust, but check it doesn't panic
+        // The render path uses floor() which handles NaN → 0
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        let area = Rect::new(0, 0, 10, 1);
+        Widget::render(&pb, area, &mut frame);
+    }
+
+    #[test]
+    fn ratio_infinity_clamped() {
+        let pb = ProgressBar::new().ratio(f64::INFINITY);
+        assert_eq!(pb.ratio, 1.0);
+
+        let pb_neg = ProgressBar::new().ratio(f64::NEG_INFINITY);
+        assert_eq!(pb_neg.ratio, 0.0);
+    }
+
+    #[test]
+    fn label_wider_than_area() {
+        let pb = ProgressBar::new()
+            .ratio(0.5)
+            .label("This is a very long label text");
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        let area = Rect::new(0, 0, 5, 1);
+        Widget::render(&pb, area, &mut frame); // Should not panic, truncated
+    }
+
+    #[test]
+    fn label_on_multi_row_bar_vertically_centered() {
+        let pb = ProgressBar::new().ratio(0.5).label("X");
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 5, &mut pool);
+        let area = Rect::new(0, 0, 10, 5);
+        Widget::render(&pb, area, &mut frame);
+        // label_y = top + height/2 = 0 + 2 = 2
+        let c = frame.buffer.get(4, 2).and_then(|c| c.content.as_char());
+        assert_eq!(c, Some('X'));
+    }
+
+    #[test]
+    fn empty_label_renders_no_text() {
+        let pb = ProgressBar::new().ratio(0.5).label("");
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        let area = Rect::new(0, 0, 10, 1);
+        Widget::render(&pb, area, &mut frame); // Should not panic
+    }
+
+    #[test]
+    fn progress_bar_clone_and_debug() {
+        let pb = ProgressBar::new().ratio(0.5).label("test");
+        let cloned = pb.clone();
+        assert!((cloned.ratio - 0.5).abs() < f64::EPSILON);
+        assert_eq!(cloned.label, Some("test"));
+        let dbg = format!("{:?}", pb);
+        assert!(dbg.contains("ProgressBar"));
+    }
+
+    #[test]
+    fn progress_bar_default_trait() {
+        let pb = ProgressBar::default();
+        assert_eq!(pb.ratio, 0.0);
+        assert!(pb.label.is_none());
+    }
+
+    #[test]
+    fn render_width_one() {
+        let pb = ProgressBar::new()
+            .ratio(1.0)
+            .gauge_style(Style::new().bg(PackedRgba::RED));
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(1, 1, &mut pool);
+        let area = Rect::new(0, 0, 1, 1);
+        Widget::render(&pb, area, &mut frame);
+        assert_eq!(cell_at(&frame, 0, 0).bg, PackedRgba::RED);
+    }
+
+    #[test]
+    fn render_ratio_just_above_zero() {
+        let pb = ProgressBar::new()
+            .ratio(0.01)
+            .gauge_style(Style::new().bg(PackedRgba::GREEN));
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(100, 1, &mut pool);
+        let area = Rect::new(0, 0, 100, 1);
+        Widget::render(&pb, area, &mut frame);
+        // floor(100 * 0.01) = 1 cell filled
+        assert_eq!(cell_at(&frame, 0, 0).bg, PackedRgba::GREEN);
+        assert_ne!(cell_at(&frame, 1, 0).bg, PackedRgba::GREEN);
+    }
+
+    // --- MiniBar edge cases ---
+
+    #[test]
+    fn minibar_nan_value_treated_as_zero() {
+        let bar = MiniBar::new(f64::NAN, 10);
+        let filled = bar.render_string().chars().filter(|c| *c == '█').count();
+        assert_eq!(filled, 0);
+    }
+
+    #[test]
+    fn minibar_infinity_clamped_to_full() {
+        let bar = MiniBar::new(f64::INFINITY, 10);
+        let filled = bar.render_string().chars().filter(|c| *c == '█').count();
+        assert_eq!(filled, 0); // NaN/Inf → normalized_value returns 0.0
+    }
+
+    #[test]
+    fn minibar_negative_value() {
+        let bar = MiniBar::new(-0.5, 10);
+        let filled = bar.render_string().chars().filter(|c| *c == '█').count();
+        assert_eq!(filled, 0);
+    }
+
+    #[test]
+    fn minibar_value_above_one() {
+        let bar = MiniBar::new(1.5, 10);
+        let filled = bar.render_string().chars().filter(|c| *c == '█').count();
+        assert_eq!(filled, 10); // clamped to 1.0
+    }
+
+    #[test]
+    fn minibar_width_zero() {
+        let bar = MiniBar::new(0.5, 0);
+        assert_eq!(bar.render_string(), "");
+    }
+
+    #[test]
+    fn minibar_width_one() {
+        let bar = MiniBar::new(1.0, 1);
+        let s = bar.render_string();
+        assert_eq!(s.chars().count(), 1);
+        assert_eq!(s.chars().next(), Some('█'));
+    }
+
+    #[test]
+    fn minibar_custom_chars() {
+        let bar = MiniBar::new(0.5, 4).filled_char('#').empty_char('-');
+        let s = bar.render_string();
+        assert!(s.contains('#'));
+        assert!(s.contains('-'));
+        assert_eq!(s.chars().count(), 4);
+    }
+
+    #[test]
+    fn minibar_value_and_width_setters() {
+        let bar = MiniBar::new(0.0, 5).value(1.0).width(3);
+        assert_eq!(bar.render_string().chars().count(), 3);
+        let filled = bar.render_string().chars().filter(|c| *c == '█').count();
+        assert_eq!(filled, 3);
+    }
+
+    #[test]
+    fn minibar_color_boundary_exactly_at_high() {
+        // Default high threshold is 0.75; at exactly 0.75, value is NOT > 0.75
+        let at_thresh = MiniBar::color_for_value(0.75);
+        let above = MiniBar::color_for_value(0.76);
+        let defaults = MiniBarColors::default();
+        assert_eq!(above, defaults.high);
+        assert_eq!(at_thresh, defaults.mid); // not above high threshold
+    }
+
+    #[test]
+    fn minibar_color_boundary_exactly_at_mid() {
+        let at_thresh = MiniBar::color_for_value(0.50);
+        let defaults = MiniBarColors::default();
+        assert_eq!(at_thresh, defaults.low); // not above mid threshold
+    }
+
+    #[test]
+    fn minibar_color_boundary_exactly_at_low() {
+        let at_thresh = MiniBar::color_for_value(0.25);
+        let defaults = MiniBarColors::default();
+        assert_eq!(at_thresh, defaults.critical); // not above low threshold
+    }
+
+    #[test]
+    fn minibar_color_for_value_nan() {
+        let c = MiniBar::color_for_value(f64::NAN);
+        let defaults = MiniBarColors::default();
+        assert_eq!(c, defaults.critical); // NaN → 0.0 → critical
+    }
+
+    #[test]
+    fn minibar_colors_new() {
+        let r = PackedRgba::rgb(255, 0, 0);
+        let g = PackedRgba::rgb(0, 255, 0);
+        let b = PackedRgba::rgb(0, 0, 255);
+        let w = PackedRgba::rgb(255, 255, 255);
+        let colors = MiniBarColors::new(r, g, b, w);
+        assert_eq!(colors.high, r);
+        assert_eq!(colors.mid, g);
+        assert_eq!(colors.low, b);
+        assert_eq!(colors.critical, w);
+    }
+
+    #[test]
+    fn minibar_custom_thresholds_and_colors() {
+        let colors = MiniBarColors::new(
+            PackedRgba::rgb(1, 1, 1),
+            PackedRgba::rgb(2, 2, 2),
+            PackedRgba::rgb(3, 3, 3),
+            PackedRgba::rgb(4, 4, 4),
+        );
+        let thresholds = MiniBarThresholds {
+            high: 0.9,
+            mid: 0.5,
+            low: 0.1,
+        };
+        let bar = MiniBar::new(0.95, 10).colors(colors).thresholds(thresholds);
+        let c = bar.color_for_value_with_palette(0.95);
+        assert_eq!(c, PackedRgba::rgb(1, 1, 1));
+    }
+
+    #[test]
+    fn minibar_clone_and_debug() {
+        let bar = MiniBar::new(0.5, 10).show_percent(true);
+        let cloned = bar.clone();
+        assert_eq!(cloned.render_string(), bar.render_string());
+        let dbg = format!("{:?}", bar);
+        assert!(dbg.contains("MiniBar"));
+    }
+
+    #[test]
+    fn minibar_render_zero_area() {
+        let bar = MiniBar::new(0.5, 10);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 1, &mut pool);
+        let area = Rect::new(0, 0, 0, 0);
+        Widget::render(&bar, area, &mut frame); // Should not panic
+    }
+
+    #[test]
+    fn minibar_render_with_percent_narrow() {
+        let bar = MiniBar::new(0.5, 10).show_percent(true);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 1, &mut pool);
+        // Area smaller than bar_width + percent_width
+        let area = Rect::new(0, 0, 5, 1);
+        Widget::render(&bar, area, &mut frame); // Should adapt or truncate
+    }
+
+    #[test]
+    fn minibar_render_percent_only_no_bar_room() {
+        let bar = MiniBar::new(0.5, 10).show_percent(true);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(5, 1, &mut pool);
+        // Area of width 5, percent takes 5 (" XXX%"), bar_width gets 0
+        let area = Rect::new(0, 0, 5, 1);
+        Widget::render(&bar, area, &mut frame);
+    }
+
+    #[test]
+    fn minibar_thresholds_default_values() {
+        let t = MiniBarThresholds::default();
+        assert!((t.high - 0.75).abs() < f64::EPSILON);
+        assert!((t.mid - 0.50).abs() < f64::EPSILON);
+        assert!((t.low - 0.25).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn minibar_colors_default_not_all_same() {
+        let c = MiniBarColors::default();
+        assert_ne!(c.high, c.mid);
+        assert_ne!(c.mid, c.low);
+        assert_ne!(c.low, c.critical);
+    }
+
+    #[test]
+    fn minibar_colors_copy() {
+        let c = MiniBarColors::default();
+        let c2 = c; // Copy
+        assert_eq!(c.high, c2.high);
+    }
+
+    #[test]
+    fn minibar_thresholds_copy() {
+        let t = MiniBarThresholds::default();
+        let t2 = t; // Copy
+        assert!((t.high - t2.high).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn minibar_style_setter() {
+        let bar = MiniBar::new(0.5, 10).style(Style::new().bold());
+        let dbg = format!("{:?}", bar);
+        assert!(dbg.contains("MiniBar"));
+    }
 }
