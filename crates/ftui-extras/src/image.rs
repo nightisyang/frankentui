@@ -583,4 +583,460 @@ mod tests {
         // Scale = max(10/2, 10/4) = max(5, 2.5) = 5 → (10, 20)
         assert_eq!((w, h), (10, 20));
     }
+
+    // ── detect_protocol priority ────────────────────────────────────
+
+    #[test]
+    fn detect_protocol_kitty_explicit_hint() {
+        let caps = TerminalCapabilities::basic();
+        let hints = DetectionHints::default().with_kitty_graphics(true);
+        assert_eq!(detect_protocol(caps, &hints), ImageProtocol::Kitty);
+    }
+
+    #[test]
+    fn detect_protocol_kitty_beats_iterm2() {
+        let caps = TerminalCapabilities::basic();
+        let hints = DetectionHints::default()
+            .with_kitty_graphics(true)
+            .with_iterm2_inline(true);
+        assert_eq!(detect_protocol(caps, &hints), ImageProtocol::Kitty);
+    }
+
+    #[test]
+    fn detect_protocol_iterm2_beats_sixel() {
+        let caps = TerminalCapabilities::basic();
+        let hints = DetectionHints::default()
+            .with_iterm2_inline(true)
+            .with_sixel(true);
+        assert_eq!(detect_protocol(caps, &hints), ImageProtocol::Iterm2);
+    }
+
+    #[test]
+    fn detect_protocol_iterm2_from_term_program() {
+        let caps = TerminalCapabilities::basic();
+        let hints = DetectionHints {
+            term_program: Some("iTerm.app".to_string()),
+            ..DetectionHints::default()
+        };
+        assert_eq!(detect_protocol(caps, &hints), ImageProtocol::Iterm2);
+    }
+
+    #[test]
+    fn detect_protocol_sixel_from_term() {
+        let caps = TerminalCapabilities::basic();
+        let hints = DetectionHints {
+            term: Some("xterm-sixel".to_string()),
+            ..DetectionHints::default()
+        };
+        assert_eq!(detect_protocol(caps, &hints), ImageProtocol::Sixel);
+    }
+
+    #[test]
+    fn detect_protocol_explicit_false_overrides_env() {
+        let caps = TerminalCapabilities::basic();
+        // TERM says kitty, but hint explicitly false
+        let hints = DetectionHints {
+            term: Some("xterm-kitty".to_string()),
+            kitty_graphics: Some(false),
+            ..DetectionHints::default()
+        };
+        // kitty_graphics=Some(false) overrides the env check
+        assert_ne!(detect_protocol(caps, &hints), ImageProtocol::Kitty);
+    }
+
+    // ── DetectionHints builders and defaults ─────────────────────────
+
+    #[test]
+    fn detection_hints_default_all_none() {
+        let hints = DetectionHints::default();
+        assert!(hints.term.is_none());
+        assert!(hints.term_program.is_none());
+        assert!(hints.kitty_graphics.is_none());
+        assert!(hints.sixel.is_none());
+        assert!(hints.iterm2_inline.is_none());
+    }
+
+    #[test]
+    fn detection_hints_builders_chain() {
+        let hints = DetectionHints::default()
+            .with_kitty_graphics(true)
+            .with_sixel(false)
+            .with_iterm2_inline(true);
+        assert_eq!(hints.kitty_graphics, Some(true));
+        assert_eq!(hints.sixel, Some(false));
+        assert_eq!(hints.iterm2_inline, Some(true));
+    }
+
+    // ── ProtocolCache ────────────────────────────────────────────────
+
+    #[test]
+    fn protocol_cache_new_is_empty() {
+        let cache = ProtocolCache::new();
+        assert!(cache.cached.is_none());
+    }
+
+    // ── iTerm2 encoding with options ─────────────────────────────────
+
+    #[test]
+    fn iterm2_encoding_with_dimensions() {
+        let payload = vec![0u8; 4];
+        let opts = Iterm2Options {
+            width: Some(Iterm2Dimension::Cells(80)),
+            height: Some(Iterm2Dimension::Pixels(400)),
+            ..Iterm2Options::default()
+        };
+        let seq = encode_iterm2_png(&payload, &opts);
+        assert!(seq.contains("width=80"), "Should contain width: {seq}");
+        assert!(
+            seq.contains("height=400px"),
+            "Should contain height in pixels: {seq}"
+        );
+    }
+
+    #[test]
+    fn iterm2_encoding_with_name() {
+        let payload = vec![0u8; 4];
+        let opts = Iterm2Options {
+            name: Some("test.png".to_string()),
+            ..Iterm2Options::default()
+        };
+        let seq = encode_iterm2_png(&payload, &opts);
+        let expected_name = STANDARD.encode(b"test.png");
+        assert!(
+            seq.contains(&format!("name={expected_name}")),
+            "Should contain encoded name: {seq}"
+        );
+    }
+
+    #[test]
+    fn iterm2_encoding_no_preserve_aspect() {
+        let payload = vec![0u8; 4];
+        let opts = Iterm2Options {
+            preserve_aspect_ratio: false,
+            ..Iterm2Options::default()
+        };
+        let seq = encode_iterm2_png(&payload, &opts);
+        assert!(
+            seq.contains("preserveAspectRatio=0"),
+            "Should contain aspect ratio override: {seq}"
+        );
+    }
+
+    #[test]
+    fn iterm2_encoding_not_inline() {
+        let payload = vec![0u8; 4];
+        let opts = Iterm2Options {
+            inline: false,
+            ..Iterm2Options::default()
+        };
+        let seq = encode_iterm2_png(&payload, &opts);
+        assert!(
+            !seq.contains("inline=1"),
+            "Should not contain inline when false: {seq}"
+        );
+    }
+
+    #[test]
+    fn iterm2_encoding_percent_dimension() {
+        let payload = vec![0u8; 4];
+        let opts = Iterm2Options {
+            width: Some(Iterm2Dimension::Percent(50)),
+            height: Some(Iterm2Dimension::Auto),
+            ..Iterm2Options::default()
+        };
+        let seq = encode_iterm2_png(&payload, &opts);
+        assert!(seq.contains("width=50%"), "Percent width: {seq}");
+        assert!(seq.contains("height=auto"), "Auto height: {seq}");
+    }
+
+    // ── kitty large payload (multi-chunk) ────────────────────────────
+
+    #[test]
+    fn kitty_large_payload_multiple_chunks() {
+        // 4096 base64 chars = ~3072 raw bytes, so 4000 raw bytes > 1 chunk
+        let payload = vec![0u8; 4000];
+        let chunks = encode_kitty_png(&payload);
+        assert!(
+            chunks.len() > 1,
+            "Large payload should produce multiple chunks, got {}",
+            chunks.len()
+        );
+        // First chunk has metadata and m=1 (more)
+        assert!(chunks[0].contains("a=T,f=100"));
+        assert!(chunks[0].contains("m=1"));
+        // Last chunk has m=0
+        let last = chunks.last().unwrap();
+        assert!(last.contains("m=0"), "Last chunk should have m=0: {last}");
+    }
+
+    // ── Image wrapper methods ────────────────────────────────────────
+
+    #[test]
+    fn image_encode_kitty_produces_chunks() {
+        let bytes = encode_bytes(ImageFormat::Png, 2, 2);
+        let img = Image::from_bytes(&bytes).expect("decode");
+        let chunks = img.encode_kitty(None, None, ImageFit::None).expect("kitty");
+        assert!(!chunks.is_empty());
+        assert!(chunks[0].contains("a=T,f=100"));
+    }
+
+    #[test]
+    fn image_encode_iterm2_produces_sequence() {
+        let bytes = encode_bytes(ImageFormat::Png, 2, 2);
+        let img = Image::from_bytes(&bytes).expect("decode");
+        let seq = img
+            .encode_iterm2(None, None, ImageFit::None, &Iterm2Options::default())
+            .expect("iterm2");
+        assert!(seq.starts_with("\x1b]1337;File="));
+        assert!(seq.ends_with('\x07'));
+    }
+
+    #[test]
+    fn image_render_ascii_returns_lines() {
+        let bytes = encode_bytes(ImageFormat::Png, 4, 3);
+        let img = Image::from_bytes(&bytes).expect("decode");
+        let lines = img.render_ascii(4, 3, ImageFit::Stretch);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].len(), 4);
+    }
+
+    // ── resize edge cases ────────────────────────────────────────────
+
+    #[test]
+    fn resize_none_preserves_original() {
+        let bytes = encode_bytes(ImageFormat::Png, 5, 3);
+        let img = Image::from_bytes(&bytes).expect("decode");
+        let out = img
+            .to_png_bytes(Some(10), Some(10), ImageFit::None)
+            .expect("encode");
+        let decoded = image::load_from_memory(&out).expect("decode");
+        assert_eq!(
+            decoded.dimensions(),
+            (5, 3),
+            "None fit should preserve size"
+        );
+    }
+
+    #[test]
+    fn resize_only_max_width() {
+        let bytes = encode_bytes(ImageFormat::Png, 10, 5);
+        let img = Image::from_bytes(&bytes).expect("decode");
+        let out = img
+            .to_png_bytes(Some(5), None, ImageFit::Contain)
+            .expect("encode");
+        let decoded = image::load_from_memory(&out).expect("decode");
+        // Contain with max_width=5: scale=min(5/10, 5/5)=min(0.5,1)=0.5 → (5, 3)
+        let (w, h) = decoded.dimensions();
+        assert!(w <= 5, "Width should be at most 5, got {w}");
+        assert!(h <= 5, "Height should be bounded, got {h}");
+    }
+
+    #[test]
+    fn resize_only_max_height() {
+        let bytes = encode_bytes(ImageFormat::Png, 5, 10);
+        let img = Image::from_bytes(&bytes).expect("decode");
+        let out = img
+            .to_png_bytes(None, Some(5), ImageFit::Contain)
+            .expect("encode");
+        let decoded = image::load_from_memory(&out).expect("decode");
+        let (_w, h) = decoded.dimensions();
+        assert!(h <= 5, "Height should be at most 5, got {h}");
+    }
+
+    #[test]
+    fn resize_no_constraints_preserves_original() {
+        let bytes = encode_bytes(ImageFormat::Png, 7, 3);
+        let img = Image::from_bytes(&bytes).expect("decode");
+        let out = img
+            .to_png_bytes(None, None, ImageFit::Contain)
+            .expect("encode");
+        let decoded = image::load_from_memory(&out).expect("decode");
+        assert_eq!(decoded.dimensions(), (7, 3));
+    }
+
+    #[test]
+    fn resize_cover_exceeds_box() {
+        let bytes = encode_bytes(ImageFormat::Png, 10, 5);
+        let img = Image::from_bytes(&bytes).expect("decode");
+        let out = img
+            .to_png_bytes(Some(4), Some(4), ImageFit::Cover)
+            .expect("encode");
+        let decoded = image::load_from_memory(&out).expect("decode");
+        let (w, h) = decoded.dimensions();
+        // Cover: at least one dimension >= target
+        assert!(w >= 4 || h >= 4, "Cover should fill box: {w}x{h}");
+    }
+
+    // ── scale_to_fit additional cases ────────────────────────────────
+
+    #[test]
+    fn scale_to_fit_width_zero_only() {
+        let (w, h) = scale_to_fit(0, 10, 5, 5, false);
+        assert_eq!((w, h), (5, 5), "Zero width returns max dimensions");
+    }
+
+    #[test]
+    fn scale_to_fit_height_zero_only() {
+        let (w, h) = scale_to_fit(10, 0, 5, 5, false);
+        assert_eq!((w, h), (5, 5), "Zero height returns max dimensions");
+    }
+
+    #[test]
+    fn scale_to_fit_already_fits() {
+        let (w, h) = scale_to_fit(5, 5, 10, 10, false);
+        // contain: scale = min(10/5, 10/5) = 2 → (10, 10)
+        assert_eq!((w, h), (10, 10));
+    }
+
+    #[test]
+    fn scale_to_fit_wide_image_contain() {
+        // 20x5 in 10x10: scale = min(10/20, 10/5) = min(0.5, 2) = 0.5 → (10, 3)
+        let (w, h) = scale_to_fit(20, 5, 10, 10, false);
+        assert_eq!(w, 10);
+        assert!(h <= 10);
+    }
+
+    #[test]
+    fn scale_to_fit_tall_image_cover() {
+        // 5x20 in 10x10: scale = max(10/5, 10/20) = max(2, 0.5) = 2 → (10, 40)
+        let (w, h) = scale_to_fit(5, 20, 10, 10, true);
+        assert_eq!((w, h), (10, 40));
+    }
+
+    // ── ASCII rendering variations ───────────────────────────────────
+
+    #[test]
+    fn ascii_stretch_ignores_aspect() {
+        let image = DynamicImage::new_rgb8(4, 2);
+        let lines = render_ascii(&image, 8, 8, ImageFit::Stretch);
+        assert_eq!(lines.len(), 8, "Stretch should match target height");
+        assert_eq!(lines[0].len(), 8, "Stretch should match target width");
+    }
+
+    #[test]
+    fn ascii_cover_fills_at_least_one_dim() {
+        let image = DynamicImage::new_rgb8(4, 2);
+        let lines = render_ascii(&image, 4, 4, ImageFit::Cover);
+        // Cover: scale = max(4/4, 4/2) = 2 → (8, 4) then lines should be 4
+        assert!(lines.len() >= 4, "Cover should fill height");
+    }
+
+    #[test]
+    fn ascii_ramp_black_is_space() {
+        // Black pixel should map to space (first char in ramp)
+        let image = DynamicImage::new_rgb8(1, 1);
+        let lines = render_ascii(&image, 1, 1, ImageFit::None);
+        assert_eq!(lines[0], " ", "Black pixel should be space");
+    }
+
+    // ── ImageError variants ──────────────────────────────────────────
+
+    #[test]
+    fn image_error_display_decode() {
+        let err = Image::from_bytes(b"bad").unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("decode"), "got: {msg}");
+    }
+
+    #[test]
+    fn image_error_is_std_error() {
+        let err = Image::from_bytes(b"bad").unwrap_err();
+        let _: &dyn std::error::Error = &err;
+    }
+
+    #[test]
+    fn image_error_from_image_error() {
+        // Test the From<image::ImageError> impl
+        let decode_err = image::load_from_memory(b"bad").unwrap_err();
+        let err: ImageError = decode_err.into();
+        assert!(matches!(err, ImageError::Decode(_)));
+    }
+
+    // ── derive trait coverage ────────────────────────────────────────
+
+    #[test]
+    fn image_protocol_derive_traits() {
+        let p = ImageProtocol::Kitty;
+        let cloned = p;
+        assert_eq!(p, cloned);
+        let debug = format!("{p:?}");
+        assert!(debug.contains("Kitty"));
+
+        // Hash
+        let mut set = std::collections::HashSet::new();
+        set.insert(p);
+        assert!(set.contains(&ImageProtocol::Kitty));
+    }
+
+    #[test]
+    fn image_fit_derive_traits() {
+        let f = ImageFit::Contain;
+        let cloned = f;
+        assert_eq!(f, cloned);
+        let debug = format!("{f:?}");
+        assert!(debug.contains("Contain"));
+
+        let mut set = std::collections::HashSet::new();
+        set.insert(f);
+        assert!(set.contains(&ImageFit::Contain));
+    }
+
+    #[test]
+    fn iterm2_dimension_derive_traits() {
+        let d = Iterm2Dimension::Cells(10);
+        let cloned = d;
+        assert_eq!(d, cloned);
+        let debug = format!("{d:?}");
+        assert!(debug.contains("Cells"));
+
+        let mut set = std::collections::HashSet::new();
+        set.insert(d);
+        assert!(set.contains(&Iterm2Dimension::Cells(10)));
+    }
+
+    #[test]
+    fn iterm2_options_debug_clone() {
+        let opts = Iterm2Options::default();
+        let cloned = opts.clone();
+        assert!(cloned.inline);
+        let debug = format!("{opts:?}");
+        assert!(debug.contains("Iterm2Options"));
+    }
+
+    #[test]
+    fn image_debug_clone() {
+        let bytes = encode_bytes(ImageFormat::Png, 1, 1);
+        let img = Image::from_bytes(&bytes).expect("decode");
+        let cloned = img.clone();
+        let debug = format!("{img:?}");
+        assert!(debug.contains("Image"));
+        // Verify clone works by encoding both
+        let out1 = img
+            .to_png_bytes(None, None, ImageFit::None)
+            .expect("encode");
+        let out2 = cloned
+            .to_png_bytes(None, None, ImageFit::None)
+            .expect("encode clone");
+        assert_eq!(out1, out2);
+    }
+
+    #[test]
+    fn protocol_cache_debug_default() {
+        let cache = ProtocolCache::default();
+        assert!(cache.cached.is_none());
+        let debug = format!("{cache:?}");
+        assert!(debug.contains("ProtocolCache"));
+    }
+
+    #[test]
+    fn detection_hints_debug_clone() {
+        let hints = DetectionHints {
+            term: Some("xterm".to_string()),
+            ..DetectionHints::default()
+        };
+        let cloned = hints.clone();
+        assert_eq!(cloned.term.as_deref(), Some("xterm"));
+        let debug = format!("{hints:?}");
+        assert!(debug.contains("DetectionHints"));
+    }
 }
