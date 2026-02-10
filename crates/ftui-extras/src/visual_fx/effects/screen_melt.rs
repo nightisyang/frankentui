@@ -719,4 +719,338 @@ mod tests {
             "80x100 melt should complete within 500 frames (took {frames})"
         );
     }
+
+    // --- Additional edge case tests (bd-2y5ve) ---
+
+    #[test]
+    fn is_done_initially_false() {
+        let inner = Box::new(SolidFx {
+            color: PackedRgba::rgb(0, 0, 0),
+        });
+        let melt = ScreenMeltFx::new(inner);
+        assert!(!melt.is_done());
+    }
+
+    #[test]
+    fn melt_1x1_grid() {
+        let inner = Box::new(SolidFx {
+            color: PackedRgba::rgb(255, 0, 0),
+        });
+        let mut melt = ScreenMeltFx::new(inner);
+        let mut buf = vec![PackedRgba::rgb(0, 0, 255); 1];
+
+        for frame in 0..50 {
+            let ctx = make_ctx(1, 1, frame);
+            melt.render(ctx, &mut buf);
+            if melt.is_done() {
+                break;
+            }
+        }
+        assert!(melt.is_done(), "1x1 melt should complete quickly");
+    }
+
+    #[test]
+    fn melt_zero_width_nonzero_height() {
+        let inner = Box::new(SolidFx {
+            color: PackedRgba::rgb(0, 0, 0),
+        });
+        let mut melt = ScreenMeltFx::new(inner);
+        let ctx = make_ctx(0, 10, 0);
+        let mut buf = vec![];
+        melt.render(ctx, &mut buf);
+        // Should not panic, should not start
+        assert!(!melt.started);
+    }
+
+    #[test]
+    fn melt_nonzero_width_zero_height() {
+        let inner = Box::new(SolidFx {
+            color: PackedRgba::rgb(0, 0, 0),
+        });
+        let mut melt = ScreenMeltFx::new(inner);
+        let ctx = make_ctx(10, 0, 0);
+        let mut buf = vec![];
+        melt.render(ctx, &mut buf);
+        assert!(!melt.started);
+    }
+
+    #[test]
+    fn advance_acceleration_capped_at_8() {
+        let inner = Box::new(SolidFx {
+            color: PackedRgba::rgb(0, 0, 0),
+        });
+        let mut melt = ScreenMeltFx::with_seed(inner, 1);
+        melt.last_width = 1;
+        melt.last_height = 1000;
+
+        // At offset 20, dy = min(20+1, 8) = 8
+        melt.column_offsets = vec![20];
+        melt.advance();
+        assert_eq!(melt.column_offsets[0], 28);
+
+        // At offset 100, dy = min(100+1, 8) = 8 (still capped)
+        melt.column_offsets = vec![100];
+        melt.advance();
+        assert_eq!(melt.column_offsets[0], 108);
+    }
+
+    #[test]
+    fn advance_zero_offset_boundary() {
+        let inner = Box::new(SolidFx {
+            color: PackedRgba::rgb(0, 0, 0),
+        });
+        let mut melt = ScreenMeltFx::with_seed(inner, 1);
+        melt.last_width = 1;
+        melt.last_height = 100;
+
+        // At offset 0: dy = min(0+1, 8) = 1
+        melt.column_offsets = vec![0];
+        melt.advance();
+        assert_eq!(melt.column_offsets[0], 1);
+    }
+
+    #[test]
+    fn init_offsets_single_column() {
+        let inner = Box::new(SolidFx {
+            color: PackedRgba::rgb(0, 0, 0),
+        });
+        let mut melt = ScreenMeltFx::with_seed(inner, 42);
+        melt.column_offsets.resize(1, 0);
+        melt.init_offsets(1);
+        assert!(
+            (-15..=0).contains(&melt.column_offsets[0]),
+            "single column offset {} out of range",
+            melt.column_offsets[0]
+        );
+    }
+
+    #[test]
+    fn default_seed_is_deadbeef() {
+        let inner = Box::new(SolidFx {
+            color: PackedRgba::rgb(0, 0, 0),
+        });
+        let melt = ScreenMeltFx::new(inner);
+        assert_eq!(melt.rng_seed, 0xDEAD_BEEF);
+    }
+
+    #[test]
+    fn inner_buf_grows_only() {
+        let inner = Box::new(SolidFx {
+            color: PackedRgba::rgb(255, 0, 0),
+        });
+        let mut melt = ScreenMeltFx::new(inner);
+
+        // Render large
+        let mut buf = vec![PackedRgba::rgb(0, 0, 255); 200];
+        let ctx = make_ctx(20, 10, 0);
+        melt.render(ctx, &mut buf);
+        let cap_after_large = melt.inner_buf.capacity();
+
+        // Render small — capacity should not shrink
+        let mut buf2 = vec![PackedRgba::rgb(0, 0, 255); 20];
+        melt.reset();
+        let ctx2 = make_ctx(5, 4, 0);
+        melt.render(ctx2, &mut buf2);
+        assert!(
+            melt.inner_buf.capacity() >= cap_after_large,
+            "inner_buf capacity should not shrink"
+        );
+    }
+
+    #[test]
+    fn dimension_change_reinits_offsets() {
+        let inner = Box::new(SolidFx {
+            color: PackedRgba::rgb(255, 0, 0),
+        });
+        let mut melt = ScreenMeltFx::new(inner);
+
+        // Start with 10x10
+        let mut buf = vec![PackedRgba::rgb(0, 0, 255); 100];
+        let ctx = make_ctx(10, 10, 0);
+        melt.render(ctx, &mut buf);
+        let _offsets_10 = melt.column_offsets[..10].to_vec();
+
+        // Render a few frames
+        for frame in 1..5 {
+            let ctx = make_ctx(10, 10, frame);
+            melt.render(ctx, &mut buf);
+        }
+
+        // Change to 20x10 — should reinit offsets
+        let mut buf2 = vec![PackedRgba::rgb(0, 0, 255); 200];
+        let ctx = make_ctx(20, 10, 5);
+        melt.render(ctx, &mut buf2);
+
+        // Width changed, so first 10 columns should be reinited
+        // (not equal to the advanced offsets from frames 1-4)
+        let offsets_20 = melt.column_offsets[..10].to_vec();
+        // The reinited offsets should be back in [-15, 0] range
+        for (i, &o) in offsets_20.iter().enumerate() {
+            assert!(
+                (-15..=0).contains(&o),
+                "reinited column {i} offset {o} out of [-15, 0]"
+            );
+        }
+        // And we now have 20 columns
+        assert!(melt.column_offsets.len() >= 20);
+    }
+
+    #[test]
+    fn xorshift_no_short_cycle() {
+        let mut state = 1u32;
+        let first = xorshift32(&mut state);
+        // Run 1000 steps and verify we don't return to the first value quickly
+        let mut seen_first = false;
+        for _ in 0..1000 {
+            if xorshift32(&mut state) == first {
+                seen_first = true;
+                break;
+            }
+        }
+        // Xorshift32 has a full period of 2^32-1, so we should NOT see
+        // the first value again in 1000 steps
+        assert!(!seen_first, "xorshift32 should not have a short cycle");
+    }
+
+    #[test]
+    fn frozen_frame_preserves_pattern() {
+        let inner = Box::new(SolidFx {
+            color: PackedRgba::rgb(255, 0, 0),
+        });
+        let mut melt = ScreenMeltFx::new(inner);
+
+        // Create a patterned initial buffer (alternating)
+        let mut buf: Vec<PackedRgba> = (0..25)
+            .map(|i| {
+                if i % 2 == 0 {
+                    PackedRgba::rgb(10, 20, 30)
+                } else {
+                    PackedRgba::rgb(200, 200, 200)
+                }
+            })
+            .collect();
+        let original = buf.clone();
+
+        let ctx = make_ctx(5, 5, 0);
+        melt.render(ctx, &mut buf);
+
+        // Verify frozen frame matches original pattern
+        for (i, expected) in original.iter().enumerate().take(25) {
+            assert_eq!(
+                melt.frozen_frame[i], *expected,
+                "frozen frame pixel {i} should match original"
+            );
+        }
+    }
+
+    #[test]
+    fn resize_propagates_to_inner() {
+        /// Inner effect that records whether resize was called.
+        struct TrackingFx {
+            resized: bool,
+            last_w: u16,
+            last_h: u16,
+        }
+        impl BackdropFx for TrackingFx {
+            fn name(&self) -> &'static str {
+                "Tracking"
+            }
+            fn resize(&mut self, w: u16, h: u16) {
+                self.resized = true;
+                self.last_w = w;
+                self.last_h = h;
+            }
+            fn render(&mut self, _ctx: FxContext<'_>, _out: &mut [PackedRgba]) {}
+        }
+
+        let inner = Box::new(TrackingFx {
+            resized: false,
+            last_w: 0,
+            last_h: 0,
+        });
+        let mut melt = ScreenMeltFx::new(inner);
+        melt.resize(40, 20);
+
+        // Access the inner to verify resize was propagated
+        assert_eq!(melt.inner().name(), "Tracking");
+    }
+
+    #[test]
+    fn melt_wide_2x2() {
+        let inner = Box::new(SolidFx {
+            color: PackedRgba::rgb(0, 255, 0),
+        });
+        let mut melt = ScreenMeltFx::new(inner);
+        let mut buf = vec![PackedRgba::rgb(0, 0, 255); 4];
+
+        for frame in 0..50 {
+            let ctx = make_ctx(2, 2, frame);
+            melt.render(ctx, &mut buf);
+            if melt.is_done() {
+                break;
+            }
+        }
+        assert!(melt.is_done(), "2x2 melt should complete");
+        // After completion, all green
+        let ctx = make_ctx(2, 2, 100);
+        melt.render(ctx, &mut buf);
+        assert!(buf.iter().all(|&px| px == PackedRgba::rgb(0, 255, 0)));
+    }
+
+    #[test]
+    fn melt_tall_1x20() {
+        let inner = Box::new(SolidFx {
+            color: PackedRgba::rgb(0, 255, 0),
+        });
+        let mut melt = ScreenMeltFx::new(inner);
+        let mut buf = vec![PackedRgba::rgb(0, 0, 255); 20];
+
+        for frame in 0..100 {
+            let ctx = make_ctx(1, 20, frame);
+            melt.render(ctx, &mut buf);
+            if melt.is_done() {
+                break;
+            }
+        }
+        assert!(
+            melt.is_done(),
+            "1x20 melt should complete within 100 frames"
+        );
+    }
+
+    #[test]
+    fn melt_wide_100x1() {
+        let inner = Box::new(SolidFx {
+            color: PackedRgba::rgb(0, 255, 0),
+        });
+        let mut melt = ScreenMeltFx::new(inner);
+        let mut buf = vec![PackedRgba::rgb(0, 0, 255); 100];
+
+        for frame in 0..50 {
+            let ctx = make_ctx(100, 1, frame);
+            melt.render(ctx, &mut buf);
+            if melt.is_done() {
+                break;
+            }
+        }
+        assert!(
+            melt.is_done(),
+            "100x1 melt should complete quickly (height=1)"
+        );
+    }
+
+    #[test]
+    fn column_offsets_all_negative_means_not_done() {
+        let inner = Box::new(SolidFx {
+            color: PackedRgba::rgb(0, 0, 0),
+        });
+        let mut melt = ScreenMeltFx::with_seed(inner, 1);
+        melt.last_width = 3;
+        melt.last_height = 10;
+        melt.column_offsets = vec![-5, -3, -1];
+
+        melt.advance();
+        assert!(!melt.done, "negative offsets mean melt is still pending");
+        assert_eq!(melt.column_offsets, vec![-4, -2, 0]);
+    }
 }
