@@ -819,4 +819,215 @@ mod tests {
         );
         assert_eq!(visited[1], 1);
     }
+
+    // --- Additional edge case tests (bd-3iynj) ---
+
+    #[test]
+    fn bbox_visible_zero_fov() {
+        // Zero FOV: only exact direction matches; conservative still returns true
+        assert!(bbox_visible(0.0, 0.0, 0.0, 0.0, &[1.0, -1.0, 4.0, 6.0]));
+    }
+
+    #[test]
+    fn bbox_visible_viewer_on_edge_not_inside() {
+        // Viewer at left edge (x == left) but outside vertically (y > top)
+        // Not inside the box, but conservative returns true
+        assert!(bbox_visible(
+            0.0,
+            20.0,
+            0.0,
+            std::f32::consts::FRAC_PI_2,
+            &[10.0, 0.0, 0.0, 10.0]
+        ));
+    }
+
+    #[test]
+    fn bbox_visible_large_coordinates() {
+        // Very large coordinates: numerical stability
+        assert!(bbox_visible(
+            1e6,
+            1e6,
+            0.0,
+            std::f32::consts::FRAC_PI_2,
+            &[1e6 + 1.0, 1e6 - 1.0, 1e6 - 1.0, 1e6 + 1.0]
+        ));
+    }
+
+    #[test]
+    fn bsp_traverse_all_return_false_immediately() {
+        // Visitor always returns false: should visit exactly 1 subsector
+        let map = make_two_subsector_map(0.0, 0.0, 0.0, 1.0);
+        let mut count = 0;
+        bsp_traverse(&map, 5.0, 0.0, &mut |_ss| {
+            count += 1;
+            false
+        });
+        assert_eq!(count, 1, "Should stop after first subsector");
+    }
+
+    #[test]
+    fn bsp_traverse_viewer_very_far_away() {
+        let map = make_two_subsector_map(0.0, 0.0, 0.0, 1.0);
+        let mut visited = vec![];
+        // Viewer very far right: cross = 1e6 * 1 = 1e6 > 0 → back
+        bsp_traverse(&map, 1e6, 0.0, &mut |ss| {
+            visited.push(ss);
+            true
+        });
+        assert_eq!(visited, vec![1, 0]);
+    }
+
+    #[test]
+    fn bsp_traverse_viewer_very_close_to_partition() {
+        let map = make_two_subsector_map(0.0, 0.0, 0.0, 1.0);
+        let mut visited = vec![];
+        // Viewer at x=0.001 (barely right): cross = 0.001 * 1 > 0 → back
+        bsp_traverse(&map, 0.001, 0.0, &mut |ss| {
+            visited.push(ss);
+            true
+        });
+        assert_eq!(visited, vec![1, 0]);
+    }
+
+    #[test]
+    fn bsp_traverse_negative_partition_origin() {
+        let map = make_two_subsector_map(-100.0, -100.0, 0.0, 1.0);
+        let mut visited = vec![];
+        // Viewer at (-90, -100): cross = (-90 - (-100)) * 1 = 10 > 0 → back
+        bsp_traverse(&map, -90.0, -100.0, &mut |ss| {
+            visited.push(ss);
+            true
+        });
+        assert_eq!(visited, vec![1, 0]);
+    }
+
+    #[test]
+    fn bsp_traverse_reversed_partition_direction() {
+        // Same partition line but reversed direction (dy=-1)
+        let map_positive = make_two_subsector_map(0.0, 0.0, 0.0, 1.0);
+        let map_negative = make_two_subsector_map(0.0, 0.0, 0.0, -1.0);
+
+        let mut pos_visited = vec![];
+        let mut neg_visited = vec![];
+        bsp_traverse(&map_positive, 5.0, 0.0, &mut |ss| {
+            pos_visited.push(ss);
+            true
+        });
+        bsp_traverse(&map_negative, 5.0, 0.0, &mut |ss| {
+            neg_visited.push(ss);
+            true
+        });
+        // Reversing direction flips near/far
+        assert_eq!(pos_visited[0], neg_visited[1]);
+        assert_eq!(pos_visited[1], neg_visited[0]);
+    }
+
+    #[test]
+    fn bsp_traverse_deep_tree_eight_subsectors() {
+        use crate::doom::map::{Node, SubSector};
+        // 8 subsectors in a linear chain (not balanced)
+        // node0: right=SS(0), left=SS(1)
+        // node1: right=node(0), left=SS(2)
+        // node2: right=node(1), left=SS(3)
+        // ... etc, all partitions along y-axis at different x offsets
+        let subsectors: Vec<SubSector> = (0..8)
+            .map(|_| SubSector {
+                num_segs: 0,
+                first_seg: 0,
+            })
+            .collect();
+        let nodes = vec![
+            Node {
+                x: -30.0,
+                y: 0.0,
+                dx: 0.0,
+                dy: 1.0,
+                bbox_right: [0.0; 4],
+                bbox_left: [0.0; 4],
+                right_child: NodeChild::SubSector(0),
+                left_child: NodeChild::SubSector(1),
+            },
+            Node {
+                x: -20.0,
+                y: 0.0,
+                dx: 0.0,
+                dy: 1.0,
+                bbox_right: [0.0; 4],
+                bbox_left: [0.0; 4],
+                right_child: NodeChild::Node(0),
+                left_child: NodeChild::SubSector(2),
+            },
+            Node {
+                x: -10.0,
+                y: 0.0,
+                dx: 0.0,
+                dy: 1.0,
+                bbox_right: [0.0; 4],
+                bbox_left: [0.0; 4],
+                right_child: NodeChild::Node(1),
+                left_child: NodeChild::SubSector(3),
+            },
+            Node {
+                x: 0.0,
+                y: 0.0,
+                dx: 0.0,
+                dy: 1.0,
+                bbox_right: [0.0; 4],
+                bbox_left: [0.0; 4],
+                right_child: NodeChild::Node(2),
+                left_child: NodeChild::SubSector(4),
+            },
+            Node {
+                x: 10.0,
+                y: 0.0,
+                dx: 0.0,
+                dy: 1.0,
+                bbox_right: [0.0; 4],
+                bbox_left: [0.0; 4],
+                right_child: NodeChild::Node(3),
+                left_child: NodeChild::SubSector(5),
+            },
+            Node {
+                x: 20.0,
+                y: 0.0,
+                dx: 0.0,
+                dy: 1.0,
+                bbox_right: [0.0; 4],
+                bbox_left: [0.0; 4],
+                right_child: NodeChild::Node(4),
+                left_child: NodeChild::SubSector(6),
+            },
+            Node {
+                x: 30.0,
+                y: 0.0,
+                dx: 0.0,
+                dy: 1.0,
+                bbox_right: [0.0; 4],
+                bbox_left: [0.0; 4],
+                right_child: NodeChild::Node(5),
+                left_child: NodeChild::SubSector(7),
+            },
+        ];
+        let map = DoomMap {
+            name: "DEEP".into(),
+            vertices: vec![],
+            linedefs: vec![],
+            sidedefs: vec![],
+            sectors: vec![],
+            segs: vec![],
+            subsectors,
+            nodes,
+            things: vec![],
+        };
+        let mut visited = vec![];
+        bsp_traverse(&map, 100.0, 0.0, &mut |ss| {
+            visited.push(ss);
+            true
+        });
+        assert_eq!(visited.len(), 8, "Should visit all 8 subsectors");
+        // All subsectors should be visited exactly once
+        let mut sorted = visited.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec![0, 1, 2, 3, 4, 5, 6, 7]);
+    }
 }
