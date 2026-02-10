@@ -148,6 +148,10 @@ impl Transaction {
     /// Returns `None` if the transaction is empty.
     #[must_use]
     pub fn commit(mut self) -> Option<Box<dyn UndoableCmd>> {
+        // Rollback/drop already finalized this transaction; never emit history.
+        if self.finalized {
+            return None;
+        }
         self.finalized = true;
 
         if self.batch.is_empty() {
@@ -187,6 +191,7 @@ impl Transaction {
         if self.executed_count > 0 {
             // The batch's undo will undo all commands
             let _ = self.batch.undo();
+            self.executed_count = 0;
         }
     }
 
@@ -595,6 +600,53 @@ mod tests {
 
         let result = txn.execute(make_cmd(buffer, "test"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_commit_after_rollback_returns_none() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+
+        let mut txn = Transaction::begin("Rollback then commit");
+        txn.add_executed(make_cmd(buffer.clone(), "a")).unwrap();
+        txn.rollback();
+
+        assert!(txn.commit().is_none());
+        assert_eq!(*buffer.lock().unwrap(), "");
+    }
+
+    #[test]
+    fn test_scope_commit_after_execute_failure_does_not_push_rolled_back_batch() {
+        let buffer = Arc::new(Mutex::new(String::new()));
+        let mut history = HistoryManager::new(HistoryConfig::unlimited());
+
+        let failing_cmd = TextInsertCmd::new(WidgetId::new(1), 0, "boom")
+            .with_apply(move |_, _, _| Err(CommandError::Other("boom".to_string())))
+            .with_remove(move |_, _, _| Ok(()));
+
+        {
+            let mut scope = TransactionScope::new(&mut history);
+            scope.begin("Failure path");
+            let b_ok_apply = buffer.clone();
+            let b_ok_remove = buffer.clone();
+            let ok_cmd = TextInsertCmd::new(WidgetId::new(1), 0, "ok")
+                .with_apply(move |_, _, txt| {
+                    let mut buf = b_ok_apply.lock().unwrap();
+                    buf.push_str(txt);
+                    Ok(())
+                })
+                .with_remove(move |_, _, _| {
+                    let mut buf = b_ok_remove.lock().unwrap();
+                    buf.drain(..2);
+                    Ok(())
+                });
+            scope.execute(Box::new(ok_cmd)).unwrap();
+            assert!(scope.execute(Box::new(failing_cmd)).is_err());
+            // This used to leak the rolled-back batch into history.
+            scope.commit().unwrap();
+        }
+
+        assert_eq!(history.undo_depth(), 0);
+        assert_eq!(*buffer.lock().unwrap(), "");
     }
 
     #[test]
