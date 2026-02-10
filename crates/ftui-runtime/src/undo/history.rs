@@ -1072,21 +1072,18 @@ mod tests {
     // ====================================================================
 
     #[test]
-    fn test_memory_limit_evicts_redo_before_undo() {
-        // Use a byte limit that can hold ~1-2 commands
-        let config = HistoryConfig::new(100, 1);
-        let mut mgr = HistoryManager::new(config);
+    fn test_push_always_clears_redo_before_enforce() {
+        // Note: enforce_limits' redo eviction path is unreachable
+        // because push() always calls clear_redo() first. Test the
+        // observable behavior: push after undo clears redo.
+        let mut mgr = HistoryManager::new(HistoryConfig::unlimited());
 
-        // Push and undo to put cmd on redo stack
         mgr.push(make_insert_cmd("redo_item"));
         mgr.undo();
         assert_eq!(mgr.redo_depth(), 1);
 
-        // Push a new command — this clears redo first, then enforce_limits
-        // sees total_bytes > max_bytes and should evict
+        // New push always clears redo (new branch)
         mgr.push(make_insert_cmd("new_item"));
-
-        // Redo should be cleared by push()
         assert_eq!(mgr.redo_depth(), 0);
     }
 
