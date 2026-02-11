@@ -68,6 +68,10 @@ pub struct FrankenTermWeb {
     focused: bool,
     live_announcements: Vec<String>,
     shadow_cells: Vec<CellData>,
+    flat_spans_scratch: Vec<u32>,
+    flat_cells_scratch: Vec<u32>,
+    dirty_row_marks: Vec<u8>,
+    dirty_rows_scratch: Vec<usize>,
     next_auto_link_id: u32,
     renderer: Option<WebGpuRenderer>,
 }
@@ -308,6 +312,10 @@ impl FrankenTermWeb {
             focused: false,
             live_announcements: Vec::new(),
             shadow_cells: Vec::new(),
+            flat_spans_scratch: Vec::new(),
+            flat_cells_scratch: Vec::new(),
+            dirty_row_marks: Vec::new(),
+            dirty_rows_scratch: Vec::new(),
             next_auto_link_id: AUTO_LINK_ID_BASE,
             renderer: None,
         }
@@ -588,20 +596,28 @@ impl FrankenTermWeb {
         spans: Uint32Array,
         cells: Uint32Array,
     ) -> Result<(), JsValue> {
-        let spans = spans.to_vec();
-        let cells = cells.to_vec();
-        let parsed = cell_patches_from_flat_u32(&spans, &cells).map_err(JsValue::from_str)?;
+        self.flat_spans_scratch.resize(spans.length() as usize, 0);
+        spans.copy_to(self.flat_spans_scratch.as_mut_slice());
+        self.flat_cells_scratch.resize(cells.length() as usize, 0);
+        cells.copy_to(self.flat_cells_scratch.as_mut_slice());
+        let parsed = cell_patches_from_flat_u32(&self.flat_spans_scratch, &self.flat_cells_scratch)
+            .map_err(JsValue::from_str)?;
         self.apply_cell_patches(&parsed);
         Ok(())
     }
 
     fn apply_cell_patches(&mut self, patches: &[CellPatch]) {
         let cols = usize::from(self.cols);
+        let row_count = usize::from(self.rows);
         let max = cols * usize::from(self.rows);
         self.shadow_cells.resize(max, CellData::EMPTY);
         self.auto_link_ids.resize(max, 0);
+        if self.dirty_row_marks.len() < row_count {
+            self.dirty_row_marks.resize(row_count, 0);
+        }
 
-        let mut dirty_rows = Vec::new();
+        let mut dirty_rows = std::mem::take(&mut self.dirty_rows_scratch);
+        dirty_rows.clear();
         for patch in patches {
             let start = usize::try_from(patch.offset).unwrap_or(max).min(max);
             let count = patch.cells.len().min(max.saturating_sub(start));
@@ -612,12 +628,21 @@ impl FrankenTermWeb {
                 let first_row = start / cols;
                 let last_row = (start + count - 1) / cols;
                 for r in first_row..=last_row {
-                    dirty_rows.push(r);
+                    if self.dirty_row_marks[r] == 0 {
+                        self.dirty_row_marks[r] = 1;
+                        dirty_rows.push(r);
+                    }
                 }
             }
         }
-        dirty_rows.sort_unstable();
-        dirty_rows.dedup();
+        // Preserve historical row-major determinism regardless of patch order.
+        if dirty_rows.len() > 1 {
+            dirty_rows.sort_unstable();
+        }
+        // Reset row marks for next patch batch.
+        for &row in &dirty_rows {
+            self.dirty_row_marks[row] = 0;
+        }
 
         self.recompute_auto_links_for_rows(&dirty_rows);
         if !self.search_query.is_empty() {
@@ -631,6 +656,7 @@ impl FrankenTermWeb {
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.apply_patches(patches);
         }
+        self.dirty_rows_scratch = dirty_rows;
     }
 
     /// Configure cursor overlay.
@@ -1076,6 +1102,10 @@ impl FrankenTermWeb {
         self.focused = false;
         self.live_announcements.clear();
         self.shadow_cells.clear();
+        self.flat_spans_scratch.clear();
+        self.flat_cells_scratch.clear();
+        self.dirty_row_marks.clear();
+        self.dirty_rows_scratch.clear();
     }
 }
 
@@ -1383,6 +1413,15 @@ impl FrankenTermWeb {
     /// left untouched — O(cols × dirty_rows) instead of O(cols × rows).
     fn recompute_auto_links_for_rows(&mut self, dirty_rows: &[usize]) {
         if self.cols == 0 || self.rows == 0 {
+            return;
+        }
+
+        // Guard: if the monotonic ID counter has consumed more than half the
+        // available range, fall back to a full recompute to reclaim IDs.
+        // This is very rare (requires millions of frame-row URL reassignments).
+        const MIDPOINT: u32 = AUTO_LINK_ID_BASE + (AUTO_LINK_ID_MAX - AUTO_LINK_ID_BASE) / 2;
+        if self.next_auto_link_id > MIDPOINT {
+            self.recompute_auto_links();
             return;
         }
 
@@ -3038,6 +3077,57 @@ mod tests {
             flat_path.search_highlight_range,
             object_path.search_highlight_range
         );
+    }
+
+    #[test]
+    fn apply_patch_batch_flat_reuses_scratch_without_stale_words() {
+        let mut term = FrankenTermWeb::new();
+        term.cols = 4;
+        term.rows = 1;
+        term.shadow_cells = vec![CellData::EMPTY; 4];
+
+        let full = text_row_cells("WXYZ");
+        let (spans_full, cells_full) = patch_batch_flat_arrays(&[(0, &full)]);
+        assert!(term.apply_patch_batch_flat(spans_full, cells_full).is_ok());
+
+        let single = text_row_cells("Q");
+        let (spans_small, cells_small) = patch_batch_flat_arrays(&[(2, &single)]);
+        assert!(
+            term.apply_patch_batch_flat(spans_small, cells_small)
+                .is_ok()
+        );
+
+        assert_eq!(term.shadow_cells[0].glyph_id, u32::from('W'));
+        assert_eq!(term.shadow_cells[1].glyph_id, u32::from('X'));
+        assert_eq!(term.shadow_cells[2].glyph_id, u32::from('Q'));
+        assert_eq!(term.shadow_cells[3].glyph_id, u32::from('Z'));
+    }
+
+    #[test]
+    fn apply_patch_batch_flat_keeps_auto_link_ids_row_major_when_patch_order_is_reversed() {
+        let mut term = FrankenTermWeb::new();
+        term.cols = 40;
+        term.rows = 2;
+
+        let row0 = text_row_cells("A https://one.test");
+        let row1 = text_row_cells("B https://two.test");
+
+        // Intentionally reversed patch order (row 1 before row 0).
+        let (spans, cells) = patch_batch_flat_arrays(&[(40, &row1), (0, &row0)]);
+        assert!(term.apply_patch_batch_flat(spans, cells).is_ok());
+
+        let row0_id = term.auto_link_ids[..40]
+            .iter()
+            .copied()
+            .find(|id| *id != 0)
+            .expect("row 0 should contain an auto-link id");
+        let row1_id = term.auto_link_ids[40..80]
+            .iter()
+            .copied()
+            .find(|id| *id != 0)
+            .expect("row 1 should contain an auto-link id");
+
+        assert!(row0_id < row1_id);
     }
 
     #[test]

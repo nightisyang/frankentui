@@ -89,6 +89,18 @@ mod tests {
     }
 
     #[test]
+    fn runner_core_patch_hash_matches_flat_batch_hash() {
+        let mut core = RunnerCore::new(80, 24);
+        core.init();
+
+        let from_outputs = core.patch_hash().expect("hash from live outputs");
+        core.prepare_flat_patches();
+        let from_flat = core.patch_hash().expect("hash from prepared flat batch");
+
+        assert_eq!(from_outputs, from_flat);
+    }
+
+    #[test]
     fn runner_core_take_flat_patches() {
         let mut core = RunnerCore::new(10, 2);
         core.init();

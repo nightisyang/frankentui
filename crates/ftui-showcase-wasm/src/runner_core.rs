@@ -28,6 +28,10 @@ pub struct RunnerCore {
     flat_spans_buf: Vec<u32>,
 }
 
+const PATCH_HASH_ALGO: &str = "fnv1a64";
+const FNV64_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV64_PRIME: u64 = 0x100000001b3;
+
 impl RunnerCore {
     /// Create a new runner with the given initial terminal dimensions.
     pub fn new(cols: u16, rows: u16) -> Self {
@@ -122,9 +126,9 @@ impl RunnerCore {
             .flatten_patches_into(&mut self.flat_cells_buf, &mut self.flat_spans_buf);
 
         // Cache metadata, then drain outputs.
-        // Hash is lazy: compute it now so it survives the drain.
-        let mut outputs = self.inner.take_outputs();
-        self.cached_patch_hash = outputs.compute_patch_hash().map(str::to_owned);
+        let outputs = self.inner.take_outputs();
+        // Hash stays lazy: compute on-demand from `flat_*_buf` only if asked.
+        self.cached_patch_hash = None;
         self.cached_patch_stats = outputs.last_patch_stats;
         self.cached_logs = outputs.logs;
     }
@@ -147,10 +151,17 @@ impl RunnerCore {
     }
 
     /// FNV-1a hash of the last patch batch.
-    pub fn patch_hash(&self) -> Option<String> {
-        self.cached_patch_hash
-            .clone()
-            .or_else(|| self.inner.outputs().last_patch_hash.clone())
+    pub fn patch_hash(&mut self) -> Option<String> {
+        if self.cached_patch_hash.is_none() {
+            if !self.flat_spans_buf.is_empty() {
+                self.cached_patch_hash =
+                    hash_flat_patch_batch(&self.flat_spans_buf, &self.flat_cells_buf);
+            } else {
+                let outputs = self.inner.backend_mut().presenter_mut().outputs_mut();
+                self.cached_patch_hash = outputs.compute_patch_hash().map(str::to_owned);
+            }
+        }
+        self.cached_patch_hash.clone()
     }
 
     /// Patch upload stats.
@@ -170,8 +181,70 @@ impl RunnerCore {
     }
 
     fn refresh_cached_patch_meta_from_live_outputs(&mut self) {
-        let outputs = self.inner.backend_mut().presenter_mut().outputs_mut();
-        self.cached_patch_hash = outputs.compute_patch_hash().map(str::to_owned);
+        let outputs = self.inner.outputs();
+        // Invalidate heavy hash cache on each newly rendered frame. Compute only
+        // when explicitly requested by the host.
+        self.cached_patch_hash = None;
         self.cached_patch_stats = outputs.last_patch_stats;
+        self.flat_cells_buf.clear();
+        self.flat_spans_buf.clear();
     }
+}
+
+#[must_use]
+fn fnv1a64_extend(mut hash: u64, bytes: &[u8]) -> u64 {
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(FNV64_PRIME);
+    }
+    hash
+}
+
+#[must_use]
+fn hash_flat_patch_batch(spans: &[u32], cells: &[u32]) -> Option<String> {
+    if spans.is_empty() {
+        return None;
+    }
+    if !spans.len().is_multiple_of(2) {
+        return None;
+    }
+
+    let mut hash = FNV64_OFFSET_BASIS;
+    let patch_count = u64::try_from(spans.len() / 2).unwrap_or(u64::MAX);
+    hash = fnv1a64_extend(hash, &patch_count.to_le_bytes());
+
+    let mut word_idx = 0usize;
+    let mut cell_bytes = [0u8; 16];
+    for span in spans.chunks_exact(2) {
+        let offset = span[0];
+        let len = span[1] as usize;
+        let cell_count = u64::try_from(len).unwrap_or(u64::MAX);
+        hash = fnv1a64_extend(hash, &offset.to_le_bytes());
+        hash = fnv1a64_extend(hash, &cell_count.to_le_bytes());
+
+        let words_needed = len.saturating_mul(4);
+        if word_idx.saturating_add(words_needed) > cells.len() {
+            return None;
+        }
+
+        for _ in 0..len {
+            let bg = cells[word_idx];
+            let fg = cells[word_idx + 1];
+            let glyph = cells[word_idx + 2];
+            let attrs = cells[word_idx + 3];
+            word_idx += 4;
+
+            cell_bytes[0..4].copy_from_slice(&bg.to_le_bytes());
+            cell_bytes[4..8].copy_from_slice(&fg.to_le_bytes());
+            cell_bytes[8..12].copy_from_slice(&glyph.to_le_bytes());
+            cell_bytes[12..16].copy_from_slice(&attrs.to_le_bytes());
+            hash = fnv1a64_extend(hash, &cell_bytes);
+        }
+    }
+
+    if word_idx != cells.len() {
+        return None;
+    }
+
+    Some(format!("{PATCH_HASH_ALGO}:{hash:016x}"))
 }

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>FrankenTUI — Showcase Demo</title>
 <link rel="preload" href="./fonts/pragmasevka-nf-subset.woff2" as="font" type="font/woff2" crossorigin>
 <style>
@@ -14,7 +14,7 @@
 	    font-display: block;
 	  }
 	  * { margin: 0; padding: 0; box-sizing: border-box; }
-	  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+	  html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; overscroll-behavior: none; }
 	  #container {
 	    width: 100%; height: 100%;
     display: flex; flex-direction: column;
@@ -24,6 +24,10 @@
     display: block;
     width: 100%; height: 100%;
     image-rendering: pixelated;
+    touch-action: none;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
   }
 	  #status {
 	    position: fixed; bottom: 8px; right: 12px;
@@ -68,11 +72,37 @@
 	    0%   { transform: translateX(-100%); }
 	    100% { transform: translateX(400%); }
 	  }
+	  @supports (height: 100dvh) {
+	    #container { height: 100dvh; }
+	  }
+	  /* Touch zoom controls — only visible on coarse-pointer (touch) devices */
+	  #touch-zoom {
+	    display: none;
+	    position: fixed; top: 8px; right: 8px;
+	    z-index: 15; gap: 6px;
+	  }
+	  #touch-zoom button {
+	    width: 40px; height: 40px;
+	    border: 1px solid #444; border-radius: 6px;
+	    background: rgba(30,30,30,0.85);
+	    color: #ccc; font: 18px/1 "Pragmasevka NF", monospace;
+	    cursor: pointer;
+	    -webkit-tap-highlight-color: transparent;
+	  }
+	  #touch-zoom button:active { background: rgba(80,80,80,0.85); }
+	  @media (pointer: coarse) {
+	    #touch-zoom { display: flex; }
+	  }
 </style>
 </head>
 <body>
 <div id="container">
   <canvas id="terminal-canvas" tabindex="0"></canvas>
+</div>
+<div id="touch-zoom">
+  <button id="zoom-out">&minus;</button>
+  <button id="zoom-reset">1:1</button>
+  <button id="zoom-in">+</button>
 </div>
 <div id="loading-overlay">
   <div id="loading-label">Loading WASM...</div>
@@ -124,34 +154,6 @@ function setProgress(pct, label) {
   }
 }
 
-// ── Fetch with progress ───────────────────────────────────────────────
-async function fetchWithProgress(url, label) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`GET ${url} -> ${response.status}`);
-  const contentLength = parseInt(response.headers.get("content-length"), 10);
-  if (!contentLength || !response.body) {
-    setProgress(-1, label);
-    return new Uint8Array(await response.arrayBuffer());
-  }
-  const reader = response.body.getReader();
-  const chunks = [];
-  let received = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    received += value.length;
-    setProgress((received / contentLength) * 100, `${label} (${(received / 1048576).toFixed(1)} MB)`);
-  }
-  const result = new Uint8Array(received);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return result;
-}
-
 // ── Font loading (must happen before first glyph rasterization) ───────────
 const fontsReady = (async () => {
   if (!("fonts" in document) || !document.fonts?.load) return;
@@ -187,11 +189,9 @@ const largeAssetsPromise = (async () => {
   }
 })();
 
-// ── WASM module loading with progress ─────────────────────────────────
-// Phase 1: Download WASM binaries with progress tracking.
-// Phase 2: Compile WASM modules.
-// Phase 3: Initialize (instantiate + link imports).
+// ── WASM module loading ────────────────────────────────────────────────
 let termMod, runnerMod;
+let runnerWasmExports = null;
 try {
   // 1a. Download JS glue modules.
   setProgress(0, "Downloading JS modules...");
@@ -202,28 +202,16 @@ try {
     import(runnerJsUrl),
   ]);
 
-  // 1b. Download WASM binaries with progress.
-  setProgress(5, "Downloading WASM...");
+  // 1b. Initialize WASM modules directly from URLs.
+  // Let wasm-bindgen use the browser's streaming compilation path instead of
+  // buffering + copying full ArrayBuffers in JS first.
+  setProgress(-1, "Initializing WASM modules...");
   const termWasmUrl = `./pkg/FrankenTerm_bg.wasm?v=${ASSET_VERSION}`;
   const runnerWasmUrl = `./pkg/ftui_showcase_wasm_bg.wasm?v=${ASSET_VERSION}`;
 
-  const [termWasm, runnerWasm] = await Promise.all([
-    fetchWithProgress(termWasmUrl, "Downloading terminal WASM..."),
-    fetchWithProgress(runnerWasmUrl, "Downloading showcase WASM..."),
-  ]);
-
-  // 2. Compile WASM modules.
-  setProgress(-1, "Compiling WASM...");
-  const [termCompiled, runnerCompiled] = await Promise.all([
-    WebAssembly.compile(termWasm),
-    WebAssembly.compile(runnerWasm),
-  ]);
-
-  // 3. Initialize (instantiate) both modules.
-  setProgress(90, "Initializing...");
-  await Promise.all([
-    termMod.default(termCompiled),
-    runnerMod.default(runnerCompiled),
+  [, runnerWasmExports] = await Promise.all([
+    termMod.default(termWasmUrl),
+    runnerMod.default(runnerWasmUrl),
   ]);
   setProgress(95, "Starting WebGPU...");
 } catch (e) {
@@ -273,7 +261,12 @@ function applyZoom() {
     currentCols = geo.cols;
     currentRows = geo.rows;
     runner.resize(currentCols, currentRows);
+  }
+  // Always update status to reflect current zoom (even if grid size didn't change).
+  if (Math.abs(userZoom - 1.0) > 0.01) {
     status.textContent = `${currentCols}\u00d7${currentRows} \u2014 zoom ${Math.round(userZoom * 100)}%`;
+  } else {
+    status.textContent = `${currentCols}\u00d7${currentRows} \u2014 running`;
   }
   localStorage.setItem("ftui-zoom", String(userZoom));
   // Update URL without reload.
@@ -284,6 +277,17 @@ function applyZoom() {
     url.searchParams.delete("zoom");
   }
   history.replaceState(null, "", url);
+}
+
+// Auto-zoom on narrow touch devices if user has no saved preference.
+const isTouchDevice = matchMedia("(pointer: coarse)").matches;
+if (isTouchDevice && !URL_ZOOM && !localStorage.getItem("ftui-zoom")) {
+  const vw = document.documentElement.clientWidth;
+  const TARGET_COLS = 40;
+  const autoZoom = vw / (TARGET_COLS * CELL_WIDTH);
+  if (autoZoom > 1.05) {
+    userZoom = Math.round(autoZoom * 20) / 20; // snap to 0.05 increments
+  }
 }
 
 // Apply initial zoom if set.
@@ -299,6 +303,79 @@ let currentRows = geo.rows;
 
 const runner = new ShowcaseRunner(currentCols, currentRows);
 runner.init();
+
+function resolveWasmMemory(mod) {
+  if (!mod) return null;
+  const direct = mod.memory;
+  if (direct instanceof WebAssembly.Memory) return direct;
+  if (typeof direct === "function") {
+    const maybe = direct();
+    if (maybe instanceof WebAssembly.Memory) return maybe;
+  }
+  return null;
+}
+
+const runnerWasmMemory =
+  resolveWasmMemory(runnerWasmExports) ||
+  resolveWasmMemory(runnerMod);
+const canUseZeroCopyPatches = Boolean(
+  runnerWasmMemory &&
+  typeof runner.prepareFlatPatches === "function" &&
+  typeof runner.flatCellsPtr === "function" &&
+  typeof runner.flatCellsLen === "function" &&
+  typeof runner.flatSpansPtr === "function" &&
+  typeof runner.flatSpansLen === "function"
+);
+const EMPTY_PATCH_U32 = new Uint32Array(0);
+let cachedCellsView = EMPTY_PATCH_U32;
+let cachedCellsPtr = -1;
+let cachedCellsLen = -1;
+let cachedCellsBuffer = null;
+let cachedSpansView = EMPTY_PATCH_U32;
+let cachedSpansPtr = -1;
+let cachedSpansLen = -1;
+let cachedSpansBuffer = null;
+
+function patchViewU32(ptr, len, isCells) {
+  if (len === 0) return EMPTY_PATCH_U32;
+  const buffer = runnerWasmMemory.buffer;
+  if (isCells) {
+    if (cachedCellsPtr === ptr && cachedCellsLen === len && cachedCellsBuffer === buffer) {
+      return cachedCellsView;
+    }
+    cachedCellsPtr = ptr;
+    cachedCellsLen = len;
+    cachedCellsBuffer = buffer;
+    cachedCellsView = new Uint32Array(buffer, ptr, len);
+    return cachedCellsView;
+  }
+  if (cachedSpansPtr === ptr && cachedSpansLen === len && cachedSpansBuffer === buffer) {
+    return cachedSpansView;
+  }
+  cachedSpansPtr = ptr;
+  cachedSpansLen = len;
+  cachedSpansBuffer = buffer;
+  cachedSpansView = new Uint32Array(buffer, ptr, len);
+  return cachedSpansView;
+}
+
+function takeRunnerPatches() {
+  if (!canUseZeroCopyPatches) {
+    return runner.takeFlatPatches();
+  }
+  runner.prepareFlatPatches();
+  const cellsLen = runner.flatCellsLen();
+  const spansLen = runner.flatSpansLen();
+  if (cellsLen === 0 || spansLen === 0) {
+    return { cells: EMPTY_PATCH_U32, spans: EMPTY_PATCH_U32 };
+  }
+  const cellsPtr = runner.flatCellsPtr();
+  const spansPtr = runner.flatSpansPtr();
+  return {
+    cells: patchViewU32(cellsPtr, cellsLen, true),
+    spans: patchViewU32(spansPtr, spansLen, false),
+  };
+}
 
 // Navigate to a specific screen if requested via URL.
 if (START_SCREEN > 0) {
@@ -319,7 +396,7 @@ if (START_SCREEN > 0) {
 // `ShowcaseRunner.init()` renders frame 1 and produces a full repaint patch batch.
 // If we don't apply it immediately, the first `step()` often returns `rendered=false`
 // and the initial frame never becomes visible (or later diffs apply against an empty buffer).
-const initPatches = runner.takeFlatPatches();
+const initPatches = takeRunnerPatches();
 if (initPatches.cells.length > 0) {
   term.applyPatchBatchFlat(initPatches.spans, initPatches.cells);
 }
@@ -494,13 +571,17 @@ window.addEventListener("keyup", (e) => {
   safeTermInput(domKeyToInput(e, "up"));
 }, { capture: true });
 
-// Track which mouse buttons are currently held for drag detection.
+// Track mouse button state for drag detection.
+// `e.button` is always 0 during mousemove, so we must remember which button
+// initiated the drag from the mousedown event.
 let mouseButtonsDown = 0;
+let dragButton = 0;
 
 canvas.addEventListener("mousedown", (e) => {
   e.preventDefault();
   canvas.focus();
   mouseButtonsDown = e.buttons;
+  dragButton = e.button;
   safeTermInput(domMouseToInput(e, "down"));
 });
 canvas.addEventListener("mouseup", (e) => {
@@ -510,9 +591,14 @@ canvas.addEventListener("mouseup", (e) => {
 });
 canvas.addEventListener("mousemove", (e) => {
   mouseButtonsDown = e.buttons;
-  // Rust expects "drag" when any button is held, "move" otherwise.
-  const phase = mouseButtonsDown ? "drag" : "move";
-  safeTermInput(domMouseToInput(e, phase));
+  if (mouseButtonsDown) {
+    // Drag: use the button from the original mousedown (e.button is always 0 on mousemove).
+    const ev = domMouseToInput(e, "drag");
+    ev.button = dragButton;
+    safeTermInput(ev);
+  } else {
+    safeTermInput(domMouseToInput(e, "move"));
+  }
 });
 window.addEventListener("mouseup", () => { mouseButtonsDown = 0; });
 window.addEventListener("blur", () => { mouseButtonsDown = 0; });
@@ -546,6 +632,193 @@ canvas.addEventListener("compositionend", (e) => {
   safeTermInput({ kind: "composition", phase: "end", data: e.data || "" });
 });
 
+// ── Touch zoom buttons ──────────────────────────────────────────────────
+document.getElementById("zoom-in").addEventListener("click", () => {
+  userZoom = Math.min(3.0, userZoom * 1.15);
+  applyZoom();
+  canvas.focus();
+});
+document.getElementById("zoom-out").addEventListener("click", () => {
+  userZoom = Math.max(0.3, userZoom / 1.15);
+  applyZoom();
+  canvas.focus();
+});
+document.getElementById("zoom-reset").addEventListener("click", () => {
+  userZoom = 1.0;
+  applyZoom();
+  canvas.focus();
+});
+
+// ── Orientation change + visual viewport scroll pinning ──────────────
+let orientationTimer = 0;
+window.addEventListener("orientationchange", () => {
+  clearTimeout(orientationTimer);
+  orientationTimer = setTimeout(() => {
+    const newDpr = window.devicePixelRatio || 1.0;
+    const geo = term.fitToContainer(container.clientWidth, container.clientHeight, newDpr);
+    if (geo.cols !== currentCols || geo.rows !== currentRows) {
+      currentCols = geo.cols;
+      currentRows = geo.rows;
+      runner.resize(currentCols, currentRows);
+      status.textContent = `${currentCols}\u00d7${currentRows} \u2014 running`;
+    }
+  }, 150);
+});
+
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("scroll", () => {
+    window.scrollTo(0, 0);
+  });
+}
+
+// ── Touch state machine ─────────────────────────────────────────────────
+// Translates touch gestures to mouse/wheel events for the Rust showcase runner.
+// States: IDLE → TRACKING → SCROLLING or PINCHING
+const TOUCH_IDLE = 0, TOUCH_TRACKING = 1, TOUCH_SCROLLING = 2, TOUCH_PINCHING = 3;
+let touchState = TOUCH_IDLE;
+let touchStartX = 0, touchStartY = 0, touchStartTime = 0;
+let touchLastX = 0, touchLastY = 0;
+let touchScrollAccX = 0, touchScrollAccY = 0;
+let pinchStartDist = 0, pinchStartZoom = 1.0;
+const TAP_MAX_DIST = 10;   // px
+const TAP_MAX_TIME = 300;  // ms
+
+function touchScrollStepsPx() {
+  const rect = canvas.getBoundingClientRect();
+  const rawX = currentCols > 0 ? rect.width / currentCols : CELL_WIDTH;
+  const rawY = currentRows > 0 ? rect.height / currentRows : CELL_HEIGHT;
+  return {
+    x: Math.max(4, Math.round(rawX || CELL_WIDTH)),
+    y: Math.max(4, Math.round(rawY || CELL_HEIGHT)),
+  };
+}
+
+function touchCellCoords(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  const cellW = rect.width / currentCols;
+  const cellH = rect.height / currentRows;
+  return {
+    x: Math.max(0, Math.min(Math.floor((clientX - rect.left) / cellW), currentCols - 1)),
+    y: Math.max(0, Math.min(Math.floor((clientY - rect.top) / cellH), currentRows - 1)),
+  };
+}
+
+function pinchDistance(t0, t1) {
+  const dx = t1.clientX - t0.clientX;
+  const dy = t1.clientY - t0.clientY;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+canvas.addEventListener("touchstart", (e) => {
+  e.preventDefault();
+  canvas.focus();
+  const touches = e.touches;
+  if (touches.length === 1) {
+    touchState = TOUCH_TRACKING;
+    touchStartX = touchLastX = touches[0].clientX;
+    touchStartY = touchLastY = touches[0].clientY;
+    touchStartTime = Date.now();
+    touchScrollAccX = 0;
+    touchScrollAccY = 0;
+  } else if (touches.length === 2) {
+    touchState = TOUCH_PINCHING;
+    pinchStartDist = pinchDistance(touches[0], touches[1]);
+    pinchStartZoom = userZoom;
+  }
+}, { passive: false });
+
+canvas.addEventListener("touchmove", (e) => {
+  e.preventDefault();
+  const touches = e.touches;
+
+  if (touches.length === 2 && touchState !== TOUCH_IDLE) {
+    // Two fingers always means pinch, even if we started as single-finger tracking.
+    if (touchState !== TOUCH_PINCHING) {
+      touchState = TOUCH_PINCHING;
+      pinchStartDist = pinchDistance(touches[0], touches[1]);
+      pinchStartZoom = userZoom;
+      return;
+    }
+    const dist = pinchDistance(touches[0], touches[1]);
+    if (pinchStartDist > 0) {
+      const scale = dist / pinchStartDist;
+      userZoom = Math.max(0.3, Math.min(3.0, pinchStartZoom * scale));
+      applyZoom();
+    }
+    return;
+  }
+
+  if (touches.length === 1 && (touchState === TOUCH_TRACKING || touchState === TOUCH_SCROLLING)) {
+    const cx = touches[0].clientX;
+    const cy = touches[0].clientY;
+    const dx = cx - touchLastX;
+    const dy = cy - touchLastY;
+    touchLastX = cx;
+    touchLastY = cy;
+
+    // Once movement exceeds tap threshold, switch to scrolling.
+    if (touchState === TOUCH_TRACKING) {
+      const totalDx = cx - touchStartX;
+      const totalDy = cy - touchStartY;
+      if (Math.abs(totalDx) > TAP_MAX_DIST || Math.abs(totalDy) > TAP_MAX_DIST) {
+        touchState = TOUCH_SCROLLING;
+      } else {
+        return;
+      }
+    }
+
+    // Accumulate movement and emit wheel events at cell-sized intervals.
+    // Natural scrolling: finger-down → content follows finger down → sees earlier
+    // content → equivalent to "scroll up" → negative wheel dy.
+    touchScrollAccX += dx;
+    touchScrollAccY += dy;
+    const scrollStep = touchScrollStepsPx();
+    const cell = touchCellCoords(cx, cy);
+    while (Math.abs(touchScrollAccY) >= scrollStep.y) {
+      const sign = touchScrollAccY > 0 ? -1 : 1;
+      safeTermInput({ kind: "wheel", x: cell.x, y: cell.y, dx: 0, dy: sign, mods: 0 });
+      touchScrollAccY -= (touchScrollAccY > 0 ? scrollStep.y : -scrollStep.y);
+    }
+    while (Math.abs(touchScrollAccX) >= scrollStep.x) {
+      const sign = touchScrollAccX > 0 ? -1 : 1;
+      safeTermInput({ kind: "wheel", x: cell.x, y: cell.y, dx: sign, dy: 0, mods: 0 });
+      touchScrollAccX -= (touchScrollAccX > 0 ? scrollStep.x : -scrollStep.x);
+    }
+  }
+}, { passive: false });
+
+canvas.addEventListener("touchend", (e) => {
+  e.preventDefault();
+  // If we were tracking a single finger and it ended quickly without much movement, it's a tap.
+  if (touchState === TOUCH_TRACKING && e.changedTouches.length > 0) {
+    const elapsed = Date.now() - touchStartTime;
+    const t = e.changedTouches[0];
+    const dist = Math.hypot(t.clientX - touchStartX, t.clientY - touchStartY);
+    if (elapsed < TAP_MAX_TIME && dist < TAP_MAX_DIST) {
+      const cell = touchCellCoords(t.clientX, t.clientY);
+      safeTermInput({ kind: "mouse", phase: "down", button: 0, x: cell.x, y: cell.y, mods: 0 });
+      safeTermInput({ kind: "mouse", phase: "up",   button: 0, x: cell.x, y: cell.y, mods: 0 });
+    }
+  }
+  // If all fingers lifted, reset state.
+  if (e.touches.length === 0) {
+    touchState = TOUCH_IDLE;
+  } else if (e.touches.length === 1 && touchState === TOUCH_PINCHING) {
+    // Went from two fingers to one — restart tracking from current position.
+    touchState = TOUCH_TRACKING;
+    touchStartX = touchLastX = e.touches[0].clientX;
+    touchStartY = touchLastY = e.touches[0].clientY;
+    touchStartTime = Date.now();
+    touchScrollAccX = 0;
+    touchScrollAccY = 0;
+  }
+}, { passive: false });
+
+canvas.addEventListener("touchcancel", (e) => {
+  e.preventDefault();
+  touchState = TOUCH_IDLE;
+}, { passive: false });
+
 // ── Host frame loop ────────────────────────────────────────────────────
 let lastTs = 0;
 let totalFrames = 0;
@@ -568,7 +841,7 @@ function frame(timestamp) {
 
   // 4. If a frame was rendered, apply patches and present.
   if (result.rendered) {
-    const patches = runner.takeFlatPatches();
+    const patches = takeRunnerPatches();
     if (patches.cells.length > 0) {
       term.applyPatchBatchFlat(patches.spans, patches.cells);
     }

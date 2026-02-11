@@ -295,18 +295,8 @@ impl WebPresenter {
             .iter()
             .map(|p| p.cells.len())
             .sum::<usize>();
-        cells.reserve(
-            total_cells
-                .saturating_mul(4)
-                .saturating_sub(cells.capacity()),
-        );
-        spans.reserve(
-            self.outputs
-                .last_patches
-                .len()
-                .saturating_mul(2)
-                .saturating_sub(spans.capacity()),
-        );
+        cells.reserve(total_cells.saturating_mul(4));
+        spans.reserve(self.outputs.last_patches.len().saturating_mul(2));
 
         for patch in &self.outputs.last_patches {
             spans.push(patch.offset);

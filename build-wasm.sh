@@ -31,11 +31,15 @@ fi
 #   sign-ext        — i32.extend8_s etc, avoids shift-based sign extension
 #   reference-types — required by some wasm-bindgen features
 #   multivalue      — functions can return multiple values (avoids stack spills)
-export RUSTFLAGS="${RUSTFLAGS:-} \
-  -C target-feature=+bulk-memory,+mutable-globals,+nontrapping-fptoint,+sign-ext,+reference-types,+multivalue \
-  -C embed-bitcode=yes"
+#
+# IMPORTANT: Use CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS, NOT RUSTFLAGS.
+# RUSTFLAGS applies to ALL compilations including proc macros (serde_derive,
+# wasm-bindgen-macro) that compile for the HOST target, which would fail with
+# WASM-specific target features.
+WASM_FLAGS="-C target-feature=+bulk-memory,+mutable-globals,+nontrapping-fptoint,+sign-ext,+reference-types,+multivalue"
+export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} ${WASM_FLAGS}"
 
-echo ">> RUSTFLAGS: $RUSTFLAGS"
+echo ">> WASM RUSTFLAGS: $CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS"
 
 # ── Step 1: Patch Cargo.toml to remove ftui-extras opt-level override ────────
 echo ">> Patching $CARGO_TOML (removing ftui-extras opt-level=3 override)..."

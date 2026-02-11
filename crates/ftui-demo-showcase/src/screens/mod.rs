@@ -820,7 +820,7 @@ mod tests {
     #[test]
     fn registry_order_matches_ids() {
         let ids = screen_ids();
-        let expected: Vec<ScreenId> = SCREEN_REGISTRY.iter().map(|meta| meta.id).collect();
+        let expected: Vec<ScreenId> = screen_registry().iter().map(|meta| meta.id).collect();
         assert_eq!(
             ids,
             expected.as_slice(),
@@ -852,7 +852,7 @@ mod tests {
 
     #[test]
     fn screen_index_matches_registry_position() {
-        for (idx, meta) in SCREEN_REGISTRY.iter().enumerate() {
+        for (idx, meta) in screen_registry().iter().enumerate() {
             let actual = screen_index(meta.id);
             assert_eq!(
                 actual, idx,
@@ -900,11 +900,12 @@ mod tests {
 
     #[test]
     fn registry_matches_screen_list() {
-        assert_eq!(SCREEN_REGISTRY.len(), screen_ids().len());
-        assert_eq!(screen_ids().len(), SCREEN_REGISTRY.len());
+        let registry = screen_registry();
+        assert_eq!(registry.len(), screen_ids().len());
+        assert_eq!(screen_ids().len(), registry.len());
         for &id in screen_ids() {
             assert!(
-                SCREEN_REGISTRY.iter().any(|meta| meta.id == id),
+                registry.iter().any(|meta| meta.id == id),
                 "missing screen in registry: {id:?}"
             );
         }
