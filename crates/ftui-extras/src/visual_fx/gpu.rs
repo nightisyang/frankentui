@@ -155,6 +155,21 @@ pub(crate) fn render_metaballs(
     false
 }
 
+/// Shared lock for all tests that mutate GPU global state.
+///
+/// Both `gpu::tests` and `metaballs::tests` manipulate the same `GPU_BACKEND`
+/// singleton. This lock must be held by any test that calls `force_disable_for_tests`,
+/// `force_init_fail_for_tests`, or `reset_for_tests` to prevent races.
+#[cfg(test)]
+pub(crate) fn gpu_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    use std::sync::{Mutex, OnceLock};
+    static GPU_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    GPU_TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("gpu test lock poisoned")
+}
+
 #[cfg(test)]
 pub(crate) fn reset_for_tests() {
     if let Some(lock) = GPU_BACKEND.get() {
@@ -544,15 +559,9 @@ fn div_ceil(value: u32, divisor: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     fn test_lock() -> std::sync::MutexGuard<'static, ()> {
-        TEST_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("test lock poisoned")
+        super::gpu_test_lock()
     }
 
     // --- packed_to_vec4 tests ---

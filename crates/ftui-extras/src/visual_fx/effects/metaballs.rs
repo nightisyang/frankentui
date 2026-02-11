@@ -519,11 +519,6 @@ fn ordered_pair(a: f64, b: f64) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "fx-gpu")]
-    use std::sync::Mutex;
-
-    #[cfg(feature = "fx-gpu")]
-    static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn ctx(theme: &ThemeInputs) -> FxContext<'_> {
         FxContext {
@@ -670,7 +665,7 @@ mod tests {
     #[test]
     fn deterministic_for_fixed_inputs() {
         #[cfg(feature = "fx-gpu")]
-        let _guard = GPU_TEST_LOCK.lock().expect("gpu test lock poisoned");
+        let _guard = crate::visual_fx::gpu::gpu_test_lock();
 
         let theme = ThemeInputs::default_dark();
         let mut fx = MetaballsFx::default();
@@ -965,7 +960,7 @@ mod tests {
     #[cfg(feature = "fx-gpu")]
     #[test]
     fn gpu_force_fail_falls_back_to_cpu() {
-        let _guard = GPU_TEST_LOCK.lock().expect("gpu test lock poisoned");
+        let _guard = crate::visual_fx::gpu::gpu_test_lock();
 
         let theme = ThemeInputs::default_dark();
         let ctx = FxContext {
@@ -1007,7 +1002,7 @@ mod tests {
     #[cfg(feature = "fx-gpu")]
     #[test]
     fn gpu_parity_sanity_small_buffer() {
-        let _guard = GPU_TEST_LOCK.lock().expect("gpu test lock poisoned");
+        let _guard = crate::visual_fx::gpu::gpu_test_lock();
 
         // Reset to allow GPU initialization.
         gpu::reset_for_tests();
@@ -1074,7 +1069,7 @@ mod tests {
     #[test]
     #[ignore = "requires GPU; run manually for perf comparison"]
     fn gpu_cpu_timing_baseline() {
-        let _guard = GPU_TEST_LOCK.lock().expect("gpu test lock poisoned");
+        let _guard = crate::visual_fx::gpu::gpu_test_lock();
 
         // Reset to allow GPU initialization.
         gpu::reset_for_tests();
