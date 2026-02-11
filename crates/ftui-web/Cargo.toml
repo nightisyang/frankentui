@@ -17,6 +17,7 @@ input-parser = ["dep:serde", "dep:serde_json"]
 [dependencies]
 ftui-backend = { path = "../ftui-backend", version = "0.1.0" }
 ftui-core = { path = "../ftui-core", version = "0.1.1" }
+ftui-layout = { path = "../ftui-layout", version = "0.1.1" }
 ftui-render = { path = "../ftui-render", version = "0.1.1" }
 ftui-runtime = { path = "../ftui-runtime", version = "0.1.1", default-features = false }
 serde = { version = "1.0.227", features = ["derive"], optional = true }

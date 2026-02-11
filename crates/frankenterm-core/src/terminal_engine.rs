@@ -489,6 +489,15 @@ impl TerminalEngine {
         let charset = self.cursor.effective_charset();
         let ch = translate_charset(ch, charset);
         self.cursor.consume_single_shift();
+
+        let width = self.width_policy.char_width(ch);
+        if width == 0 {
+            // Combining mark / ZWJ / VS16: attach to the previous cell.
+            // Must be handled before pending_wrap so marks don't trigger a wrap.
+            self.apply_combining_mark(ch);
+            return;
+        }
+
         self.last_printed = Some(ch);
 
         if self.cursor.pending_wrap {
@@ -497,13 +506,6 @@ impl TerminalEngine {
             } else {
                 self.cursor.pending_wrap = false;
             }
-        }
-
-        let width = self.width_policy.char_width(ch);
-        if width == 0 {
-            // Combining mark / ZWJ / VS16: attach to the previous cell.
-            self.apply_combining_mark(ch);
-            return;
         }
 
         if width == 2 && self.cursor.col + 1 >= self.cols {

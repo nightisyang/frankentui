@@ -1072,11 +1072,12 @@ mod tests {
     #[test]
     fn push_combining_overflow_returns_false() {
         let mut cell = Cell::new('a');
-        for i in 0..MAX_COMBINING {
-            assert!(cell.push_combining(char::from(0x0300u16 + i as u16)));
+        let marks = ['\u{0300}', '\u{0301}', '\u{0302}', '\u{0303}'];
+        for mark in &marks[..MAX_COMBINING] {
+            assert!(cell.push_combining(*mark));
         }
         // Buffer full — next push returns false.
-        assert!(!cell.push_combining('\u{0302}'));
+        assert!(!cell.push_combining(marks[MAX_COMBINING]));
         assert_eq!(cell.combining_marks().len(), MAX_COMBINING);
     }
 
