@@ -1,1 +1,5 @@
 # id|cols|rows|input_hex|root_cause
+irm_plus_lnm|10|3|1b5b34681b5b32306841424344451b5b48580a59|IRM+LNM newline column semantics diverge from VirtualTerminal reference
+lnm_newline_does_cr|10|3|1b5b3230684142430a44|LINEFEED_NEWLINE mode semantics diverge from VirtualTerminal reference
+lnm_newline_mode|10|5|1b5b32306841424344450a464748|LINEFEED_NEWLINE mode semantics diverge from VirtualTerminal reference
+newline_with_lnm|10|3|4142431b5b3230680a44|LINEFEED_NEWLINE mode semantics diverge from VirtualTerminal reference

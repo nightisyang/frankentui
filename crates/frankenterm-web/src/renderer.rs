@@ -109,6 +109,56 @@ impl CursorStyle {
     }
 }
 
+/// Renderer backend preference used during initialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RendererBackendPreference {
+    /// Prefer WebGPU and fall back to Canvas2D if WebGPU initialization fails.
+    #[default]
+    Auto,
+    /// Require WebGPU initialization and return an error on failure.
+    WebGpu,
+    /// Force Canvas2D backend selection.
+    Canvas2d,
+}
+
+impl RendererBackendPreference {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::WebGpu => "webgpu",
+            Self::Canvas2d => "canvas2d",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "webgpu" | "web_gpu" | "gpu" => Some(Self::WebGpu),
+            "canvas2d" | "canvas_2d" | "canvas-2d" | "canvas" | "2d" => Some(Self::Canvas2d),
+            _ => None,
+        }
+    }
+}
+
+/// Concrete backend selected after renderer initialization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RendererBackendKind {
+    WebGpu,
+    Canvas2d,
+}
+
+impl RendererBackendKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::WebGpu => "webgpu",
+            Self::Canvas2d => "canvas2d",
+        }
+    }
+}
+
 impl CellData {
     pub const EMPTY: Self = Self {
         bg_rgba: 0x000000FF,
@@ -281,6 +331,8 @@ pub struct RendererConfig {
     pub dpr: f32,
     /// User-controlled zoom multiplier (1.0 = default size).
     pub zoom: f32,
+    /// Backend selection policy for renderer initialization.
+    pub backend_preference: RendererBackendPreference,
 }
 
 impl Default for RendererConfig {
@@ -290,6 +342,7 @@ impl Default for RendererConfig {
             cell_height: 16,
             dpr: 1.0,
             zoom: 1.0,
+            backend_preference: RendererBackendPreference::Auto,
         }
     }
 }
@@ -496,6 +549,72 @@ pub fn cell_patches_from_flat_u32(
     }
 
     Ok(patches)
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PatchWriteSpan {
+    start_offset: u32,
+    patch_start: usize,
+    patch_end: usize,
+    total_cells: usize,
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn coalesce_patch_write_spans(patches: &[CellPatch], max_cells: u32) -> Vec<PatchWriteSpan> {
+    let mut spans = Vec::new();
+    let mut current: Option<PatchWriteSpan> = None;
+
+    for (index, patch) in patches.iter().enumerate() {
+        if patch.offset >= max_cells {
+            continue;
+        }
+        let available = max_cells.saturating_sub(patch.offset) as usize;
+        let count = patch.cells.len().min(available);
+        if count == 0 {
+            continue;
+        }
+        let start = patch.offset;
+        let end = start.saturating_add(count as u32);
+
+        match current.as_mut() {
+            Some(span) if span.start_offset.saturating_add(span.total_cells as u32) == start => {
+                span.patch_end = index + 1;
+                span.total_cells = span.total_cells.saturating_add(count);
+            }
+            Some(_) => {
+                if let Some(prev) = current.take() {
+                    spans.push(prev);
+                }
+                current = Some(PatchWriteSpan {
+                    start_offset: start,
+                    patch_start: index,
+                    patch_end: index + 1,
+                    total_cells: count,
+                });
+            }
+            None => {
+                current = Some(PatchWriteSpan {
+                    start_offset: start,
+                    patch_start: index,
+                    patch_end: index + 1,
+                    total_cells: count,
+                });
+            }
+        }
+
+        debug_assert_eq!(
+            end,
+            start.saturating_add(count as u32),
+            "coalesced span boundary overflowed unexpectedly"
+        );
+    }
+
+    if let Some(span) = current {
+        spans.push(span);
+    }
+
+    spans
 }
 
 // ---------------------------------------------------------------------------
@@ -1614,39 +1733,42 @@ mod gpu {
             let max = (self.cols as u32) * (self.rows as u32);
             let mut dirty = 0u32;
 
-            for patch in patches {
-                let start = patch.offset;
-                let end = start.saturating_add(patch.cells.len() as u32).min(max);
-                if start >= max {
-                    continue;
-                }
-
-                let count = (end - start) as usize;
-                if count == 0 {
-                    continue;
-                }
-                // Upload only the dirty range to the GPU.
-                let byte_offset = (start as u64) * (CELL_DATA_BYTES as u64);
+            for span in coalesce_patch_write_spans(patches, max) {
+                // Upload a coalesced contiguous range to reduce queue.write_buffer calls
+                // under bursty patch streams.
+                let byte_offset = (span.start_offset as u64) * (CELL_DATA_BYTES as u64);
                 self.patch_upload_scratch.clear();
-                self.patch_upload_scratch.reserve(count * CELL_DATA_BYTES);
+                self.patch_upload_scratch
+                    .reserve(span.total_cells * CELL_DATA_BYTES);
 
-                for i in 0..count {
-                    let mut gpu_cell = patch.cells[i];
-                    // Fast-path: skip the glyph atlas lookup for empty/space
-                    // cells (~60-80% of typical terminal content).
-                    let cp = gpu_cell.glyph_id;
-                    gpu_cell.glyph_id = if cp == 0 || cp == b' ' as u32 {
-                        0
-                    } else {
-                        self.ensure_glyph_slot(cp)
-                    };
-                    self.cells_cpu[(start as usize) + i] = gpu_cell;
-                    self.patch_upload_scratch
-                        .extend_from_slice(&gpu_cell.to_bytes());
+                for patch in &patches[span.patch_start..span.patch_end] {
+                    let start = patch.offset;
+                    let end = start.saturating_add(patch.cells.len() as u32).min(max);
+                    if start >= max {
+                        continue;
+                    }
+                    let count = (end - start) as usize;
+                    if count == 0 {
+                        continue;
+                    }
+                    for i in 0..count {
+                        let mut gpu_cell = patch.cells[i];
+                        // Fast-path: skip the glyph atlas lookup for empty/space
+                        // cells (~60-80% of typical terminal content).
+                        let cp = gpu_cell.glyph_id;
+                        gpu_cell.glyph_id = if cp == 0 || cp == b' ' as u32 {
+                            0
+                        } else {
+                            self.ensure_glyph_slot(cp)
+                        };
+                        self.cells_cpu[(start as usize) + i] = gpu_cell;
+                        self.patch_upload_scratch
+                            .extend_from_slice(&gpu_cell.to_bytes());
+                    }
+                    dirty = dirty.saturating_add(count as u32);
                 }
                 self.queue
                     .write_buffer(&self.cell_buffer, byte_offset, &self.patch_upload_scratch);
-                dirty += count as u32;
             }
 
             // Upload only the dirty atlas sub-regions instead of the full 4 MB
@@ -2151,6 +2273,7 @@ mod gpu {
 
     /// Terminal renderer that prefers WebGPU and falls back to Canvas2D.
     pub struct WebGpuRenderer {
+        backend_kind: RendererBackendKind,
         backend: RendererBackend,
     }
 
@@ -2165,20 +2288,50 @@ mod gpu {
             rows: u16,
             config: &RendererConfig,
         ) -> Result<Self, RendererError> {
-            match GpuRenderer::init(canvas.clone(), cols, rows, config).await {
-                Ok(renderer) => Ok(Self {
-                    backend: RendererBackend::WebGpu(Box::new(renderer)),
-                }),
-                Err(webgpu_error) => Canvas2dRenderer::init(canvas, cols, rows, config)
-                    .map(|renderer| Self {
+            match config.backend_preference {
+                RendererBackendPreference::Canvas2d => {
+                    Canvas2dRenderer::init(canvas, cols, rows, config).map(|renderer| Self {
+                        backend_kind: RendererBackendKind::Canvas2d,
                         backend: RendererBackend::Canvas2d(Box::new(renderer)),
                     })
-                    .map_err(|canvas_error| {
-                        RendererError::SurfaceError(format!(
-                            "WebGPU init failed ({webgpu_error}); Canvas2D fallback init failed ({canvas_error})"
-                        ))
+                }
+                RendererBackendPreference::WebGpu => GpuRenderer::init(canvas, cols, rows, config)
+                    .await
+                    .map(|renderer| Self {
+                        backend_kind: RendererBackendKind::WebGpu,
+                        backend: RendererBackend::WebGpu(Box::new(renderer)),
                     }),
+                RendererBackendPreference::Auto => {
+                    match GpuRenderer::init(canvas.clone(), cols, rows, config).await {
+                        Ok(renderer) => Ok(Self {
+                            backend_kind: RendererBackendKind::WebGpu,
+                            backend: RendererBackend::WebGpu(Box::new(renderer)),
+                        }),
+                        Err(webgpu_error) => Canvas2dRenderer::init(canvas, cols, rows, config)
+                            .map(|renderer| Self {
+                                backend_kind: RendererBackendKind::Canvas2d,
+                                backend: RendererBackend::Canvas2d(Box::new(renderer)),
+                            })
+                            .map_err(|canvas_error| {
+                                RendererError::SurfaceError(format!(
+                                    "WebGPU init failed ({webgpu_error}); Canvas2D fallback init failed ({canvas_error})"
+                                ))
+                            }),
+                    }
+                }
             }
+        }
+
+        /// Return which backend is currently active.
+        #[must_use]
+        pub const fn backend_kind(&self) -> RendererBackendKind {
+            self.backend_kind
+        }
+
+        /// Return the active backend name (`webgpu` or `canvas2d`).
+        #[must_use]
+        pub const fn backend_name(&self) -> &'static str {
+            self.backend_kind.as_str()
         }
 
         /// Resize the grid.
@@ -2344,6 +2497,7 @@ fn uniforms_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame_harness::{GeometrySnapshot, stable_frame_hash};
     use crate::glyph_atlas::{AtlasRect, GlyphMetrics};
 
     fn read_u32(bytes: &[u8]) -> u32 {
@@ -2360,6 +2514,130 @@ mod tests {
                 .try_into()
                 .expect("test slice must contain exactly 4 bytes"),
         )
+    }
+
+    fn parity_geometry(cols: u16, rows: u16) -> GeometrySnapshot {
+        GeometrySnapshot {
+            cols,
+            rows,
+            pixel_width: u32::from(cols),
+            pixel_height: u32::from(rows),
+            cell_width_px: 1.0,
+            cell_height_px: 1.0,
+            dpr: 1.0,
+            zoom: 1.0,
+        }
+    }
+
+    fn patch_ascii(offset: u32, text: &str) -> CellPatch {
+        CellPatch {
+            offset,
+            cells: text
+                .chars()
+                .map(|ch| CellData {
+                    bg_rgba: 0x000000FF,
+                    fg_rgba: 0xFFFFFFFF,
+                    glyph_id: u32::from(ch),
+                    attrs: 0,
+                })
+                .collect(),
+        }
+    }
+
+    fn apply_patch_stream_direct(
+        cells: &mut [CellData],
+        cols: u16,
+        rows: u16,
+        patches: &[CellPatch],
+    ) {
+        let max = u32::from(cols).saturating_mul(u32::from(rows));
+        for patch in patches {
+            if patch.offset >= max {
+                continue;
+            }
+            let available = max.saturating_sub(patch.offset) as usize;
+            let count = patch.cells.len().min(available);
+            if count == 0 {
+                continue;
+            }
+            let start = patch.offset as usize;
+            let end = start + count;
+            cells[start..end].copy_from_slice(&patch.cells[..count]);
+        }
+    }
+
+    fn apply_patch_stream_coalesced(
+        cells: &mut [CellData],
+        cols: u16,
+        rows: u16,
+        patches: &[CellPatch],
+    ) {
+        let max = u32::from(cols).saturating_mul(u32::from(rows));
+        for span in coalesce_patch_write_spans(patches, max) {
+            for patch in &patches[span.patch_start..span.patch_end] {
+                apply_patch_stream_direct(cells, cols, rows, std::slice::from_ref(patch));
+            }
+        }
+    }
+
+    fn build_backend_parity_events(
+        run_id: &str,
+        correlation_id: &str,
+        cols: u16,
+        rows: u16,
+        steps: &[Vec<CellPatch>],
+    ) -> Vec<serde_json::Value> {
+        let mut direct = vec![CellData::EMPTY; usize::from(cols) * usize::from(rows)];
+        let mut coalesced = vec![CellData::EMPTY; usize::from(cols) * usize::from(rows)];
+        let geometry = parity_geometry(cols, rows);
+        let mut events = Vec::with_capacity(steps.len());
+
+        for (step, patches) in steps.iter().enumerate() {
+            apply_patch_stream_direct(&mut direct, cols, rows, patches);
+            apply_patch_stream_coalesced(&mut coalesced, cols, rows, patches);
+
+            let direct_hash = stable_frame_hash(&direct, geometry);
+            let coalesced_hash = stable_frame_hash(&coalesced, geometry);
+            let cell_count: usize = patches.iter().map(|patch| patch.cells.len()).sum();
+            events.push(serde_json::json!({
+                "schema_version": "e2e-jsonl-v1",
+                "type": "backend_parity",
+                "event": "backend_parity_step",
+                "run_id": run_id,
+                "correlation_id": correlation_id,
+                "step": step,
+                "patch_count": patches.len(),
+                "cell_count": cell_count,
+                "direct_hash": direct_hash,
+                "coalesced_hash": coalesced_hash,
+            }));
+        }
+
+        events
+    }
+
+    fn backend_parity_events_to_jsonl(events: &[serde_json::Value]) -> Vec<String> {
+        events
+            .iter()
+            .map(|event| {
+                serde_json::to_string(event).expect("backend parity event should serialize")
+            })
+            .collect()
+    }
+
+    fn assert_backend_parity(events: &[serde_json::Value]) -> Result<(), String> {
+        for event in events {
+            let step = event["step"].as_u64().unwrap_or(u64::MAX);
+            let direct_hash = event["direct_hash"].as_str().unwrap_or("<missing>");
+            let coalesced_hash = event["coalesced_hash"].as_str().unwrap_or("<missing>");
+            if direct_hash != coalesced_hash {
+                return Err(format!(
+                    "backend parity mismatch at step={step} direct_hash={direct_hash} coalesced_hash={coalesced_hash} correlation_id={}",
+                    event["correlation_id"].as_str().unwrap_or("<missing>")
+                ));
+            }
+        }
+        Ok(())
     }
 
     #[test]
@@ -2698,6 +2976,43 @@ mod tests {
         assert_eq!(cfg.cell_height, 16);
         assert_eq!(cfg.dpr, 1.0);
         assert_eq!(cfg.zoom, 1.0);
+        assert_eq!(cfg.backend_preference, RendererBackendPreference::Auto);
+    }
+
+    #[test]
+    fn renderer_backend_preference_parse_accepts_aliases() {
+        assert_eq!(
+            RendererBackendPreference::parse("auto"),
+            Some(RendererBackendPreference::Auto)
+        );
+        assert_eq!(
+            RendererBackendPreference::parse("webgpu"),
+            Some(RendererBackendPreference::WebGpu)
+        );
+        assert_eq!(
+            RendererBackendPreference::parse("GPU"),
+            Some(RendererBackendPreference::WebGpu)
+        );
+        assert_eq!(
+            RendererBackendPreference::parse("canvas-2d"),
+            Some(RendererBackendPreference::Canvas2d)
+        );
+        assert_eq!(
+            RendererBackendPreference::parse("2d"),
+            Some(RendererBackendPreference::Canvas2d)
+        );
+    }
+
+    #[test]
+    fn renderer_backend_preference_parse_rejects_unknown_values() {
+        assert_eq!(RendererBackendPreference::parse(""), None);
+        assert_eq!(RendererBackendPreference::parse("vulkan"), None);
+    }
+
+    #[test]
+    fn renderer_backend_kind_names_are_stable() {
+        assert_eq!(RendererBackendKind::WebGpu.as_str(), "webgpu");
+        assert_eq!(RendererBackendKind::Canvas2d.as_str(), "canvas2d");
     }
 
     // ── RendererError Display ──────────────────────────────────────────
@@ -2870,6 +3185,158 @@ mod tests {
         let err = cell_patches_from_flat_u32(&[0, 1, 2], &[1, 2, 3, 4])
             .expect_err("odd spans length must fail");
         assert_eq!(err, "flat span payload length must be even");
+    }
+
+    #[test]
+    fn coalesce_patch_write_spans_merges_adjacent_ranges() {
+        let patches = vec![
+            CellPatch {
+                offset: 2,
+                cells: vec![CellData::EMPTY; 2],
+            },
+            CellPatch {
+                offset: 4,
+                cells: vec![CellData::EMPTY; 1],
+            },
+            CellPatch {
+                offset: 8,
+                cells: vec![CellData::EMPTY; 2],
+            },
+        ];
+
+        let spans = coalesce_patch_write_spans(&patches, 32);
+        assert_eq!(
+            spans,
+            vec![
+                PatchWriteSpan {
+                    start_offset: 2,
+                    patch_start: 0,
+                    patch_end: 2,
+                    total_cells: 3,
+                },
+                PatchWriteSpan {
+                    start_offset: 8,
+                    patch_start: 2,
+                    patch_end: 3,
+                    total_cells: 2,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn coalesce_patch_write_spans_does_not_merge_overlaps() {
+        let patches = vec![
+            CellPatch {
+                offset: 5,
+                cells: vec![CellData::EMPTY; 3],
+            },
+            CellPatch {
+                offset: 7,
+                cells: vec![CellData::EMPTY; 2],
+            },
+        ];
+
+        let spans = coalesce_patch_write_spans(&patches, 32);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].patch_start, 0);
+        assert_eq!(spans[0].patch_end, 1);
+        assert_eq!(spans[1].patch_start, 1);
+        assert_eq!(spans[1].patch_end, 2);
+    }
+
+    #[test]
+    fn coalesce_patch_write_spans_clips_to_grid_and_ignores_oob() {
+        let patches = vec![
+            CellPatch {
+                offset: 14,
+                cells: vec![CellData::EMPTY; 4],
+            },
+            CellPatch {
+                offset: 16,
+                cells: vec![CellData::EMPTY; 2],
+            },
+        ];
+
+        let spans = coalesce_patch_write_spans(&patches, 16);
+        assert_eq!(
+            spans,
+            vec![PatchWriteSpan {
+                start_offset: 14,
+                patch_start: 0,
+                patch_end: 1,
+                total_cells: 2,
+            }]
+        );
+    }
+
+    #[test]
+    fn backend_parity_hashes_match_for_direct_vs_coalesced_patch_application() {
+        let steps = vec![
+            vec![patch_ascii(0, "ABCD"), patch_ascii(10, "12")],
+            vec![patch_ascii(4, "xy"), patch_ascii(6, "z")],
+            vec![
+                patch_ascii(6, "ZZ"),
+                patch_ascii(30, "Q"),
+                patch_ascii(40, "ignored"),
+            ],
+            vec![
+                patch_ascii(3, "W"),
+                patch_ascii(4, "VU"),
+                patch_ascii(6, "T"),
+            ],
+        ];
+
+        let events = build_backend_parity_events("parity-run", "corr-001", 8, 4, &steps);
+        assert!(
+            assert_backend_parity(&events).is_ok(),
+            "direct/coalesced backend parity should hold for all steps"
+        );
+    }
+
+    #[test]
+    fn backend_parity_jsonl_is_deterministic_for_identical_input_stream() {
+        let steps = vec![
+            vec![patch_ascii(0, "hello"), patch_ascii(12, "WORLD")],
+            vec![patch_ascii(5, "  "), patch_ascii(7, "🦀")],
+            vec![patch_ascii(2, "rt"), patch_ascii(14, "!\u{0301}")],
+        ];
+
+        let first = backend_parity_events_to_jsonl(&build_backend_parity_events(
+            "parity-run",
+            "corr-002",
+            8,
+            4,
+            &steps,
+        ));
+        let second = backend_parity_events_to_jsonl(&build_backend_parity_events(
+            "parity-run",
+            "corr-002",
+            8,
+            4,
+            &steps,
+        ));
+
+        assert_eq!(first, second);
+        for line in first {
+            let parsed: serde_json::Value =
+                serde_json::from_str(&line).expect("parity JSONL line should parse");
+            assert_eq!(parsed["schema_version"], "e2e-jsonl-v1");
+            assert_eq!(parsed["type"], "backend_parity");
+            assert_eq!(parsed["event"], "backend_parity_step");
+        }
+    }
+
+    #[test]
+    fn backend_parity_failure_injection_reports_actionable_diagnostics() {
+        let steps = vec![vec![patch_ascii(0, "AB"), patch_ascii(2, "CD")]];
+        let mut events = build_backend_parity_events("parity-run", "corr-fail", 8, 4, &steps);
+        events[0]["coalesced_hash"] = serde_json::Value::String("deadbeef".to_owned());
+
+        let err = assert_backend_parity(&events).expect_err("mismatch should be reported");
+        assert!(err.contains("step=0"));
+        assert!(err.contains("deadbeef"));
+        assert!(err.contains("corr-fail"));
     }
 
     // ── CursorStyle exhaustive ─────────────────────────────────────────

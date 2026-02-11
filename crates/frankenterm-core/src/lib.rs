@@ -33,6 +33,7 @@ pub mod reply;
 pub mod scrollback;
 pub mod selection;
 pub mod terminal_engine;
+pub mod width_policy;
 
 pub use cell::{Cell, CellFlags, Color, HyperlinkId, HyperlinkRegistry, SgrAttrs, SgrFlags};
 pub use cursor::{Cursor, SavedCursor, translate_charset};
@@ -52,3 +53,4 @@ pub use reply::{
 pub use scrollback::{Scrollback, ScrollbackLine, ScrollbackWindow};
 pub use selection::{BufferPos, Selection};
 pub use terminal_engine::{DEFAULT_SCROLLBACK_CAPACITY, TerminalEngine, TerminalEngineConfig};
+pub use width_policy::WidthPolicy;

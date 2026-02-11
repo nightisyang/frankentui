@@ -10,6 +10,7 @@
 //! The output patches are ready for `WebGpuRenderer::apply_patches()`.
 
 use crate::renderer::{CellData, CellPatch};
+use frankenterm_core::{Cell as CoreCell, Color as CoreColor, Patch as CorePatch};
 use ftui_render::buffer::Buffer;
 use ftui_render::cell::{Cell, CellAttrs, CellContent};
 use ftui_render::diff::BufferDiff;
@@ -30,6 +31,26 @@ use ftui_render::diff::BufferDiff;
 const GRAPHEME_FALLBACK_CODEPOINT: u32 = '□' as u32;
 const ATTR_STYLE_MASK: u32 = 0xFF;
 const ATTR_LINK_ID_MAX: u32 = CellAttrs::LINK_ID_MAX;
+const DEFAULT_FG_RGBA: u32 = 0xFFFF_FFFF;
+const DEFAULT_BG_RGBA: u32 = 0x0000_00FF;
+const ANSI16_RGBA: [u32; 16] = [
+    0x0000_00FF,
+    0xCD00_00FF,
+    0x00CD_00FF,
+    0xCDCD_00FF,
+    0x0000_EEFF,
+    0xCD00_CDFF,
+    0x00CD_CDFF,
+    0xE5E5_E5FF,
+    0x7F7F_7FFF,
+    0xFF00_00FF,
+    0x00FF_00FF,
+    0xFFFF_00FF,
+    0x5C5C_FFFF,
+    0xFF00_FFFF,
+    0x00FF_FFFF,
+    0xFFFF_FFFF,
+];
 
 #[must_use]
 pub fn cell_from_render(cell: &Cell) -> CellData {
@@ -52,6 +73,93 @@ fn pack_cell_attrs(cell: &Cell) -> u32 {
     let style_bits = u32::from(cell.attrs.flags().bits()) & ATTR_STYLE_MASK;
     let link_id = cell.attrs.link_id().min(ATTR_LINK_ID_MAX);
     style_bits | (link_id << 8)
+}
+
+/// Convert a single `frankenterm-core` cell to GPU-ready `CellData`.
+///
+/// This powers the VT byte-stream (`TerminalEngine`) feed path used by wasm.
+#[must_use]
+pub fn cell_from_core(cell: &CoreCell) -> CellData {
+    let glyph_id = if cell.is_wide_continuation() || cell.content() == ' ' {
+        0
+    } else {
+        u32::from(cell.content())
+    };
+    let style_bits = u32::from(cell.attrs.flags.bits()) & ATTR_STYLE_MASK;
+    let link_id = u32::from(cell.hyperlink);
+
+    CellData {
+        bg_rgba: core_color_to_rgba(cell.attrs.bg, DEFAULT_BG_RGBA),
+        fg_rgba: core_color_to_rgba(cell.attrs.fg, DEFAULT_FG_RGBA),
+        glyph_id,
+        attrs: style_bits | (link_id << 8),
+    }
+}
+
+/// Convert a `frankenterm-core` patch into contiguous `CellPatch` runs.
+///
+/// Input updates are expected to be row-major ordered; this function coalesces
+/// contiguous linear offsets to minimize patch upload calls.
+#[must_use]
+pub fn core_patch_to_patches(patch: &CorePatch) -> Vec<CellPatch> {
+    if patch.updates.is_empty() || patch.cols == 0 || patch.rows == 0 {
+        return Vec::new();
+    }
+
+    let cols = u32::from(patch.cols);
+    let mut patches = Vec::with_capacity(patch.updates.len().div_ceil(8).max(1));
+    let mut span_start = 0u32;
+    let mut span_cells: Vec<CellData> = Vec::new();
+    let mut prev_offset = 0u32;
+    let mut has_span = false;
+
+    for update in &patch.updates {
+        if update.row >= patch.rows || update.col >= patch.cols {
+            continue;
+        }
+        let offset = u32::from(update.row)
+            .saturating_mul(cols)
+            .saturating_add(u32::from(update.col));
+        let cell = cell_from_core(&update.cell);
+
+        if !has_span {
+            span_start = offset;
+            prev_offset = offset;
+            has_span = true;
+            span_cells.push(cell);
+            continue;
+        }
+
+        if offset == prev_offset {
+            if let Some(last) = span_cells.last_mut() {
+                *last = cell;
+            }
+            continue;
+        }
+
+        if offset == prev_offset + 1 {
+            span_cells.push(cell);
+            prev_offset = offset;
+            continue;
+        }
+
+        patches.push(CellPatch {
+            offset: span_start,
+            cells: std::mem::take(&mut span_cells),
+        });
+        span_start = offset;
+        prev_offset = offset;
+        span_cells.push(cell);
+    }
+
+    if !span_cells.is_empty() {
+        patches.push(CellPatch {
+            offset: span_start,
+            cells: span_cells,
+        });
+    }
+
+    patches
 }
 
 /// Convert a `BufferDiff` into contiguous `CellPatch` spans for GPU upload.
@@ -182,9 +290,49 @@ fn cell_at_xy(buffer: &Buffer, x: u16, y: u16) -> CellData {
     cell_from_render(buffer.get_unchecked(x, y))
 }
 
+fn core_color_to_rgba(color: CoreColor, default: u32) -> u32 {
+    match color {
+        CoreColor::Default => default,
+        CoreColor::Named(idx) => ANSI16_RGBA[usize::from(idx.min(15))],
+        CoreColor::Indexed(idx) => indexed_color_to_rgba(idx),
+        CoreColor::Rgb(r, g, b) => pack_rgba(r, g, b),
+    }
+}
+
+fn indexed_color_to_rgba(index: u8) -> u32 {
+    if index < 16 {
+        return ANSI16_RGBA[usize::from(index)];
+    }
+
+    if index < 232 {
+        let base = index - 16;
+        let r = base / 36;
+        let g = (base % 36) / 6;
+        let b = base % 6;
+        const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+        return pack_rgba(
+            LEVELS[usize::from(r)],
+            LEVELS[usize::from(g)],
+            LEVELS[usize::from(b)],
+        );
+    }
+
+    // Grayscale ramp [232..255] => [8, 18, ..., 238]
+    let gray = 8u8.saturating_add((index - 232).saturating_mul(10));
+    pack_rgba(gray, gray, gray)
+}
+
+fn pack_rgba(r: u8, g: u8, b: u8) -> u32 {
+    (u32::from(r) << 24) | (u32::from(g) << 16) | (u32::from(b) << 8) | 0xFF
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use frankenterm_core::{
+        Cell as CoreCell, Color as CoreColor, Patch as CorePatch, SgrAttrs as CoreSgrAttrs,
+        SgrFlags as CoreSgrFlags, TerminalEngine,
+    };
     use ftui_render::cell::{CellAttrs, GraphemeId, PackedRgba, StyleFlags};
 
     fn make_cell(ch: char, fg: u32, bg: u32, flags: StyleFlags) -> Cell {
@@ -210,6 +358,35 @@ mod tests {
             },
             Cell::CONTINUATION,
         ]
+    }
+
+    fn apply_cell_patches_to_shadow(cols: u16, rows: u16, patches: &[CellPatch]) -> Vec<CellData> {
+        let total = usize::from(cols) * usize::from(rows);
+        let mut shadow = vec![CellData::EMPTY; total];
+        for patch in patches {
+            let start = usize::try_from(patch.offset).unwrap_or(total).min(total);
+            let count = patch.cells.len().min(total.saturating_sub(start));
+            for (idx, cell) in patch.cells.iter().take(count).enumerate() {
+                shadow[start + idx] = *cell;
+            }
+        }
+        shadow
+    }
+
+    fn shadow_row_text(shadow: &[CellData], cols: u16, row: u16) -> String {
+        let cols_usize = usize::from(cols);
+        let start = usize::from(row) * cols_usize;
+        let end = (start + cols_usize).min(shadow.len());
+        shadow[start..end]
+            .iter()
+            .map(|cell| {
+                if cell.glyph_id == 0 {
+                    ' '
+                } else {
+                    char::from_u32(cell.glyph_id).unwrap_or('□')
+                }
+            })
+            .collect()
     }
 
     #[test]
@@ -1077,5 +1254,140 @@ mod tests {
         assert_eq!(patches[1].offset, 6);
         assert_eq!(patches[1].cells.len(), 1);
         assert_eq!(patches[1].cells[0].glyph_id, 'ñ' as u32);
+    }
+
+    #[test]
+    fn cell_from_core_packs_colors_style_and_link() {
+        let mut cell = CoreCell::new('A');
+        cell.attrs = CoreSgrAttrs {
+            flags: CoreSgrFlags::BOLD | CoreSgrFlags::UNDERLINE,
+            fg: CoreColor::Rgb(1, 2, 3),
+            bg: CoreColor::Named(4),
+            underline_color: None,
+        };
+        cell.hyperlink = 0x0034;
+
+        let gpu = cell_from_core(&cell);
+        assert_eq!(gpu.glyph_id, u32::from('A'));
+        assert_eq!(gpu.fg_rgba, pack_rgba(1, 2, 3));
+        assert_eq!(gpu.bg_rgba, ANSI16_RGBA[4]);
+        assert_eq!(
+            gpu.attrs & ATTR_STYLE_MASK,
+            u32::from((CoreSgrFlags::BOLD | CoreSgrFlags::UNDERLINE).bits())
+        );
+        assert_eq!(gpu.attrs >> 8, 0x0034);
+    }
+
+    #[test]
+    fn cell_from_core_wide_continuation_maps_to_empty_glyph() {
+        let (_, cont) = CoreCell::wide('界', CoreSgrAttrs::default());
+        let gpu = cell_from_core(&cont);
+        assert_eq!(gpu.glyph_id, 0);
+    }
+
+    #[test]
+    fn cell_from_core_256_indexed_colors_follow_xterm_mapping() {
+        let mut cell = CoreCell::new('Z');
+        cell.attrs.fg = CoreColor::Indexed(196); // bright red from 6x6x6 cube
+        cell.attrs.bg = CoreColor::Indexed(243); // grayscale ramp
+        let gpu = cell_from_core(&cell);
+        assert_eq!(gpu.fg_rgba, pack_rgba(255, 0, 0));
+        assert_eq!(gpu.bg_rgba, pack_rgba(118, 118, 118));
+    }
+
+    #[test]
+    fn core_patch_to_patches_coalesces_adjacent_offsets() {
+        let mut patch = CorePatch::new(6, 2);
+        patch.push(0, 1, CoreCell::new('A'));
+        patch.push(0, 2, CoreCell::new('B'));
+        patch.push(1, 0, CoreCell::new('C'));
+
+        let runs = core_patch_to_patches(&patch);
+        assert_eq!(runs.len(), 2);
+
+        assert_eq!(runs[0].offset, 1);
+        assert_eq!(runs[0].cells.len(), 2);
+        assert_eq!(runs[0].cells[0].glyph_id, u32::from('A'));
+        assert_eq!(runs[0].cells[1].glyph_id, u32::from('B'));
+
+        assert_eq!(runs[1].offset, 6);
+        assert_eq!(runs[1].cells.len(), 1);
+        assert_eq!(runs[1].cells[0].glyph_id, u32::from('C'));
+    }
+
+    #[test]
+    fn core_patch_to_patches_last_duplicate_update_wins() {
+        let mut patch = CorePatch::new(4, 1);
+        patch.push(0, 0, CoreCell::new('X'));
+        patch.push(0, 0, CoreCell::new('Y'));
+
+        let runs = core_patch_to_patches(&patch);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].offset, 0);
+        assert_eq!(runs[0].cells.len(), 1);
+        assert_eq!(runs[0].cells[0].glyph_id, u32::from('Y'));
+    }
+
+    #[test]
+    fn remote_feed_decawm_nowrap_overwrites_rightmost_column() {
+        let mut engine = TerminalEngine::new(5, 3);
+        engine.feed_bytes(b"\x1b[?7lABCDEFGH");
+
+        let patch = engine.snapshot_patches();
+        let patches = core_patch_to_patches(&patch);
+        let shadow = apply_cell_patches_to_shadow(5, 3, &patches);
+
+        assert_eq!(shadow_row_text(&shadow, 5, 0), "ABCDH");
+        assert_eq!(shadow_row_text(&shadow, 5, 1), "     ");
+        assert_eq!(shadow_row_text(&shadow, 5, 2), "     ");
+    }
+
+    #[test]
+    fn remote_feed_origin_mode_home_targets_scroll_region_top() {
+        let mut engine = TerminalEngine::new(10, 6);
+        engine.feed_bytes(b"\x1b[3;5r\x1b[?6h\x1b[HXY");
+
+        let patch = engine.snapshot_patches();
+        let patches = core_patch_to_patches(&patch);
+        let shadow = apply_cell_patches_to_shadow(10, 6, &patches);
+
+        assert_eq!(shadow_row_text(&shadow, 10, 2), "XY        ");
+        assert_eq!(shadow_row_text(&shadow, 10, 0), "          ");
+        assert_eq!(shadow_row_text(&shadow, 10, 1), "          ");
+    }
+
+    #[test]
+    fn remote_feed_soft_reset_restores_autowrap_before_followup_writes() {
+        let mut engine = TerminalEngine::new(3, 2);
+        engine.feed_bytes(b"\x1b[?7l\x1b[!pABCDEF");
+
+        let patch = engine.snapshot_patches();
+        let patches = core_patch_to_patches(&patch);
+        let shadow = apply_cell_patches_to_shadow(3, 2, &patches);
+
+        assert_eq!(shadow_row_text(&shadow, 3, 0), "ABC");
+        assert_eq!(shadow_row_text(&shadow, 3, 1), "DEF");
+    }
+
+    #[test]
+    fn remote_feed_resize_then_home_write_stays_within_new_geometry() {
+        let mut engine = TerminalEngine::new(4, 2);
+        engine.feed_bytes(b"ABCD");
+        let _ = engine.snapshot_patches();
+
+        engine.resize(2, 2);
+        engine.feed_bytes(b"\x1b[HXY");
+        let patch = engine.snapshot_patches();
+        let patches = core_patch_to_patches(&patch);
+
+        assert!(patches.iter().all(|run| {
+            let start = usize::try_from(run.offset).unwrap_or(usize::MAX);
+            start
+                .checked_add(run.cells.len())
+                .is_some_and(|end| end <= 4usize)
+        }));
+
+        let shadow = apply_cell_patches_to_shadow(2, 2, &patches);
+        assert_eq!(shadow_row_text(&shadow, 2, 0), "XY");
     }
 }

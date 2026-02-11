@@ -535,6 +535,21 @@ impl Grid {
 
     /// Write one printable Unicode scalar with terminal-width semantics.
     ///
+    /// Uses [`Cell::display_width`] to determine the character width. External
+    /// callers (benches, proptests, model-check tests) should prefer this method
+    /// for backward compatibility.
+    ///
+    /// Returns the written display width (0, 1, or 2).
+    pub fn write_printable(&mut self, row: u16, col: u16, ch: char, attrs: SgrAttrs) -> u8 {
+        self.write_printable_with_width(row, col, ch, attrs, Cell::display_width(ch))
+    }
+
+    /// Write one printable Unicode scalar with a pre-computed display width.
+    ///
+    /// This is the inner implementation used by the terminal engine, which
+    /// owns the width policy and passes the pre-computed width down to avoid
+    /// redundant width computation.
+    ///
     /// Returns the written display width:
     /// - `0` for non-spacing marks/format controls (fallback: ignored)
     /// - `1` for narrow cells
@@ -543,12 +558,18 @@ impl Grid {
     /// If a wide character does not fit at `col` (i.e. `col+1 >= cols`), this
     /// method returns `0` and leaves the grid unchanged. Callers are responsible
     /// for wrap policy decisions.
-    pub fn write_printable(&mut self, row: u16, col: u16, ch: char, attrs: SgrAttrs) -> u8 {
+    pub fn write_printable_with_width(
+        &mut self,
+        row: u16,
+        col: u16,
+        ch: char,
+        attrs: SgrAttrs,
+        width: u8,
+    ) -> u8 {
         if row >= self.rows || col >= self.cols {
             return 0;
         }
 
-        let width = Cell::display_width(ch);
         match width {
             0 => 0,
             1 => {

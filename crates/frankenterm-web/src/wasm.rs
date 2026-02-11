@@ -1,8 +1,11 @@
 #![forbid(unsafe_code)]
 
+use crate::attach::{
+    AttachAction, AttachClientStateMachine, AttachEvent, AttachSnapshot, AttachTransition,
+};
 use crate::frame_harness::{
     GeometrySnapshot, InteractionSnapshot, LinkClickSnapshot, link_click_jsonl,
-    resize_storm_frame_jsonl_with_interaction,
+    resize_storm_frame_jsonl_with_interaction, scrollback_virtualization_frame_jsonl,
 };
 use crate::input::{
     AccessibilityInput, CompositionInput, CompositionPhase, CompositionState, FocusInput,
@@ -10,13 +13,16 @@ use crate::input::{
     MousePhase, PasteInput, TouchInput, TouchPhase, TouchPoint, VtInputEncoderFeatures, WheelInput,
     encode_vt_input_event, normalize_dom_key_code,
 };
+use crate::patch_feed::core_patch_to_patches;
 use crate::renderer::{
-    CellData, CellPatch, CursorStyle, GridGeometry, RendererConfig, WebGpuRenderer,
-    cell_attr_link_id, cell_patches_from_flat_u32,
+    CellData, CellPatch, CursorStyle, GridGeometry, RendererBackendPreference, RendererConfig,
+    WebGpuRenderer, cell_attr_link_id, cell_patches_from_flat_u32,
 };
-use crate::scroll::{SearchConfig, SearchIndex};
+use crate::scroll::{ScrollState, SearchConfig, SearchIndex, ViewportSnapshot};
+use frankenterm_core::{ScrollbackWindow, TerminalEngine};
 use js_sys::{Array, Object, Reflect, Uint8Array, Uint32Array};
 use std::collections::HashMap;
+use std::time::Duration;
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
@@ -72,7 +78,11 @@ pub struct FrankenTermWeb {
     flat_cells_scratch: Vec<u32>,
     dirty_row_marks: Vec<u8>,
     dirty_rows_scratch: Vec<usize>,
+    scroll_state: ScrollState,
+    follow_output: bool,
+    attach_client: AttachClientStateMachine,
     next_auto_link_id: u32,
+    engine: Option<TerminalEngine>,
     renderer: Option<WebGpuRenderer>,
 }
 
@@ -316,7 +326,11 @@ impl FrankenTermWeb {
             flat_cells_scratch: Vec::new(),
             dirty_row_marks: Vec::new(),
             dirty_rows_scratch: Vec::new(),
+            scroll_state: ScrollState::with_defaults(),
+            follow_output: true,
+            attach_client: AttachClientStateMachine::default(),
             next_auto_link_id: AUTO_LINK_ID_BASE,
+            engine: None,
             renderer: None,
         }
     }
@@ -336,12 +350,14 @@ impl FrankenTermWeb {
         let cell_height = parse_init_u16(&options, "cellHeight")?.unwrap_or(16);
         let dpr = parse_init_f32(&options, "dpr")?.unwrap_or(1.0);
         let zoom = parse_init_f32(&options, "zoom")?.unwrap_or(1.0);
+        let backend_preference = parse_init_renderer_backend(&options)?;
 
         let config = RendererConfig {
             cell_width,
             cell_height,
             dpr,
             zoom,
+            backend_preference,
         };
 
         let renderer = WebGpuRenderer::init(canvas.clone(), cols, rows, &config)
@@ -354,6 +370,8 @@ impl FrankenTermWeb {
         self.shadow_cells = vec![CellData::EMPTY; usize::from(cols) * usize::from(rows)];
         self.auto_link_ids = vec![0; usize::from(cols) * usize::from(rows)];
         self.auto_link_urls.clear();
+        self.follow_output = true;
+        self.sync_terminal_engine_size(cols, rows);
         self.canvas = Some(canvas);
         self.renderer = Some(renderer);
         self.encoder_features = parse_encoder_features(&options);
@@ -371,12 +389,23 @@ impl FrankenTermWeb {
         self.text_shaping =
             parse_text_shaping_config(options.as_ref(), TextShapingConfig::default())?;
         self.initialized = true;
+        self.refresh_viewport_snapshot();
         self.sync_canvas_css_size(geometry);
         Ok(())
     }
 
+    /// Return the active renderer backend (`webgpu`, `canvas2d`, or `none` before init).
+    #[wasm_bindgen(js_name = rendererBackend)]
+    pub fn renderer_backend(&self) -> String {
+        self.renderer
+            .as_ref()
+            .map(|renderer| renderer.backend_name().to_owned())
+            .unwrap_or_else(|| "none".to_owned())
+    }
+
     /// Resize the terminal in logical grid coordinates (cols/rows).
     pub fn resize(&mut self, cols: u16, rows: u16) {
+        let previous_viewport_start = self.refresh_viewport_snapshot().viewport_start;
         self.cols = cols;
         self.rows = rows;
         self.shadow_cells
@@ -384,12 +413,14 @@ impl FrankenTermWeb {
         self.auto_link_ids
             .resize(usize::from(cols) * usize::from(rows), 0);
         self.auto_link_urls.clear();
+        self.sync_terminal_engine_size(cols, rows);
         self.refresh_search_after_buffer_change();
         if let Some(r) = self.renderer.as_mut() {
             r.resize(cols, rows);
             let geometry = r.current_geometry();
             self.sync_canvas_css_size(geometry);
         }
+        self.refresh_viewport_after_resize(previous_viewport_start);
         self.sync_renderer_interaction_state();
     }
 
@@ -432,6 +463,7 @@ impl FrankenTermWeb {
         container_height_css: u32,
         dpr: f32,
     ) -> Result<JsValue, JsValue> {
+        let previous_viewport_start = self.refresh_viewport_snapshot().viewport_start;
         let Some(renderer) = self.renderer.as_mut() else {
             return Err(JsValue::from_str("renderer not initialized"));
         };
@@ -448,7 +480,9 @@ impl FrankenTermWeb {
         self.auto_link_ids
             .resize(usize::from(geometry.cols) * usize::from(geometry.rows), 0);
         self.auto_link_urls.clear();
+        self.sync_terminal_engine_size(geometry.cols, geometry.rows);
         self.refresh_search_after_buffer_change();
+        self.refresh_viewport_after_resize(previous_viewport_start);
         self.sync_canvas_css_size(geometry);
         Ok(geometry_to_js(geometry))
     }
@@ -526,6 +560,174 @@ impl FrankenTermWeb {
         arr
     }
 
+    /// Drain pending terminal reply bytes generated by VT query sequences.
+    ///
+    /// Returned as `Array<Uint8Array>` chunks in FIFO order.
+    #[wasm_bindgen(js_name = drainReplyBytes)]
+    pub fn drain_reply_bytes(&mut self) -> Array {
+        let arr = Array::new();
+        let Some(engine) = self.engine.as_mut() else {
+            return arr;
+        };
+        for bytes in engine.drain_replies() {
+            let chunk = Uint8Array::from(bytes.as_slice());
+            arr.push(&chunk.into());
+        }
+        arr
+    }
+
+    /// Return websocket-attach lifecycle snapshot.
+    ///
+    /// Shape:
+    /// `{state, attempt, maxRetries, handshakeDeadlineMs, retryDeadlineMs,
+    ///   sessionId, closeReason, failureCode, closeCode, cleanClose, canRetry}`
+    #[wasm_bindgen(js_name = attachState)]
+    pub fn attach_state(&self) -> JsValue {
+        attach_snapshot_to_js(&self.attach_client.snapshot())
+    }
+
+    /// Start (or restart) a websocket attach lifecycle.
+    ///
+    /// Host is expected to open the websocket transport after this call reports
+    /// `open_transport` in `actions`.
+    #[wasm_bindgen(js_name = attachConnect)]
+    pub fn attach_connect(&mut self, now_ms: u32) -> JsValue {
+        let transition = self
+            .attach_client
+            .handle_event(u64::from(now_ms), AttachEvent::ConnectRequested);
+        attach_transition_to_js(&transition)
+    }
+
+    /// Inform state machine that the transport opened successfully.
+    ///
+    /// Host should send handshake frame when transition actions include
+    /// `send_handshake`.
+    #[wasm_bindgen(js_name = attachTransportOpened)]
+    pub fn attach_transport_opened(&mut self, now_ms: u32) -> JsValue {
+        let transition = self
+            .attach_client
+            .handle_event(u64::from(now_ms), AttachEvent::TransportOpened);
+        attach_transition_to_js(&transition)
+    }
+
+    /// Inform state machine that handshake acknowledgement was received.
+    #[wasm_bindgen(js_name = attachHandshakeAck)]
+    pub fn attach_handshake_ack(
+        &mut self,
+        session_id: &str,
+        now_ms: u32,
+    ) -> Result<JsValue, JsValue> {
+        let normalized = session_id.trim();
+        if normalized.is_empty() {
+            return Err(JsValue::from_str("session_id must not be empty"));
+        }
+        let transition = self.attach_client.handle_event(
+            u64::from(now_ms),
+            AttachEvent::HandshakeAck {
+                session_id: normalized.to_owned(),
+            },
+        );
+        Ok(attach_transition_to_js(&transition))
+    }
+
+    /// Inform state machine that transport was closed.
+    #[wasm_bindgen(js_name = attachTransportClosed)]
+    pub fn attach_transport_closed(
+        &mut self,
+        code: u16,
+        clean: bool,
+        reason: &str,
+        now_ms: u32,
+    ) -> JsValue {
+        let transition = self.attach_client.handle_event(
+            u64::from(now_ms),
+            AttachEvent::TransportClosed {
+                code,
+                clean,
+                reason: reason.to_owned(),
+            },
+        );
+        attach_transition_to_js(&transition)
+    }
+
+    /// Inform state machine about protocol-level error.
+    #[wasm_bindgen(js_name = attachProtocolError)]
+    pub fn attach_protocol_error(
+        &mut self,
+        code: &str,
+        fatal: bool,
+        now_ms: u32,
+    ) -> Result<JsValue, JsValue> {
+        let normalized = code.trim();
+        if normalized.is_empty() {
+            return Err(JsValue::from_str("protocol error code must not be empty"));
+        }
+        let transition = self.attach_client.handle_event(
+            u64::from(now_ms),
+            AttachEvent::ProtocolError {
+                code: normalized.to_owned(),
+                fatal,
+            },
+        );
+        Ok(attach_transition_to_js(&transition))
+    }
+
+    /// Inform state machine about server-initiated session end.
+    #[wasm_bindgen(js_name = attachSessionEnded)]
+    pub fn attach_session_ended(&mut self, reason: &str, now_ms: u32) -> JsValue {
+        let transition = self.attach_client.handle_event(
+            u64::from(now_ms),
+            AttachEvent::SessionEnded {
+                reason: reason.to_owned(),
+            },
+        );
+        attach_transition_to_js(&transition)
+    }
+
+    /// Request graceful client-side session close.
+    #[wasm_bindgen(js_name = attachClose)]
+    pub fn attach_close(&mut self, reason: &str, now_ms: u32) -> JsValue {
+        let transition = self.attach_client.handle_event(
+            u64::from(now_ms),
+            AttachEvent::CloseRequested {
+                reason: reason.to_owned(),
+            },
+        );
+        attach_transition_to_js(&transition)
+    }
+
+    /// Advance timer-driven attach transitions deterministically.
+    #[wasm_bindgen(js_name = attachTick)]
+    pub fn attach_tick(&mut self, now_ms: u32) -> JsValue {
+        let transition = self
+            .attach_client
+            .handle_event(u64::from(now_ms), AttachEvent::Tick);
+        attach_transition_to_js(&transition)
+    }
+
+    /// Reset attach lifecycle to detached baseline state.
+    #[wasm_bindgen(js_name = attachReset)]
+    pub fn attach_reset(&mut self, now_ms: u32) -> JsValue {
+        let transition = self
+            .attach_client
+            .handle_event(u64::from(now_ms), AttachEvent::Reset);
+        attach_transition_to_js(&transition)
+    }
+
+    /// Drain structured attach transition logs as JSONL lines.
+    #[wasm_bindgen(js_name = drainAttachTransitionsJsonl)]
+    pub fn drain_attach_transitions_jsonl(&mut self, run_id: &str) -> Result<Array, JsValue> {
+        let normalized = run_id.trim();
+        if normalized.is_empty() {
+            return Err(JsValue::from_str("run_id must not be empty"));
+        }
+        let out = Array::new();
+        for line in self.attach_client.drain_transition_jsonl(normalized) {
+            out.push(&JsValue::from_str(&line));
+        }
+        Ok(out)
+    }
+
     /// Queue pasted text as terminal input bytes.
     ///
     /// Browser clipboard APIs require trusted user gestures; hosts should read
@@ -544,7 +746,31 @@ impl FrankenTermWeb {
     }
 
     /// Feed a VT/ANSI byte stream (remote mode).
-    pub fn feed(&mut self, _data: &[u8]) {}
+    pub fn feed(&mut self, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        let Some(_) = self.engine.as_ref() else {
+            return;
+        };
+        let previous_viewport_start = self.refresh_viewport_snapshot().viewport_start;
+
+        let patch = {
+            let engine = self
+                .engine
+                .as_mut()
+                .expect("engine was checked as present above");
+            engine.feed_bytes(data);
+            engine.snapshot_patches()
+        };
+        let patches = core_patch_to_patches(&patch);
+        if patches.is_empty() {
+            self.refresh_viewport_after_content_change(previous_viewport_start);
+            return;
+        }
+        self.apply_cell_patches(&patches);
+        self.refresh_viewport_after_content_change(previous_viewport_start);
+    }
 
     /// Apply a cell patch (ftui-web mode).
     ///
@@ -554,8 +780,10 @@ impl FrankenTermWeb {
     /// state so host-side logic (search/link lookup/evidence) remains usable.
     #[wasm_bindgen(js_name = applyPatch)]
     pub fn apply_patch(&mut self, patch: JsValue) -> Result<(), JsValue> {
+        let previous_viewport_start = self.refresh_viewport_snapshot().viewport_start;
         let patch = parse_cell_patch(&patch)?;
         self.apply_cell_patches(std::slice::from_ref(&patch));
+        self.refresh_viewport_after_content_change(previous_viewport_start);
         Ok(())
     }
 
@@ -580,7 +808,9 @@ impl FrankenTermWeb {
         for patch in patches_arr.iter() {
             parsed.push(parse_cell_patch(&patch)?);
         }
+        let previous_viewport_start = self.refresh_viewport_snapshot().viewport_start;
         self.apply_cell_patches(&parsed);
+        self.refresh_viewport_after_content_change(previous_viewport_start);
         Ok(())
     }
 
@@ -602,7 +832,9 @@ impl FrankenTermWeb {
         cells.copy_to(self.flat_cells_scratch.as_mut_slice());
         let parsed = cell_patches_from_flat_u32(&self.flat_spans_scratch, &self.flat_cells_scratch)
             .map_err(JsValue::from_str)?;
+        let previous_viewport_start = self.refresh_viewport_snapshot().viewport_start;
         self.apply_cell_patches(&parsed);
+        self.refresh_viewport_after_content_change(previous_viewport_start);
         Ok(())
     }
 
@@ -736,6 +968,7 @@ impl FrankenTermWeb {
     #[wasm_bindgen(js_name = searchNext)]
     pub fn search_next(&mut self) -> JsValue {
         self.search_active_match = self.search_index.next_index(self.search_active_match);
+        self.align_viewport_to_active_search_match();
         self.search_highlight_range = self.search_highlight_for_active_match();
         self.sync_renderer_interaction_state();
         self.search_state()
@@ -747,6 +980,7 @@ impl FrankenTermWeb {
     #[wasm_bindgen(js_name = searchPrev)]
     pub fn search_prev(&mut self) -> JsValue {
         self.search_active_match = self.search_index.prev_index(self.search_active_match);
+        self.align_viewport_to_active_search_match();
         self.search_highlight_range = self.search_highlight_for_active_match();
         self.sync_renderer_interaction_state();
         self.search_state()
@@ -775,6 +1009,188 @@ impl FrankenTermWeb {
             &self.search_index,
             self.search_active_match,
         )
+    }
+
+    /// Return a deterministic viewport snapshot over unified history
+    /// (`scrollback + visible grid`).
+    ///
+    /// Shape:
+    /// `{ totalLines, scrollbackLines, gridRows, viewportStart, viewportEnd,
+    ///    renderStart, renderEnd, scrollOffsetFromBottom, maxScrollOffset,
+    ///    atBottom, followOutput, animating, subLineOffset }`
+    #[wasm_bindgen(js_name = viewportState)]
+    pub fn viewport_state(&mut self) -> JsValue {
+        let snap = self.refresh_viewport_snapshot();
+        let scrollback_lines = self.scrollback_line_count();
+        let obj = Object::new();
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("totalLines"),
+            &JsValue::from_f64(snap.total_lines as f64),
+        );
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("scrollbackLines"),
+            &JsValue::from_f64(scrollback_lines as f64),
+        );
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("gridRows"),
+            &JsValue::from_f64(f64::from(self.rows)),
+        );
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("viewportStart"),
+            &JsValue::from_f64(snap.viewport_start as f64),
+        );
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("viewportEnd"),
+            &JsValue::from_f64(snap.viewport_end as f64),
+        );
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("renderStart"),
+            &JsValue::from_f64(snap.render_start as f64),
+        );
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("renderEnd"),
+            &JsValue::from_f64(snap.render_end as f64),
+        );
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("scrollOffsetFromBottom"),
+            &JsValue::from_f64(snap.scroll_offset_from_bottom as f64),
+        );
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("maxScrollOffset"),
+            &JsValue::from_f64(snap.max_scroll_offset as f64),
+        );
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("atBottom"),
+            &JsValue::from_bool(snap.is_at_bottom),
+        );
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("followOutput"),
+            &JsValue::from_bool(self.follow_output),
+        );
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("animating"),
+            &JsValue::from_bool(snap.is_animating),
+        );
+        let _ = Reflect::set(
+            &obj,
+            &JsValue::from_str("subLineOffset"),
+            &JsValue::from_f64(snap.sub_line_offset),
+        );
+        obj.into()
+    }
+
+    /// Return visible viewport text lines over unified history
+    /// (`scrollback + visible grid`).
+    #[wasm_bindgen(js_name = viewportLines)]
+    pub fn viewport_lines(&mut self) -> Array {
+        let snap = self.refresh_viewport_snapshot();
+        let out = Array::new();
+        for line_idx in snap.viewport_start..snap.viewport_end {
+            out.push(&JsValue::from_str(&self.history_line_text(line_idx)));
+        }
+        out
+    }
+
+    /// Emit one JSONL `scrollback_frame` trace record for viewport telemetry.
+    ///
+    /// This mirrors `frame_harness::scrollback_virtualization_frame_jsonl` and
+    /// is intended for deterministic E2E/perf evidence collection.
+    #[wasm_bindgen(js_name = snapshotScrollbackFrameJsonl)]
+    pub fn snapshot_scrollback_frame_jsonl(
+        &mut self,
+        run_id: &str,
+        timestamp: &str,
+        frame_idx: u32,
+        render_cost_us: u32,
+    ) -> Result<String, JsValue> {
+        if run_id.is_empty() {
+            return Err(JsValue::from_str("run_id must not be empty"));
+        }
+        if timestamp.is_empty() {
+            return Err(JsValue::from_str("timestamp must not be empty"));
+        }
+
+        let snap = self.refresh_viewport_snapshot();
+        let window = ScrollbackWindow {
+            total_lines: snap.total_lines,
+            max_scroll_offset: snap.max_scroll_offset,
+            scroll_offset_from_bottom: snap.scroll_offset_from_bottom,
+            viewport_start: snap.viewport_start,
+            viewport_end: snap.viewport_end,
+            render_start: snap.render_start,
+            render_end: snap.render_end,
+        };
+        Ok(scrollback_virtualization_frame_jsonl(
+            run_id,
+            timestamp,
+            u64::from(frame_idx),
+            window,
+            Duration::from_micros(u64::from(render_cost_us)),
+        ))
+    }
+
+    /// Scroll viewport by signed line count (positive = older, negative = newer).
+    #[wasm_bindgen(js_name = scrollLines)]
+    pub fn scroll_lines_nav(&mut self, lines: i32) -> JsValue {
+        self.scroll_state.scroll_lines(lines as isize);
+        self.refresh_viewport_after_user_navigation();
+        self.viewport_state()
+    }
+
+    /// Scroll viewport by signed page count.
+    ///
+    /// One page equals current viewport row count.
+    #[wasm_bindgen(js_name = scrollPages)]
+    pub fn scroll_pages_nav(&mut self, pages: i32) -> JsValue {
+        let rows = usize::from(self.rows.max(1));
+        let delta = i64::from(pages).saturating_mul(rows as i64);
+        let clamped = delta.clamp(isize::MIN as i64, isize::MAX as i64) as isize;
+        self.scroll_state.scroll_lines(clamped);
+        self.refresh_viewport_after_user_navigation();
+        self.viewport_state()
+    }
+
+    /// Jump viewport to newest output (follow-output position).
+    #[wasm_bindgen(js_name = scrollToBottom)]
+    pub fn scroll_to_bottom_nav(&mut self) -> JsValue {
+        self.scroll_state.snap_to_bottom();
+        self.follow_output = true;
+        self.viewport_state()
+    }
+
+    /// Jump viewport to oldest retained line.
+    #[wasm_bindgen(js_name = scrollToTop)]
+    pub fn scroll_to_top_nav(&mut self) -> JsValue {
+        self.scroll_state
+            .snap_to_top(self.total_history_lines(), usize::from(self.rows));
+        self.refresh_viewport_after_user_navigation();
+        self.viewport_state()
+    }
+
+    /// Jump viewport so target absolute history line is visible.
+    ///
+    /// `line_idx` uses unified history indexing (`0 = oldest retained line`).
+    #[wasm_bindgen(js_name = scrollToLine)]
+    pub fn scroll_to_line_nav(&mut self, line_idx: u32) -> JsValue {
+        self.scroll_state.jump_to_line(
+            self.total_history_lines(),
+            usize::from(self.rows),
+            line_idx as usize,
+        );
+        self.refresh_viewport_after_user_navigation();
+        self.viewport_state()
     }
 
     /// Return hyperlink ID at a given grid cell (0 if none / out of bounds).
@@ -1064,6 +1480,8 @@ impl FrankenTermWeb {
 
     /// Request a frame render. Encodes and submits a WebGPU draw pass.
     pub fn render(&mut self) -> Result<(), JsValue> {
+        self.scroll_state.tick(self.max_scroll_offset());
+        self.refresh_viewport_snapshot();
         let Some(renderer) = self.renderer.as_mut() else {
             return Err(JsValue::from_str("renderer not initialized"));
         };
@@ -1076,6 +1494,7 @@ impl FrankenTermWeb {
     /// Explicit teardown for JS callers. Drops GPU resources and clears
     /// internal references so the canvas can be reclaimed.
     pub fn destroy(&mut self) {
+        self.engine = None;
         self.renderer = None;
         self.initialized = false;
         self.canvas = None;
@@ -1106,10 +1525,128 @@ impl FrankenTermWeb {
         self.flat_cells_scratch.clear();
         self.dirty_row_marks.clear();
         self.dirty_rows_scratch.clear();
+        self.scroll_state = ScrollState::with_defaults();
+        self.follow_output = true;
+        self.attach_client = AttachClientStateMachine::default();
     }
 }
 
 impl FrankenTermWeb {
+    fn scrollback_line_count(&self) -> usize {
+        self.engine
+            .as_ref()
+            .map_or(0, |engine| engine.scrollback().len())
+    }
+
+    fn total_history_lines(&self) -> usize {
+        self.scrollback_line_count()
+            .saturating_add(usize::from(self.rows))
+    }
+
+    fn max_scroll_offset(&self) -> usize {
+        let total_lines = self.total_history_lines();
+        let viewport_rows = usize::from(self.rows);
+        total_lines.saturating_sub(viewport_rows.min(total_lines))
+    }
+
+    fn refresh_viewport_snapshot(&mut self) -> ViewportSnapshot {
+        self.scroll_state
+            .viewport(self.total_history_lines(), usize::from(self.rows))
+    }
+
+    fn refresh_viewport_after_user_navigation(&mut self) -> ViewportSnapshot {
+        let snap = self.refresh_viewport_snapshot();
+        self.follow_output = snap.is_at_bottom;
+        snap
+    }
+
+    fn refresh_viewport_after_content_change(
+        &mut self,
+        previous_viewport_start: usize,
+    ) -> ViewportSnapshot {
+        if self.follow_output {
+            self.scroll_state.snap_to_bottom();
+        } else {
+            self.scroll_state.set_viewport_start(
+                self.total_history_lines(),
+                usize::from(self.rows),
+                previous_viewport_start,
+            );
+        }
+        let snap = self.refresh_viewport_snapshot();
+        if !self.follow_output && snap.max_scroll_offset == 0 {
+            // If there is no scrollback headroom anymore, automatically resume
+            // follow-output mode.
+            self.follow_output = true;
+        }
+        snap
+    }
+
+    fn refresh_viewport_after_resize(
+        &mut self,
+        previous_viewport_start: usize,
+    ) -> ViewportSnapshot {
+        self.refresh_viewport_after_content_change(previous_viewport_start)
+    }
+
+    fn history_line_text(&self, line_idx: usize) -> String {
+        let scrollback_len = self.scrollback_line_count();
+        if line_idx < scrollback_len {
+            if let Some(engine) = self.engine.as_ref()
+                && let Some(line) = engine.scrollback().get(line_idx)
+            {
+                return line.cells.iter().map(|cell| cell.content()).collect();
+            }
+            return String::new();
+        }
+
+        let grid_row = line_idx.saturating_sub(scrollback_len);
+        self.shadow_grid_row_text(grid_row)
+    }
+
+    fn shadow_grid_row_text(&self, row: usize) -> String {
+        let rows = usize::from(self.rows);
+        if row >= rows {
+            return String::new();
+        }
+
+        let cols = usize::from(self.cols);
+        if cols == 0 {
+            return String::new();
+        }
+
+        let row_start = row.saturating_mul(cols);
+        let row_end = row_start.saturating_add(cols).min(self.shadow_cells.len());
+        if row_start >= row_end {
+            return String::new();
+        }
+
+        let mut line = String::with_capacity(cols);
+        for idx in row_start..row_end {
+            let glyph_id = self.shadow_cells[idx].glyph_id;
+            let ch = if glyph_id == 0 {
+                ' '
+            } else {
+                char::from_u32(glyph_id).unwrap_or('□')
+            };
+            line.push(ch);
+        }
+        line
+    }
+
+    fn sync_terminal_engine_size(&mut self, cols: u16, rows: u16) {
+        if cols == 0 || rows == 0 {
+            self.engine = None;
+            return;
+        }
+
+        if let Some(engine) = self.engine.as_mut() {
+            engine.resize(cols, rows);
+        } else {
+            self.engine = Some(TerminalEngine::new(cols, rows));
+        }
+    }
+
     fn queue_input_event(&mut self, ev: InputEvent) -> Result<(), JsValue> {
         // Guarantee no "stuck modifiers" after focus loss by treating focus
         // loss as an explicit modifier reset point.
@@ -1121,6 +1658,13 @@ impl FrankenTermWeb {
 
         if let InputEvent::Accessibility(a11y) = &ev {
             self.apply_accessibility_input(a11y);
+        }
+        if let InputEvent::Wheel(wheel) = &ev
+            && !self.encoder_features.sgr_mouse
+        {
+            self.scroll_state
+                .apply_wheel(i32::from(wheel.dy), self.max_scroll_offset());
+            self.refresh_viewport_after_user_navigation();
         }
         self.handle_interaction_event(&ev);
 
@@ -1244,32 +1788,11 @@ impl FrankenTermWeb {
     }
 
     fn build_search_lines(&self) -> Vec<String> {
-        let cols = usize::from(self.cols.max(1));
-        let rows = usize::from(self.rows);
-        let mut lines = Vec::with_capacity(rows);
-
-        for y in 0..rows {
-            let row_start = y.saturating_mul(cols);
-            let row_end = row_start.saturating_add(cols).min(self.shadow_cells.len());
-            let mut line = String::with_capacity(cols);
-            let mut char_count = 0usize;
-            for idx in row_start..row_end {
-                let glyph_id = self.shadow_cells[idx].glyph_id;
-                let ch = if glyph_id == 0 {
-                    ' '
-                } else {
-                    char::from_u32(glyph_id).unwrap_or('□')
-                };
-                line.push(ch);
-                char_count = char_count.saturating_add(1);
-            }
-            while char_count < cols {
-                line.push(' ');
-                char_count = char_count.saturating_add(1);
-            }
-            lines.push(line);
+        let total_lines = self.total_history_lines();
+        let mut lines = Vec::with_capacity(total_lines);
+        for line_idx in 0..total_lines {
+            lines.push(self.history_line_text(line_idx));
         }
-
         lines
     }
 
@@ -1278,7 +1801,9 @@ impl FrankenTermWeb {
         let search_match = *self.search_index.matches().get(idx)?;
         let cols = usize::from(self.cols);
         let rows = usize::from(self.rows);
-        if cols == 0 || rows == 0 || search_match.line_idx >= rows {
+        let scrollback_len = self.scrollback_line_count();
+        let grid_row = search_match.line_idx.checked_sub(scrollback_len)?;
+        if cols == 0 || rows == 0 || grid_row >= rows {
             return None;
         }
 
@@ -1288,10 +1813,25 @@ impl FrankenTermWeb {
             return None;
         }
 
-        let line_base = search_match.line_idx.saturating_mul(cols);
+        let line_base = grid_row.saturating_mul(cols);
         let start = line_base.saturating_add(start_col) as u32;
         let end = line_base.saturating_add(end_col) as u32;
         self.normalize_selection_range((start, end))
+    }
+
+    fn align_viewport_to_active_search_match(&mut self) {
+        let target_line = self
+            .search_active_match
+            .and_then(|idx| self.search_index.matches().get(idx).map(|m| m.line_idx));
+        let Some(target_line) = target_line else {
+            return;
+        };
+        self.scroll_state.jump_to_line(
+            self.total_history_lines(),
+            usize::from(self.rows),
+            target_line,
+        );
+        self.refresh_viewport_after_user_navigation();
     }
 
     fn refresh_search_after_buffer_change(&mut self) {
@@ -2077,6 +2617,25 @@ fn parse_init_bool(options: &Option<JsValue>, key: &str) -> Option<bool> {
     v.as_bool()
 }
 
+fn parse_init_renderer_backend(
+    options: &Option<JsValue>,
+) -> Result<RendererBackendPreference, JsValue> {
+    let Some(obj) = options.as_ref() else {
+        return Ok(RendererBackendPreference::Auto);
+    };
+    let selected = get_string_opt(obj, "rendererBackend")?
+        .or(get_string_opt(obj, "renderer_backend")?)
+        .or(get_string_opt(obj, "backend")?);
+    let Some(raw) = selected else {
+        return Ok(RendererBackendPreference::Auto);
+    };
+    RendererBackendPreference::parse(&raw).ok_or_else(|| {
+        JsValue::from_str(&format!(
+            "field rendererBackend must be one of auto|webgpu|canvas2d (got {raw:?})"
+        ))
+    })
+}
+
 fn parse_encoder_features(options: &Option<JsValue>) -> VtInputEncoderFeatures {
     let sgr_mouse = parse_init_bool(options, "sgrMouse").or(parse_init_bool(options, "sgr_mouse"));
     let bracketed_paste =
@@ -2151,6 +2710,201 @@ fn geometry_to_js(geometry: GridGeometry) -> JsValue {
         &obj,
         &JsValue::from_str("zoom"),
         &JsValue::from_f64(f64::from(geometry.zoom)),
+    );
+    obj.into()
+}
+
+fn attach_snapshot_to_js(snapshot: &AttachSnapshot) -> JsValue {
+    let obj = Object::new();
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("state"),
+        &JsValue::from_str(snapshot.state.as_str()),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("attempt"),
+        &JsValue::from_f64(f64::from(snapshot.attempt)),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("maxRetries"),
+        &JsValue::from_f64(f64::from(snapshot.max_retries)),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("handshakeDeadlineMs"),
+        &snapshot
+            .handshake_deadline_ms
+            .map_or(JsValue::NULL, |value| JsValue::from_f64(value as f64)),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("retryDeadlineMs"),
+        &snapshot
+            .retry_deadline_ms
+            .map_or(JsValue::NULL, |value| JsValue::from_f64(value as f64)),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("sessionId"),
+        &snapshot
+            .session_id
+            .as_deref()
+            .map_or(JsValue::NULL, JsValue::from_str),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("closeReason"),
+        &snapshot
+            .close_reason
+            .as_deref()
+            .map_or(JsValue::NULL, JsValue::from_str),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("failureCode"),
+        &snapshot
+            .failure_code
+            .as_deref()
+            .map_or(JsValue::NULL, JsValue::from_str),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("closeCode"),
+        &snapshot
+            .close_code
+            .map_or(JsValue::NULL, |value| JsValue::from_f64(f64::from(value))),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("cleanClose"),
+        &snapshot
+            .clean_close
+            .map_or(JsValue::NULL, JsValue::from_bool),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("canRetry"),
+        &JsValue::from_bool(snapshot.can_retry),
+    );
+    obj.into()
+}
+
+fn attach_transition_to_js(transition: &AttachTransition) -> JsValue {
+    let obj = Object::new();
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("seq"),
+        &JsValue::from_f64(transition.seq as f64),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("atMs"),
+        &JsValue::from_f64(transition.at_ms as f64),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("event"),
+        &JsValue::from_str(transition.event.as_str()),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("fromState"),
+        &JsValue::from_str(transition.from_state.as_str()),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("toState"),
+        &JsValue::from_str(transition.to_state.as_str()),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("attempt"),
+        &JsValue::from_f64(f64::from(transition.attempt)),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("handshakeDeadlineMs"),
+        &transition
+            .handshake_deadline_ms
+            .map_or(JsValue::NULL, |value| JsValue::from_f64(value as f64)),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("retryDeadlineMs"),
+        &transition
+            .retry_deadline_ms
+            .map_or(JsValue::NULL, |value| JsValue::from_f64(value as f64)),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("sessionId"),
+        &transition
+            .session_id
+            .as_deref()
+            .map_or(JsValue::NULL, JsValue::from_str),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("closeCode"),
+        &transition
+            .close_code
+            .map_or(JsValue::NULL, |value| JsValue::from_f64(f64::from(value))),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("cleanClose"),
+        &transition
+            .clean_close
+            .map_or(JsValue::NULL, JsValue::from_bool),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("reason"),
+        &transition
+            .reason
+            .as_deref()
+            .map_or(JsValue::NULL, JsValue::from_str),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("failureCode"),
+        &transition
+            .failure_code
+            .as_deref()
+            .map_or(JsValue::NULL, JsValue::from_str),
+    );
+
+    let actions = Array::new();
+    for action in &transition.actions {
+        actions.push(&attach_action_to_js(action));
+    }
+    let _ = Reflect::set(&obj, &JsValue::from_str("actions"), &actions);
+
+    obj.into()
+}
+
+fn attach_action_to_js(action: &AttachAction) -> JsValue {
+    let obj = Object::new();
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("kind"),
+        &JsValue::from_str(action.kind.as_str()),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("deadlineMs"),
+        &action
+            .deadline_ms
+            .map_or(JsValue::NULL, |value| JsValue::from_f64(value as f64)),
+    );
+    let _ = Reflect::set(
+        &obj,
+        &JsValue::from_str("attempt"),
+        &action
+            .attempt
+            .map_or(JsValue::NULL, |value| JsValue::from_f64(f64::from(value))),
     );
     obj.into()
 }
@@ -2840,6 +3594,20 @@ mod tests {
         )
     }
 
+    fn feed_numbered_lines(term: &mut FrankenTermWeb, line_count: usize, cols: usize) {
+        let width = cols.max(1);
+        let mut payload = Vec::with_capacity(line_count.saturating_mul(width.saturating_add(2)));
+        for i in 0..line_count {
+            let mut line = format!("{i:0>width$}", width = width);
+            line.truncate(width);
+            payload.extend_from_slice(line.as_bytes());
+            if i + 1 < line_count {
+                payload.extend_from_slice(b"\r\n");
+            }
+        }
+        term.feed(&payload);
+    }
+
     #[test]
     fn set_selection_range_normalizes_reverse_and_out_of_bounds() {
         let mut term = FrankenTermWeb::new();
@@ -2890,6 +3658,36 @@ mod tests {
         let _ = term.search_prev();
         assert_eq!(term.search_active_match, Some(1));
         assert_eq!(term.search_highlight_range, Some((6, 8)));
+    }
+
+    #[test]
+    fn set_search_query_indexes_unified_history_not_only_visible_grid() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(4, 2);
+        term.feed(b"AAAA\r\nBBBB\r\nCCCC\r\nDDDD");
+
+        assert!(term.set_search_query("BBBB", None).is_ok());
+        assert_eq!(term.search_index.len(), 1);
+        assert_eq!(term.search_active_match, Some(0));
+
+        let state = term.search_state();
+        assert_eq!(js_f64_field(&state, "activeLine"), 1.0);
+        // Active match is in scrollback (off-grid), so no in-grid highlight range.
+        assert_eq!(term.search_highlight_range, None);
+    }
+
+    #[test]
+    fn search_navigation_jumps_viewport_to_history_matches_deterministically() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(4, 2);
+        term.feed(b"AAAA\r\nBBBB\r\nCCCC\r\nDDDD");
+        assert!(term.set_search_query("BBBB", None).is_ok());
+
+        let _ = term.search_next();
+        let view = term.viewport_state();
+        assert!(js_f64_field(&view, "viewportStart") <= 1.0);
+        assert!(1.0 < js_f64_field(&view, "viewportEnd"));
+        assert!(!js_bool_field(&view, "followOutput"));
     }
 
     #[test]
@@ -3699,5 +4497,517 @@ mod tests {
         assert_eq!(parsed["event_idx"], 0);
         assert_eq!(parsed["open_allowed"], true);
         assert_eq!(parsed["url"], "https://example.test");
+    }
+
+    fn drain_uint8_chunks(chunks: Array) -> Vec<Vec<u8>> {
+        chunks
+            .iter()
+            .map(|chunk| {
+                let bytes = Uint8Array::new(&chunk);
+                let len = usize::try_from(bytes.length())
+                    .expect("Uint8Array length should fit into usize for tests");
+                let mut out = vec![0u8; len];
+                bytes.copy_to(out.as_mut_slice());
+                out
+            })
+            .collect()
+    }
+
+    fn bytes_to_hex(bytes: &[u8]) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut out = String::with_capacity(bytes.len() * 2);
+        for &b in bytes {
+            out.push(HEX[(b >> 4) as usize] as char);
+            out.push(HEX[(b & 0x0f) as usize] as char);
+        }
+        out
+    }
+
+    fn test_geometry(cols: u16, rows: u16) -> GeometrySnapshot {
+        GeometrySnapshot {
+            cols,
+            rows,
+            pixel_width: u32::from(cols),
+            pixel_height: u32::from(rows),
+            cell_width_px: 1.0,
+            cell_height_px: 1.0,
+            dpr: 1.0,
+            zoom: 1.0,
+        }
+    }
+
+    fn js_f64_field(obj: &JsValue, key: &str) -> f64 {
+        let value = match Reflect::get(obj, &JsValue::from_str(key)) {
+            Ok(v) => v,
+            Err(_) => panic!("viewport state missing key: {key}"),
+        };
+        match value.as_f64() {
+            Some(v) => v,
+            None => panic!("viewport state key is not numeric: {key}"),
+        }
+    }
+
+    fn js_bool_field(obj: &JsValue, key: &str) -> bool {
+        let value = match Reflect::get(obj, &JsValue::from_str(key)) {
+            Ok(v) => v,
+            Err(_) => panic!("viewport state missing key: {key}"),
+        };
+        match value.as_bool() {
+            Some(v) => v,
+            None => panic!("viewport state key is not bool: {key}"),
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ReplayFixtureResult {
+        transcript_jsonl: Vec<String>,
+        final_frame_hash: String,
+        replies_hex: Vec<String>,
+    }
+
+    fn run_remote_feed_replay_fixture(chunks: &[&[u8]]) -> ReplayFixtureResult {
+        let mut term = FrankenTermWeb::new();
+        term.resize(8, 4);
+        let geometry = test_geometry(8, 4);
+        let mut transcript_jsonl = Vec::with_capacity(chunks.len() + 1);
+        let mut replies_hex = Vec::new();
+
+        for (step, chunk) in chunks.iter().enumerate() {
+            term.feed(chunk);
+            let step_replies = drain_uint8_chunks(term.drain_reply_bytes());
+            let step_reply_hex: Vec<String> = step_replies
+                .iter()
+                .map(|bytes| bytes_to_hex(bytes))
+                .collect();
+            replies_hex.extend(step_reply_hex.iter().cloned());
+
+            let frame_hash = crate::frame_harness::stable_frame_hash(&term.shadow_cells, geometry);
+            let non_empty_cells = term
+                .shadow_cells
+                .iter()
+                .filter(|cell| cell.glyph_id != 0)
+                .count();
+            let line = serde_json::json!({
+                "schema_version": "e2e-jsonl-v1",
+                "type": "remote_feed_replay",
+                "event": "remote_feed_step",
+                "step": step,
+                "input_hex": bytes_to_hex(chunk),
+                "frame_hash": frame_hash,
+                "non_empty_cells": non_empty_cells,
+                "replies_hex": step_reply_hex,
+            });
+            transcript_jsonl.push(
+                serde_json::to_string(&line)
+                    .expect("remote feed replay step should serialize to JSONL"),
+            );
+        }
+
+        let final_frame_hash =
+            crate::frame_harness::stable_frame_hash(&term.shadow_cells, geometry);
+        transcript_jsonl.push(
+            serde_json::to_string(&serde_json::json!({
+                "schema_version": "e2e-jsonl-v1",
+                "type": "remote_feed_replay",
+                "event": "remote_feed_final",
+                "frame_hash": final_frame_hash,
+                "remaining_reply_chunks": term.drain_reply_bytes().length(),
+            }))
+            .expect("remote feed replay final should serialize to JSONL"),
+        );
+
+        ReplayFixtureResult {
+            transcript_jsonl,
+            final_frame_hash,
+            replies_hex,
+        }
+    }
+
+    #[test]
+    fn feed_projects_terminal_engine_cells_into_shadow_grid() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(4, 2);
+        term.feed(b"AB\r\nCD");
+
+        let glyphs: Vec<u32> = term.shadow_cells.iter().map(|cell| cell.glyph_id).collect();
+        assert_eq!(
+            glyphs,
+            vec![
+                u32::from('A'),
+                u32::from('B'),
+                0,
+                0,
+                u32::from('C'),
+                u32::from('D'),
+                0,
+                0,
+            ]
+        );
+    }
+
+    #[test]
+    fn drain_reply_bytes_is_fifo_and_drains_once() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(8, 4);
+        term.feed(b"\x1b[5n\x1b[6n");
+
+        let replies = drain_uint8_chunks(term.drain_reply_bytes());
+        assert_eq!(replies, vec![b"\x1b[0n".to_vec(), b"\x1b[1;1R".to_vec()]);
+        assert_eq!(term.drain_reply_bytes().length(), 0);
+    }
+
+    #[test]
+    fn drain_reply_bytes_cpr_reflects_resize_clamped_cursor() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(8, 4);
+        term.feed(b"\x1b[4;8H\x1b[6n");
+        assert_eq!(
+            drain_uint8_chunks(term.drain_reply_bytes()),
+            vec![b"\x1b[4;8R".to_vec()]
+        );
+
+        term.resize(5, 2);
+        term.feed(b"\x1b[6n");
+        assert_eq!(
+            drain_uint8_chunks(term.drain_reply_bytes()),
+            vec![b"\x1b[2;5R".to_vec()]
+        );
+    }
+
+    #[test]
+    fn drain_reply_bytes_decrpm_tracks_mode_transitions() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(8, 4);
+
+        term.feed(b"\x1b[?2026$p");
+        assert_eq!(
+            drain_uint8_chunks(term.drain_reply_bytes()),
+            vec![b"\x1b[?2026;2$y".to_vec()]
+        );
+
+        term.feed(b"\x1b[?2026h\x1b[?2026$p\x1b[?2026l\x1b[?2026$p");
+        assert_eq!(
+            drain_uint8_chunks(term.drain_reply_bytes()),
+            vec![b"\x1b[?2026;1$y".to_vec(), b"\x1b[?2026;2$y".to_vec()]
+        );
+    }
+
+    #[test]
+    fn viewport_state_unifies_scrollback_and_visible_grid_ranges() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(4, 2);
+        term.feed(b"AAAA\r\nBBBB\r\nCCCC\r\nDDDD");
+
+        let state = term.viewport_state();
+        assert_eq!(js_f64_field(&state, "scrollbackLines"), 2.0);
+        assert_eq!(js_f64_field(&state, "gridRows"), 2.0);
+        assert_eq!(js_f64_field(&state, "totalLines"), 4.0);
+        assert_eq!(js_f64_field(&state, "viewportStart"), 2.0);
+        assert_eq!(js_f64_field(&state, "viewportEnd"), 4.0);
+        assert!(js_bool_field(&state, "atBottom"));
+        assert!(js_bool_field(&state, "followOutput"));
+    }
+
+    #[test]
+    fn viewport_lines_map_across_scrollback_then_grid() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(4, 2);
+        term.feed(b"AAAA\r\nBBBB\r\nCCCC\r\nDDDD");
+
+        term.scroll_state.set_offset(1);
+        let lines = term.viewport_lines();
+        assert_eq!(lines.length(), 2);
+        assert_eq!(lines.get(0).as_string().as_deref(), Some("BBBB"));
+        assert_eq!(lines.get(1).as_string().as_deref(), Some("CCCC"));
+    }
+
+    #[test]
+    fn snapshot_scrollback_frame_jsonl_emits_unified_window_metrics() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(4, 2);
+        term.feed(b"AAAA\r\nBBBB\r\nCCCC\r\nDDDD");
+        term.scroll_state.set_offset(1);
+
+        let line = term
+            .snapshot_scrollback_frame_jsonl("run-scroll", "T000100", 7, 1234)
+            .expect("snapshot_scrollback_frame_jsonl should succeed");
+        let parsed: serde_json::Value = serde_json::from_str(&line)
+            .expect("snapshot_scrollback_frame_jsonl output should be valid JSON");
+
+        assert_eq!(parsed["type"], "scrollback_frame");
+        assert_eq!(parsed["run_id"], "run-scroll");
+        assert_eq!(parsed["frame_idx"], 7);
+        assert_eq!(parsed["scrollback_lines"], 4);
+        assert_eq!(parsed["viewport_start"], 1);
+        assert_eq!(parsed["viewport_end"], 3);
+        assert_eq!(parsed["render_cost_us"], 1234);
+    }
+
+    #[test]
+    fn scroll_navigation_apis_are_clamped_and_deterministic() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(4, 2);
+        term.feed(b"AAAA\r\nBBBB\r\nCCCC\r\nDDDD");
+
+        let top = term.scroll_to_top_nav();
+        assert_eq!(js_f64_field(&top, "viewportStart"), 0.0);
+        assert_eq!(js_f64_field(&top, "maxScrollOffset"), 2.0);
+        assert!(!js_bool_field(&top, "followOutput"));
+
+        let down_one = term.scroll_lines_nav(-1);
+        assert_eq!(js_f64_field(&down_one, "viewportStart"), 1.0);
+        assert!(!js_bool_field(&down_one, "followOutput"));
+
+        let page_down = term.scroll_pages_nav(-1);
+        assert_eq!(js_f64_field(&page_down, "viewportStart"), 2.0);
+        assert!(js_bool_field(&page_down, "atBottom"));
+        assert!(js_bool_field(&page_down, "followOutput"));
+
+        let jump_line = term.scroll_to_line_nav(1);
+        assert_eq!(js_f64_field(&jump_line, "viewportStart"), 0.0);
+        assert!(!js_bool_field(&jump_line, "followOutput"));
+
+        let bottom = term.scroll_to_bottom_nav();
+        assert_eq!(js_f64_field(&bottom, "viewportStart"), 2.0);
+        assert!(js_bool_field(&bottom, "atBottom"));
+        assert!(js_bool_field(&bottom, "followOutput"));
+    }
+
+    #[test]
+    fn feed_preserves_viewport_anchor_when_follow_output_is_disabled() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(4, 2);
+        term.feed(b"AAAA\r\nBBBB\r\nCCCC\r\nDDDD");
+
+        let scrolled = term.scroll_lines_nav(1);
+        assert_eq!(js_f64_field(&scrolled, "viewportStart"), 1.0);
+        assert!(!js_bool_field(&scrolled, "followOutput"));
+
+        term.feed(b"\r\nEEEE");
+        let after = term.viewport_state();
+        assert_eq!(js_f64_field(&after, "viewportStart"), 1.0);
+        assert!(!js_bool_field(&after, "followOutput"));
+    }
+
+    #[test]
+    fn feed_keeps_bottom_when_follow_output_is_enabled() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(4, 2);
+        term.feed(b"AAAA\r\nBBBB\r\nCCCC\r\nDDDD");
+        assert_eq!(js_f64_field(&term.viewport_state(), "viewportStart"), 2.0);
+
+        term.feed(b"\r\nEEEE");
+        let after = term.viewport_state();
+        assert_eq!(js_f64_field(&after, "viewportStart"), 3.0);
+        assert!(js_bool_field(&after, "atBottom"));
+        assert!(js_bool_field(&after, "followOutput"));
+    }
+
+    #[test]
+    fn resize_preserves_anchor_line_when_follow_output_is_disabled() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(4, 2);
+        term.feed(b"AAAA\r\nBBBB\r\nCCCC\r\nDDDD\r\nEEEE\r\nFFFF");
+
+        let scrolled = term.scroll_lines_nav(1);
+        assert_eq!(js_f64_field(&scrolled, "viewportStart"), 3.0);
+        assert!(!js_bool_field(&scrolled, "followOutput"));
+
+        term.resize(4, 3);
+        let after = term.viewport_state();
+        assert_eq!(js_f64_field(&after, "viewportStart"), 3.0);
+        assert!(!js_bool_field(&after, "followOutput"));
+    }
+
+    #[test]
+    fn resize_keeps_bottom_when_follow_output_is_enabled() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(4, 2);
+        term.feed(b"AAAA\r\nBBBB\r\nCCCC\r\nDDDD\r\nEEEE\r\nFFFF");
+        assert_eq!(js_f64_field(&term.viewport_state(), "viewportStart"), 4.0);
+
+        term.resize(4, 3);
+        let after = term.viewport_state();
+        assert_eq!(js_f64_field(&after, "viewportStart"), 3.0);
+        assert!(js_bool_field(&after, "atBottom"));
+        assert!(js_bool_field(&after, "followOutput"));
+    }
+
+    #[test]
+    fn wheel_input_scrolls_viewport_when_mouse_reporting_is_disabled() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(4, 2);
+        term.feed(b"AAAA\r\nBBBB\r\nCCCC\r\nDDDD");
+        assert_eq!(js_f64_field(&term.viewport_state(), "viewportStart"), 2.0);
+
+        assert!(
+            term.queue_input_event(InputEvent::Wheel(WheelInput {
+                x: 0,
+                y: 0,
+                dx: 0,
+                dy: 1,
+                mods: Modifiers::default(),
+            }))
+            .is_ok()
+        );
+
+        // Default lines_per_tick=3; max offset=2, so one wheel tick reaches top.
+        let state = term.viewport_state();
+        assert_eq!(js_f64_field(&state, "viewportStart"), 0.0);
+        assert!(!js_bool_field(&state, "followOutput"));
+        assert_eq!(term.encoded_input_bytes.len(), 0);
+    }
+
+    #[test]
+    fn wheel_input_does_not_scroll_viewport_when_sgr_mouse_is_enabled() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(4, 2);
+        term.feed(b"AAAA\r\nBBBB\r\nCCCC\r\nDDDD");
+        term.encoder_features.sgr_mouse = true;
+        assert_eq!(js_f64_field(&term.viewport_state(), "viewportStart"), 2.0);
+
+        assert!(
+            term.queue_input_event(InputEvent::Wheel(WheelInput {
+                x: 0,
+                y: 0,
+                dx: 0,
+                dy: 1,
+                mods: Modifiers::default(),
+            }))
+            .is_ok()
+        );
+
+        // Mouse-reporting mode should route wheel to VT bytes, not local viewport scroll.
+        let state = term.viewport_state();
+        assert_eq!(js_f64_field(&state, "viewportStart"), 2.0);
+        assert!(js_bool_field(&state, "followOutput"));
+        assert_eq!(term.encoded_input_bytes.len(), 1);
+        assert!(!term.encoded_input_bytes[0].is_empty());
+    }
+
+    #[test]
+    fn large_scrollback_snapshot_window_is_bounded_and_deterministic() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(8, 4);
+        feed_numbered_lines(&mut term, 20_000, 8);
+
+        let top = term.scroll_to_top_nav();
+        assert_eq!(js_f64_field(&top, "viewportStart"), 0.0);
+
+        let line_a = term
+            .snapshot_scrollback_frame_jsonl("run-large", "T000200", 3, 777)
+            .expect("snapshot_scrollback_frame_jsonl should succeed");
+        let line_b = term
+            .snapshot_scrollback_frame_jsonl("run-large", "T000200", 3, 777)
+            .expect("snapshot_scrollback_frame_jsonl should be deterministic");
+        assert_eq!(line_a, line_b);
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&line_a).expect("scrollback frame jsonl should parse");
+        let viewport_len = parsed["viewport_end"].as_u64().unwrap_or(0)
+            - parsed["viewport_start"].as_u64().unwrap_or(0);
+        let render_len = parsed["render_end"].as_u64().unwrap_or(0)
+            - parsed["render_start"].as_u64().unwrap_or(0);
+        assert_eq!(viewport_len, 4);
+        // Overscan window must stay bounded (default overscan is small; 64 is a safe upper guard).
+        assert!(render_len <= viewport_len + 64);
+    }
+
+    #[test]
+    fn large_scrollback_search_navigation_is_stable_and_moves_viewport_to_match() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(8, 4);
+        feed_numbered_lines(&mut term, 20_000, 8);
+
+        assert!(term.set_search_query("00000123", None).is_ok());
+        let state = term.search_next();
+        assert_eq!(js_f64_field(&state, "activeLine"), 123.0);
+
+        let view = term.viewport_state();
+        assert!(js_f64_field(&view, "viewportStart") <= 123.0);
+        assert!(123.0 < js_f64_field(&view, "viewportEnd"));
+        assert!(!js_bool_field(&view, "followOutput"));
+    }
+
+    #[test]
+    fn scrollback_frame_snapshot_validates_required_fields_with_actionable_errors() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(4, 2);
+        term.feed(b"AAAA\r\nBBBB");
+
+        let missing_run = term
+            .snapshot_scrollback_frame_jsonl("", "T000201", 1, 42)
+            .expect_err("missing run id should fail");
+        assert_eq!(
+            missing_run.as_string().as_deref(),
+            Some("run_id must not be empty")
+        );
+
+        let missing_timestamp = term
+            .snapshot_scrollback_frame_jsonl("run", "", 1, 42)
+            .expect_err("missing timestamp should fail");
+        assert_eq!(
+            missing_timestamp.as_string().as_deref(),
+            Some("timestamp must not be empty")
+        );
+    }
+
+    #[test]
+    fn feed_is_noop_when_engine_is_unavailable() {
+        let mut term = FrankenTermWeb::new();
+        term.resize(0, 0);
+        term.feed(b"ABC\x1b[5n");
+        assert!(term.shadow_cells.is_empty());
+        assert_eq!(term.drain_reply_bytes().length(), 0);
+    }
+
+    #[test]
+    fn remote_feed_replay_transcript_is_deterministic_for_identical_chunks() {
+        let chunks: [&[u8]; 5] = [b"ABCD", b"\x1b[2;3H", b"Z\x1b[5n", b"\x1b[6n\r\n", b"xy"];
+
+        let run_a = run_remote_feed_replay_fixture(&chunks);
+        let run_b = run_remote_feed_replay_fixture(&chunks);
+
+        assert_eq!(run_a.transcript_jsonl, run_b.transcript_jsonl);
+        assert_eq!(run_a.final_frame_hash, run_b.final_frame_hash);
+        assert_eq!(run_a.replies_hex, run_b.replies_hex);
+    }
+
+    #[test]
+    fn remote_feed_replay_transcript_chunked_and_single_feed_have_same_outcome() {
+        let single = run_remote_feed_replay_fixture(&[b"ABCD\x1b[2;3HZ\x1b[5n\x1b[6n\r\nxy"]);
+        let chunked = run_remote_feed_replay_fixture(&[
+            b"AB",
+            b"CD\x1b[2",
+            b";3H",
+            b"Z\x1b[5n",
+            b"\x1b[6n\r\nxy",
+        ]);
+
+        assert_eq!(single.final_frame_hash, chunked.final_frame_hash);
+        assert_eq!(single.replies_hex, chunked.replies_hex);
+    }
+
+    #[test]
+    fn remote_feed_replay_transcript_records_cursor_sensitive_reply_order() {
+        let replay = run_remote_feed_replay_fixture(&[b"\x1b[3;4H", b"\x1b[6n\x1b[5n"]);
+
+        // CPR should reflect row=3,col=4 (1-indexed); DSR 5n reply follows.
+        assert_eq!(
+            replay.replies_hex,
+            vec![bytes_to_hex(b"\x1b[3;4R"), bytes_to_hex(b"\x1b[0n")]
+        );
+
+        let parsed: Vec<serde_json::Value> = replay
+            .transcript_jsonl
+            .iter()
+            .map(|line| serde_json::from_str(line).expect("transcript line should be valid JSON"))
+            .collect();
+        assert!(
+            parsed
+                .iter()
+                .all(|event| event["schema_version"] == "e2e-jsonl-v1"),
+            "every replay transcript line must be schema-tagged"
+        );
     }
 }

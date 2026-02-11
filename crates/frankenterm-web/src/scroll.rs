@@ -286,6 +286,27 @@ impl ScrollState {
         self.set_offset(newest_start.saturating_sub(target_start));
     }
 
+    /// Set the visible viewport start line in unified history space.
+    ///
+    /// This is useful for resize/content-update policies that want to preserve
+    /// the reader's current anchor line rather than preserving bottom offset.
+    pub fn set_viewport_start(
+        &mut self,
+        total_scrollback_lines: usize,
+        viewport_rows: usize,
+        desired_start: usize,
+    ) {
+        let viewport_len = viewport_rows.min(total_scrollback_lines);
+        if viewport_len == 0 || total_scrollback_lines == 0 {
+            self.set_offset(0);
+            return;
+        }
+        let max_start = total_scrollback_lines.saturating_sub(viewport_len);
+        let clamped_start = desired_start.min(max_start);
+        let newest_start = max_start;
+        self.set_offset(newest_start.saturating_sub(clamped_start));
+    }
+
     /// Scroll by a signed number of lines (positive = older, negative = newer).
     pub fn scroll_lines(&mut self, delta: isize) {
         if delta >= 0 {
@@ -863,6 +884,24 @@ mod tests {
         let snap = state.viewport(100, 24);
         assert_eq!(snap.viewport_start, 0);
         assert_eq!(snap.viewport_end, 24);
+    }
+
+    #[test]
+    fn set_viewport_start_preserves_requested_anchor_when_feasible() {
+        let mut state = ScrollState::with_defaults();
+        state.set_viewport_start(100, 24, 50);
+        let snap = state.viewport(100, 24);
+        assert_eq!(snap.viewport_start, 50);
+        assert_eq!(snap.viewport_end, 74);
+    }
+
+    #[test]
+    fn set_viewport_start_clamps_to_oldest_window_when_requested_start_is_too_old() {
+        let mut state = ScrollState::with_defaults();
+        state.set_viewport_start(10, 4, 42);
+        let snap = state.viewport(10, 4);
+        assert_eq!(snap.viewport_start, 6);
+        assert_eq!(snap.viewport_end, 10);
     }
 
     #[test]

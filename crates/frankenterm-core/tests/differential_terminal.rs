@@ -1,7 +1,4 @@
-use frankenterm_core::{
-    Action, Cell, Color, Cursor, Grid, Modes, Parser, SavedCursor, Scrollback, SgrFlags,
-    translate_charset,
-};
+use frankenterm_core::{Color, SgrFlags, TerminalEngine};
 use ftui_pty::virtual_terminal::VirtualTerminal;
 use serde::Deserialize;
 use std::ffi::OsStr;
@@ -138,398 +135,30 @@ struct TerminalSnapshot {
 
 #[derive(Debug)]
 struct CoreTerminalHarness {
-    parser: Parser,
-    grid: Grid,
-    cursor: Cursor,
-    scrollback: Scrollback,
-    modes: Modes,
-    last_printed: Option<char>,
-    saved_cursor: SavedCursor,
-    cols: u16,
-    rows: u16,
+    engine: TerminalEngine,
 }
 
 impl CoreTerminalHarness {
     fn new(cols: u16, rows: u16) -> Self {
-        assert!(cols > 0, "cols must be > 0");
-        assert!(rows > 0, "rows must be > 0");
         Self {
-            parser: Parser::new(),
-            grid: Grid::new(cols, rows),
-            cursor: Cursor::new(cols, rows),
-            scrollback: Scrollback::new(512),
-            modes: Modes::new(),
-            last_printed: None,
-            saved_cursor: SavedCursor::default(),
-            cols,
-            rows,
+            engine: TerminalEngine::new(cols, rows),
         }
     }
 
     fn feed_bytes(&mut self, bytes: &[u8]) {
-        for action in self.parser.feed(bytes) {
-            self.apply_action(action);
-        }
-    }
-
-    fn apply_action(&mut self, action: Action) {
-        match action {
-            Action::Print(ch) => self.apply_print(ch),
-            Action::Newline => self.apply_newline(),
-            Action::CarriageReturn => self.cursor.carriage_return(),
-            Action::Tab => {
-                self.cursor.col = self.cursor.next_tab_stop(self.cols);
-                self.cursor.pending_wrap = false;
-            }
-            Action::Backspace => self.cursor.move_left(1),
-            Action::Bell => {}
-            Action::CursorUp(count) => self.cursor.move_up(count),
-            Action::CursorDown(count) => self.cursor.move_down(count, self.rows),
-            Action::CursorRight(count) => self.cursor.move_right(count, self.cols),
-            Action::CursorLeft(count) => self.cursor.move_left(count),
-            Action::CursorNextLine(count) => {
-                self.cursor.move_down(count, self.rows);
-                self.cursor.col = 0;
-                self.cursor.pending_wrap = false;
-            }
-            Action::CursorPrevLine(count) => {
-                self.cursor.move_up(count);
-                self.cursor.col = 0;
-                self.cursor.pending_wrap = false;
-            }
-            Action::CursorRow(row) => {
-                self.cursor
-                    .move_to(row, self.cursor.col, self.rows, self.cols);
-            }
-            Action::CursorColumn(col) => {
-                self.cursor
-                    .move_to(self.cursor.row, col, self.rows, self.cols);
-            }
-            Action::SetScrollRegion { top, bottom } => {
-                let bottom = if bottom == 0 {
-                    self.rows
-                } else {
-                    bottom.min(self.rows)
-                };
-                self.cursor.set_scroll_region(top, bottom, self.rows);
-                self.cursor.move_to(0, 0, self.rows, self.cols);
-            }
-            Action::ScrollUp(count) => self.grid.scroll_up_into(
-                self.cursor.scroll_top(),
-                self.cursor.scroll_bottom(),
-                count,
-                &mut self.scrollback,
-                self.cursor.attrs.bg,
-            ),
-            Action::ScrollDown(count) => self.grid.scroll_down(
-                self.cursor.scroll_top(),
-                self.cursor.scroll_bottom(),
-                count,
-                self.cursor.attrs.bg,
-            ),
-            Action::InsertLines(count) => {
-                self.grid.insert_lines(
-                    self.cursor.row,
-                    count,
-                    self.cursor.scroll_top(),
-                    self.cursor.scroll_bottom(),
-                    self.cursor.attrs.bg,
-                );
-                self.cursor.pending_wrap = false;
-            }
-            Action::DeleteLines(count) => {
-                self.grid.delete_lines(
-                    self.cursor.row,
-                    count,
-                    self.cursor.scroll_top(),
-                    self.cursor.scroll_bottom(),
-                    self.cursor.attrs.bg,
-                );
-                self.cursor.pending_wrap = false;
-            }
-            Action::InsertChars(count) => {
-                self.grid.insert_chars(
-                    self.cursor.row,
-                    self.cursor.col,
-                    count,
-                    self.cursor.attrs.bg,
-                );
-                self.cursor.pending_wrap = false;
-            }
-            Action::DeleteChars(count) => {
-                self.grid.delete_chars(
-                    self.cursor.row,
-                    self.cursor.col,
-                    count,
-                    self.cursor.attrs.bg,
-                );
-                self.cursor.pending_wrap = false;
-            }
-            Action::EraseChars(count) => {
-                self.grid.erase_chars(
-                    self.cursor.row,
-                    self.cursor.col,
-                    count,
-                    self.cursor.attrs.bg,
-                );
-                self.cursor.pending_wrap = false;
-            }
-            Action::CursorPosition { row, col } => {
-                self.cursor.move_to(row, col, self.rows, self.cols);
-            }
-            Action::EraseInDisplay(mode) => {
-                let bg = self.cursor.attrs.bg;
-                match mode {
-                    0 => self.grid.erase_below(self.cursor.row, self.cursor.col, bg),
-                    1 => self.grid.erase_above(self.cursor.row, self.cursor.col, bg),
-                    2 => self.grid.erase_all(bg),
-                    _ => {}
-                }
-            }
-            Action::EraseInLine(mode) => {
-                let bg = self.cursor.attrs.bg;
-                match mode {
-                    0 => self
-                        .grid
-                        .erase_line_right(self.cursor.row, self.cursor.col, bg),
-                    1 => self
-                        .grid
-                        .erase_line_left(self.cursor.row, self.cursor.col, bg),
-                    2 => self.grid.erase_line(self.cursor.row, bg),
-                    _ => {}
-                }
-            }
-            Action::Sgr(params) => self.cursor.attrs.apply_sgr_params(&params),
-            Action::DecSet(params) => {
-                for &p in &params {
-                    self.modes.set_dec_mode(p, true);
-                    if p == 6 {
-                        // DECOM on: home cursor to top-left of scroll region.
-                        self.cursor.row = self.cursor.scroll_top();
-                        self.cursor.col = 0;
-                        self.cursor.pending_wrap = false;
-                    }
-                }
-            }
-            Action::DecRst(params) => {
-                for &p in &params {
-                    self.modes.set_dec_mode(p, false);
-                    if p == 6 {
-                        // DECOM off: home cursor to absolute (0,0).
-                        self.cursor.row = 0;
-                        self.cursor.col = 0;
-                        self.cursor.pending_wrap = false;
-                    }
-                }
-            }
-            Action::AnsiSet(params) => {
-                for &p in &params {
-                    self.modes.set_ansi_mode(p, true);
-                }
-            }
-            Action::AnsiRst(params) => {
-                for &p in &params {
-                    self.modes.set_ansi_mode(p, false);
-                }
-            }
-            Action::SaveCursor => {
-                self.saved_cursor = SavedCursor::save(&self.cursor, self.modes.origin_mode());
-            }
-            Action::RestoreCursor => {
-                self.saved_cursor.restore(&mut self.cursor);
-            }
-            Action::Index => {
-                // ESC D: same as LF
-                self.apply_newline();
-            }
-            Action::ReverseIndex => {
-                if self.cursor.row <= self.cursor.scroll_top() {
-                    self.grid.scroll_down(
-                        self.cursor.scroll_top(),
-                        self.cursor.scroll_bottom(),
-                        1,
-                        self.cursor.attrs.bg,
-                    );
-                } else {
-                    self.cursor.move_up(1);
-                }
-            }
-            Action::NextLine => {
-                self.cursor.carriage_return();
-                self.apply_newline();
-            }
-            Action::FullReset => {
-                self.grid = Grid::new(self.cols, self.rows);
-                self.cursor = Cursor::new(self.cols, self.rows);
-                self.scrollback = Scrollback::new(512);
-                self.modes = Modes::new();
-                self.last_printed = None;
-                self.saved_cursor = SavedCursor::default();
-            }
-            Action::SetTitle(_) | Action::HyperlinkStart(_) | Action::HyperlinkEnd => {}
-            Action::SetTabStop => {
-                self.cursor.set_tab_stop();
-                self.cursor.pending_wrap = false;
-            }
-            Action::ClearTabStop(mode) => {
-                match mode {
-                    0 => self.cursor.clear_tab_stop(),
-                    3 | 5 => self.cursor.clear_all_tab_stops(),
-                    _ => {}
-                }
-                self.cursor.pending_wrap = false;
-            }
-            Action::BackTab(count) => {
-                for _ in 0..count {
-                    self.cursor.col = self.cursor.prev_tab_stop();
-                }
-                self.cursor.pending_wrap = false;
-            }
-            // Keypad mode toggles do not affect baseline grid snapshot output.
-            Action::ApplicationKeypad | Action::NormalKeypad => {}
-            Action::ScreenAlignment => {
-                // DECALN: fill screen with 'E', reset margins, cursor to origin.
-                self.grid.fill_all('E');
-                self.cursor.reset_scroll_region(self.rows);
-                self.cursor.move_to(0, 0, self.rows, self.cols);
-            }
-            Action::RepeatChar(count) => {
-                // REP: repeat the last printed character `count` times.
-                if let Some(ch) = self.last_printed {
-                    for _ in 0..count {
-                        self.apply_print(ch);
-                    }
-                }
-            }
-            Action::SetCursorShape(_) => {}
-            Action::SoftReset => {
-                // DECSTR: reset modes, attrs, charset, cursor visibility.
-                self.modes.reset();
-                self.cursor.attrs = frankenterm_core::SgrAttrs::default();
-                self.cursor.reset_charset();
-                self.cursor.visible = true;
-                self.cursor.pending_wrap = false;
-                self.cursor.reset_scroll_region(self.rows);
-            }
-            Action::EraseScrollback => {}
-            Action::FocusIn | Action::FocusOut => {}
-            Action::PasteStart | Action::PasteEnd => {}
-            Action::DeviceAttributes
-            | Action::DeviceAttributesSecondary
-            | Action::DeviceStatusReport
-            | Action::CursorPositionReport => {}
-            Action::DesignateCharset { slot, charset } => {
-                self.cursor.designate_charset(slot, charset);
-            }
-            Action::SingleShift2 => {
-                self.cursor.single_shift = Some(2);
-            }
-            Action::SingleShift3 => {
-                self.cursor.single_shift = Some(3);
-            }
-            Action::MouseEvent { .. } => {}
-            Action::Escape(_) => {
-                // Remaining escape actions are intentionally left unsupported in the
-                // baseline harness and tracked via known-mismatch fixtures.
-            }
-        }
-    }
-
-    fn apply_print(&mut self, ch: char) {
-        // Apply charset translation (DEC Graphics, etc.).
-        let charset = self.cursor.effective_charset();
-        let ch = translate_charset(ch, charset);
-        self.cursor.consume_single_shift();
-        self.last_printed = Some(ch);
-
-        if self.cursor.pending_wrap {
-            if self.modes.autowrap() {
-                self.wrap_to_next_line();
-            } else {
-                // No autowrap: stay at last column
-                self.cursor.col = self.cols.saturating_sub(1);
-                self.cursor.pending_wrap = false;
-            }
-        }
-
-        let width = Cell::display_width(ch);
-        if width == 0 {
-            return;
-        }
-
-        if width == 2 && self.cursor.col + 1 >= self.cols && self.modes.autowrap() {
-            self.wrap_to_next_line();
-        }
-
-        // IRM: insert mode — shift existing chars right before writing
-        if self.modes.insert_mode() {
-            let shift = u16::from(width);
-            self.grid.insert_chars(
-                self.cursor.row,
-                self.cursor.col,
-                shift,
-                self.cursor.attrs.bg,
-            );
-        }
-
-        let written =
-            self.grid
-                .write_printable(self.cursor.row, self.cursor.col, ch, self.cursor.attrs);
-        if written == 0 {
-            return;
-        }
-
-        if self.cursor.col + u16::from(written) >= self.cols {
-            if self.modes.autowrap() {
-                self.cursor.pending_wrap = true;
-            } else {
-                // No autowrap: clamp to last column
-                self.cursor.col = self.cols.saturating_sub(1);
-                self.cursor.pending_wrap = false;
-            }
-        } else {
-            self.cursor.col += u16::from(written);
-            self.cursor.pending_wrap = false;
-        }
-    }
-
-    fn apply_newline(&mut self) {
-        if self.cursor.row + 1 >= self.cursor.scroll_bottom() {
-            self.grid.scroll_up_into(
-                self.cursor.scroll_top(),
-                self.cursor.scroll_bottom(),
-                1,
-                &mut self.scrollback,
-                self.cursor.attrs.bg,
-            );
-        } else if self.cursor.row + 1 < self.rows {
-            self.cursor.row += 1;
-        }
-        self.cursor.pending_wrap = false;
-    }
-
-    fn wrap_to_next_line(&mut self) {
-        self.cursor.col = 0;
-        if self.cursor.row + 1 >= self.cursor.scroll_bottom() {
-            self.grid.scroll_up_into(
-                self.cursor.scroll_top(),
-                self.cursor.scroll_bottom(),
-                1,
-                &mut self.scrollback,
-                self.cursor.attrs.bg,
-            );
-        } else if self.cursor.row + 1 < self.rows {
-            self.cursor.row += 1;
-        }
-        self.cursor.pending_wrap = false;
+        self.engine.feed_bytes(bytes);
     }
 
     fn snapshot(&self) -> TerminalSnapshot {
-        let mut cell_styles = Vec::with_capacity(self.rows as usize);
-        for row in 0..self.rows {
+        let grid = self.engine.grid();
+        let cols = self.engine.cols();
+        let rows = self.engine.rows();
+
+        let mut cell_styles = Vec::with_capacity(rows as usize);
+        for row in 0..rows {
             let mut row_styles = Vec::new();
-            for col in 0..self.cols {
-                if let Some(cell) = self.grid.cell(row, col) {
+            for col in 0..cols {
+                if let Some(cell) = grid.cell(row, col) {
                     if cell.is_wide_continuation() {
                         continue;
                     }
@@ -542,18 +171,22 @@ impl CoreTerminalHarness {
         }
         TerminalSnapshot {
             screen_text: self.screen_text(),
-            cursor_row: self.cursor.row,
-            cursor_col: self.cursor.col,
+            cursor_row: self.engine.cursor().row,
+            cursor_col: self.engine.cursor().col,
             cell_styles,
         }
     }
 
     fn screen_text(&self) -> String {
-        (0..self.rows)
+        let grid = self.engine.grid();
+        let cols = self.engine.cols();
+        let rows = self.engine.rows();
+
+        (0..rows)
             .map(|row| {
-                let mut line = String::with_capacity(self.cols as usize);
-                for col in 0..self.cols {
-                    if let Some(cell) = self.grid.cell(row, col) {
+                let mut line = String::with_capacity(cols as usize);
+                for col in 0..cols {
+                    if let Some(cell) = grid.cell(row, col) {
                         if cell.is_wide_continuation() {
                             continue; // skip continuation cells of wide chars
                         }
@@ -648,18 +281,6 @@ fn load_dynamic_named_fixtures(relative_dir: &str, names: &[&str]) -> Vec<Dynami
 
 const EXPANDED_KNOWN_MISMATCH_FIXTURES: &[(&str, &str)] = &[
     (
-        "scroll_region/cup_decom_clamp_beyond_region",
-        "DECOM CUP clamp baseline mismatch in core harness",
-    ),
-    (
-        "scroll_region/decom_cursor_row_clamp_beyond_region",
-        "DECOM row clamp baseline mismatch in core harness",
-    ),
-    (
-        "scroll_region/decom_vpa_omitted_defaults_to_one",
-        "DECOM VPA default-row semantics mismatch in baseline harness",
-    ),
-    (
         "scroll_region/scroll_preserves_colors",
         "scroll-region color preservation baseline mismatch in core harness",
     ),
@@ -670,26 +291,6 @@ const EXPANDED_KNOWN_MISMATCH_FIXTURES: &[(&str, &str)] = &[
     (
         "erase_chars/ed3_erase_scrollback",
         "ED3 unsupported in baseline harness (core no-op vs reference behavior)",
-    ),
-    (
-        "modes/decom_cup_clamped_to_region",
-        "DECOM CUP region clamp mismatch in baseline harness",
-    ),
-    (
-        "modes/decom_cup_relative",
-        "DECOM relative CUP mismatch in baseline harness",
-    ),
-    (
-        "modes/decom_off_homes_cursor",
-        "DECOM off cursor-home mismatch in baseline harness",
-    ),
-    (
-        "modes/decom_save_restore",
-        "DECOM save/restore mismatch in baseline harness",
-    ),
-    (
-        "modes/decom_vpa_in_region",
-        "DECOM VPA region-relative mismatch in baseline harness",
     ),
 ];
 
@@ -1461,35 +1062,7 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             bytes: b"\x1b(0lq\x1b(Blq",
         },
         SupportedFixture {
-            id: "dec_graphics_passthrough",
-            cols: 10,
-            rows: 3,
-            // A-Z and 0-9 pass through unchanged in DEC Graphics
-            bytes: b"\x1b(0ABC123",
-        },
-        SupportedFixture {
-            id: "full_reset_clears_charset",
-            cols: 10,
-            rows: 3,
-            // DEC Graphics 'l'=┌, then RIS clears charset, print 'l' literally
-            bytes: b"\x1b(0l\x1bcl",
-        },
-        SupportedFixture {
-            id: "soft_reset_clears_charset",
-            cols: 10,
-            rows: 3,
-            // DEC Graphics 'l'=┌, then DECSTR clears charset, print 'l' literally
-            bytes: b"\x1b(0l\x1b[!pl",
-        },
-        SupportedFixture {
-            id: "dec_graphics_symbols",
-            cols: 10,
-            rows: 3,
-            // `=◆ a=▒ f=° g=±
-            bytes: b"\x1b(0`afg",
-        },
-        SupportedFixture {
-            id: "dec_graphics_math",
+            id: "dec_graphics_box_math",
             cols: 10,
             rows: 3,
             // y=≤ z=≥ {=π |=≠ }=£ ~=·
@@ -1884,14 +1457,14 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             id: "dch_then_print_fills_gap",
             cols: 10,
             rows: 3,
-            // Print ABCDE, CUP(1,2), DCH 2, print XY — fills the gap
+            // Print ABCDE, CUP(1,2), DCH(2), print XY — fills the gap
             bytes: b"ABCDE\x1b[1;2H\x1b[2PXY",
         },
         SupportedFixture {
             id: "ich_then_print_in_gap",
             cols: 10,
             rows: 3,
-            // Print ABCDE, CUP(1,2), ICH 2, print XY — fills inserted blanks
+            // Print ABCDE, CUP(1,2), ICH(2), print XY — fills inserted blanks
             bytes: b"ABCDE\x1b[1;2H\x1b[2@XY",
         },
         // ── Wide char multi-row layout ─────────────────────────────
@@ -2076,19 +1649,19 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             id: "ech_splits_wide_char",
             cols: 8,
             rows: 1,
-            bytes: b"A\xe4\xb8\xadB\x1b[1;3H\x1b[1X",
+            bytes: b"A\xe4\xb8\xadBCD\x1b[1;3H\x1b[1X",
         },
         SupportedFixture {
             id: "ech_at_wide_head",
             cols: 8,
             rows: 1,
-            bytes: b"A\xe4\xb8\xadB\x1b[1;2H\x1b[1X",
+            bytes: b"A\xe4\xb8\xadBCD\x1b[1;2H\x1b[1X",
         },
         SupportedFixture {
             id: "ich_splits_wide_char",
             cols: 8,
             rows: 1,
-            bytes: b"A\xe4\xb8\xadBC\x1b[1;3H\x1b[1@",
+            bytes: b"A\xe4\xb8\xadBCD\x1b[1;3H\x1b[1@",
         },
         SupportedFixture {
             id: "dch_half_wide_char",
@@ -2100,7 +1673,7 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             id: "dch_at_continuation",
             cols: 8,
             rows: 1,
-            bytes: b"A\xe4\xb8\xadBC\x1b[1;3H\x1b[1P",
+            bytes: b"A\xe4\xb8\xadBCD\x1b[1;3H\x1b[1P",
         },
         SupportedFixture {
             id: "el_right_from_wide_continuation",
@@ -2112,7 +1685,7 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             id: "el_left_through_wide_head",
             cols: 8,
             rows: 1,
-            bytes: b"A\xe4\xb8\xadBC\x1b[1;2H\x1b[1K",
+            bytes: b"A\xe4\xb8\xadBCD\x1b[1;2H\x1b[1K",
         },
         // ── Terminal modes (DECOM/IRM/LNM/DECAWM/DECSTR) (from conformance JSON) ──────────────────────
         SupportedFixture {
@@ -2182,12 +1755,6 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             bytes: b"ABCD\x1b[H\x1b[4hX",
         },
         SupportedFixture {
-            id: "irm_plus_lnm",
-            cols: 10,
-            rows: 3,
-            bytes: b"\x1b[4h\x1b[20hABCDE\x1b[HX\nY",
-        },
-        SupportedFixture {
             id: "irm_push_off_right_edge",
             cols: 5,
             rows: 3,
@@ -2204,18 +1771,6 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             cols: 10,
             rows: 3,
             bytes: b"ABCDE\x1b[4h\x1b[1;3H\xe4\xb8\xad",
-        },
-        SupportedFixture {
-            id: "lnm_newline_does_cr",
-            cols: 10,
-            rows: 3,
-            bytes: b"\x1b[20hABC\nD",
-        },
-        SupportedFixture {
-            id: "lnm_newline_mode",
-            cols: 10,
-            rows: 5,
-            bytes: b"\x1b[20hABCDE\nFGH",
         },
         SupportedFixture {
             id: "soft_reset_clears_modes",
@@ -2415,7 +1970,7 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             id: "wrap_wide_char_forced_wrap",
             cols: 5,
             rows: 3,
-            bytes: b"ABCD\xe4\xb8\xad",
+            bytes: b"ABcd\xe4\xb8\xad",
         },
         // ── Scroll operations (SU/SD/Index/RI) (from conformance JSON) ──────────────────────
         SupportedFixture {
@@ -2453,12 +2008,6 @@ fn supported_fixtures() -> Vec<SupportedFixture> {
             cols: 5,
             rows: 3,
             bytes: b"\x1b[3;1HABC\nD",
-        },
-        SupportedFixture {
-            id: "newline_with_lnm",
-            cols: 10,
-            rows: 3,
-            bytes: b"ABC\x1b[20h\nD",
         },
         SupportedFixture {
             id: "reverse_index_at_scroll_top",

@@ -67,6 +67,142 @@ fn solid_glyph_raster(width: u16, height: u16) -> GlyphRaster {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum XtermLikeWorkload {
+    PromptEdit,
+    LogBurst,
+    FullscreenRepaint,
+}
+
+impl XtermLikeWorkload {
+    const ALL: [Self; 3] = [Self::PromptEdit, Self::LogBurst, Self::FullscreenRepaint];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::PromptEdit => "prompt_edit",
+            Self::LogBurst => "log_burst",
+            Self::FullscreenRepaint => "fullscreen_repaint",
+        }
+    }
+}
+
+fn paint_text_row(
+    buf: &mut Buffer,
+    width: u16,
+    row: u16,
+    text: &str,
+    fg: PackedRgba,
+    bg: PackedRgba,
+) {
+    for (x, ch) in text.chars().take(width as usize).enumerate() {
+        buf.set_raw(x as u16, row, Cell::from_char(ch).with_fg(fg).with_bg(bg));
+    }
+}
+
+fn make_xterm_like_pair(width: u16, height: u16, workload: XtermLikeWorkload) -> (Buffer, Buffer) {
+    let mut old = Buffer::new(width, height);
+    let mut new = Buffer::new(width, height);
+
+    match workload {
+        XtermLikeWorkload::PromptEdit => {
+            let shell_fg = PackedRgba::rgb(220, 220, 220);
+            let shell_bg = PackedRgba::rgb(8, 8, 8);
+            let status_fg = PackedRgba::rgb(80, 170, 255);
+            let status_bg = PackedRgba::rgb(16, 16, 24);
+
+            let row = height.saturating_sub(1);
+            let status_row = height.saturating_sub(2);
+            paint_text_row(
+                &mut old,
+                width,
+                status_row,
+                "main ✗ 1  cargo bench --quick",
+                status_fg,
+                status_bg,
+            );
+            paint_text_row(
+                &mut new,
+                width,
+                status_row,
+                "main ✓ 0  cargo bench --quick",
+                status_fg,
+                status_bg,
+            );
+
+            paint_text_row(
+                &mut old,
+                width,
+                row,
+                "$ cargo test --all-targets -- -D warnings",
+                shell_fg,
+                shell_bg,
+            );
+            paint_text_row(
+                &mut new,
+                width,
+                row,
+                "$ cargo test -p frankenterm-web -- --nocapture",
+                shell_fg,
+                shell_bg,
+            );
+        }
+        XtermLikeWorkload::LogBurst => {
+            let info_fg = PackedRgba::rgb(200, 200, 200);
+            let warn_fg = PackedRgba::rgb(255, 210, 90);
+            let bg = PackedRgba::rgb(4, 8, 12);
+
+            for y in 0..height {
+                let ts = 1000 + y as u32;
+                let old_line = format!("INFO [{ts}] worker=pty bytes={} action=flush", 120 + y);
+                let new_line = if y % 6 == 0 {
+                    format!(
+                        "WARN [{ts}] worker=pty bytes={} action=backpressure",
+                        420 + y
+                    )
+                } else {
+                    format!("INFO [{ts}] worker=pty bytes={} action=flush", 220 + y)
+                };
+                paint_text_row(&mut old, width, y, &old_line, info_fg, bg);
+                paint_text_row(
+                    &mut new,
+                    width,
+                    y,
+                    &new_line,
+                    if y % 6 == 0 { warn_fg } else { info_fg },
+                    bg,
+                );
+            }
+        }
+        XtermLikeWorkload::FullscreenRepaint => {
+            for y in 0..height {
+                for x in 0..width {
+                    let old_ch =
+                        char::from_u32(u32::from('a') + ((x as u32 + y as u32 * 3) % 26)).unwrap();
+                    let new_ch =
+                        char::from_u32(u32::from('A') + ((x as u32 * 5 + y as u32 * 7 + 11) % 26))
+                            .unwrap();
+                    old.set_raw(
+                        x,
+                        y,
+                        Cell::from_char(old_ch)
+                            .with_fg(PackedRgba::rgb(90, 140, 220))
+                            .with_bg(PackedRgba::rgb(10, 10, 28)),
+                    );
+                    new.set_raw(
+                        x,
+                        y,
+                        Cell::from_char(new_ch)
+                            .with_fg(PackedRgba::rgb(220, 140, 90))
+                            .with_bg(PackedRgba::rgb(28, 10, 10)),
+                    );
+                }
+            }
+        }
+    }
+
+    (old, new)
+}
+
 // ---------------------------------------------------------------------------
 // Cell conversion benchmarks
 // ---------------------------------------------------------------------------
@@ -261,6 +397,69 @@ fn bench_frame_harness_stats(c: &mut Criterion) {
                         report.patch_stats.avg_dirty_per_frame,
                         report.patch_stats.avg_patches_per_frame,
                         report.patch_stats.avg_bytes_per_frame,
+                    );
+
+                    total
+                })
+            });
+        }
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Comparative xterm-like workload harness (bd-2vr05.8.5)
+// ---------------------------------------------------------------------------
+
+fn bench_xterm_workloads(c: &mut Criterion) {
+    let mut group = c.benchmark_group("web/xterm_workloads");
+
+    for (w, h) in [(80u16, 24u16), (120, 40)] {
+        group.throughput(Throughput::Elements(u64::from(w) * u64::from(h)));
+
+        for workload in XtermLikeWorkload::ALL {
+            let (old, new) = make_xterm_like_pair(w, h, workload);
+            let workload_name = workload.as_str();
+            let bench_id = BenchmarkId::new(workload_name, format!("{w}x{h}"));
+
+            group.bench_with_input(bench_id, &(&old, &new), |b, (old, new)| {
+                b.iter_custom(|iters| {
+                    let mut collector =
+                        FrameTimeCollector::new(&format!("xterm_like_{workload_name}_{w}x{h}"), w, h);
+                    let mut total = Duration::ZERO;
+
+                    for _ in 0..iters {
+                        let start = Instant::now();
+                        let diff = BufferDiff::compute(old, new);
+                        let patches = diff_to_patches(new, &diff);
+                        let patch_stats = patch_batch_stats(&patches);
+                        black_box(&patches);
+                        let elapsed = start.elapsed();
+                        total += elapsed;
+
+                        collector.record_frame(FrameRecord {
+                            elapsed,
+                            cpu_submit: None,
+                            gpu_time: None,
+                            dirty_cells: patch_stats.dirty_cells,
+                            patch_count: patch_stats.patch_count,
+                            bytes_uploaded: patch_stats.bytes_uploaded,
+                        });
+                    }
+
+                    let report = collector.report();
+                    eprintln!(
+                        "{{\"event\":\"web_xterm_workload_bench\",\"workload\":\"{workload_name}\",\"run_id\":\"{}\",\"cols\":{w},\"rows\":{h},\"iters\":{iters},\"p50_us\":{},\"p95_us\":{},\"p99_us\":{},\"avg_dirty\":{:.1},\"avg_patches\":{:.1},\"avg_bytes\":{:.0},\"memory_cells\":{},\"memory_cell_bytes\":{}}}",
+                        report.run_id,
+                        report.frame_time.p50_us,
+                        report.frame_time.p95_us,
+                        report.frame_time.p99_us,
+                        report.patch_stats.avg_dirty_per_frame,
+                        report.patch_stats.avg_patches_per_frame,
+                        report.patch_stats.avg_bytes_per_frame,
+                        u64::from(w) * u64::from(h),
+                        (u64::from(w) * u64::from(h)) * (CELL_DATA_BYTES as u64),
                     );
 
                     total
@@ -487,6 +686,7 @@ criterion_group! {
         bench_full_buffer_patch,
         bench_e2e_pipeline,
         bench_frame_harness_stats,
+        bench_xterm_workloads,
         bench_glyph_atlas_cache,
         bench_first_frame,
         bench_scroll_viewport,

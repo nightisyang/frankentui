@@ -8,8 +8,8 @@
 //! - snapshotting incremental patches.
 
 use crate::{
-    Action, AnsiModes, Cell, Cursor, Grid, GridDiff, Modes, Parser, Patch, ReplyContext,
-    ReplyEngine, SavedCursor, Scrollback, translate_charset,
+    Action, AnsiModes, Cursor, Grid, GridDiff, Modes, Parser, Patch, ReplyContext, ReplyEngine,
+    SavedCursor, Scrollback, WidthPolicy, translate_charset,
 };
 
 /// Default scrollback capacity for [`TerminalEngine`].
@@ -22,6 +22,8 @@ pub struct TerminalEngineConfig {
     pub scrollback_capacity: usize,
     /// Reply identity/policy for terminal query sequences (DA/DSR/CPR/DECRPM).
     pub reply_engine: ReplyEngine,
+    /// Unicode character width measurement policy.
+    pub width_policy: WidthPolicy,
 }
 
 impl Default for TerminalEngineConfig {
@@ -29,6 +31,7 @@ impl Default for TerminalEngineConfig {
         Self {
             scrollback_capacity: DEFAULT_SCROLLBACK_CAPACITY,
             reply_engine: ReplyEngine::default(),
+            width_policy: WidthPolicy::Standard,
         }
     }
 }
@@ -49,6 +52,7 @@ pub struct TerminalEngine {
     cols: u16,
     rows: u16,
     scrollback_capacity: usize,
+    width_policy: WidthPolicy,
 }
 
 impl TerminalEngine {
@@ -86,6 +90,7 @@ impl TerminalEngine {
             cols,
             rows,
             scrollback_capacity: config.scrollback_capacity,
+            width_policy: config.width_policy,
         }
     }
 
@@ -173,6 +178,12 @@ impl TerminalEngine {
     #[must_use]
     pub fn rows(&self) -> u16 {
         self.rows
+    }
+
+    /// Current width policy.
+    #[must_use]
+    pub fn width_policy(&self) -> WidthPolicy {
+        self.width_policy
     }
 
     fn maybe_enqueue_reply_for_action(&mut self, action: &Action) {
@@ -488,7 +499,7 @@ impl TerminalEngine {
             }
         }
 
-        let width = Cell::display_width(ch);
+        let width = self.width_policy.char_width(ch);
         if width == 0 {
             return;
         }
@@ -511,9 +522,13 @@ impl TerminalEngine {
             );
         }
 
-        let written =
-            self.grid
-                .write_printable(self.cursor.row, self.cursor.col, ch, self.cursor.attrs);
+        let written = self.grid.write_printable_with_width(
+            self.cursor.row,
+            self.cursor.col,
+            ch,
+            self.cursor.attrs,
+            width,
+        );
         if written == 0 {
             return;
         }

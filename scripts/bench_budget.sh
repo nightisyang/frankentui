@@ -131,6 +131,14 @@ declare -A BUDGETS=(
     ["web/frame_harness_stats/sparse_5pct/120x40"]=40000
     ["web/frame_harness_stats/heavy_50pct/120x40"]=40000
 
+    # Comparative xterm-like workload profiles (bd-2vr05.8.5)
+    ["web/xterm_workloads/prompt_edit/80x24"]=25000
+    ["web/xterm_workloads/log_burst/80x24"]=45000
+    ["web/xterm_workloads/fullscreen_repaint/80x24"]=90000
+    ["web/xterm_workloads/prompt_edit/120x40"]=40000
+    ["web/xterm_workloads/log_burst/120x40"]=70000
+    ["web/xterm_workloads/fullscreen_repaint/120x40"]=220000
+
     # Glyph atlas cache (bd-lff4p.2.4)
     ["web/glyph_atlas_cache/miss_insert_single"]=5000
     ["web/glyph_atlas_cache/hit_hot_path"]=250
@@ -318,8 +326,8 @@ run_benchmarks() {
         fi
         local bench_filters=("")
         if [[ "$pkg" == "frankenterm-web" && "$bench" == "renderer_bench" && "$QUICK_MODE" == "true" ]]; then
-            # Quick-mode still validates web frame-time harness and glyph-atlas cache gates.
-            bench_filters=("frame_harness_stats" "glyph_atlas_cache")
+            # Quick-mode validates web frame-time harness, xterm-like profiles, and glyph-atlas gates.
+            bench_filters=("frame_harness_stats" "xterm_workloads" "glyph_atlas_cache")
         fi
 
         local append_mode=false
