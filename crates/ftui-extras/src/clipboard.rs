@@ -1399,4 +1399,328 @@ mod tests {
         // Just verify it doesn't panic; actual content depends on system state
         let _ = content;
     }
+
+    // --- supports_osc52 accessor ---
+
+    #[test]
+    fn supports_osc52_true_when_capable() {
+        let clipboard = Clipboard::new(caps_with_clipboard());
+        assert!(clipboard.supports_osc52());
+    }
+
+    #[test]
+    fn supports_osc52_false_for_basic() {
+        let clipboard = Clipboard::new(TerminalCapabilities::basic());
+        assert!(!clipboard.supports_osc52());
+    }
+
+    #[test]
+    fn supports_osc52_false_in_tmux_without_native() {
+        let clipboard = Clipboard::new(caps_in_tmux());
+        assert!(!clipboard.supports_osc52());
+    }
+
+    // --- ClipboardError implements std::error::Error ---
+
+    #[test]
+    fn clipboard_error_is_std_error() {
+        let err: Box<dyn std::error::Error> = Box::new(ClipboardError::NotAvailable);
+        assert_eq!(err.to_string(), "clipboard not available");
+    }
+
+    #[test]
+    fn clipboard_error_source_is_none() {
+        use std::error::Error;
+        let err = ClipboardError::Timeout;
+        assert!(err.source().is_none());
+    }
+
+    // --- Cut buffer edge cases ---
+
+    #[test]
+    fn cut_buffer_max_valid_index() {
+        let code = ClipboardSelection::CutBuffer(7).osc52_code().unwrap();
+        assert_eq!(code, '7');
+    }
+
+    #[test]
+    fn cut_buffer_min_valid_index() {
+        let code = ClipboardSelection::CutBuffer(0).osc52_code().unwrap();
+        assert_eq!(code, '0');
+    }
+
+    #[test]
+    fn cut_buffer_large_index_error() {
+        let err = ClipboardSelection::CutBuffer(255).osc52_code();
+        assert!(matches!(err, Err(ClipboardError::InvalidInput(_))));
+        if let Err(ClipboardError::InvalidInput(msg)) = err {
+            assert!(msg.contains("255"));
+        }
+    }
+
+    // --- set/clear with cut buffer selection via OSC 52 ---
+
+    #[test]
+    fn set_cut_buffer_zero() {
+        let clipboard = Clipboard::new(caps_with_clipboard());
+        let mut out = Vec::new();
+        clipboard
+            .set("data", ClipboardSelection::CutBuffer(0), &mut out)
+            .unwrap();
+        let expected = format!("\x1b]52;0;{}\x07", STANDARD.encode("data"));
+        assert_eq!(String::from_utf8(out).unwrap(), expected);
+    }
+
+    #[test]
+    fn clear_cut_buffer() {
+        let clipboard = Clipboard::new(caps_with_clipboard());
+        let mut out = Vec::new();
+        clipboard
+            .clear(ClipboardSelection::CutBuffer(5), &mut out)
+            .unwrap();
+        assert_eq!(out, b"\x1b]52;5;\x07");
+    }
+
+    #[test]
+    fn set_invalid_cut_buffer_fails() {
+        let clipboard = Clipboard::new(caps_with_clipboard());
+        let mut out = Vec::new();
+        let err = clipboard.set("data", ClipboardSelection::CutBuffer(8), &mut out);
+        assert!(matches!(err, Err(ClipboardError::InvalidInput(_))));
+    }
+
+    #[test]
+    fn clear_invalid_cut_buffer_fails() {
+        let clipboard = Clipboard::new(caps_with_clipboard());
+        let mut out = Vec::new();
+        let err = clipboard.clear(ClipboardSelection::CutBuffer(8), &mut out);
+        assert!(matches!(err, Err(ClipboardError::InvalidInput(_))));
+    }
+
+    // --- Query OSC 52 cut buffer and secondary ---
+
+    #[test]
+    fn query_osc52_secondary() {
+        let clipboard = Clipboard::new(caps_with_clipboard());
+        let mut out = Vec::new();
+        clipboard
+            .query_osc52(ClipboardSelection::Secondary, &mut out)
+            .unwrap();
+        assert_eq!(out, b"\x1b]52;s;?\x07");
+    }
+
+    #[test]
+    fn query_osc52_cut_buffer() {
+        let clipboard = Clipboard::new(caps_with_clipboard());
+        let mut out = Vec::new();
+        clipboard
+            .query_osc52(ClipboardSelection::CutBuffer(2), &mut out)
+            .unwrap();
+        assert_eq!(out, b"\x1b]52;2;?\x07");
+    }
+
+    #[test]
+    fn query_osc52_invalid_cut_buffer_fails() {
+        let clipboard = Clipboard::new(caps_with_clipboard());
+        let mut out = Vec::new();
+        let err = clipboard.query_osc52(ClipboardSelection::CutBuffer(9), &mut out);
+        assert!(matches!(err, Err(ClipboardError::InvalidInput(_))));
+    }
+
+    // --- Screen passthrough query ---
+
+    #[test]
+    fn query_osc52_with_screen_passthrough() {
+        let clipboard = Clipboard::new(caps_in_screen()).with_mux_passthrough();
+        let mut out = Vec::new();
+        clipboard
+            .query_osc52(ClipboardSelection::Clipboard, &mut out)
+            .unwrap();
+
+        // Screen passthrough: ESC P <seq> ESC \
+        let mut expected = Vec::new();
+        expected.extend_from_slice(b"\x1bP");
+        expected.extend_from_slice(b"\x1b]52;c;?\x07");
+        expected.extend_from_slice(b"\x1b\\");
+        assert_eq!(out, expected);
+    }
+
+    // --- Tmux passthrough with multiple ESC in content ---
+
+    #[test]
+    fn tmux_passthrough_doubles_all_esc_bytes() {
+        let clipboard = Clipboard::new(caps_in_tmux()).with_mux_passthrough();
+        let mut out = Vec::new();
+        clipboard
+            .set("test", ClipboardSelection::Clipboard, &mut out)
+            .unwrap();
+
+        // Count ESC doubling: the inner sequence has ESC] at the start
+        // In tmux passthrough, each ESC (0x1b) in the payload becomes ESC ESC
+        let inner_seq = format!("\x1b]52;c;{}\x07", STANDARD.encode("test"));
+        let esc_count = inner_seq.bytes().filter(|&b| b == 0x1b).count();
+        // Each ESC in inner should appear as doubled ESC in output
+        // Output format: ESC P tmux; <doubled payload> ESC \
+        let doubled_in_output = out
+            .windows(2)
+            .filter(|w| w[0] == 0x1b && w[1] == 0x1b)
+            .count();
+        assert_eq!(doubled_in_output, esc_count);
+    }
+
+    // --- get / get_with_timeout behavior ---
+
+    #[test]
+    fn get_with_timeout_unavailable() {
+        let clipboard = Clipboard::new(TerminalCapabilities::basic());
+        let err = clipboard.get_with_timeout(std::time::Duration::from_millis(50));
+        assert!(matches!(err, Err(ClipboardError::NotAvailable)));
+    }
+
+    #[test]
+    fn get_with_timeout_osc52_no_fallback_returns_timeout() {
+        let clipboard = Clipboard::new(caps_with_clipboard());
+        let err = clipboard.get_with_timeout(std::time::Duration::from_millis(10));
+        assert!(matches!(err, Err(ClipboardError::Timeout)));
+    }
+
+    // --- Passthrough + auto interactions ---
+
+    #[test]
+    fn auto_tmux_with_osc52_prefers_direct() {
+        // If terminal supports OSC 52 natively AND is in tmux, prefer direct
+        let mut caps = TerminalCapabilities::basic();
+        caps.osc52_clipboard = true;
+        caps.in_tmux = true;
+        let clipboard = Clipboard::auto(caps);
+        // Should use direct OSC 52 (no passthrough needed)
+        assert_eq!(clipboard.backend(), ClipboardBackend::Osc52);
+        assert_eq!(clipboard.passthrough, PassthroughMode::None);
+    }
+
+    #[test]
+    fn with_mux_passthrough_tmux_and_screen_precedence() {
+        // If both tmux and screen are set (unusual), tmux takes precedence
+        let mut caps = TerminalCapabilities::basic();
+        caps.in_tmux = true;
+        caps.in_screen = true;
+        let clipboard = Clipboard::new(caps).with_mux_passthrough();
+        // tmux check comes first in the if/else chain
+        assert_eq!(clipboard.passthrough, PassthroughMode::Tmux);
+    }
+
+    // --- Newline and special chars in content ---
+
+    #[test]
+    fn set_content_with_newlines() {
+        let clipboard = Clipboard::new(caps_with_clipboard());
+        let mut out = Vec::new();
+        let content = "line1\nline2\nline3";
+        clipboard
+            .set(content, ClipboardSelection::Clipboard, &mut out)
+            .unwrap();
+
+        let output = String::from_utf8(out).unwrap();
+        let payload = output
+            .strip_prefix("\x1b]52;c;")
+            .unwrap()
+            .strip_suffix('\x07')
+            .unwrap();
+        let decoded = STANDARD.decode(payload).unwrap();
+        assert_eq!(String::from_utf8(decoded).unwrap(), content);
+    }
+
+    #[test]
+    fn set_content_with_tabs_and_special() {
+        let clipboard = Clipboard::new(caps_with_clipboard());
+        let mut out = Vec::new();
+        let content = "col1\tcol2\r\ncr+lf";
+        clipboard
+            .set(content, ClipboardSelection::Clipboard, &mut out)
+            .unwrap();
+
+        let output = String::from_utf8(out).unwrap();
+        let payload = output
+            .strip_prefix("\x1b]52;c;")
+            .unwrap()
+            .strip_suffix('\x07')
+            .unwrap();
+        let decoded = STANDARD.decode(payload).unwrap();
+        assert_eq!(String::from_utf8(decoded).unwrap(), content);
+    }
+
+    // --- ClipboardError equality ---
+
+    #[test]
+    fn clipboard_error_eq() {
+        assert_eq!(ClipboardError::NotAvailable, ClipboardError::NotAvailable);
+        assert_eq!(ClipboardError::Timeout, ClipboardError::Timeout);
+        assert_eq!(
+            ClipboardError::InvalidInput("a".to_string()),
+            ClipboardError::InvalidInput("a".to_string())
+        );
+        assert_ne!(
+            ClipboardError::InvalidInput("a".to_string()),
+            ClipboardError::InvalidInput("b".to_string())
+        );
+        assert_ne!(ClipboardError::Timeout, ClipboardError::NotAvailable);
+    }
+
+    // --- Clone behavior ---
+
+    #[test]
+    fn clipboard_is_cloneable() {
+        let clipboard = Clipboard::new(caps_with_clipboard());
+        let cloned = clipboard.clone();
+        assert_eq!(cloned.backend(), clipboard.backend());
+        assert_eq!(cloned.max_payload(), clipboard.max_payload());
+        assert_eq!(cloned.supports_osc52(), clipboard.supports_osc52());
+        assert_eq!(cloned.is_available(), clipboard.is_available());
+    }
+
+    // --- Boundary payload size ---
+
+    #[test]
+    fn exact_payload_limit_succeeds() {
+        // Create content whose base64 encoding is exactly at the limit
+        let mut clipboard = Clipboard::new(caps_with_clipboard());
+        clipboard.max_payload = 8; // Small limit for testing
+        let mut out = Vec::new();
+        // "hello" encodes to "aGVsbG8=" (8 bytes) - exactly at limit
+        let result = clipboard.set("hello", ClipboardSelection::Clipboard, &mut out);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn one_over_payload_limit_fails() {
+        let mut clipboard = Clipboard::new(caps_with_clipboard());
+        clipboard.max_payload = 7; // One less than "aGVsbG8=" (8 bytes)
+        let mut out = Vec::new();
+        let result = clipboard.set("hello", ClipboardSelection::Clipboard, &mut out);
+        assert!(matches!(result, Err(ClipboardError::InvalidInput(_))));
+    }
+
+    // --- set secondary selection ---
+
+    #[test]
+    fn set_secondary_selection() {
+        let clipboard = Clipboard::new(caps_with_clipboard());
+        let mut out = Vec::new();
+        clipboard
+            .set("sec", ClipboardSelection::Secondary, &mut out)
+            .unwrap();
+
+        let expected = format!("\x1b]52;s;{}\x07", STANDARD.encode("sec"));
+        assert_eq!(String::from_utf8(out).unwrap(), expected);
+    }
+
+    #[test]
+    fn clear_secondary_selection() {
+        let clipboard = Clipboard::new(caps_with_clipboard());
+        let mut out = Vec::new();
+        clipboard
+            .clear(ClipboardSelection::Secondary, &mut out)
+            .unwrap();
+        assert_eq!(out, b"\x1b]52;s;\x07");
+    }
 }

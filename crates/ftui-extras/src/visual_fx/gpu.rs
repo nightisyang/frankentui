@@ -540,3 +540,289 @@ fn packed_to_vec4(color: PackedRgba) -> [f32; 4] {
 fn div_ceil(value: u32, divisor: u32) -> u32 {
     value.div_ceil(divisor)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("test lock poisoned")
+    }
+
+    // --- packed_to_vec4 tests ---
+
+    #[test]
+    fn packed_to_vec4_black() {
+        let v = packed_to_vec4(PackedRgba::rgb(0, 0, 0));
+        assert!((v[0] - 0.0).abs() < 0.001);
+        assert!((v[1] - 0.0).abs() < 0.001);
+        assert!((v[2] - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn packed_to_vec4_white() {
+        let v = packed_to_vec4(PackedRgba::rgb(255, 255, 255));
+        assert!((v[0] - 1.0).abs() < 0.001);
+        assert!((v[1] - 1.0).abs() < 0.001);
+        assert!((v[2] - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn packed_to_vec4_red() {
+        let v = packed_to_vec4(PackedRgba::rgb(255, 0, 0));
+        assert!((v[0] - 1.0).abs() < 0.001);
+        assert!((v[1] - 0.0).abs() < 0.001);
+        assert!((v[2] - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn packed_to_vec4_mid_gray() {
+        let v = packed_to_vec4(PackedRgba::rgb(128, 128, 128));
+        assert!((v[0] - 128.0 / 255.0).abs() < 0.001);
+        assert!((v[1] - 128.0 / 255.0).abs() < 0.001);
+        assert!((v[2] - 128.0 / 255.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn packed_to_vec4_with_alpha() {
+        let v = packed_to_vec4(PackedRgba::rgba(100, 150, 200, 128));
+        assert!((v[0] - 100.0 / 255.0).abs() < 0.001);
+        assert!((v[1] - 150.0 / 255.0).abs() < 0.001);
+        assert!((v[2] - 200.0 / 255.0).abs() < 0.001);
+        assert!((v[3] - 128.0 / 255.0).abs() < 0.001);
+    }
+
+    // --- div_ceil tests ---
+
+    #[test]
+    fn div_ceil_exact() {
+        assert_eq!(div_ceil(16, 8), 2);
+        assert_eq!(div_ceil(64, 8), 8);
+        assert_eq!(div_ceil(0, 8), 0);
+    }
+
+    #[test]
+    fn div_ceil_rounds_up() {
+        assert_eq!(div_ceil(17, 8), 3);
+        assert_eq!(div_ceil(1, 8), 1);
+        assert_eq!(div_ceil(15, 8), 2);
+    }
+
+    #[test]
+    fn div_ceil_by_one() {
+        assert_eq!(div_ceil(42, 1), 42);
+        assert_eq!(div_ceil(0, 1), 0);
+    }
+
+    // --- GpuBall struct tests ---
+
+    #[test]
+    fn gpu_ball_default() {
+        let ball = GpuBall::default();
+        assert_eq!(ball.x, 0.0);
+        assert_eq!(ball.y, 0.0);
+        assert_eq!(ball.r2, 0.0);
+        assert_eq!(ball.hue, 0.0);
+    }
+
+    #[test]
+    fn gpu_ball_clone_copy() {
+        let ball = GpuBall {
+            x: 1.0,
+            y: 2.0,
+            r2: 3.0,
+            hue: 4.0,
+        };
+        let copied = ball;
+        let copied2 = ball;
+        assert_eq!(copied.x, 1.0);
+        assert_eq!(copied2.y, 2.0);
+    }
+
+    #[test]
+    fn gpu_ball_debug() {
+        let ball = GpuBall::default();
+        let debug = format!("{ball:?}");
+        assert!(debug.contains("GpuBall"));
+    }
+
+    #[test]
+    fn gpu_ball_pod_zeroable() {
+        // Pod and Zeroable should allow safe zero-init
+        let zeroed: GpuBall = bytemuck::Zeroable::zeroed();
+        assert_eq!(zeroed.x, 0.0);
+        assert_eq!(zeroed.y, 0.0);
+    }
+
+    // --- GpuDisableReason tests ---
+
+    #[test]
+    fn gpu_disable_reason_eq() {
+        assert_eq!(GpuDisableReason::ForcedByEnv, GpuDisableReason::ForcedByEnv);
+        assert_eq!(GpuDisableReason::InitFailed, GpuDisableReason::InitFailed);
+        assert_eq!(
+            GpuDisableReason::RenderFailed,
+            GpuDisableReason::RenderFailed
+        );
+        assert_ne!(GpuDisableReason::ForcedByEnv, GpuDisableReason::InitFailed);
+    }
+
+    #[test]
+    fn gpu_disable_reason_debug() {
+        let reason = GpuDisableReason::ForcedByEnv;
+        let debug = format!("{reason:?}");
+        assert!(debug.contains("ForcedByEnv"));
+    }
+
+    #[test]
+    fn gpu_disable_reason_clone_copy() {
+        let reason = GpuDisableReason::InitFailed;
+        let copied = reason;
+        let copied2 = reason;
+        assert_eq!(copied, GpuDisableReason::InitFailed);
+        assert_eq!(copied2, GpuDisableReason::InitFailed);
+    }
+
+    // --- GpuBackend state machine tests ---
+
+    #[test]
+    fn backend_new_is_uninitialized() {
+        let backend = GpuBackend::new();
+        assert!(matches!(backend.state, GpuState::Uninitialized));
+        assert!(!backend.is_disabled());
+    }
+
+    #[test]
+    fn backend_disable_sets_unavailable() {
+        let mut backend = GpuBackend::new();
+        backend.disable(GpuDisableReason::ForcedByEnv);
+        assert!(backend.is_disabled());
+    }
+
+    #[test]
+    fn backend_disable_different_reasons() {
+        let mut backend = GpuBackend::new();
+        backend.disable(GpuDisableReason::InitFailed);
+        assert!(backend.is_disabled());
+        assert!(matches!(
+            backend.state,
+            GpuState::Unavailable(GpuDisableReason::InitFailed)
+        ));
+    }
+
+    #[test]
+    fn backend_ensure_initialized_when_already_disabled() {
+        let mut backend = GpuBackend::new();
+        backend.disable(GpuDisableReason::ForcedByEnv);
+        let result = backend.ensure_initialized();
+        assert!(result.is_err());
+    }
+
+    // --- env_truthy tests ---
+
+    #[test]
+    fn env_truthy_missing_key() {
+        // Use a key unlikely to exist
+        assert!(!env_truthy("FTUI_TEST_NONEXISTENT_VAR_12345"));
+    }
+
+    // --- Test helpers ---
+
+    #[test]
+    fn force_disable_and_check() {
+        let _lock = test_lock();
+        // Use the test helpers that manipulate global state
+        force_disable_for_tests();
+        assert!(is_disabled_for_tests());
+        reset_for_tests();
+    }
+
+    #[test]
+    fn force_init_fail_disables() {
+        let _lock = test_lock();
+        force_init_fail_for_tests();
+        assert!(is_disabled_for_tests());
+        reset_for_tests();
+    }
+
+    #[test]
+    fn reset_clears_disabled_state() {
+        let _lock = test_lock();
+        force_disable_for_tests();
+        assert!(is_disabled_for_tests());
+        reset_for_tests();
+        // After reset, should be uninitialized (not disabled)
+        assert!(!is_disabled_for_tests());
+    }
+
+    // --- render_metaballs public function ---
+
+    #[test]
+    fn disabled_backend_returns_err_on_render() {
+        use crate::visual_fx::{FxContext, FxQuality, ThemeInputs};
+
+        // Use a local GpuBackend instead of the global to avoid race conditions
+        let mut backend = GpuBackend::new();
+        backend.disable(GpuDisableReason::ForcedByEnv);
+
+        let theme = ThemeInputs::default_dark();
+        let ctx = FxContext {
+            width: 10,
+            height: 5,
+            frame: 0,
+            time_seconds: 0.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        let balls = [GpuBall::default()];
+        let mut out = vec![PackedRgba::TRANSPARENT; ctx.len()];
+
+        let result = backend.render_metaballs(
+            ctx,
+            1.0,
+            0.5,
+            PackedRgba::BLACK,
+            [PackedRgba::BLACK; 4],
+            &balls,
+            &mut out,
+        );
+        assert!(
+            result.is_err(),
+            "disabled backend should return Err on render"
+        );
+    }
+
+    // --- MetaballsUniform struct layout ---
+
+    #[test]
+    fn metaballs_uniform_pod_layout() {
+        // Verify MetaballsUniform size is correct for bytemuck
+        let size = std::mem::size_of::<MetaballsUniform>();
+        // 4 u32s + 2 f32s + 2 pad f32s + 5 * [f32;4] = (4*4) + (2*4) + (2*4) + (5*16) = 16+8+8+80 = 112
+        assert_eq!(
+            size, 112,
+            "MetaballsUniform should be 112 bytes for GPU alignment"
+        );
+    }
+
+    #[test]
+    fn gpu_ball_size() {
+        // GpuBall: 4 f32s = 16 bytes
+        assert_eq!(std::mem::size_of::<GpuBall>(), 16);
+    }
+
+    // --- gpu_enabled ---
+
+    #[test]
+    fn gpu_enabled_when_env_not_set() {
+        // Only tests that the function is callable and returns a bool;
+        // cannot mutate env vars due to #![forbid(unsafe_code)]
+        let _ = gpu_enabled();
+    }
+}
