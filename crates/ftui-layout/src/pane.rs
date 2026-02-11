@@ -707,6 +707,314 @@ impl fmt::Display for PaneSemanticInputEventError {
 
 impl std::error::Error for PaneSemanticInputEventError {}
 
+/// Rational scale factor used for deterministic coordinate transforms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneScaleFactor {
+    numerator: u32,
+    denominator: u32,
+}
+
+impl PaneScaleFactor {
+    /// Identity scale (`1/1`).
+    pub const ONE: Self = Self {
+        numerator: 1,
+        denominator: 1,
+    };
+
+    /// Build and normalize a rational scale factor.
+    pub fn new(numerator: u32, denominator: u32) -> Result<Self, PaneCoordinateNormalizationError> {
+        if numerator == 0 || denominator == 0 {
+            return Err(PaneCoordinateNormalizationError::InvalidScaleFactor {
+                field: "scale_factor",
+                numerator,
+                denominator,
+            });
+        }
+        let gcd = gcd_u32(numerator, denominator);
+        Ok(Self {
+            numerator: numerator / gcd,
+            denominator: denominator / gcd,
+        })
+    }
+
+    fn validate(self, field: &'static str) -> Result<(), PaneCoordinateNormalizationError> {
+        if self.numerator == 0 || self.denominator == 0 {
+            return Err(PaneCoordinateNormalizationError::InvalidScaleFactor {
+                field,
+                numerator: self.numerator,
+                denominator: self.denominator,
+            });
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub const fn numerator(self) -> u32 {
+        self.numerator
+    }
+
+    #[must_use]
+    pub const fn denominator(self) -> u32 {
+        self.denominator
+    }
+}
+
+impl Default for PaneScaleFactor {
+    fn default() -> Self {
+        Self::ONE
+    }
+}
+
+/// Deterministic rounding policy for coordinate normalization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneCoordinateRoundingPolicy {
+    /// Round toward negative infinity (`floor`).
+    #[default]
+    TowardNegativeInfinity,
+    /// Round to nearest value; exact half-way ties resolve toward negative infinity.
+    NearestHalfTowardNegativeInfinity,
+}
+
+/// Input coordinate source variants accepted by pane normalization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum PaneInputCoordinate {
+    /// Absolute CSS pixel coordinates.
+    CssPixels { position: PanePointerPosition },
+    /// Absolute device pixel coordinates.
+    DevicePixels { position: PanePointerPosition },
+    /// Viewport-local cell coordinates.
+    Cell { position: PanePointerPosition },
+}
+
+/// Deterministic normalized coordinate payload used by pane interaction layers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneNormalizedCoordinate {
+    /// Canonical global cell coordinate (viewport offset applied).
+    pub global_cell: PanePointerPosition,
+    /// Viewport-local cell coordinate.
+    pub local_cell: PanePointerPosition,
+    /// Normalized viewport-local CSS coordinate after DPR/zoom conversion.
+    pub local_css: PanePointerPosition,
+}
+
+/// Coordinate normalization configuration and transform pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneCoordinateNormalizer {
+    pub viewport_origin_css: PanePointerPosition,
+    pub viewport_origin_cells: PanePointerPosition,
+    pub cell_width_css: u16,
+    pub cell_height_css: u16,
+    pub dpr: PaneScaleFactor,
+    pub zoom: PaneScaleFactor,
+    #[serde(default)]
+    pub rounding: PaneCoordinateRoundingPolicy,
+}
+
+impl PaneCoordinateNormalizer {
+    /// Construct a validated coordinate normalizer.
+    pub fn new(
+        viewport_origin_css: PanePointerPosition,
+        viewport_origin_cells: PanePointerPosition,
+        cell_width_css: u16,
+        cell_height_css: u16,
+        dpr: PaneScaleFactor,
+        zoom: PaneScaleFactor,
+        rounding: PaneCoordinateRoundingPolicy,
+    ) -> Result<Self, PaneCoordinateNormalizationError> {
+        if cell_width_css == 0 || cell_height_css == 0 {
+            return Err(PaneCoordinateNormalizationError::InvalidCellSize {
+                width: cell_width_css,
+                height: cell_height_css,
+            });
+        }
+        dpr.validate("dpr")?;
+        zoom.validate("zoom")?;
+
+        Ok(Self {
+            viewport_origin_css,
+            viewport_origin_cells,
+            cell_width_css,
+            cell_height_css,
+            dpr,
+            zoom,
+            rounding,
+        })
+    }
+
+    /// Convert one raw coordinate into canonical pane cell space.
+    pub fn normalize(
+        &self,
+        input: PaneInputCoordinate,
+    ) -> Result<PaneNormalizedCoordinate, PaneCoordinateNormalizationError> {
+        let (local_css_x, local_css_y) = match input {
+            PaneInputCoordinate::CssPixels { position } => (
+                i64::from(position.x) - i64::from(self.viewport_origin_css.x),
+                i64::from(position.y) - i64::from(self.viewport_origin_css.y),
+            ),
+            PaneInputCoordinate::DevicePixels { position } => {
+                let css_x = scale_div_round(
+                    i64::from(position.x),
+                    i64::from(self.dpr.denominator()),
+                    i64::from(self.dpr.numerator()),
+                    self.rounding,
+                )?;
+                let css_y = scale_div_round(
+                    i64::from(position.y),
+                    i64::from(self.dpr.denominator()),
+                    i64::from(self.dpr.numerator()),
+                    self.rounding,
+                )?;
+                (
+                    css_x - i64::from(self.viewport_origin_css.x),
+                    css_y - i64::from(self.viewport_origin_css.y),
+                )
+            }
+            PaneInputCoordinate::Cell { position } => {
+                let local_css_x = i64::from(position.x)
+                    .checked_mul(i64::from(self.cell_width_css))
+                    .ok_or(PaneCoordinateNormalizationError::CoordinateOverflow)?;
+                let local_css_y = i64::from(position.y)
+                    .checked_mul(i64::from(self.cell_height_css))
+                    .ok_or(PaneCoordinateNormalizationError::CoordinateOverflow)?;
+                let global_cell_x = i64::from(position.x) + i64::from(self.viewport_origin_cells.x);
+                let global_cell_y = i64::from(position.y) + i64::from(self.viewport_origin_cells.y);
+
+                return Ok(PaneNormalizedCoordinate {
+                    global_cell: PanePointerPosition::new(
+                        to_i32(global_cell_x)?,
+                        to_i32(global_cell_y)?,
+                    ),
+                    local_cell: position,
+                    local_css: PanePointerPosition::new(to_i32(local_css_x)?, to_i32(local_css_y)?),
+                });
+            }
+        };
+
+        let unzoomed_css_x = scale_div_round(
+            local_css_x,
+            i64::from(self.zoom.denominator()),
+            i64::from(self.zoom.numerator()),
+            self.rounding,
+        )?;
+        let unzoomed_css_y = scale_div_round(
+            local_css_y,
+            i64::from(self.zoom.denominator()),
+            i64::from(self.zoom.numerator()),
+            self.rounding,
+        )?;
+
+        let local_cell_x = div_round(
+            unzoomed_css_x,
+            i64::from(self.cell_width_css),
+            self.rounding,
+        )?;
+        let local_cell_y = div_round(
+            unzoomed_css_y,
+            i64::from(self.cell_height_css),
+            self.rounding,
+        )?;
+
+        let global_cell_x = local_cell_x + i64::from(self.viewport_origin_cells.x);
+        let global_cell_y = local_cell_y + i64::from(self.viewport_origin_cells.y);
+
+        Ok(PaneNormalizedCoordinate {
+            global_cell: PanePointerPosition::new(to_i32(global_cell_x)?, to_i32(global_cell_y)?),
+            local_cell: PanePointerPosition::new(to_i32(local_cell_x)?, to_i32(local_cell_y)?),
+            local_css: PanePointerPosition::new(to_i32(unzoomed_css_x)?, to_i32(unzoomed_css_y)?),
+        })
+    }
+}
+
+/// Coordinate normalization failures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaneCoordinateNormalizationError {
+    InvalidCellSize {
+        width: u16,
+        height: u16,
+    },
+    InvalidScaleFactor {
+        field: &'static str,
+        numerator: u32,
+        denominator: u32,
+    },
+    CoordinateOverflow,
+}
+
+impl fmt::Display for PaneCoordinateNormalizationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidCellSize { width, height } => {
+                write!(
+                    f,
+                    "invalid pane cell dimensions width={width} height={height} (must be > 0)"
+                )
+            }
+            Self::InvalidScaleFactor {
+                field,
+                numerator,
+                denominator,
+            } => {
+                write!(
+                    f,
+                    "invalid pane scale factor for {field}: {numerator}/{denominator} (must be > 0)"
+                )
+            }
+            Self::CoordinateOverflow => {
+                write!(f, "coordinate conversion overflowed representable range")
+            }
+        }
+    }
+}
+
+impl std::error::Error for PaneCoordinateNormalizationError {}
+
+fn scale_div_round(
+    value: i64,
+    numerator: i64,
+    denominator: i64,
+    rounding: PaneCoordinateRoundingPolicy,
+) -> Result<i64, PaneCoordinateNormalizationError> {
+    let scaled = value
+        .checked_mul(numerator)
+        .ok_or(PaneCoordinateNormalizationError::CoordinateOverflow)?;
+    div_round(scaled, denominator, rounding)
+}
+
+fn div_round(
+    value: i64,
+    denominator: i64,
+    rounding: PaneCoordinateRoundingPolicy,
+) -> Result<i64, PaneCoordinateNormalizationError> {
+    if denominator <= 0 {
+        return Err(PaneCoordinateNormalizationError::CoordinateOverflow);
+    }
+
+    let floor = value.div_euclid(denominator);
+    let remainder = value.rem_euclid(denominator);
+    if remainder == 0 || rounding == PaneCoordinateRoundingPolicy::TowardNegativeInfinity {
+        return Ok(floor);
+    }
+
+    let twice_remainder = remainder
+        .checked_mul(2)
+        .ok_or(PaneCoordinateNormalizationError::CoordinateOverflow)?;
+    if twice_remainder > denominator {
+        if value >= 0 {
+            return floor
+                .checked_add(1)
+                .ok_or(PaneCoordinateNormalizationError::CoordinateOverflow);
+        }
+        return Ok(floor);
+    }
+    Ok(floor)
+}
+
+fn to_i32(value: i64) -> Result<i32, PaneCoordinateNormalizationError> {
+    i32::try_from(value).map_err(|_| PaneCoordinateNormalizationError::CoordinateOverflow)
+}
+
 /// Default move threshold (in coordinate units) for transitioning from
 /// `Armed` to `Dragging`.
 pub const PANE_DRAG_RESIZE_DEFAULT_THRESHOLD: u16 = 2;
@@ -4481,6 +4789,180 @@ mod tests {
             keyboard.validate(),
             Err(PaneSemanticInputEventError::ZeroResizeUnits)
         );
+    }
+
+    fn default_coordinate_normalizer() -> PaneCoordinateNormalizer {
+        PaneCoordinateNormalizer::new(
+            PanePointerPosition::new(100, 50),
+            PanePointerPosition::new(20, 10),
+            8,
+            16,
+            PaneScaleFactor::new(2, 1).expect("valid dpr"),
+            PaneScaleFactor::ONE,
+            PaneCoordinateRoundingPolicy::TowardNegativeInfinity,
+        )
+        .expect("normalizer should be valid")
+    }
+
+    #[test]
+    fn coordinate_normalizer_css_device_and_cell_pipeline() {
+        let normalizer = default_coordinate_normalizer();
+
+        let css = normalizer
+            .normalize(PaneInputCoordinate::CssPixels {
+                position: PanePointerPosition::new(116, 82),
+            })
+            .expect("css normalization should succeed");
+        assert_eq!(
+            css,
+            PaneNormalizedCoordinate {
+                global_cell: PanePointerPosition::new(22, 12),
+                local_cell: PanePointerPosition::new(2, 2),
+                local_css: PanePointerPosition::new(16, 32),
+            }
+        );
+
+        let device = normalizer
+            .normalize(PaneInputCoordinate::DevicePixels {
+                position: PanePointerPosition::new(232, 164),
+            })
+            .expect("device normalization should match css");
+        assert_eq!(device, css);
+
+        let cell = normalizer
+            .normalize(PaneInputCoordinate::Cell {
+                position: PanePointerPosition::new(3, 1),
+            })
+            .expect("cell normalization should succeed");
+        assert_eq!(
+            cell,
+            PaneNormalizedCoordinate {
+                global_cell: PanePointerPosition::new(23, 11),
+                local_cell: PanePointerPosition::new(3, 1),
+                local_css: PanePointerPosition::new(24, 16),
+            }
+        );
+    }
+
+    #[test]
+    fn coordinate_normalizer_zoom_and_rounding_tie_breaks_are_deterministic() {
+        let zoomed = PaneCoordinateNormalizer::new(
+            PanePointerPosition::new(100, 50),
+            PanePointerPosition::new(0, 0),
+            8,
+            8,
+            PaneScaleFactor::ONE,
+            PaneScaleFactor::new(5, 4).expect("valid zoom"),
+            PaneCoordinateRoundingPolicy::TowardNegativeInfinity,
+        )
+        .expect("zoomed normalizer should be valid");
+
+        let zoomed_point = zoomed
+            .normalize(PaneInputCoordinate::CssPixels {
+                position: PanePointerPosition::new(120, 70),
+            })
+            .expect("zoomed normalization should succeed");
+        assert_eq!(zoomed_point.local_css, PanePointerPosition::new(16, 16));
+        assert_eq!(zoomed_point.local_cell, PanePointerPosition::new(2, 2));
+
+        let nearest = PaneCoordinateNormalizer::new(
+            PanePointerPosition::new(0, 0),
+            PanePointerPosition::new(0, 0),
+            10,
+            10,
+            PaneScaleFactor::ONE,
+            PaneScaleFactor::ONE,
+            PaneCoordinateRoundingPolicy::NearestHalfTowardNegativeInfinity,
+        )
+        .expect("nearest normalizer should be valid");
+
+        let positive_tie = nearest
+            .normalize(PaneInputCoordinate::CssPixels {
+                position: PanePointerPosition::new(15, 0),
+            })
+            .expect("positive tie should normalize");
+        let negative_tie = nearest
+            .normalize(PaneInputCoordinate::CssPixels {
+                position: PanePointerPosition::new(-15, 0),
+            })
+            .expect("negative tie should normalize");
+
+        assert_eq!(positive_tie.local_cell.x, 1);
+        assert_eq!(negative_tie.local_cell.x, -2);
+    }
+
+    #[test]
+    fn coordinate_normalizer_rejects_invalid_configuration() {
+        assert_eq!(
+            PaneScaleFactor::new(0, 1).expect_err("zero numerator must fail"),
+            PaneCoordinateNormalizationError::InvalidScaleFactor {
+                field: "scale_factor",
+                numerator: 0,
+                denominator: 1,
+            }
+        );
+
+        let err = PaneCoordinateNormalizer::new(
+            PanePointerPosition::new(0, 0),
+            PanePointerPosition::new(0, 0),
+            0,
+            10,
+            PaneScaleFactor::ONE,
+            PaneScaleFactor::ONE,
+            PaneCoordinateRoundingPolicy::TowardNegativeInfinity,
+        )
+        .expect_err("zero width must fail");
+        assert_eq!(
+            err,
+            PaneCoordinateNormalizationError::InvalidCellSize {
+                width: 0,
+                height: 10,
+            }
+        );
+    }
+
+    #[test]
+    fn coordinate_normalizer_repeated_device_updates_do_not_drift() {
+        let normalizer = PaneCoordinateNormalizer::new(
+            PanePointerPosition::new(0, 0),
+            PanePointerPosition::new(0, 0),
+            7,
+            11,
+            PaneScaleFactor::new(3, 2).expect("valid dpr"),
+            PaneScaleFactor::new(5, 4).expect("valid zoom"),
+            PaneCoordinateRoundingPolicy::TowardNegativeInfinity,
+        )
+        .expect("normalizer should be valid");
+
+        let mut prev = i32::MIN;
+        for x in 150..190 {
+            let first = normalizer
+                .normalize(PaneInputCoordinate::DevicePixels {
+                    position: PanePointerPosition::new(x, 0),
+                })
+                .expect("first normalization should succeed");
+            let second = normalizer
+                .normalize(PaneInputCoordinate::DevicePixels {
+                    position: PanePointerPosition::new(x, 0),
+                })
+                .expect("second normalization should succeed");
+
+            assert_eq!(
+                first, second,
+                "normalization should be stable for same input"
+            );
+            assert!(
+                first.global_cell.x >= prev,
+                "cell coordinate should be monotonic"
+            );
+            if prev != i32::MIN {
+                assert!(
+                    first.global_cell.x - prev <= 1,
+                    "cell coordinate should not jump by more than one per pixel step"
+                );
+            }
+            prev = first.global_cell.x;
+        }
     }
 
     fn pointer_down_event(
