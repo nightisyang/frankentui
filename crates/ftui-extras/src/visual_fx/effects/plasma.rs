@@ -3309,4 +3309,334 @@ mod tests {
         let q = p; // Copy
         assert_eq!(p, q);
     }
+
+    // =========================================================================
+    // Negative Time Values (bd-17wlv)
+    // =========================================================================
+
+    #[test]
+    fn plasma_wave_negative_time() {
+        // Negative time is valid (e.g., rewinding); wave should still be in [0,1].
+        for &t in &[-1.0, -10.0, -100.0, -1e4] {
+            let v = plasma_wave(0.5, 0.5, t);
+            assert!(
+                (0.0..=1.0).contains(&v),
+                "plasma_wave at time={t} should be in [0,1], got {v}"
+            );
+            let vl = plasma_wave_low(0.5, 0.5, t);
+            assert!(
+                (0.0..=1.0).contains(&vl),
+                "plasma_wave_low at time={t} should be in [0,1], got {vl}"
+            );
+        }
+    }
+
+    #[test]
+    fn render_negative_time_produces_output() {
+        let theme = ThemeInputs::default_dark();
+        let mut fx = PlasmaFx::new(PlasmaPalette::Ocean);
+        let ctx = FxContext {
+            width: 8,
+            height: 8,
+            frame: 0,
+            time_seconds: -5.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        let mut out = vec![PackedRgba::TRANSPARENT; 64];
+        fx.render(ctx, &mut out);
+        let filled = out
+            .iter()
+            .filter(|c| **c != PackedRgba::TRANSPARENT)
+            .count();
+        assert!(filled > 0, "Negative time should still produce output");
+    }
+
+    // =========================================================================
+    // NaN / Infinity Edge Cases (bd-17wlv)
+    // =========================================================================
+
+    #[test]
+    fn render_nan_time_does_not_panic() {
+        let theme = ThemeInputs::default_dark();
+        let mut fx = PlasmaFx::new(PlasmaPalette::Sunset);
+        let ctx = FxContext {
+            width: 4,
+            height: 4,
+            frame: 0,
+            time_seconds: f64::NAN,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        let mut out = vec![PackedRgba::TRANSPARENT; 16];
+        // Should not panic. Output may be garbage but must not crash.
+        fx.render(ctx, &mut out);
+    }
+
+    #[test]
+    fn render_infinity_time_does_not_panic() {
+        let theme = ThemeInputs::default_dark();
+        let mut fx = PlasmaFx::new(PlasmaPalette::Fire);
+        for &t in &[f64::INFINITY, f64::NEG_INFINITY] {
+            let ctx = FxContext {
+                width: 4,
+                height: 4,
+                frame: 0,
+                time_seconds: t,
+                quality: FxQuality::Full,
+                theme: &theme,
+            };
+            let mut out = vec![PackedRgba::TRANSPARENT; 16];
+            fx.render(ctx, &mut out);
+        }
+    }
+
+    // =========================================================================
+    // render_with_palette Early Returns (bd-17wlv)
+    // =========================================================================
+
+    #[test]
+    fn render_quality_off_leaves_output_untouched() {
+        let theme = ThemeInputs::default_dark();
+        let mut fx = PlasmaFx::new(PlasmaPalette::Ocean);
+        let sentinel = PackedRgba::rgb(42, 42, 42);
+        let ctx = FxContext {
+            width: 4,
+            height: 4,
+            frame: 0,
+            time_seconds: 1.0,
+            quality: FxQuality::Off,
+            theme: &theme,
+        };
+        let mut out = vec![sentinel; 16];
+        fx.render(ctx, &mut out);
+        // Output should be completely untouched.
+        assert!(
+            out.iter().all(|c| *c == sentinel),
+            "FxQuality::Off should not modify the output buffer"
+        );
+    }
+
+    #[test]
+    fn render_mismatched_buffer_leaves_output_untouched() {
+        let theme = ThemeInputs::default_dark();
+        let mut fx = PlasmaFx::new(PlasmaPalette::Sunset);
+        let sentinel = PackedRgba::rgb(99, 99, 99);
+        let ctx = FxContext {
+            width: 4,
+            height: 4,
+            frame: 0,
+            time_seconds: 1.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        // Buffer is 10 elements but ctx expects 16 — should early-return.
+        let mut out = vec![sentinel; 10];
+        fx.render(ctx, &mut out);
+        assert!(
+            out.iter().all(|c| *c == sentinel),
+            "Mismatched buffer should not be modified"
+        );
+    }
+
+    // =========================================================================
+    // BackdropFx::render() Consistency with color_at() (bd-17wlv)
+    // =========================================================================
+
+    #[test]
+    fn backdrop_render_matches_color_at_for_all_palettes() {
+        // The inlined palette closures in BackdropFx::render() must produce
+        // the same colors as PlasmaPalette::color_at() for the same wave values.
+        let theme = ThemeInputs::default_dark();
+        let all_palettes = [
+            PlasmaPalette::ThemeAccents,
+            PlasmaPalette::Aurora,
+            PlasmaPalette::Ember,
+            PlasmaPalette::Subtle,
+            PlasmaPalette::Monochrome,
+            PlasmaPalette::Sunset,
+            PlasmaPalette::Ocean,
+            PlasmaPalette::Fire,
+            PlasmaPalette::Neon,
+            PlasmaPalette::Cyberpunk,
+            PlasmaPalette::Galaxy,
+        ];
+
+        let w: u16 = 10;
+        let h: u16 = 6;
+        let time = 1.5;
+
+        for palette in all_palettes {
+            let mut fx = PlasmaFx::new(palette);
+            let ctx = FxContext {
+                width: w,
+                height: h,
+                frame: 0,
+                time_seconds: time,
+                quality: FxQuality::Full,
+                theme: &theme,
+            };
+            let mut out = vec![PackedRgba::TRANSPARENT; ctx.len()];
+            fx.render(ctx, &mut out);
+
+            // Verify every pixel matches the reference path.
+            for dy in 0..h {
+                for dx in 0..w {
+                    let idx = dy as usize * w as usize + dx as usize;
+                    let nx = dx as f64 / w as f64;
+                    let ny = dy as f64 / h as f64;
+                    let wave = plasma_wave(nx, ny, time).clamp(0.0, 1.0);
+                    let expected = palette.color_at(wave, &theme);
+                    assert_eq!(
+                        out[idx], expected,
+                        "{:?} mismatch at ({dx},{dy}): wave={wave:.4}",
+                        palette
+                    );
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // Ember Fallback Path (bd-17wlv)
+    // =========================================================================
+
+    #[test]
+    fn ember_fallback_produces_warm_gradient() {
+        // With transparent accent_slots[2..4], Ember should fall back to red/orange.
+        let mut theme = ThemeInputs::default_dark();
+        theme.accent_slots[2] = PackedRgba::TRANSPARENT;
+        theme.accent_slots[3] = PackedRgba::TRANSPARENT;
+
+        let mut seen_red_bias = false;
+        for i in 1..10 {
+            let t = i as f64 / 10.0;
+            let c = PlasmaPalette::Ember.color_at(t, &theme);
+            if c.r() > c.b() {
+                seen_red_bias = true;
+            }
+        }
+        assert!(
+            seen_red_bias,
+            "Ember fallback should have at least some warm/red tones"
+        );
+    }
+
+    // =========================================================================
+    // color_at Clamping (bd-17wlv)
+    // =========================================================================
+
+    #[test]
+    fn color_at_clamps_out_of_range_t() {
+        let theme = ThemeInputs::default_dark();
+        // Negative and >1.0 should be clamped to endpoints.
+        for palette in [
+            PlasmaPalette::Sunset,
+            PlasmaPalette::Ocean,
+            PlasmaPalette::Fire,
+            PlasmaPalette::Neon,
+            PlasmaPalette::ThemeAccents,
+        ] {
+            let at_neg = palette.color_at(-1.0, &theme);
+            let at_0 = palette.color_at(0.0, &theme);
+            assert_eq!(
+                at_neg, at_0,
+                "{:?}: color_at(-1.0) should equal color_at(0.0)",
+                palette
+            );
+
+            let at_2 = palette.color_at(2.0, &theme);
+            let at_1 = palette.color_at(1.0, &theme);
+            assert_eq!(
+                at_2, at_1,
+                "{:?}: color_at(2.0) should equal color_at(1.0)",
+                palette
+            );
+        }
+    }
+
+    // =========================================================================
+    // Scratch Capacity Stability (bd-17wlv)
+    // =========================================================================
+
+    #[test]
+    fn scratch_capacity_stable_across_same_size_renders() {
+        let theme = ThemeInputs::default_dark();
+        let mut fx = PlasmaFx::new(PlasmaPalette::Galaxy);
+        let mut out = vec![PackedRgba::TRANSPARENT; 48];
+
+        // Warm up.
+        let ctx = FxContext {
+            width: 8,
+            height: 6,
+            frame: 0,
+            time_seconds: 0.0,
+            quality: FxQuality::Full,
+            theme: &theme,
+        };
+        fx.render(ctx, &mut out);
+
+        // Clone to capture scratch state after warm-up.
+        let fx_snapshot = fx.clone();
+
+        // Render 10 more times at same size.
+        for i in 1..=10 {
+            let ctx = FxContext {
+                width: 8,
+                height: 6,
+                frame: i,
+                time_seconds: i as f64 * 0.05,
+                quality: FxQuality::Full,
+                theme: &theme,
+            };
+            fx.render(ctx, &mut out);
+        }
+
+        // Scratch dimensions should match.
+        assert_eq!(fx.scratch.width, fx_snapshot.scratch.width);
+        assert_eq!(fx.scratch.height, fx_snapshot.scratch.height);
+        // Vec lengths should be identical (no growth).
+        assert_eq!(
+            fx.scratch.x_v1_sin.len(),
+            fx_snapshot.scratch.x_v1_sin.len()
+        );
+        assert_eq!(
+            fx.scratch.radial_center_sin.len(),
+            fx_snapshot.scratch.radial_center_sin.len()
+        );
+    }
+
+    // =========================================================================
+    // Reduced Quality Uses Fewer Components (bd-17wlv)
+    // =========================================================================
+
+    #[test]
+    fn reduced_quality_differs_from_full() {
+        // Reduced uses 4 components (v1+v2+v3+v6), Full uses 6.
+        // At non-trivial sizes, the outputs should differ.
+        let theme = ThemeInputs::default_dark();
+
+        let run = |quality: FxQuality| -> Vec<PackedRgba> {
+            let mut fx = PlasmaFx::new(PlasmaPalette::Sunset);
+            let ctx = FxContext {
+                width: 8,
+                height: 8,
+                frame: 0,
+                time_seconds: 2.0,
+                quality,
+                theme: &theme,
+            };
+            let mut out = vec![PackedRgba::TRANSPARENT; 64];
+            fx.render(ctx, &mut out);
+            out
+        };
+
+        let full = run(FxQuality::Full);
+        let reduced = run(FxQuality::Reduced);
+        let minimal = run(FxQuality::Minimal);
+
+        assert_ne!(full, reduced, "Full and Reduced should differ");
+        assert_ne!(full, minimal, "Full and Minimal should differ");
+        assert_ne!(reduced, minimal, "Reduced and Minimal should differ");
+    }
 }
