@@ -15,7 +15,10 @@ crate-type = ["cdylib", "rlib"]
 [package.metadata.wasm-pack.profile.release]
 # wasm-pack bundles an older wasm-opt; Rust 2024 wasm output requires explicit
 # feature enabling to avoid validation failures.
-wasm-opt = ["-Oz", "--all-features"]
+# -Oz: maximum size optimization
+# --all-features: enable all wasm features (bulk-memory, etc.)
+# --converge: re-run optimization passes until output stabilizes
+wasm-opt = ["-Oz", "--all-features", "--converge"]
 
 [features]
 default = []

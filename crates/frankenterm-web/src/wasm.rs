@@ -1356,6 +1356,7 @@ impl FrankenTermWeb {
         }
     }
 
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn recompute_auto_links(&mut self) {
         let max = usize::from(self.cols) * usize::from(self.rows);
         self.auto_link_ids.resize(max, 0);

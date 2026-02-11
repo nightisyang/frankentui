@@ -455,26 +455,29 @@ function shouldForwardKeyEvent(e) {
   return !(e.isComposing || e.key === "Process");
 }
 
-// Intercept Ctrl+/- for zoom, forward everything else to the terminal.
+// Intercept Ctrl+/- (or Cmd+/- on Mac) for zoom, forward everything else.
 window.addEventListener("keydown", (e) => {
   if (!shouldForwardKeyEvent(e)) return;
 
-  // Ctrl+Plus / Ctrl+Equal: zoom in.
-  if (e.ctrlKey && (e.key === "+" || e.key === "=")) {
+  // Zoom modifier: Ctrl on Windows/Linux, Cmd (Meta) on macOS.
+  const zoomMod = e.ctrlKey || e.metaKey;
+
+  // Zoom in: Ctrl/Cmd + Plus or Equal.
+  if (zoomMod && (e.key === "+" || e.key === "=")) {
     e.preventDefault();
     userZoom = Math.min(3.0, userZoom * 1.1);
     applyZoom();
     return;
   }
-  // Ctrl+Minus: zoom out.
-  if (e.ctrlKey && e.key === "-") {
+  // Zoom out: Ctrl/Cmd + Minus.
+  if (zoomMod && e.key === "-") {
     e.preventDefault();
     userZoom = Math.max(0.3, userZoom / 1.1);
     applyZoom();
     return;
   }
-  // Ctrl+0: reset zoom.
-  if (e.ctrlKey && e.key === "0") {
+  // Reset zoom: Ctrl/Cmd + 0.
+  if (zoomMod && e.key === "0") {
     e.preventDefault();
     userZoom = 1.0;
     applyZoom();
@@ -491,16 +494,30 @@ window.addEventListener("keyup", (e) => {
   safeTermInput(domKeyToInput(e, "up"));
 }, { capture: true });
 
+// Track which mouse buttons are currently held for drag detection.
+let mouseButtonsDown = 0;
+
 canvas.addEventListener("mousedown", (e) => {
+  e.preventDefault();
   canvas.focus();
+  mouseButtonsDown = e.buttons;
   safeTermInput(domMouseToInput(e, "down"));
 });
 canvas.addEventListener("mouseup", (e) => {
+  e.preventDefault();
+  mouseButtonsDown = e.buttons;
   safeTermInput(domMouseToInput(e, "up"));
 });
 canvas.addEventListener("mousemove", (e) => {
-  safeTermInput(domMouseToInput(e, "move"));
+  mouseButtonsDown = e.buttons;
+  // Rust expects "drag" when any button is held, "move" otherwise.
+  const phase = mouseButtonsDown ? "drag" : "move";
+  safeTermInput(domMouseToInput(e, phase));
 });
+window.addEventListener("mouseup", () => { mouseButtonsDown = 0; });
+window.addEventListener("blur", () => { mouseButtonsDown = 0; });
+// Suppress context menu on canvas (right-click is forwarded to terminal).
+canvas.addEventListener("contextmenu", (e) => { e.preventDefault(); });
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
   safeTermInput(domWheelToInput(e));

@@ -98,6 +98,7 @@ impl RunnerCore {
     /// Also caches patch hash, stats, and logs so they can be read
     /// via `patch_hash()`, `patch_stats()`, and `take_logs()` after
     /// the outputs have been drained.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub fn take_flat_patches(&mut self) -> WebFlatPatchBatch {
         let mut outputs = self.inner.take_outputs();
         self.cached_patch_hash = outputs.compute_patch_hash().map(str::to_owned);

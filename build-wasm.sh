@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# build-wasm.sh — Size-optimized WASM build for the FrankenTUI showcase demo.
+# build-wasm.sh — Maximum-optimized WASM build for the FrankenTUI showcase demo.
+#
+# Optimization pipeline:
+#   1. Rust compiler: opt-level="z", LTO, codegen-units=1, panic=abort, strip
+#   2. RUSTFLAGS: enable modern WASM features for better codegen
+#   3. wasm-opt: -Oz --converge --all-features (runs passes until no improvement)
 #
 # Temporarily removes the ftui-extras opt-level=3 override (which bloats WASM
-# by disabling size optimizations), builds both WASM crates, restores Cargo.toml,
-# and copies assets to dist/.
+# by disabling size optimizations), builds both WASM crates, restores Cargo.toml.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,6 +21,21 @@ if ! command -v wasm-pack &>/dev/null; then
   echo "ERROR: wasm-pack is not installed. Install with: cargo install wasm-pack" >&2
   exit 1
 fi
+
+# ── Step 0: Set WASM-specific compiler flags ──────────────────────────────────
+# Enable modern WASM features that all major browsers support (Chrome 91+,
+# Firefox 89+, Safari 15+). These unlock better codegen from LLVM:
+#   bulk-memory     — memcpy/memset as single wasm instructions
+#   mutable-globals — avoid indirection for thread-local-like patterns
+#   nontrapping-fptoint — faster float→int without trapping semantics
+#   sign-ext        — i32.extend8_s etc, avoids shift-based sign extension
+#   reference-types — required by some wasm-bindgen features
+#   multivalue      — functions can return multiple values (avoids stack spills)
+export RUSTFLAGS="${RUSTFLAGS:-} \
+  -C target-feature=+bulk-memory,+mutable-globals,+nontrapping-fptoint,+sign-ext,+reference-types,+multivalue \
+  -C embed-bitcode=yes"
+
+echo ">> RUSTFLAGS: $RUSTFLAGS"
 
 # ── Step 1: Patch Cargo.toml to remove ftui-extras opt-level override ────────
 echo ">> Patching $CARGO_TOML (removing ftui-extras opt-level=3 override)..."
@@ -35,6 +54,9 @@ restore_cargo() {
 trap restore_cargo EXIT
 
 # ── Step 2: Build WASM crates ────────────────────────────────────────────────
+# wasm-pack runs wasm-opt automatically using flags from
+# [package.metadata.wasm-pack.profile.release] in each crate's Cargo.toml:
+#   wasm-opt = ["-Oz", "--all-features", "--converge"]
 echo ">> Building frankenterm-web (WebGPU terminal renderer)..."
 wasm-pack build crates/frankenterm-web \
   --target web \
