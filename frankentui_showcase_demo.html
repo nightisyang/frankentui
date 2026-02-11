@@ -38,43 +38,123 @@
 	    padding: 32px; overflow: auto; z-index: 20;
 	  }
 	  #error-overlay.visible { display: block; }
+	  /* ── Loading overlay ─────────────────────────────────────────────── */
+	  #loading-overlay {
+	    position: fixed; inset: 0;
+	    background: #0a0a0a;
+	    display: flex; flex-direction: column;
+	    align-items: center; justify-content: center;
+	    z-index: 30; transition: opacity 0.3s;
+	  }
+	  #loading-overlay.hidden { opacity: 0; pointer-events: none; }
+	  #loading-label {
+	    color: #888; font: 14px/1.4 "Pragmasevka NF", monospace;
+	    margin-bottom: 16px;
+	  }
+	  #loading-bar-container {
+	    width: 320px; max-width: 80vw; height: 4px;
+	    background: #222; border-radius: 2px; overflow: hidden;
+	  }
+	  #loading-bar {
+	    height: 100%; width: 0%;
+	    background: #4a9; border-radius: 2px;
+	    transition: width 0.15s ease-out;
+	  }
+	  #loading-bar.indeterminate {
+	    width: 30%;
+	    animation: indeterminate 1.2s ease-in-out infinite;
+	  }
+	  @keyframes indeterminate {
+	    0%   { transform: translateX(-100%); }
+	    100% { transform: translateX(400%); }
+	  }
 </style>
 </head>
 <body>
 <div id="container">
   <canvas id="terminal-canvas" tabindex="0"></canvas>
 </div>
-<div id="status">Loading WASM…</div>
+<div id="loading-overlay">
+  <div id="loading-label">Loading WASM...</div>
+  <div id="loading-bar-container"><div id="loading-bar"></div></div>
+</div>
+<div id="status">Loading WASM...</div>
 <div id="error-overlay"></div>
 
 <script type="module">
-// ── Configuration ──────────────────────────────────────────────────────
-const INITIAL_COLS = 80;
-const INITIAL_ROWS = 24;
-const CELL_WIDTH   = 8;
-const CELL_HEIGHT  = 16;
-const LOG_JSONL    = true;   // Emit JSONL evidence to console
-const LOG_PERF     = false;  // Per-frame timing in console
+// ── URL Settings ──────────────────────────────────────────────────────
+const params = new URLSearchParams(window.location.search);
+const INITIAL_COLS    = parseInt(params.get("cols"), 10) || 80;
+const INITIAL_ROWS    = parseInt(params.get("rows"), 10) || 24;
+const CELL_WIDTH      = parseInt(params.get("cellWidth"), 10) || 8;
+const CELL_HEIGHT     = parseInt(params.get("cellHeight"), 10) || 16;
+const START_SCREEN    = parseInt(params.get("screen"), 10) || 0;
+const URL_ZOOM        = parseFloat(params.get("zoom")) || 0;
+const LOG_JSONL       = true;   // Emit JSONL evidence to console
+const LOG_PERF        = false;  // Per-frame timing in console
 // Bump when deploying to bypass Cloudflare/browser caches for JS/WASM artifacts.
-const ASSET_VERSION = "2026-02-10.6";
+const ASSET_VERSION = "2026-02-10.7";
 
 // ── DOM refs ───────────────────────────────────────────────────────────
-const canvas   = document.getElementById("terminal-canvas");
-const status   = document.getElementById("status");
-const errorDiv = document.getElementById("error-overlay");
+const canvas         = document.getElementById("terminal-canvas");
+const status         = document.getElementById("status");
+const errorDiv       = document.getElementById("error-overlay");
+const loadingOverlay = document.getElementById("loading-overlay");
+const loadingLabel   = document.getElementById("loading-label");
+const loadingBar     = document.getElementById("loading-bar");
 
 function showError(msg) {
   errorDiv.textContent = msg;
   errorDiv.classList.add("visible");
+  loadingOverlay.classList.add("hidden");
   status.textContent = "Error";
   console.error("[ShowcaseDemo]", msg);
+}
+
+function setProgress(pct, label) {
+  loadingLabel.textContent = label;
+  if (pct < 0) {
+    // Indeterminate mode.
+    loadingBar.classList.add("indeterminate");
+    loadingBar.style.width = "";
+  } else {
+    loadingBar.classList.remove("indeterminate");
+    loadingBar.style.width = Math.min(100, Math.round(pct)) + "%";
+  }
+}
+
+// ── Fetch with progress ───────────────────────────────────────────────
+async function fetchWithProgress(url, label) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`GET ${url} -> ${response.status}`);
+  const contentLength = parseInt(response.headers.get("content-length"), 10);
+  if (!contentLength || !response.body) {
+    setProgress(-1, label);
+    return new Uint8Array(await response.arrayBuffer());
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    setProgress((received / contentLength) * 100, `${label} (${(received / 1048576).toFixed(1)} MB)`);
+  }
+  const result = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
 }
 
 // ── Font loading (must happen before first glyph rasterization) ───────────
 const fontsReady = (async () => {
   if (!("fonts" in document) || !document.fonts?.load) return;
   try {
-    status.textContent = "Loading fonts…";
     await document.fonts.load('16px "Pragmasevka NF"');
     await document.fonts.ready;
   } catch (e) {
@@ -106,30 +186,51 @@ const largeAssetsPromise = (async () => {
   }
 })();
 
-// ── WASM module loading ────────────────────────────────────────────────
-// wasm-pack builds produce an ES module with an `default` init function
-// and the exported classes. Adjust paths to match your wasm-pack output.
+// ── WASM module loading with progress ─────────────────────────────────
+// Phase 1: Download WASM binaries with progress tracking.
+// Phase 2: Compile WASM modules.
+// Phase 3: Initialize (instantiate + link imports).
 let termMod, runnerMod;
 try {
-  status.textContent = "Loading WASM modules…";
+  // 1a. Download JS glue modules.
+  setProgress(0, "Downloading JS modules...");
   const termJsUrl = `./pkg/FrankenTerm.js?v=${ASSET_VERSION}`;
   const runnerJsUrl = `./pkg/ftui_showcase_wasm.js?v=${ASSET_VERSION}`;
   [termMod, runnerMod] = await Promise.all([
     import(termJsUrl),
     import(runnerJsUrl),
   ]);
-  // Initialize both WASM modules (fetches .wasm files).
-  await Promise.all([
-    termMod.default(new URL(`./pkg/FrankenTerm_bg.wasm?v=${ASSET_VERSION}`, import.meta.url)),
-    runnerMod.default(new URL(`./pkg/ftui_showcase_wasm_bg.wasm?v=${ASSET_VERSION}`, import.meta.url)),
+
+  // 1b. Download WASM binaries with progress.
+  setProgress(5, "Downloading WASM...");
+  const termWasmUrl = `./pkg/FrankenTerm_bg.wasm?v=${ASSET_VERSION}`;
+  const runnerWasmUrl = `./pkg/ftui_showcase_wasm_bg.wasm?v=${ASSET_VERSION}`;
+
+  const [termWasm, runnerWasm] = await Promise.all([
+    fetchWithProgress(termWasmUrl, "Downloading terminal WASM..."),
+    fetchWithProgress(runnerWasmUrl, "Downloading showcase WASM..."),
   ]);
+
+  // 2. Compile WASM modules.
+  setProgress(-1, "Compiling WASM...");
+  const [termCompiled, runnerCompiled] = await Promise.all([
+    WebAssembly.compile(termWasm),
+    WebAssembly.compile(runnerWasm),
+  ]);
+
+  // 3. Initialize (instantiate) both modules.
+  setProgress(90, "Initializing...");
+  await Promise.all([
+    termMod.default(termCompiled),
+    runnerMod.default(runnerCompiled),
+  ]);
+  setProgress(95, "Starting WebGPU...");
 } catch (e) {
   showError(
     `Failed to load WASM modules.\n\n` +
     `Expected wasm-pack output at ./pkg/FrankenTerm.js and ./pkg/ftui_showcase_wasm.js\n\n` +
     `Build with:\n` +
-    `  wasm-pack build crates/frankenterm-web --target web --out-dir ../../pkg --out-name FrankenTerm\n` +
-    `  wasm-pack build crates/ftui-showcase-wasm --target web --out-dir ../../pkg\n\n` +
+    `  ./build-wasm.sh\n\n` +
     `Error: ${e.message || e}`
   );
   throw e;
@@ -144,7 +245,7 @@ const dpr    = window.devicePixelRatio || 1.0;
 
 try {
   await fontsReady;
-  status.textContent = "Initializing WebGPU terminal…";
+  setProgress(96, "Initializing WebGPU terminal...");
   await term.init(canvas, {
     cols: INITIAL_COLS,
     rows: INITIAL_ROWS,
@@ -158,14 +259,61 @@ try {
   throw e;
 }
 
+// ── User zoom (Ctrl+/- font sizing) ──────────────────────────────────
+let userZoom = URL_ZOOM || parseFloat(localStorage.getItem("ftui-zoom")) || 1.0;
+
+function applyZoom() {
+  if (typeof term.setZoom === "function") {
+    term.setZoom(userZoom);
+  }
+  const newDpr = window.devicePixelRatio || 1.0;
+  const geo = term.fitToContainer(container.clientWidth, container.clientHeight, newDpr);
+  if (geo.cols !== currentCols || geo.rows !== currentRows) {
+    currentCols = geo.cols;
+    currentRows = geo.rows;
+    runner.resize(currentCols, currentRows);
+    status.textContent = `${currentCols}\u00d7${currentRows} \u2014 zoom ${Math.round(userZoom * 100)}%`;
+  }
+  localStorage.setItem("ftui-zoom", String(userZoom));
+  // Update URL without reload.
+  const url = new URL(window.location);
+  if (Math.abs(userZoom - 1.0) > 0.01) {
+    url.searchParams.set("zoom", userZoom.toFixed(2));
+  } else {
+    url.searchParams.delete("zoom");
+  }
+  history.replaceState(null, "", url);
+}
+
+// Apply initial zoom if set.
+if (userZoom !== 1.0 && typeof term.setZoom === "function") {
+  term.setZoom(userZoom);
+}
+
 // Fit to actual container size and get real cols/rows.
 const container = document.getElementById("container");
 const geo = term.fitToContainer(container.clientWidth, container.clientHeight, dpr);
-const cols = geo.cols;
-const rows = geo.rows;
+let currentCols = geo.cols;
+let currentRows = geo.rows;
 
-const runner = new ShowcaseRunner(cols, rows);
+const runner = new ShowcaseRunner(currentCols, currentRows);
 runner.init();
+
+// Navigate to a specific screen if requested via URL.
+if (START_SCREEN > 0) {
+  const screenIdx = START_SCREEN - 1;
+  // Send number key press to navigate: '1'-'9' for screens 1-9, '0' for 10.
+  // For screens > 10, we send repeated Tab presses.
+  if (screenIdx < 10) {
+    const key = screenIdx === 9 ? "0" : String(screenIdx + 1);
+    runner.pushEncodedInput(JSON.stringify({ kind: "key", phase: "down", key, code: `Digit${key}`, mods: 0, repeat: false }));
+  } else {
+    // Navigate with Tab presses.
+    for (let i = 0; i < screenIdx; i++) {
+      runner.pushEncodedInput(JSON.stringify({ kind: "key", phase: "down", key: "Tab", code: "Tab", mods: 0, repeat: false }));
+    }
+  }
+}
 
 // `ShowcaseRunner.init()` renders frame 1 and produces a full repaint patch batch.
 // If we don't apply it immediately, the first `step()` often returns `rendered=false`
@@ -175,7 +323,11 @@ if (initPatches.cells.length > 0) {
   term.applyPatchBatchFlat(initPatches.spans, initPatches.cells);
 }
 term.render();
-status.textContent = `${cols}×${rows} — running`;
+
+// Hide loading overlay, show status.
+setProgress(100, "Ready");
+loadingOverlay.classList.add("hidden");
+status.textContent = `${currentCols}\u00d7${currentRows} \u2014 running`;
 
 // Inject large text assets after first frame so startup work is not blocked.
 largeAssetsPromise.then((assets) => {
@@ -200,12 +352,9 @@ function jsonl(obj) {
   if (LOG_JSONL) console.log(JSON.stringify(obj));
 }
 
-jsonl({ event: "init", cols, rows, dpr, ts: Date.now() });
+jsonl({ event: "init", cols: currentCols, rows: currentRows, dpr, zoom: userZoom, ts: Date.now() });
 
 // ── Resize handling ────────────────────────────────────────────────────
-let currentCols = cols;
-let currentRows = rows;
-
 const resizeObserver = new ResizeObserver(() => {
   const newDpr = window.devicePixelRatio || 1.0;
   const geo = term.fitToContainer(container.clientWidth, container.clientHeight, newDpr);
@@ -214,24 +363,37 @@ const resizeObserver = new ResizeObserver(() => {
     currentRows = geo.rows;
     runner.resize(currentCols, currentRows);
     jsonl({ event: "resize", cols: currentCols, rows: currentRows, ts: Date.now() });
-    status.textContent = `${currentCols}×${currentRows} — running`;
+    status.textContent = `${currentCols}\u00d7${currentRows} \u2014 running`;
   }
 });
 resizeObserver.observe(container);
 
-// Also handle DPR changes (e.g., moving window between monitors).
-window.matchMedia(`(resolution: ${dpr}dppx)`).addEventListener("change", () => {
-  const newDpr = window.devicePixelRatio || 1.0;
-  const geo = term.fitToContainer(container.clientWidth, container.clientHeight, newDpr);
-  if (geo.cols !== currentCols || geo.rows !== currentRows) {
-    currentCols = geo.cols;
-    currentRows = geo.rows;
-    runner.resize(currentCols, currentRows);
-  }
-});
+// Handle DPR changes via visualViewport API (more reliable than matchMedia).
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", () => {
+    const newDpr = window.devicePixelRatio || 1.0;
+    const geo = term.fitToContainer(container.clientWidth, container.clientHeight, newDpr);
+    if (geo.cols !== currentCols || geo.rows !== currentRows) {
+      currentCols = geo.cols;
+      currentRows = geo.rows;
+      runner.resize(currentCols, currentRows);
+    }
+  });
+} else {
+  // Fallback: matchMedia for DPR changes (only fires once per threshold).
+  window.matchMedia(`(resolution: ${dpr}dppx)`).addEventListener("change", () => {
+    const newDpr = window.devicePixelRatio || 1.0;
+    const geo = term.fitToContainer(container.clientWidth, container.clientHeight, newDpr);
+    if (geo.cols !== currentCols || geo.rows !== currentRows) {
+      currentCols = geo.cols;
+      currentRows = geo.rows;
+      runner.resize(currentCols, currentRows);
+    }
+  });
+}
 
 // ── Input forwarding ───────────────────────────────────────────────────
-// DOM events → FrankenTermWeb.input() → drainEncodedInputs() → runner
+// DOM events -> FrankenTermWeb.input() -> drainEncodedInputs() -> runner
 
 function safeTermInput(ev) {
   try {
@@ -292,8 +454,32 @@ function shouldForwardKeyEvent(e) {
   return !(e.isComposing || e.key === "Process");
 }
 
+// Intercept Ctrl+/- for zoom, forward everything else to the terminal.
 window.addEventListener("keydown", (e) => {
   if (!shouldForwardKeyEvent(e)) return;
+
+  // Ctrl+Plus / Ctrl+Equal: zoom in.
+  if (e.ctrlKey && (e.key === "+" || e.key === "=")) {
+    e.preventDefault();
+    userZoom = Math.min(3.0, userZoom * 1.1);
+    applyZoom();
+    return;
+  }
+  // Ctrl+Minus: zoom out.
+  if (e.ctrlKey && e.key === "-") {
+    e.preventDefault();
+    userZoom = Math.max(0.3, userZoom / 1.1);
+    applyZoom();
+    return;
+  }
+  // Ctrl+0: reset zoom.
+  if (e.ctrlKey && e.key === "0") {
+    e.preventDefault();
+    userZoom = 1.0;
+    applyZoom();
+    return;
+  }
+
   e.preventDefault();
   safeTermInput(domKeyToInput(e, "down"));
 }, { capture: true });
@@ -353,7 +539,7 @@ function frame(timestamp) {
   // 1. Advance deterministic clock.
   runner.advanceTime(dt);
 
-  // 2. Drain normalized inputs from FrankenTermWeb → push to runner.
+  // 2. Drain normalized inputs from FrankenTermWeb -> push to runner.
   const inputs = term.drainEncodedInputs();
   for (let i = 0; i < inputs.length; i++) {
     runner.pushEncodedInput(inputs[i]);
@@ -395,7 +581,7 @@ function frame(timestamp) {
   if (result.running) {
     requestAnimationFrame(frame);
   } else {
-    status.textContent = `${currentCols}×${currentRows} — stopped (${totalFrames} frames)`;
+    status.textContent = `${currentCols}\u00d7${currentRows} \u2014 stopped (${totalFrames} frames)`;
     jsonl({ event: "quit", total_frames: totalFrames, ts: Date.now() });
     runner.destroy();
   }

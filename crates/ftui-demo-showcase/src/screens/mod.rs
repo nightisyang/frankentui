@@ -39,7 +39,6 @@ pub mod mouse_playground;
 pub mod notifications;
 pub mod performance;
 pub mod performance_hud;
-#[cfg(feature = "screen-doom")]
 pub mod quake;
 pub mod responsive_demo;
 pub mod shakespeare;
@@ -569,9 +568,32 @@ pub const SCREEN_REGISTRY: &[ScreenMeta] = &[
     },
 ];
 
-/// Return the full registry (ordered).
+/// Return the filtered registry (ordered), excluding feature-gated screens.
 pub fn screen_registry() -> &'static [ScreenMeta] {
-    SCREEN_REGISTRY
+    // When all screen features are enabled, use the full const array directly.
+    #[cfg(feature = "screen-mermaid")]
+    {
+        SCREEN_REGISTRY
+    }
+    // Otherwise, lazily build a filtered registry that omits unavailable screens.
+    #[cfg(not(feature = "screen-mermaid"))]
+    {
+        static FILTERED: OnceLock<Vec<ScreenMeta>> = OnceLock::new();
+        FILTERED
+            .get_or_init(|| {
+                SCREEN_REGISTRY
+                    .iter()
+                    .filter(|meta| {
+                        !matches!(
+                            meta.id,
+                            ScreenId::MermaidShowcase | ScreenId::MermaidMegaShowcase
+                        )
+                    })
+                    .copied()
+                    .collect()
+            })
+            .as_slice()
+    }
 }
 
 /// Lazily computed ordered screen IDs (derived from the registry).

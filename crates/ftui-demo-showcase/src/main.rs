@@ -2,10 +2,9 @@
 
 //! FrankenTUI Demo Showcase binary entry point.
 
-use ftui_demo_showcase::app::{
-    AppModel, MermaidHarnessConfig, MermaidHarnessModel, ScreenId, VfxHarnessConfig,
-    VfxHarnessModel,
-};
+use ftui_demo_showcase::app::{AppModel, ScreenId, VfxHarnessConfig, VfxHarnessModel};
+#[cfg(feature = "screen-mermaid")]
+use ftui_demo_showcase::app::{MermaidHarnessConfig, MermaidHarnessModel};
 use ftui_demo_showcase::cli;
 use ftui_demo_showcase::screens;
 use ftui_render::budget::{FrameBudgetConfig, PhaseBudgets};
@@ -75,6 +74,7 @@ fn main() {
         return;
     }
 
+    #[cfg(feature = "screen-mermaid")]
     if opts.mermaid_harness {
         let harness_config = MermaidHarnessConfig {
             cols: opts.mermaid_cols,
