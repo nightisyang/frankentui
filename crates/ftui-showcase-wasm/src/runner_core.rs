@@ -8,6 +8,14 @@
 use core::time::Duration;
 
 use ftui_demo_showcase::app::AppModel;
+use ftui_layout::{
+    PaneModifierSnapshot, PanePointerButton, PanePointerPosition, PaneResizeTarget, SplitAxis,
+};
+use ftui_web::pane_pointer_capture::{
+    PanePointerCaptureAdapter, PanePointerCaptureCommand, PanePointerCaptureConfig,
+    PanePointerDispatch, PanePointerIgnoredReason, PanePointerLifecyclePhase, PanePointerLogEntry,
+    PanePointerLogOutcome,
+};
 use ftui_web::step_program::{StepProgram, StepResult};
 use ftui_web::{WebFlatPatchBatch, WebPatchStats};
 
@@ -26,11 +34,41 @@ pub struct RunnerCore {
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     /// Reusable span buffer for flat patch output (avoids per-frame allocation).
     flat_spans_buf: Vec<u32>,
+    /// Deterministic pane pointer lifecycle adapter for wasm-hosted pane interactions.
+    pane_adapter: PanePointerCaptureAdapter,
+    /// Structured pane interaction logs (kept separate from presenter output logs).
+    pane_logs: Vec<String>,
 }
 
 const PATCH_HASH_ALGO: &str = "fnv1a64";
 const FNV64_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV64_PRIME: u64 = 0x100000001b3;
+
+/// Host-facing outcome category for one pane lifecycle dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneDispatchOutcome {
+    SemanticForwarded,
+    CaptureStateUpdated,
+    Ignored(PanePointerIgnoredReason),
+}
+
+/// Host-facing summary of one pane lifecycle dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaneDispatchSummary {
+    pub phase: PanePointerLifecyclePhase,
+    pub sequence: Option<u64>,
+    pub pointer_id: Option<u32>,
+    pub target: Option<PaneResizeTarget>,
+    pub capture_command: Option<PanePointerCaptureCommand>,
+    pub outcome: PaneDispatchOutcome,
+}
+
+impl PaneDispatchSummary {
+    #[must_use]
+    pub const fn accepted(self) -> bool {
+        !matches!(self.outcome, PaneDispatchOutcome::Ignored(_))
+    }
+}
 
 impl RunnerCore {
     /// Create a new runner with the given initial terminal dimensions.
@@ -43,6 +81,9 @@ impl RunnerCore {
             cached_logs: Vec::new(),
             flat_cells_buf: Vec::new(),
             flat_spans_buf: Vec::new(),
+            pane_adapter: PanePointerCaptureAdapter::new(PanePointerCaptureConfig::default())
+                .expect("default pane pointer adapter config should be valid"),
+            pane_logs: Vec::new(),
         }
     }
 
@@ -147,7 +188,9 @@ impl RunnerCore {
 
     /// Take accumulated log lines (from the last `take_flat_patches` call).
     pub fn take_logs(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.cached_logs)
+        let mut logs = std::mem::take(&mut self.cached_logs);
+        logs.append(&mut self.pane_logs);
+        logs
     }
 
     /// FNV-1a hash of the last patch batch.
@@ -180,6 +223,104 @@ impl RunnerCore {
         self.inner.is_running()
     }
 
+    /// Active pane pointer ID currently tracked by the adapter.
+    pub fn pane_active_pointer_id(&self) -> Option<u32> {
+        self.pane_adapter.active_pointer_id()
+    }
+
+    /// Handle pane pointer-down and emit capture command if needed.
+    pub fn pane_pointer_down(
+        &mut self,
+        target: PaneResizeTarget,
+        pointer_id: u32,
+        button: PanePointerButton,
+        x: i32,
+        y: i32,
+        modifiers: PaneModifierSnapshot,
+    ) -> PaneDispatchSummary {
+        let dispatch = self.pane_adapter.pointer_down(
+            target,
+            pointer_id,
+            button,
+            PanePointerPosition::new(x, y),
+            modifiers,
+        );
+        self.record_pane_dispatch(dispatch)
+    }
+
+    /// Mark pane pointer capture as acquired by the host/browser.
+    pub fn pane_capture_acquired(&mut self, pointer_id: u32) -> PaneDispatchSummary {
+        let dispatch = self.pane_adapter.capture_acquired(pointer_id);
+        self.record_pane_dispatch(dispatch)
+    }
+
+    /// Handle pane pointer-move updates.
+    pub fn pane_pointer_move(
+        &mut self,
+        pointer_id: u32,
+        x: i32,
+        y: i32,
+        modifiers: PaneModifierSnapshot,
+    ) -> PaneDispatchSummary {
+        let dispatch =
+            self.pane_adapter
+                .pointer_move(pointer_id, PanePointerPosition::new(x, y), modifiers);
+        self.record_pane_dispatch(dispatch)
+    }
+
+    /// Handle pane pointer-up and capture release if needed.
+    pub fn pane_pointer_up(
+        &mut self,
+        pointer_id: u32,
+        button: PanePointerButton,
+        x: i32,
+        y: i32,
+        modifiers: PaneModifierSnapshot,
+    ) -> PaneDispatchSummary {
+        let dispatch = self.pane_adapter.pointer_up(
+            pointer_id,
+            button,
+            PanePointerPosition::new(x, y),
+            modifiers,
+        );
+        self.record_pane_dispatch(dispatch)
+    }
+
+    /// Handle pane pointer-cancel lifecycle.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn pane_pointer_cancel(&mut self, pointer_id: Option<u32>) -> PaneDispatchSummary {
+        let dispatch = self.pane_adapter.pointer_cancel(pointer_id);
+        self.record_pane_dispatch(dispatch)
+    }
+
+    /// Handle pane pointer-leave lifecycle.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn pane_pointer_leave(&mut self, pointer_id: u32) -> PaneDispatchSummary {
+        let dispatch = self.pane_adapter.pointer_leave(pointer_id);
+        self.record_pane_dispatch(dispatch)
+    }
+
+    /// Handle browser blur for pane interaction lifecycle.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn pane_blur(&mut self) -> PaneDispatchSummary {
+        let dispatch = self.pane_adapter.blur();
+        self.record_pane_dispatch(dispatch)
+    }
+
+    /// Handle hidden-tab visibility transition for pane interaction lifecycle.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn pane_visibility_hidden(&mut self) -> PaneDispatchSummary {
+        let dispatch = self.pane_adapter.visibility_hidden();
+        self.record_pane_dispatch(dispatch)
+    }
+
+    /// Handle lost-pointer-capture lifecycle signal.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn pane_lost_pointer_capture(&mut self, pointer_id: u32) -> PaneDispatchSummary {
+        let dispatch = self.pane_adapter.lost_pointer_capture(pointer_id);
+        self.record_pane_dispatch(dispatch)
+    }
+
     fn refresh_cached_patch_meta_from_live_outputs(&mut self) {
         let outputs = self.inner.outputs();
         // Invalidate heavy hash cache on each newly rendered frame. Compute only
@@ -189,6 +330,97 @@ impl RunnerCore {
         self.flat_cells_buf.clear();
         self.flat_spans_buf.clear();
     }
+
+    fn record_pane_dispatch(&mut self, dispatch: PanePointerDispatch) -> PaneDispatchSummary {
+        let summary = PaneDispatchSummary {
+            phase: dispatch.log.phase,
+            sequence: dispatch.log.sequence,
+            pointer_id: dispatch.log.pointer_id,
+            target: dispatch.log.target,
+            capture_command: dispatch.capture_command,
+            outcome: match dispatch.log.outcome {
+                PanePointerLogOutcome::SemanticForwarded => PaneDispatchOutcome::SemanticForwarded,
+                PanePointerLogOutcome::CaptureStateUpdated => {
+                    PaneDispatchOutcome::CaptureStateUpdated
+                }
+                PanePointerLogOutcome::Ignored(reason) => PaneDispatchOutcome::Ignored(reason),
+            },
+        };
+        self.pane_logs.push(format_pane_log_entry(dispatch.log));
+        summary
+    }
+}
+
+fn format_split_axis(axis: SplitAxis) -> &'static str {
+    match axis {
+        SplitAxis::Horizontal => "horizontal",
+        SplitAxis::Vertical => "vertical",
+    }
+}
+
+fn format_capture_command(command: Option<PanePointerCaptureCommand>) -> &'static str {
+    match command {
+        Some(PanePointerCaptureCommand::Acquire { .. }) => "acquire",
+        Some(PanePointerCaptureCommand::Release { .. }) => "release",
+        None => "none",
+    }
+}
+
+fn format_ignored_reason(reason: PanePointerIgnoredReason) -> &'static str {
+    match reason {
+        PanePointerIgnoredReason::InvalidPointerId => "invalid_pointer_id",
+        PanePointerIgnoredReason::ButtonNotAllowed => "button_not_allowed",
+        PanePointerIgnoredReason::ButtonMismatch => "button_mismatch",
+        PanePointerIgnoredReason::ActivePointerAlreadyInProgress => {
+            "active_pointer_already_in_progress"
+        }
+        PanePointerIgnoredReason::NoActivePointer => "no_active_pointer",
+        PanePointerIgnoredReason::PointerMismatch => "pointer_mismatch",
+        PanePointerIgnoredReason::LeaveWhileCaptured => "leave_while_captured",
+        PanePointerIgnoredReason::MachineRejectedEvent => "machine_rejected_event",
+    }
+}
+
+fn format_pane_log_entry(log: PanePointerLogEntry) -> String {
+    let phase = match log.phase {
+        PanePointerLifecyclePhase::PointerDown => "pointer_down",
+        PanePointerLifecyclePhase::PointerMove => "pointer_move",
+        PanePointerLifecyclePhase::PointerUp => "pointer_up",
+        PanePointerLifecyclePhase::PointerCancel => "pointer_cancel",
+        PanePointerLifecyclePhase::PointerLeave => "pointer_leave",
+        PanePointerLifecyclePhase::Blur => "blur",
+        PanePointerLifecyclePhase::VisibilityHidden => "visibility_hidden",
+        PanePointerLifecyclePhase::LostPointerCapture => "lost_pointer_capture",
+        PanePointerLifecyclePhase::CaptureAcquired => "capture_acquired",
+    };
+    let pointer_id = log
+        .pointer_id
+        .map_or_else(|| "-".to_owned(), |id| id.to_string());
+    let sequence = log
+        .sequence
+        .map_or_else(|| "-".to_owned(), |seq| seq.to_string());
+    let (split_id, axis) = match log.target {
+        Some(target) => (
+            target.split_id.get().to_string(),
+            format_split_axis(target.axis).to_owned(),
+        ),
+        None => ("-".to_owned(), "-".to_owned()),
+    };
+    let (x, y) = match log.position {
+        Some(pos) => (pos.x.to_string(), pos.y.to_string()),
+        None => ("-".to_owned(), "-".to_owned()),
+    };
+    let outcome = match log.outcome {
+        PanePointerLogOutcome::SemanticForwarded => "semantic_forwarded".to_owned(),
+        PanePointerLogOutcome::CaptureStateUpdated => "capture_state_updated".to_owned(),
+        PanePointerLogOutcome::Ignored(reason) => {
+            format!("ignored:{}", format_ignored_reason(reason))
+        }
+    };
+    let command = format_capture_command(log.capture_command);
+    format!(
+        "pane_pointer phase={phase} seq={sequence} pointer={pointer_id} split={split_id} axis={axis} x={x} y={y} command={command} outcome={outcome}"
+    )
 }
 
 #[must_use]

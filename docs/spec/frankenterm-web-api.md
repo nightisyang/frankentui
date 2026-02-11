@@ -210,6 +210,7 @@ Structured logging paths (current):
 
 - `scripts/e2e_test.sh`
 - `scripts/demo_showcase_e2e.sh`
+- `tests/e2e/scripts/test_frankenterm_event_ordering_contract.sh`
 
 These scripts are expected to preserve JSONL diagnostics required for replay and
 triage, including run identifiers and timestamp context.
@@ -227,6 +228,8 @@ Unit tests MUST enforce:
 E2E coverage MUST enforce:
 
 - Browser host can call `apiContract()` and validate required fields.
+- Host-observed drain ordering remains aligned with `apiContract().eventOrdering`
+  under burst input, resize transitions, and attach mode transitions.
 - Replay-oriented JSONL traces still parse after SDK changes.
 
 ## Migration Guidance (xterm.js → FrankenTermJS)

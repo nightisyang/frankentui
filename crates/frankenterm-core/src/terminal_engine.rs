@@ -488,15 +488,18 @@ impl TerminalEngine {
     fn apply_print(&mut self, ch: char) {
         let charset = self.cursor.effective_charset();
         let ch = translate_charset(ch, charset);
-        self.cursor.consume_single_shift();
 
         let width = self.width_policy.char_width(ch);
         if width == 0 {
             // Combining mark / ZWJ / VS16: attach to the previous cell.
             // Must be handled before pending_wrap so marks don't trigger a wrap.
+            // Do NOT consume single_shift — only graphic characters consume it.
             self.apply_combining_mark(ch);
             return;
         }
+
+        // Only graphic (non-zero-width) characters consume the single shift.
+        self.cursor.consume_single_shift();
 
         self.last_printed = Some(ch);
 
@@ -552,7 +555,7 @@ impl TerminalEngine {
     /// If the cursor is at column 0 with no pending wrap, there is no
     /// previous cell and the mark is silently dropped.
     fn apply_combining_mark(&mut self, mark: char) {
-        let (row, col) = if self.cursor.pending_wrap {
+        let (row, mut col) = if self.cursor.pending_wrap {
             // Last printed char sits at cursor.col (right margin), wrap hasn't fired yet.
             (self.cursor.row, self.cursor.col)
         } else if self.cursor.col > 0 {
@@ -561,6 +564,17 @@ impl TerminalEngine {
             // Column 0, no pending wrap — nowhere to attach.
             return;
         };
+
+        // If the target is a wide continuation cell, redirect to the leading cell.
+        // Continuation cells are rendering placeholders; combining marks belong on
+        // the leading cell where the base character lives.
+        if let Some(cell) = self.grid.cell(row, col)
+            && cell.is_wide_continuation()
+            && col > 0
+        {
+            col -= 1;
+        }
+
         self.grid.push_combining_mark(row, col, mark);
     }
 }
@@ -693,21 +707,18 @@ mod tests {
         // CJK ideograph '中' (wide) + combining grave
         engine.feed_bytes("中\u{0300}".as_bytes());
 
-        // '中' is at col 0, continuation at col 1, cursor at col 2.
-        // The combining mark should attach to col 1 (cursor was at col 2,
-        // so previous cell is col 1). But col 1 is a continuation cell.
-        // Actually let me think: after printing '中', cursor.col = 2.
-        // pending_wrap is false (col + 2 = 2 < 10).
-        // apply_combining_mark: cursor.col > 0 → attach to (0, cursor.col - 1) = (0, 1).
-        // col 1 is the CONTINUATION cell.
-        //
-        // This is technically valid — the mark attaches to wherever the cursor
-        // "was". Some terminals attach to the leading cell instead.
-        // For correctness, let's verify the current behavior.
+        // '中' is at col 0 (leading), continuation at col 1, cursor at col 2.
+        // apply_combining_mark targets col 1 (cursor.col - 1), detects it is a
+        // wide continuation cell, and redirects to col 0 (the leading cell)
+        // where the base character lives.
+        let leading = engine.grid().cell(0, 0).unwrap();
+        assert!(leading.is_wide());
+        assert!(leading.has_combining());
+        assert_eq!(leading.combining_marks(), &['\u{0300}']);
+
         let cont = engine.grid().cell(0, 1).unwrap();
         assert!(cont.is_wide_continuation());
-        // The combining mark landed on the continuation cell.
-        assert!(cont.has_combining());
+        assert!(!cont.has_combining());
     }
 
     #[test]
@@ -817,9 +828,12 @@ mod tests {
         assert_eq!(cell.content(), '─');
         assert!(cell.is_wide());
 
-        // Combining mark attaches to continuation cell at col 1
-        // (cursor was at col 2 after wide char, so col-1 = col 1).
+        // Combining mark redirected from continuation (col 1) to leading cell (col 0).
+        assert!(cell.has_combining());
+        assert_eq!(cell.combining_marks(), &['\u{0300}']);
+
         let cont = engine.grid().cell(0, 1).unwrap();
-        assert!(cont.has_combining());
+        assert!(cont.is_wide_continuation());
+        assert!(!cont.has_combining());
     }
 }

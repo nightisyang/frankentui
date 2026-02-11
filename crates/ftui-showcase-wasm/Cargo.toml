@@ -14,6 +14,7 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 ftui-web = { path = "../ftui-web", version = "0.1.0", features = ["input-parser"] }
 ftui-demo-showcase = { path = "../ftui-demo-showcase", version = "0.1.1", default-features = false }
+ftui-layout = { path = "../ftui-layout", version = "0.1.1" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3.85"

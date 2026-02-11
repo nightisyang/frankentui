@@ -9,7 +9,9 @@ use js_sys::{Array, Object, Reflect, Uint32Array};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
-use super::runner_core::RunnerCore;
+use super::runner_core::{PaneDispatchOutcome, PaneDispatchSummary, RunnerCore};
+use ftui_layout::{PaneId, PaneModifierSnapshot, PanePointerButton, PaneResizeTarget, SplitAxis};
+use ftui_web::pane_pointer_capture::{PanePointerCaptureCommand, PanePointerIgnoredReason};
 
 fn console_error(msg: &str) {
     let global = js_sys::global();
@@ -45,6 +47,146 @@ fn install_panic_hook() {
             console_error(&msg);
         }));
     });
+}
+
+fn set_js(obj: &Object, key: &str, value: JsValue) {
+    let _ = Reflect::set(obj, &JsValue::from_str(key), &value);
+}
+
+fn pane_axis_from_u8(axis: u8) -> Option<SplitAxis> {
+    match axis {
+        0 => Some(SplitAxis::Horizontal),
+        1 => Some(SplitAxis::Vertical),
+        _ => None,
+    }
+}
+
+fn pane_button_from_u8(button: u8) -> Option<PanePointerButton> {
+    match button {
+        0 => Some(PanePointerButton::Primary),
+        1 => Some(PanePointerButton::Secondary),
+        2 => Some(PanePointerButton::Middle),
+        _ => None,
+    }
+}
+
+fn pane_modifiers_from_bits(mods: u8) -> PaneModifierSnapshot {
+    PaneModifierSnapshot {
+        shift: mods & 0b0001 != 0,
+        alt: mods & 0b0010 != 0,
+        ctrl: mods & 0b0100 != 0,
+        meta: mods & 0b1000 != 0,
+    }
+}
+
+fn ignored_reason_label(reason: PanePointerIgnoredReason) -> &'static str {
+    match reason {
+        PanePointerIgnoredReason::InvalidPointerId => "invalid_pointer_id",
+        PanePointerIgnoredReason::ButtonNotAllowed => "button_not_allowed",
+        PanePointerIgnoredReason::ButtonMismatch => "button_mismatch",
+        PanePointerIgnoredReason::ActivePointerAlreadyInProgress => {
+            "active_pointer_already_in_progress"
+        }
+        PanePointerIgnoredReason::NoActivePointer => "no_active_pointer",
+        PanePointerIgnoredReason::PointerMismatch => "pointer_mismatch",
+        PanePointerIgnoredReason::LeaveWhileCaptured => "leave_while_captured",
+        PanePointerIgnoredReason::MachineRejectedEvent => "machine_rejected_event",
+    }
+}
+
+fn pane_dispatch_to_js(
+    dispatch: PaneDispatchSummary,
+    active_pointer_id: Option<u32>,
+    error: Option<&str>,
+) -> JsValue {
+    let obj = Object::new();
+    set_js(&obj, "accepted", dispatch.accepted().into());
+
+    if let Some(sequence) = dispatch.sequence {
+        set_js(&obj, "sequence", JsValue::from_f64(sequence as f64));
+    } else {
+        set_js(&obj, "sequence", JsValue::NULL);
+    }
+
+    if let Some(pointer_id) = dispatch.pointer_id {
+        set_js(&obj, "pointer_id", JsValue::from_f64(pointer_id as f64));
+    } else {
+        set_js(&obj, "pointer_id", JsValue::NULL);
+    }
+
+    match dispatch.target {
+        Some(target) => {
+            set_js(
+                &obj,
+                "split_id",
+                JsValue::from_f64(target.split_id.get() as f64),
+            );
+            let axis = match target.axis {
+                SplitAxis::Horizontal => "horizontal",
+                SplitAxis::Vertical => "vertical",
+            };
+            set_js(&obj, "axis", JsValue::from_str(axis));
+        }
+        None => {
+            set_js(&obj, "split_id", JsValue::NULL);
+            set_js(&obj, "axis", JsValue::NULL);
+        }
+    }
+
+    match dispatch.capture_command {
+        Some(PanePointerCaptureCommand::Acquire { pointer_id }) => {
+            let command = Object::new();
+            set_js(&command, "kind", JsValue::from_str("acquire"));
+            set_js(&command, "pointer_id", JsValue::from_f64(pointer_id as f64));
+            set_js(&obj, "capture_command", command.into());
+        }
+        Some(PanePointerCaptureCommand::Release { pointer_id }) => {
+            let command = Object::new();
+            set_js(&command, "kind", JsValue::from_str("release"));
+            set_js(&command, "pointer_id", JsValue::from_f64(pointer_id as f64));
+            set_js(&obj, "capture_command", command.into());
+        }
+        None => {
+            set_js(&obj, "capture_command", JsValue::NULL);
+        }
+    }
+
+    match dispatch.outcome {
+        PaneDispatchOutcome::SemanticForwarded => {
+            set_js(&obj, "outcome", JsValue::from_str("semantic_forwarded"));
+            set_js(&obj, "ignored_reason", JsValue::NULL);
+        }
+        PaneDispatchOutcome::CaptureStateUpdated => {
+            set_js(&obj, "outcome", JsValue::from_str("capture_state_updated"));
+            set_js(&obj, "ignored_reason", JsValue::NULL);
+        }
+        PaneDispatchOutcome::Ignored(reason) => {
+            set_js(&obj, "outcome", JsValue::from_str("ignored"));
+            set_js(
+                &obj,
+                "ignored_reason",
+                JsValue::from_str(ignored_reason_label(reason)),
+            );
+        }
+    }
+
+    if let Some(active_pointer_id) = active_pointer_id {
+        set_js(
+            &obj,
+            "active_pointer_id",
+            JsValue::from_f64(active_pointer_id as f64),
+        );
+    } else {
+        set_js(&obj, "active_pointer_id", JsValue::NULL);
+    }
+
+    if let Some(error) = error {
+        set_js(&obj, "error", JsValue::from_str(error));
+    } else {
+        set_js(&obj, "error", JsValue::NULL);
+    }
+
+    obj.into()
 }
 
 /// WASM showcase runner for the FrankenTUI demo application.
@@ -112,6 +254,194 @@ impl ShowcaseRunner {
     #[wasm_bindgen(js_name = pushEncodedInput)]
     pub fn push_encoded_input(&mut self, json: &str) -> bool {
         self.inner.push_encoded_input(json)
+    }
+
+    /// Pane-specific pointer-down path with direct capture semantics.
+    ///
+    /// `axis`: `0` = horizontal, `1` = vertical.
+    /// `button`: `0` = primary, `1` = secondary, `2` = middle.
+    /// `mods` bitmask: `1=shift`, `2=alt`, `4=ctrl`, `8=meta`.
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = panePointerDown)]
+    pub fn pane_pointer_down(
+        &mut self,
+        split_id: u64,
+        axis: u8,
+        pointer_id: u32,
+        button: u8,
+        x: i32,
+        y: i32,
+        mods: u8,
+    ) -> JsValue {
+        let axis = match pane_axis_from_u8(axis) {
+            Some(axis) => axis,
+            None => {
+                let dispatch = PaneDispatchSummary {
+                    phase: ftui_web::pane_pointer_capture::PanePointerLifecyclePhase::PointerDown,
+                    sequence: None,
+                    pointer_id: Some(pointer_id),
+                    target: None,
+                    capture_command: None,
+                    outcome: PaneDispatchOutcome::Ignored(
+                        PanePointerIgnoredReason::MachineRejectedEvent,
+                    ),
+                };
+                return pane_dispatch_to_js(
+                    dispatch,
+                    self.inner.pane_active_pointer_id(),
+                    Some("invalid_axis"),
+                );
+            }
+        };
+        let button = match pane_button_from_u8(button) {
+            Some(button) => button,
+            None => {
+                let dispatch = PaneDispatchSummary {
+                    phase: ftui_web::pane_pointer_capture::PanePointerLifecyclePhase::PointerDown,
+                    sequence: None,
+                    pointer_id: Some(pointer_id),
+                    target: None,
+                    capture_command: None,
+                    outcome: PaneDispatchOutcome::Ignored(
+                        PanePointerIgnoredReason::ButtonNotAllowed,
+                    ),
+                };
+                return pane_dispatch_to_js(
+                    dispatch,
+                    self.inner.pane_active_pointer_id(),
+                    Some("invalid_button"),
+                );
+            }
+        };
+        let split_id = match PaneId::new(split_id) {
+            Ok(split_id) => split_id,
+            Err(_) => {
+                let dispatch = PaneDispatchSummary {
+                    phase: ftui_web::pane_pointer_capture::PanePointerLifecyclePhase::PointerDown,
+                    sequence: None,
+                    pointer_id: Some(pointer_id),
+                    target: None,
+                    capture_command: None,
+                    outcome: PaneDispatchOutcome::Ignored(
+                        PanePointerIgnoredReason::MachineRejectedEvent,
+                    ),
+                };
+                return pane_dispatch_to_js(
+                    dispatch,
+                    self.inner.pane_active_pointer_id(),
+                    Some("invalid_split_id"),
+                );
+            }
+        };
+        let target = PaneResizeTarget { split_id, axis };
+        let dispatch = self.inner.pane_pointer_down(
+            target,
+            pointer_id,
+            button,
+            x,
+            y,
+            pane_modifiers_from_bits(mods),
+        );
+        pane_dispatch_to_js(dispatch, self.inner.pane_active_pointer_id(), None)
+    }
+
+    /// Pane-specific pointer capture acknowledgement path.
+    #[wasm_bindgen(js_name = panePointerCaptureAcquired)]
+    pub fn pane_pointer_capture_acquired(&mut self, pointer_id: u32) -> JsValue {
+        let dispatch = self.inner.pane_capture_acquired(pointer_id);
+        pane_dispatch_to_js(dispatch, self.inner.pane_active_pointer_id(), None)
+    }
+
+    /// Pane-specific pointer-move path.
+    #[wasm_bindgen(js_name = panePointerMove)]
+    pub fn pane_pointer_move(&mut self, pointer_id: u32, x: i32, y: i32, mods: u8) -> JsValue {
+        let dispatch =
+            self.inner
+                .pane_pointer_move(pointer_id, x, y, pane_modifiers_from_bits(mods));
+        pane_dispatch_to_js(dispatch, self.inner.pane_active_pointer_id(), None)
+    }
+
+    /// Pane-specific pointer-up path.
+    ///
+    /// `button`: `0` = primary, `1` = secondary, `2` = middle.
+    /// `mods` bitmask: `1=shift`, `2=alt`, `4=ctrl`, `8=meta`.
+    #[wasm_bindgen(js_name = panePointerUp)]
+    pub fn pane_pointer_up(
+        &mut self,
+        pointer_id: u32,
+        button: u8,
+        x: i32,
+        y: i32,
+        mods: u8,
+    ) -> JsValue {
+        let button = match pane_button_from_u8(button) {
+            Some(button) => button,
+            None => {
+                let dispatch = PaneDispatchSummary {
+                    phase: ftui_web::pane_pointer_capture::PanePointerLifecyclePhase::PointerUp,
+                    sequence: None,
+                    pointer_id: Some(pointer_id),
+                    target: None,
+                    capture_command: None,
+                    outcome: PaneDispatchOutcome::Ignored(
+                        PanePointerIgnoredReason::ButtonNotAllowed,
+                    ),
+                };
+                return pane_dispatch_to_js(
+                    dispatch,
+                    self.inner.pane_active_pointer_id(),
+                    Some("invalid_button"),
+                );
+            }
+        };
+        let dispatch =
+            self.inner
+                .pane_pointer_up(pointer_id, button, x, y, pane_modifiers_from_bits(mods));
+        pane_dispatch_to_js(dispatch, self.inner.pane_active_pointer_id(), None)
+    }
+
+    /// Pane-specific pointer-cancel path.
+    ///
+    /// Pass `0` to represent an unspecified pointer id.
+    #[wasm_bindgen(js_name = panePointerCancel)]
+    pub fn pane_pointer_cancel(&mut self, pointer_id: u32) -> JsValue {
+        let pointer_id = (pointer_id != 0).then_some(pointer_id);
+        let dispatch = self.inner.pane_pointer_cancel(pointer_id);
+        pane_dispatch_to_js(dispatch, self.inner.pane_active_pointer_id(), None)
+    }
+
+    /// Pane-specific pointer-leave path.
+    #[wasm_bindgen(js_name = panePointerLeave)]
+    pub fn pane_pointer_leave(&mut self, pointer_id: u32) -> JsValue {
+        let dispatch = self.inner.pane_pointer_leave(pointer_id);
+        pane_dispatch_to_js(dispatch, self.inner.pane_active_pointer_id(), None)
+    }
+
+    /// Pane-specific blur path.
+    #[wasm_bindgen(js_name = paneBlur)]
+    pub fn pane_blur(&mut self) -> JsValue {
+        let dispatch = self.inner.pane_blur();
+        pane_dispatch_to_js(dispatch, self.inner.pane_active_pointer_id(), None)
+    }
+
+    /// Pane-specific hidden visibility path.
+    #[wasm_bindgen(js_name = paneVisibilityHidden)]
+    pub fn pane_visibility_hidden(&mut self) -> JsValue {
+        let dispatch = self.inner.pane_visibility_hidden();
+        pane_dispatch_to_js(dispatch, self.inner.pane_active_pointer_id(), None)
+    }
+
+    /// Pane-specific lost pointer capture path.
+    #[wasm_bindgen(js_name = paneLostPointerCapture)]
+    pub fn pane_lost_pointer_capture(&mut self, pointer_id: u32) -> JsValue {
+        let dispatch = self.inner.pane_lost_pointer_capture(pointer_id);
+        pane_dispatch_to_js(dispatch, self.inner.pane_active_pointer_id(), None)
+    }
+
+    /// Active pane pointer id tracked by the adapter, or `null`.
+    #[wasm_bindgen(js_name = paneActivePointerId)]
+    pub fn pane_active_pointer_id(&self) -> Option<u32> {
+        self.inner.pane_active_pointer_id()
     }
 
     /// Resize the terminal (pushes Resize event, processed on next step).
