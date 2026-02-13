@@ -34,6 +34,8 @@ pub mod scrollback;
 pub mod selection;
 pub mod terminal_engine;
 pub mod width_policy;
+#[cfg(feature = "ws-codec")]
+pub mod ws_codec;
 
 pub use cell::{
     Cell, CellFlags, Color, HyperlinkId, HyperlinkRegistry, MAX_COMBINING, SgrAttrs, SgrFlags,
