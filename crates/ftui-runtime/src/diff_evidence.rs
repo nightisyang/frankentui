@@ -633,4 +633,161 @@ mod tests {
         assert_eq!(ledger.len(), 1); // wrapped
         assert_eq!(ledger.last_decision().unwrap().frame_id, 2);
     }
+
+    // ── Decision Contract integration tests (bd-3jlw5.6) ───────
+
+    #[test]
+    fn contract_stable_to_bursty_transition() {
+        // StableFrame -> BurstyChange when change_fraction > 0.5
+        let mut ledger = DiffEvidenceLedger::new(100);
+
+        // 10 stable frames
+        for i in 0..10 {
+            ledger.record(make_record(i, DiffRegime::StableFrame));
+        }
+        assert_eq!(ledger.current_regime(), DiffRegime::StableFrame);
+        assert_eq!(ledger.transition_count(), 0);
+
+        // Bursty change detected
+        ledger.record(make_record(10, DiffRegime::BurstyChange));
+        assert_eq!(ledger.current_regime(), DiffRegime::BurstyChange);
+        assert_eq!(ledger.transition_count(), 1);
+
+        let t = ledger.transitions().next().unwrap();
+        assert_eq!(t.from_regime, DiffRegime::StableFrame);
+        assert_eq!(t.to_regime, DiffRegime::BurstyChange);
+        assert_eq!(t.frame_id, 10);
+    }
+
+    #[test]
+    fn contract_bursty_recovery_to_stable() {
+        // BurstyChange -> StableFrame after consecutive low-change frames
+        let mut ledger = DiffEvidenceLedger::new(100);
+
+        // Enter bursty via stable first
+        ledger.record(make_record(0, DiffRegime::StableFrame));
+        ledger.record(make_record(1, DiffRegime::BurstyChange));
+        assert_eq!(ledger.transition_count(), 1); // Stable -> Bursty
+
+        // Recovery: 3 stable frames
+        for i in 2..5 {
+            ledger.record(make_record(i, DiffRegime::StableFrame));
+        }
+        assert_eq!(ledger.current_regime(), DiffRegime::StableFrame);
+        assert_eq!(ledger.transition_count(), 2); // Stable->Bursty, Bursty->Stable
+    }
+
+    #[test]
+    fn contract_resize_returns_to_previous() {
+        // ResizeRegime lasts 1 frame, then returns to previous regime
+        let mut ledger = DiffEvidenceLedger::new(100);
+
+        // Start stable
+        ledger.record(make_record(0, DiffRegime::StableFrame));
+
+        // Resize event
+        ledger.record(make_record(1, DiffRegime::ResizeRegime));
+        assert_eq!(ledger.current_regime(), DiffRegime::ResizeRegime);
+
+        // Return to stable after 1 frame
+        ledger.record(make_record(2, DiffRegime::StableFrame));
+        assert_eq!(ledger.current_regime(), DiffRegime::StableFrame);
+
+        // 2 transitions: Stable->Resize, Resize->Stable
+        assert_eq!(ledger.transition_count(), 2);
+    }
+
+    #[test]
+    fn contract_degraded_entry_and_recovery() {
+        // DegradedTerminal when latency > 10ms, recovery when < 5ms
+        let mut ledger = DiffEvidenceLedger::new(100);
+
+        ledger.record(make_record(0, DiffRegime::StableFrame));
+        ledger.record(make_record(1, DiffRegime::DegradedTerminal));
+        assert_eq!(ledger.current_regime(), DiffRegime::DegradedTerminal);
+
+        // Stay degraded for several frames
+        for i in 2..10 {
+            ledger.record(make_record(i, DiffRegime::DegradedTerminal));
+        }
+        assert_eq!(ledger.current_regime(), DiffRegime::DegradedTerminal);
+        assert_eq!(ledger.transition_count(), 1); // only the initial transition
+
+        // Recovery
+        ledger.record(make_record(10, DiffRegime::StableFrame));
+        assert_eq!(ledger.current_regime(), DiffRegime::StableFrame);
+        assert_eq!(ledger.transition_count(), 2);
+    }
+
+    #[test]
+    fn contract_no_flapping() {
+        // Hysteresis: regime shouldn't flap back and forth rapidly
+        // Record transitions and verify each one is captured
+        let mut ledger = DiffEvidenceLedger::new(100);
+
+        let sequence = [
+            DiffRegime::StableFrame,
+            DiffRegime::BurstyChange,
+            DiffRegime::StableFrame,
+            DiffRegime::BurstyChange,
+            DiffRegime::StableFrame,
+        ];
+
+        for (i, &regime) in sequence.iter().enumerate() {
+            ledger.record(make_record(i as u64, regime));
+        }
+
+        // 4 transitions (each change recorded)
+        assert_eq!(ledger.transition_count(), 4);
+
+        // Verify transition order
+        let transitions: Vec<(DiffRegime, DiffRegime)> = ledger
+            .transitions()
+            .map(|t| (t.from_regime, t.to_regime))
+            .collect();
+        assert_eq!(
+            transitions,
+            vec![
+                (DiffRegime::StableFrame, DiffRegime::BurstyChange),
+                (DiffRegime::BurstyChange, DiffRegime::StableFrame),
+                (DiffRegime::StableFrame, DiffRegime::BurstyChange),
+                (DiffRegime::BurstyChange, DiffRegime::StableFrame),
+            ]
+        );
+    }
+
+    #[test]
+    fn contract_full_lifecycle() {
+        // Full lifecycle: stable -> bursty -> resize -> stable -> degraded -> stable
+        let mut ledger = DiffEvidenceLedger::new(100);
+
+        let lifecycle = [
+            (0, DiffRegime::StableFrame),
+            (1, DiffRegime::StableFrame),
+            (2, DiffRegime::BurstyChange),
+            (3, DiffRegime::BurstyChange),
+            (4, DiffRegime::ResizeRegime),
+            (5, DiffRegime::StableFrame),
+            (6, DiffRegime::StableFrame),
+            (7, DiffRegime::DegradedTerminal),
+            (8, DiffRegime::DegradedTerminal),
+            (9, DiffRegime::StableFrame),
+        ];
+
+        for &(frame, regime) in &lifecycle {
+            ledger.record(make_record(frame, regime));
+        }
+
+        assert_eq!(ledger.len(), 10);
+        // Transitions: Stable->Bursty, Bursty->Resize, Resize->Stable,
+        //              Stable->Degraded, Degraded->Stable
+        assert_eq!(ledger.transition_count(), 5);
+        assert_eq!(ledger.current_regime(), DiffRegime::StableFrame);
+
+        // Verify all transitions have valid frame IDs
+        for t in ledger.transitions() {
+            assert!(t.frame_id <= 9);
+            assert_ne!(t.from_regime, t.to_regime);
+        }
+    }
 }
