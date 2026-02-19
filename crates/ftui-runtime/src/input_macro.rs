@@ -851,6 +851,8 @@ pub struct RecordingFilter {
     pub resize: bool,
     /// Record paste events.
     pub paste: bool,
+    /// Record IME composition events.
+    pub ime: bool,
     /// Record focus events.
     pub focus: bool,
 }
@@ -862,6 +864,7 @@ impl Default for RecordingFilter {
             mouse: true,
             resize: true,
             paste: true,
+            ime: true,
             focus: true,
         }
     }
@@ -875,6 +878,7 @@ impl RecordingFilter {
             mouse: false,
             resize: false,
             paste: false,
+            ime: false,
             focus: false,
         }
     }
@@ -886,6 +890,7 @@ impl RecordingFilter {
             Event::Mouse(_) => self.mouse,
             Event::Resize { .. } => self.resize,
             Event::Paste(_) => self.paste,
+            Event::Ime(_) => self.ime,
             Event::Focus(_) => self.focus,
             Event::Clipboard(_) => true, // Always record clipboard responses
             Event::Tick => false,        // Internal timing, not recorded
@@ -1701,6 +1706,7 @@ mod tests {
             mouse: false,
             resize: false,
             paste: true,
+            ime: false,
             focus: false,
         };
         assert!(filter.accepts(&key_event('a')));

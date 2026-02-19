@@ -950,6 +950,7 @@ pub enum PaneTerminalIgnoredReason {
     NoActivePointer,
     PointerButtonMismatch,
     ActivationButtonRequired,
+    WindowNotFocused,
     UnsupportedKey,
     FocusGainNoop,
     ResizeNoop,
@@ -1061,6 +1062,7 @@ pub struct PaneTerminalAdapter {
     machine: PaneDragResizeMachine,
     config: PaneTerminalAdapterConfig,
     active: Option<PaneTerminalActivePointer>,
+    window_focused: bool,
     next_sequence: u64,
 }
 
@@ -1079,6 +1081,7 @@ impl PaneTerminalAdapter {
             machine,
             config,
             active: None,
+            window_focused: true,
             next_sequence: 1,
         })
     }
@@ -1093,6 +1096,12 @@ impl PaneTerminalAdapter {
     #[must_use]
     pub fn active_pointer_id(&self) -> Option<u32> {
         self.active.map(|active| active.pointer_id)
+    }
+
+    /// Whether the host window is currently focused.
+    #[must_use]
+    pub const fn window_focused(&self) -> bool {
+        self.window_focused
     }
 
     /// Current pane drag/resize machine state.
@@ -1438,6 +1447,14 @@ impl PaneTerminalAdapter {
         key: KeyEvent,
         target_hint: Option<PaneResizeTarget>,
     ) -> PaneTerminalDispatch {
+        if !self.window_focused {
+            return PaneTerminalDispatch::ignored(
+                PaneTerminalLifecyclePhase::KeyResize,
+                PaneTerminalIgnoredReason::WindowNotFocused,
+                self.active_pointer_id(),
+                target_hint.or(self.active.map(|active| active.target)),
+            );
+        }
         if key.kind == KeyEventKind::Release {
             return PaneTerminalDispatch::ignored(
                 PaneTerminalLifecyclePhase::Other,
@@ -1487,6 +1504,7 @@ impl PaneTerminalAdapter {
 
     fn translate_focus(&mut self, focused: bool) -> PaneTerminalDispatch {
         if focused {
+            self.window_focused = true;
             return PaneTerminalDispatch::ignored(
                 PaneTerminalLifecyclePhase::Other,
                 PaneTerminalIgnoredReason::FocusGainNoop,
@@ -1494,6 +1512,7 @@ impl PaneTerminalAdapter {
                 self.active.map(|active| active.target),
             );
         }
+        self.window_focused = false;
         if !self.config.cancel_on_focus_lost {
             return PaneTerminalDispatch::ignored(
                 PaneTerminalLifecyclePhase::FocusLoss,
@@ -3690,6 +3709,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             Event::Key(_)
             | Event::Mouse(_)
             | Event::Paste(_)
+            | Event::Ime(_)
             | Event::Focus(_)
             | Event::Clipboard(_) => FairnessEventType::Input,
             Event::Resize { .. } => FairnessEventType::Resize,
@@ -5543,6 +5563,29 @@ mod tests {
             }
         ));
         assert!(shifted_event.modifiers.shift);
+    }
+
+    #[test]
+    fn pane_terminal_adapter_keyboard_resize_requires_focus() {
+        let mut adapter =
+            PaneTerminalAdapter::new(PaneTerminalAdapterConfig::default()).expect("valid adapter");
+        let target = pane_target(SplitAxis::Horizontal);
+
+        let _ = adapter.translate(&Event::Focus(false), None);
+        assert!(!adapter.window_focused());
+
+        let unfocused = adapter.translate(&Event::Key(KeyEvent::new(KeyCode::Right)), Some(target));
+        assert!(unfocused.primary_event.is_none());
+        assert!(matches!(
+            unfocused.log.outcome,
+            PaneTerminalLogOutcome::Ignored(PaneTerminalIgnoredReason::WindowNotFocused)
+        ));
+
+        let _ = adapter.translate(&Event::Focus(true), None);
+        assert!(adapter.window_focused());
+
+        let focused = adapter.translate(&Event::Key(KeyEvent::new(KeyCode::Right)), Some(target));
+        assert!(focused.primary_event.is_some());
     }
 
     #[test]
