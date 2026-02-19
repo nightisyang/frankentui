@@ -402,6 +402,14 @@ pub struct BudgetController {
     frames_since_change: u32,
     last_pid_output: f64,
     last_decision: BudgetDecision,
+    last_decision_reason: BudgetDecisionReason,
+    last_frame_ms: f64,
+    transition_seq: u64,
+    last_transition_correlation_id: u64,
+    last_pid_gate_threshold: f64,
+    last_pid_gate_margin: f64,
+    last_evidence_threshold: f64,
+    last_evidence_margin: f64,
 }
 
 /// Decision output from the budget controller.
@@ -427,6 +435,47 @@ impl BudgetDecision {
     }
 }
 
+/// Version tag for budget telemetry schema emitted by [`BudgetTelemetry`].
+pub const BUDGET_TELEMETRY_SCHEMA_VERSION: u16 = 1;
+
+/// Controller rationale for a per-frame decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetDecisionReason {
+    /// No decision change while cooldown is active.
+    CooldownActive,
+    /// Overload + evidence gate passed, so degrade one level.
+    OverloadEvidencePassed,
+    /// Underload + evidence gate passed, so upgrade one level.
+    UnderloadEvidencePassed,
+    /// Already at maximum degradation; cannot degrade further.
+    AtMaxDegradation,
+    /// Already at full quality; cannot upgrade further.
+    AtFullQuality,
+    /// Overload signal present but e-process degrade gate not satisfied.
+    OverloadEvidenceInsufficient,
+    /// Underload signal present but e-process upgrade gate not satisfied.
+    UnderloadEvidenceInsufficient,
+    /// PID output remained in the hold band.
+    WithinThresholdBand,
+}
+
+impl BudgetDecisionReason {
+    /// Stable string code for JSONL logs and CI parsing.
+    #[inline]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CooldownActive => "cooldown_active",
+            Self::OverloadEvidencePassed => "overload_evidence_passed",
+            Self::UnderloadEvidencePassed => "underload_evidence_passed",
+            Self::AtMaxDegradation => "at_max_degradation",
+            Self::AtFullQuality => "at_full_quality",
+            Self::OverloadEvidenceInsufficient => "overload_evidence_insufficient",
+            Self::UnderloadEvidenceInsufficient => "underload_evidence_insufficient",
+            Self::WithinThresholdBand => "within_threshold_band",
+        }
+    }
+}
+
 impl BudgetController {
     /// Create a new budget controller with the given configuration.
     pub fn new(config: BudgetControllerConfig) -> Self {
@@ -438,6 +487,14 @@ impl BudgetController {
             frames_since_change: 0,
             last_pid_output: 0.0,
             last_decision: BudgetDecision::Hold,
+            last_decision_reason: BudgetDecisionReason::WithinThresholdBand,
+            last_frame_ms: 0.0,
+            transition_seq: 0,
+            last_transition_correlation_id: 0,
+            last_pid_gate_threshold: 0.0,
+            last_pid_gate_margin: 0.0,
+            last_evidence_threshold: 0.0,
+            last_evidence_margin: 0.0,
         }
     }
 
@@ -454,6 +511,7 @@ impl BudgetController {
         // Update PID
         let u = self.pid.update(error, &self.config.pid);
         self.last_pid_output = u;
+        self.last_frame_ms = frame_ms;
 
         // Update e-process
         self.eprocess
@@ -462,30 +520,60 @@ impl BudgetController {
         // Increment cooldown counter
         self.frames_since_change = self.frames_since_change.saturating_add(1);
 
-        // Decision logic with hysteresis + e-process gating
-        let decision = if self.frames_since_change < self.config.cooldown_frames {
-            // Cooldown active — hold
-            BudgetDecision::Hold
-        } else if u > self.config.degrade_threshold
-            && !self.current_level.is_max()
-            && self.eprocess.should_degrade(&self.config.eprocess)
-        {
-            BudgetDecision::Degrade
-        } else if u < -self.config.upgrade_threshold
-            && !self.current_level.is_full()
-            && self.eprocess.should_upgrade(&self.config.eprocess)
-        {
-            BudgetDecision::Upgrade
-        } else {
-            BudgetDecision::Hold
-        };
+        let mut decision = BudgetDecision::Hold;
+        let mut reason = BudgetDecisionReason::WithinThresholdBand;
+        let mut pid_gate_threshold = 0.0;
+        let mut pid_gate_margin = 0.0;
+        let mut evidence_threshold = 0.0;
+        let mut evidence_margin = 0.0;
+
+        // Decision logic with hysteresis + e-process gating + explainable reason/evidence.
+        if self.frames_since_change < self.config.cooldown_frames {
+            reason = BudgetDecisionReason::CooldownActive;
+        } else if u > self.config.degrade_threshold {
+            pid_gate_threshold = self.config.degrade_threshold;
+            pid_gate_margin = u - pid_gate_threshold;
+            evidence_threshold = 1.0 / self.config.eprocess.alpha;
+            evidence_margin = self.eprocess.e_value - evidence_threshold;
+
+            if self.current_level.is_max() {
+                reason = BudgetDecisionReason::AtMaxDegradation;
+            } else if self.eprocess.should_degrade(&self.config.eprocess) {
+                decision = BudgetDecision::Degrade;
+                reason = BudgetDecisionReason::OverloadEvidencePassed;
+            } else {
+                reason = BudgetDecisionReason::OverloadEvidenceInsufficient;
+            }
+        } else if u < -self.config.upgrade_threshold {
+            pid_gate_threshold = -self.config.upgrade_threshold;
+            pid_gate_margin = (-u) - self.config.upgrade_threshold;
+            evidence_threshold = self.config.eprocess.beta;
+            evidence_margin = evidence_threshold - self.eprocess.e_value;
+
+            if self.current_level.is_full() {
+                reason = BudgetDecisionReason::AtFullQuality;
+            } else if self.eprocess.should_upgrade(&self.config.eprocess) {
+                decision = BudgetDecision::Upgrade;
+                reason = BudgetDecisionReason::UnderloadEvidencePassed;
+            } else {
+                reason = BudgetDecisionReason::UnderloadEvidenceInsufficient;
+            }
+        }
 
         // Record decision for telemetry
         self.last_decision = decision;
+        self.last_decision_reason = reason;
+        self.last_pid_gate_threshold = pid_gate_threshold;
+        self.last_pid_gate_margin = pid_gate_margin;
+        self.last_evidence_threshold = evidence_threshold;
+        self.last_evidence_margin = evidence_margin;
 
         // Apply decision
         match decision {
             BudgetDecision::Degrade => {
+                self.transition_seq = self.transition_seq.saturating_add(1);
+                self.last_transition_correlation_id =
+                    (self.transition_seq << 32) ^ u64::from(self.eprocess.frames_observed);
                 self.current_level = self.current_level.next();
                 self.frames_since_change = 0;
 
@@ -498,6 +586,9 @@ impl BudgetController {
                 );
             }
             BudgetDecision::Upgrade => {
+                self.transition_seq = self.transition_seq.saturating_add(1);
+                self.last_transition_correlation_id =
+                    (self.transition_seq << 32) ^ u64::from(self.eprocess.frames_observed);
                 self.current_level = self.current_level.prev();
                 self.frames_since_change = 0;
 
@@ -554,6 +645,7 @@ impl BudgetController {
     #[inline]
     pub fn telemetry(&self) -> BudgetTelemetry {
         BudgetTelemetry {
+            schema_version: BUDGET_TELEMETRY_SCHEMA_VERSION,
             level: self.current_level,
             pid_output: self.last_pid_output,
             pid_p: self.pid.last_p,
@@ -563,6 +655,15 @@ impl BudgetController {
             frames_observed: self.eprocess.frames_observed,
             frames_since_change: self.frames_since_change,
             last_decision: self.last_decision,
+            decision_reason: self.last_decision_reason,
+            transition_seq: self.transition_seq,
+            transition_correlation_id: self.last_transition_correlation_id,
+            frame_time_ms: self.last_frame_ms,
+            target_ms: self.config.target.as_secs_f64() * 1000.0,
+            pid_gate_threshold: self.last_pid_gate_threshold,
+            pid_gate_margin: self.last_pid_gate_margin,
+            evidence_threshold: self.last_evidence_threshold,
+            evidence_margin: self.last_evidence_margin,
             in_warmup: self.eprocess.frames_observed < self.config.eprocess.warmup_frames,
         }
     }
@@ -575,6 +676,14 @@ impl BudgetController {
         self.frames_since_change = 0;
         self.last_pid_output = 0.0;
         self.last_decision = BudgetDecision::Hold;
+        self.last_decision_reason = BudgetDecisionReason::WithinThresholdBand;
+        self.last_frame_ms = 0.0;
+        self.transition_seq = 0;
+        self.last_transition_correlation_id = 0;
+        self.last_pid_gate_threshold = 0.0;
+        self.last_pid_gate_margin = 0.0;
+        self.last_evidence_threshold = 0.0;
+        self.last_evidence_margin = 0.0;
     }
 
     /// Get a reference to the controller configuration.
@@ -591,6 +700,8 @@ impl BudgetController {
 /// once per frame and forwarded to a tracing subscriber or debug overlay widget.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BudgetTelemetry {
+    /// Telemetry schema version for CI/E2E consumers.
+    pub schema_version: u16,
     /// Current degradation level.
     pub level: DegradationLevel,
     /// Last PID control signal (positive = over budget).
@@ -609,6 +720,24 @@ pub struct BudgetTelemetry {
     pub frames_since_change: u32,
     /// Last decision made by the controller.
     pub last_decision: BudgetDecision,
+    /// Rationale code describing why the last decision was taken.
+    pub decision_reason: BudgetDecisionReason,
+    /// Monotonic transition sequence number (increments on degrade/upgrade).
+    pub transition_seq: u64,
+    /// Correlation ID for the most recent transition event (0 if none yet).
+    pub transition_correlation_id: u64,
+    /// Last observed frame time in milliseconds.
+    pub frame_time_ms: f64,
+    /// Current target frame budget in milliseconds.
+    pub target_ms: f64,
+    /// PID gate threshold used for the last decision path.
+    pub pid_gate_threshold: f64,
+    /// PID gate margin (positive values indicate stronger gate pass).
+    pub pid_gate_margin: f64,
+    /// Evidence (e-process) threshold used for the last decision path.
+    pub evidence_threshold: f64,
+    /// Evidence gate margin (positive values indicate stronger gate pass).
+    pub evidence_margin: f64,
     /// Whether the controller is in warmup (e-process not yet active).
     pub in_warmup: bool,
 }
@@ -2410,6 +2539,14 @@ mod tests {
     mod stability_tests {
         use super::super::*;
 
+        #[derive(Debug, Clone)]
+        struct CampaignFrameLog {
+            frame_idx: u64,
+            phase: &'static str,
+            frame_time_us: u64,
+            telemetry: BudgetTelemetry,
+        }
+
         /// Helper: create a controller with minimal warmup/cooldown for testing.
         fn fast_controller(target_ms: u64) -> BudgetController {
             BudgetController::new(BudgetControllerConfig {
@@ -2439,6 +2576,28 @@ mod tests {
                     (i as u64, ft.as_micros() as u64, telem)
                 })
                 .collect()
+        }
+
+        /// Run a labeled phase campaign and collect deterministic replay logs.
+        fn run_campaign(
+            ctrl: &mut BudgetController,
+            phases: &[(&'static str, usize, Duration)],
+        ) -> Vec<CampaignFrameLog> {
+            let mut logs = Vec::new();
+            let mut frame_idx: u64 = 0;
+            for &(phase, count, frame_time) in phases {
+                for _ in 0..count {
+                    ctrl.update(frame_time);
+                    logs.push(CampaignFrameLog {
+                        frame_idx,
+                        phase,
+                        frame_time_us: frame_time.as_micros() as u64,
+                        telemetry: ctrl.telemetry(),
+                    });
+                    frame_idx = frame_idx.saturating_add(1);
+                }
+            }
+            logs
         }
 
         /// Count level transitions in a trace log.
@@ -2626,6 +2785,200 @@ mod tests {
             );
         }
 
+        #[test]
+        fn e2e_overload_campaign_burst_sustained_recovery_with_replay_logs() {
+            // bd-2vr05.15.4.5:
+            // 1) burst overload
+            // 2) sustained overload
+            // 3) recovery/underload
+            let phases: [(&str, usize, Duration); 3] = [
+                ("burst_overload", 24, Duration::from_millis(28)),
+                ("sustained_overload", 80, Duration::from_millis(52)),
+                ("recovery_underload", 140, Duration::from_millis(8)),
+            ];
+
+            let mut ctrl = fast_controller(16);
+            let logs = run_campaign(&mut ctrl, &phases);
+            assert!(!logs.is_empty(), "campaign logs must be non-empty");
+
+            let mut burst_degrades = 0u32;
+            let mut sustained_degrades = 0u32;
+            let mut sustained_degraded_frames = 0u32;
+            let mut recovery_upgrades = 0u32;
+            let mut max_level = DegradationLevel::Full;
+
+            for log in &logs {
+                let telem = &log.telemetry;
+                if telem.level > max_level {
+                    max_level = telem.level;
+                }
+                if log.phase == "burst_overload" && telem.last_decision == BudgetDecision::Degrade {
+                    burst_degrades = burst_degrades.saturating_add(1);
+                }
+                if log.phase == "sustained_overload"
+                    && telem.last_decision == BudgetDecision::Degrade
+                {
+                    sustained_degrades = sustained_degrades.saturating_add(1);
+                }
+                if log.phase == "sustained_overload" && telem.level > DegradationLevel::Full {
+                    sustained_degraded_frames = sustained_degraded_frames.saturating_add(1);
+                }
+                if log.phase == "recovery_underload"
+                    && telem.last_decision == BudgetDecision::Upgrade
+                {
+                    recovery_upgrades = recovery_upgrades.saturating_add(1);
+                }
+
+                // Semantic integrity invariants (no corruption under degradation)
+                assert!(
+                    telem.level <= DegradationLevel::SkipFrame,
+                    "frame {}: invalid degradation level {:?}",
+                    log.frame_idx,
+                    telem.level
+                );
+                assert!(
+                    telem.e_value.is_finite() && telem.e_value > 0.0,
+                    "frame {}: invalid e_value {}",
+                    log.frame_idx,
+                    telem.e_value
+                );
+                assert!(
+                    telem.pid_output.is_finite(),
+                    "frame {}: invalid pid_output {}",
+                    log.frame_idx,
+                    telem.pid_output
+                );
+            }
+
+            // Adjacent level changes must be stepwise (no jump corruption).
+            for pair in logs.windows(2) {
+                let prev = pair[0].telemetry.level.level();
+                let curr = pair[1].telemetry.level.level();
+                let delta = (curr as i16 - prev as i16).unsigned_abs();
+                assert!(
+                    delta <= 1,
+                    "frame {}->{} level jump {}: {:?} -> {:?}",
+                    pair[0].frame_idx,
+                    pair[1].frame_idx,
+                    delta,
+                    pair[0].telemetry.level,
+                    pair[1].telemetry.level
+                );
+            }
+
+            assert!(
+                burst_degrades > 0,
+                "burst phase should trigger degradation decisions"
+            );
+            assert!(
+                sustained_degrades > 0 || sustained_degraded_frames > 0,
+                "sustained overload phase should maintain degraded operation"
+            );
+            assert!(
+                max_level >= DegradationLevel::Skeleton,
+                "sustained overload should reach deep degradation (got {:?})",
+                max_level
+            );
+            assert!(
+                recovery_upgrades > 0,
+                "recovery phase should trigger upgrade decisions"
+            );
+
+            let final_level = logs
+                .last()
+                .map(|entry| entry.telemetry.level)
+                .unwrap_or(DegradationLevel::SkipFrame);
+            assert!(
+                final_level < max_level,
+                "final level should recover below peak degradation: final={:?} peak={:?}",
+                final_level,
+                max_level
+            );
+
+            // Deterministic replay contract: same scenario -> same decisions/telemetry.
+            let mut ctrl_replay = fast_controller(16);
+            let replay_logs = run_campaign(&mut ctrl_replay, &phases);
+            assert_eq!(
+                logs.len(),
+                replay_logs.len(),
+                "log length mismatch in replay"
+            );
+            for (lhs, rhs) in logs.iter().zip(replay_logs.iter()) {
+                assert_eq!(lhs.frame_idx, rhs.frame_idx);
+                assert_eq!(lhs.phase, rhs.phase);
+                assert_eq!(lhs.frame_time_us, rhs.frame_time_us);
+                assert_eq!(lhs.telemetry.schema_version, rhs.telemetry.schema_version);
+                assert_eq!(lhs.telemetry.level, rhs.telemetry.level);
+                assert_eq!(lhs.telemetry.last_decision, rhs.telemetry.last_decision);
+                assert_eq!(
+                    lhs.telemetry.decision_reason, rhs.telemetry.decision_reason,
+                    "decision_reason mismatch at frame {}",
+                    lhs.frame_idx
+                );
+                assert_eq!(
+                    lhs.telemetry.transition_seq, rhs.telemetry.transition_seq,
+                    "transition_seq mismatch at frame {}",
+                    lhs.frame_idx
+                );
+                assert_eq!(
+                    lhs.telemetry.transition_correlation_id,
+                    rhs.telemetry.transition_correlation_id,
+                    "transition_correlation_id mismatch at frame {}",
+                    lhs.frame_idx
+                );
+                assert!(
+                    (lhs.telemetry.pid_output - rhs.telemetry.pid_output).abs() < 1e-12,
+                    "pid_output mismatch at frame {}",
+                    lhs.frame_idx
+                );
+                assert!(
+                    (lhs.telemetry.e_value - rhs.telemetry.e_value).abs() < 1e-12,
+                    "e_value mismatch at frame {}",
+                    lhs.frame_idx
+                );
+            }
+
+            // Replay-grade diagnostics for controller postmortems.
+            for entry in &logs {
+                let t = &entry.telemetry;
+                eprintln!(
+                    r#"{{"event":"control_campaign_frame","schema_version":{},"scenario":"bd-2vr05.15.4.5","frame_idx":{},"phase":"{}","frame_time_us":{},"decision":"{}","decision_reason":"{}","transition_seq":{},"transition_correlation_id":{},"level":"{}","pid_output":{:.6},"pid_p":{:.6},"pid_i":{:.6},"pid_d":{:.6},"e_value":{:.6},"frame_time_ms":{:.6},"target_ms":{:.6},"pid_gate_threshold":{:.6},"pid_gate_margin":{:.6},"evidence_threshold":{:.6},"evidence_margin":{:.6},"frames_observed":{},"frames_since_change":{}}}"#,
+                    t.schema_version,
+                    entry.frame_idx,
+                    entry.phase,
+                    entry.frame_time_us,
+                    t.last_decision.as_str(),
+                    t.decision_reason.as_str(),
+                    t.transition_seq,
+                    t.transition_correlation_id,
+                    t.level.as_str(),
+                    t.pid_output,
+                    t.pid_p,
+                    t.pid_i,
+                    t.pid_d,
+                    t.e_value,
+                    t.frame_time_ms,
+                    t.target_ms,
+                    t.pid_gate_threshold,
+                    t.pid_gate_margin,
+                    t.evidence_threshold,
+                    t.evidence_margin,
+                    t.frames_observed,
+                    t.frames_since_change
+                );
+            }
+            eprintln!(
+                r#"{{"event":"control_campaign_summary","schema_version":{},"scenario":"bd-2vr05.15.4.5","frames":{},"burst_degrades":{},"sustained_degrades":{},"recovery_upgrades":{},"peak_level":"{}","final_level":"{}"}}"#,
+                BUDGET_TELEMETRY_SCHEMA_VERSION,
+                logs.len(),
+                burst_degrades,
+                sustained_degrades,
+                recovery_upgrades,
+                max_level.as_str(),
+                final_level.as_str()
+            );
+        }
+
         // --- property_random_load ---
 
         #[test]
@@ -2748,10 +3101,26 @@ mod tests {
             for (r1, r2) in log1.iter().zip(log2.iter()) {
                 assert_eq!(r1.0, r2.0, "frame index mismatch");
                 assert_eq!(r1.1, r2.1, "frame time mismatch");
+                assert_eq!(r1.2.schema_version, r2.2.schema_version);
                 assert_eq!(r1.2.level, r2.2.level, "level mismatch at frame {}", r1.0);
                 assert_eq!(
                     r1.2.last_decision, r2.2.last_decision,
                     "decision mismatch at frame {}",
+                    r1.0
+                );
+                assert_eq!(
+                    r1.2.decision_reason, r2.2.decision_reason,
+                    "decision_reason mismatch at frame {}",
+                    r1.0
+                );
+                assert_eq!(
+                    r1.2.transition_seq, r2.2.transition_seq,
+                    "transition_seq mismatch at frame {}",
+                    r1.0
+                );
+                assert_eq!(
+                    r1.2.transition_correlation_id, r2.2.transition_correlation_id,
+                    "transition_correlation_id mismatch at frame {}",
                     r1.0
                 );
                 assert!(
@@ -2782,18 +3151,103 @@ mod tests {
             let telem = ctrl.telemetry();
 
             // All schema fields present and accessible:
+            let _schema_version: u16 = telem.schema_version;
             let _degradation: &str = telem.level.as_str();
             let _pid_p: f64 = telem.pid_p;
             let _pid_i: f64 = telem.pid_i;
             let _pid_d: f64 = telem.pid_d;
             let _e_value: f64 = telem.e_value;
             let _decision: &str = telem.last_decision.as_str();
+            let _reason: &str = telem.decision_reason.as_str();
+            let _transition_seq: u64 = telem.transition_seq;
+            let _transition_correlation_id: u64 = telem.transition_correlation_id;
+            let _frame_time_ms: f64 = telem.frame_time_ms;
+            let _target_ms: f64 = telem.target_ms;
+            let _pid_gate_threshold: f64 = telem.pid_gate_threshold;
+            let _pid_gate_margin: f64 = telem.pid_gate_margin;
+            let _evidence_threshold: f64 = telem.evidence_threshold;
+            let _evidence_margin: f64 = telem.evidence_margin;
             let _frames: u32 = telem.frames_observed;
 
             // Verify decision string mapping
             assert_eq!(BudgetDecision::Hold.as_str(), "stay");
             assert_eq!(BudgetDecision::Degrade.as_str(), "degrade");
             assert_eq!(BudgetDecision::Upgrade.as_str(), "upgrade");
+            assert_eq!(
+                BUDGET_TELEMETRY_SCHEMA_VERSION, telem.schema_version,
+                "schema version mismatch"
+            );
+        }
+
+        #[test]
+        fn telemetry_transition_records_correlation_reason_and_evidence() {
+            let mut ctrl = fast_controller(16);
+
+            // Drive toward a degrade transition.
+            let mut degrade_telem = None;
+            for _ in 0..64 {
+                ctrl.update(Duration::from_millis(48));
+                let telem = ctrl.telemetry();
+                if telem.last_decision == BudgetDecision::Degrade {
+                    degrade_telem = Some(telem);
+                    break;
+                }
+            }
+            let degrade_telem =
+                degrade_telem.expect("expected degrade transition with correlation metadata");
+            assert_eq!(
+                degrade_telem.decision_reason,
+                BudgetDecisionReason::OverloadEvidencePassed
+            );
+            assert!(
+                degrade_telem.transition_seq > 0,
+                "transition_seq should increment on transitions"
+            );
+            assert!(
+                degrade_telem.transition_correlation_id > 0,
+                "transition correlation id should be populated on transitions"
+            );
+            assert!(
+                degrade_telem.pid_gate_margin > 0.0,
+                "degrade transition should have positive PID gate margin"
+            );
+            assert!(
+                degrade_telem.evidence_margin > 0.0,
+                "degrade transition should have positive evidence margin"
+            );
+
+            // Drive toward an upgrade transition.
+            let mut upgrade_telem = None;
+            for _ in 0..160 {
+                ctrl.update(Duration::from_millis(4));
+                let telem = ctrl.telemetry();
+                if telem.last_decision == BudgetDecision::Upgrade {
+                    upgrade_telem = Some(telem);
+                    break;
+                }
+            }
+            let upgrade_telem =
+                upgrade_telem.expect("expected upgrade transition with correlation metadata");
+            assert_eq!(
+                upgrade_telem.decision_reason,
+                BudgetDecisionReason::UnderloadEvidencePassed
+            );
+            assert!(
+                upgrade_telem.transition_seq >= degrade_telem.transition_seq,
+                "transition sequence should be monotonic"
+            );
+            assert!(
+                upgrade_telem.transition_correlation_id >= degrade_telem.transition_correlation_id,
+                "transition correlation id should be monotonic"
+            );
+            assert!(
+                upgrade_telem.pid_gate_margin > 0.0,
+                "upgrade transition should have positive PID gate margin"
+            );
+            assert!(
+                upgrade_telem.evidence_margin > 0.0,
+                "upgrade transition should have positive evidence margin"
+            );
         }
 
         #[test]
@@ -3479,6 +3933,29 @@ mod tests {
             assert_eq!(BudgetDecision::Upgrade.as_str(), "upgrade");
         }
 
+        #[test]
+        fn budget_decision_reason_debug_and_as_str() {
+            assert!(
+                format!("{:?}", BudgetDecisionReason::CooldownActive).contains("CooldownActive")
+            );
+            assert_eq!(
+                BudgetDecisionReason::CooldownActive.as_str(),
+                "cooldown_active"
+            );
+            assert_eq!(
+                BudgetDecisionReason::OverloadEvidencePassed.as_str(),
+                "overload_evidence_passed"
+            );
+            assert_eq!(
+                BudgetDecisionReason::UnderloadEvidencePassed.as_str(),
+                "underload_evidence_passed"
+            );
+            assert_eq!(
+                BudgetDecisionReason::WithinThresholdBand.as_str(),
+                "within_threshold_band"
+            );
+        }
+
         // --- Phase edge cases ---
 
         #[test]
@@ -3514,6 +3991,7 @@ mod tests {
         #[test]
         fn budget_telemetry_debug() {
             let telem = BudgetTelemetry {
+                schema_version: BUDGET_TELEMETRY_SCHEMA_VERSION,
                 level: DegradationLevel::Full,
                 pid_output: 0.0,
                 pid_p: 0.0,
@@ -3523,6 +4001,15 @@ mod tests {
                 frames_observed: 0,
                 frames_since_change: 0,
                 last_decision: BudgetDecision::Hold,
+                decision_reason: BudgetDecisionReason::WithinThresholdBand,
+                transition_seq: 0,
+                transition_correlation_id: 0,
+                frame_time_ms: 0.0,
+                target_ms: 16.0,
+                pid_gate_threshold: 0.0,
+                pid_gate_margin: 0.0,
+                evidence_threshold: 0.0,
+                evidence_margin: 0.0,
                 in_warmup: true,
             };
             let s = format!("{:?}", telem);
@@ -3532,6 +4019,7 @@ mod tests {
         #[test]
         fn budget_telemetry_partial_eq() {
             let a = BudgetTelemetry {
+                schema_version: BUDGET_TELEMETRY_SCHEMA_VERSION,
                 level: DegradationLevel::Full,
                 pid_output: 0.5,
                 pid_p: 0.3,
@@ -3541,6 +4029,15 @@ mod tests {
                 frames_observed: 5,
                 frames_since_change: 2,
                 last_decision: BudgetDecision::Hold,
+                decision_reason: BudgetDecisionReason::WithinThresholdBand,
+                transition_seq: 0,
+                transition_correlation_id: 0,
+                frame_time_ms: 16.0,
+                target_ms: 16.0,
+                pid_gate_threshold: 0.0,
+                pid_gate_margin: 0.0,
+                evidence_threshold: 0.0,
+                evidence_margin: 0.0,
                 in_warmup: false,
             };
             let b = a;
