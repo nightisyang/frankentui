@@ -1,6 +1,6 @@
 [package]
 name = "ftui-extras"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license-file = "../../LICENSE"
 description = "Feature-gated extras for FrankenTUI (markdown, charts, clipboard, themes)."

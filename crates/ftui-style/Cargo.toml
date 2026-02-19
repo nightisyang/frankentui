@@ -1,6 +1,6 @@
 [package]
 name = "ftui-style"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license-file = "../../LICENSE"
 description = "Style, theme, and color primitives for FrankenTUI."
