@@ -3458,6 +3458,7 @@ impl Default for VisualEffectsScreen {
             // Transition overlay
             transition: TransitionState::new(),
             painter: RefCell::new(Painter::new(0, 0, Mode::Braille)),
+            cell_buffer: RefCell::new(Vec::new()),
             last_quality: Cell::new(FxQuality::Full),
             effect_panic: Cell::new(None),
             // Text effects demo (bd-2b82)
@@ -4446,16 +4447,8 @@ impl Screen for VisualEffectsScreen {
                         EffectType::SpinLattice => {
                             self.spin_lattice.render(&mut painter, pw, ph, quality)
                         }
-                        EffectType::DoomE1M1 => {
-                            self.with_doom_mut(|doom| {
-                                doom.render(&mut painter, pw, ph, quality, self.time, self.frame);
-                            });
-                        }
-                        EffectType::QuakeE1M1 => {
-                            self.with_quake_mut(|quake| {
-                                quake.render(&mut painter, pw, ph, quality, self.time, self.frame);
-                            });
-                        }
+                        // Replaced with high-fidelity BackdropFx (see below)
+                        EffectType::DoomE1M1 | EffectType::QuakeE1M1 => {}
                         // Canvas adapters for metaballs and plasma (bd-l8x9.5.3)
                         EffectType::Metaballs => {
                             self.with_metaballs_adapter_mut(|adapter| {
@@ -4495,6 +4488,60 @@ impl Screen for VisualEffectsScreen {
                     )
                     .style(Style::new().fg(PackedRgba::rgb(255, 220, 220)))
                     .render(crash_area, frame);
+                }
+            }
+        }
+
+        // Render high-fidelity BackdropFx for Doom/Quake (replacing legacy 3D canvas)
+        if matches!(self.effect, EffectType::DoomE1M1 | EffectType::QuakeE1M1) {
+            let width = canvas_area.width;
+            let height = canvas_area.height;
+            let len = width as usize * height as usize;
+            let mut buf = self.cell_buffer.borrow_mut();
+            if buf.len() < len {
+                buf.resize(len, PackedRgba::TRANSPARENT);
+            }
+            
+            let theme_inputs = current_fx_theme();
+            let ctx = ftui_extras::visual_fx::FxContext {
+                width,
+                height,
+                frame: self.frame,
+                time_seconds: self.time * 0.1,
+                quality: FxQuality::Full,
+                theme: &theme_inputs,
+            };
+            
+            match self.effect {
+                EffectType::DoomE1M1 => {
+                    self.with_doom_melt_mut(|fx| {
+                        use ftui_extras::visual_fx::BackdropFx;
+                        fx.resize(width, height);
+                        fx.render(ctx, &mut buf[..len]);
+                    });
+                }
+                EffectType::QuakeE1M1 => {
+                    self.with_quake_console_mut(|fx| {
+                        use ftui_extras::visual_fx::BackdropFx;
+                        // Animate drop or keep static? Full console is best for background.
+                        fx.set_progress(1.0); 
+                        fx.resize(width, height);
+                        fx.render(ctx, &mut buf[..len]);
+                    });
+                }
+                _ => unreachable!(),
+            }
+            
+            // Blit directly to frame buffers (Backdrop behavior)
+            for y in 0..height {
+                for x in 0..width {
+                    let idx = y as usize * width as usize + x as usize;
+                    let color = buf[idx];
+                    if let Some(cell) = frame.buffer.get_mut(canvas_area.x + x, canvas_area.y + y) {
+                        cell.bg = color;
+                        // Clear content to ensure backdrop is visible
+                        cell.content = ftui_render::cell::CellContent::EMPTY;
+                    }
                 }
             }
         }
