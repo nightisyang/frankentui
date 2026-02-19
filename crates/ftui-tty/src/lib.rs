@@ -9,7 +9,7 @@
 //! | Feature           | Enable                    | Disable                   |
 //! |-------------------|---------------------------|---------------------------|
 //! | Alternate screen  | `CSI ? 1049 h`            | `CSI ? 1049 l`            |
-//! | Mouse (SGR)       | `CSI ? 1000;1002;1006 h` (+ split compatibility) | `CSI ? 1000;1002;1006 l` (+ split compatibility) |
+//! | Mouse (SGR)       | `CSI ? 1000;1002;1006 h` (+ split compatibility) | `CSI ? 1000;1002;1006 l` (+ legacy reset hygiene) |
 //! | Bracketed paste   | `CSI ? 2004 h`            | `CSI ? 2004 l`            |
 //! | Focus events      | `CSI ? 1004 h`            | `CSI ? 1004 l`            |
 //! | Kitty keyboard    | `CSI > 15 u`              | `CSI < u`                 |
@@ -18,7 +18,7 @@
 
 use core::time::Duration;
 use std::collections::VecDeque;
-use std::io::{self, Read, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::Instant;
 
@@ -46,10 +46,16 @@ const ALT_SCREEN_LEAVE: &[u8] = b"\x1b[?1049l";
 //    split forms for emulator/mux compatibility.
 // 3) Clear 1016 before enabling SGR to avoid terminals that interpret 1016l
 //    after 1006h as a fallback to X10 mode.
-const MOUSE_ENABLE: &[u8] = b"\x1b[?1001l\x1b[?1003l\x1b[?1005l\x1b[?1015l\x1b[?1016l\x1b[?1000;1002;1006h\x1b[?1000h\x1b[?1002h\x1b[?1006h";
-const MOUSE_ENABLE_MUX_SAFE: &[u8] = b"\x1b[?1016l\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+// 4) Avoid DECSET 1003 (any-event mouse) because high-rate move streams can
+//    destabilize some mux pipelines.
+// NOTE: Set SGR format (1006) before enabling mouse event modes for better
+// compatibility with terminals that key off "last mode set" ordering.
+const MOUSE_ENABLE: &[u8] = b"\x1b[?1001l\x1b[?1003l\x1b[?1005l\x1b[?1015l\x1b[?1016l\x1b[?1006;1000;1002h\x1b[?1006h\x1b[?1000h\x1b[?1002h";
+const MOUSE_ENABLE_MUX_SAFE: &[u8] =
+    b"\x1b[?1001l\x1b[?1003l\x1b[?1005l\x1b[?1015l\x1b[?1016l\x1b[?1006h\x1b[?1000h\x1b[?1002h";
 const MOUSE_DISABLE: &[u8] = b"\x1b[?1000;1002;1006l\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1001l\x1b[?1003l\x1b[?1005l\x1b[?1015l\x1b[?1016l";
-const MOUSE_DISABLE_MUX_SAFE: &[u8] = b"\x1b[?1016l\x1b[?1000l\x1b[?1002l\x1b[?1006l";
+const MOUSE_DISABLE_MUX_SAFE: &[u8] =
+    b"\x1b[?1016l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1001l\x1b[?1005l\x1b[?1015l";
 
 const BRACKETED_PASTE_ENABLE: &[u8] = b"\x1b[?2004h";
 const BRACKETED_PASTE_DISABLE: &[u8] = b"\x1b[?2004l";
@@ -67,6 +73,55 @@ const CURSOR_HIDE: &[u8] = b"\x1b[?25l";
 const SYNC_END: &[u8] = b"\x1b[?2026l";
 const RESET_SCROLL_REGION: &[u8] = b"\x1b[r";
 const SGR_RESET: &[u8] = b"\x1b[0m";
+
+// ── Debug Input Tracing ──────────────────────────────────────────────────
+
+const INPUT_TRACE_ENV: &str = "FTUI_TTY_INPUT_TRACE";
+
+#[derive(Debug)]
+struct InputTrace {
+    seq: u64,
+    writer: BufWriter<std::fs::File>,
+}
+
+impl InputTrace {
+    fn from_env() -> Option<Self> {
+        let path = std::env::var(INPUT_TRACE_ENV).ok()?;
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(trimmed)
+            .ok()?;
+        Some(Self {
+            seq: 0,
+            writer: BufWriter::new(file),
+        })
+    }
+
+    fn record(&mut self, bytes: &[u8], parsed: &[Event]) {
+        self.seq = self.seq.saturating_add(1);
+        let _ = write!(self.writer, "seq={} n={} hex=", self.seq, bytes.len());
+        let _ = write_hex(&mut self.writer, bytes);
+        let _ = writeln!(self.writer);
+        for ev in parsed {
+            let _ = writeln!(self.writer, "  {:?}", ev);
+        }
+        let _ = writeln!(self.writer, "---");
+        let _ = self.writer.flush();
+    }
+}
+
+fn write_hex(w: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for &b in bytes {
+        w.write_all(&[HEX[(b >> 4) as usize], HEX[(b & 0x0f) as usize]])?;
+    }
+    Ok(())
+}
 
 #[inline]
 const fn mouse_disable_sequence_for_capabilities(
@@ -426,6 +481,8 @@ pub struct TtyEventSource {
     reader_nonblocking: bool,
     /// Monotonic timestamp of the most recent byte read from the tty.
     last_input_byte_at: Option<Instant>,
+    /// Optional raw input trace sink (env-gated).
+    input_trace: Option<InputTrace>,
 }
 
 impl TtyEventSource {
@@ -452,6 +509,7 @@ impl TtyEventSource {
             tty_reader: None,
             reader_nonblocking: false,
             last_input_byte_at: None,
+            input_trace: None,
         }
     }
 
@@ -503,6 +561,7 @@ impl TtyEventSource {
             tty_reader: Some(tty_reader),
             reader_nonblocking,
             last_input_byte_at: None,
+            input_trace: InputTrace::from_env(),
         })
     }
 
@@ -533,6 +592,7 @@ impl TtyEventSource {
             tty_reader: Some(reader),
             reader_nonblocking,
             last_input_byte_at: None,
+            input_trace: None,
         }
     }
 
@@ -619,22 +679,20 @@ impl TtyEventSource {
         let outside_grid = mouse.x >= self.width || mouse.y >= self.height;
         let strongly_outside =
             mouse.x >= self.width.saturating_mul(2) || mouse.y >= self.height.saturating_mul(2);
-        let kind_implies_in_viewport = matches!(
-            mouse.kind,
-            MouseEventKind::Down(_)
-                | MouseEventKind::Up(_)
-                | MouseEventKind::ScrollUp
-                | MouseEventKind::ScrollDown
-                | MouseEventKind::ScrollLeft
-                | MouseEventKind::ScrollRight
-        );
-        if !self.mouse_coords_pixels
-            && (strongly_outside || (outside_grid && kind_implies_in_viewport))
-        {
+        if !self.mouse_coords_pixels && strongly_outside {
             self.mouse_coords_pixels = true;
         }
         let likely_pixel_space = self.mouse_coords_pixels || strongly_outside;
-        if !self.features.mouse_capture || !self.capabilities.mouse_sgr || !likely_pixel_space {
+        if !self.features.mouse_capture || !self.capabilities.mouse_sgr {
+            return Event::Mouse(mouse);
+        }
+        if !likely_pixel_space {
+            // Minor out-of-grid events happen at viewport edges in some terminals.
+            // Clamp to valid cell coordinates but avoid arming sticky pixel mode.
+            if outside_grid {
+                mouse.x = mouse.x.min(self.width.saturating_sub(1));
+                mouse.y = mouse.y.min(self.height.saturating_sub(1));
+            }
             return Event::Mouse(mouse);
         }
 
@@ -758,9 +816,12 @@ impl TtyEventSource {
                     parsed_events.clear();
                     self.parser
                         .parse_with(&buf[..n], |event| parsed_events.push(event));
+                    if let Some(ref mut trace) = self.input_trace {
+                        trace.record(&buf[..n], &parsed_events);
+                    }
                     for event in parsed_events.drain(..) {
                         let normalized = self.normalize_event(event);
-                        self.event_queue.push_back(normalized);
+                        self.push_event_coalescing(normalized);
                     }
                     drained_bytes = drained_bytes.saturating_add(n);
                     if !self.reader_nonblocking {
@@ -775,6 +836,24 @@ impl TtyEventSource {
                 Err(e) => return Err(e),
             }
         }
+    }
+
+    /// Push an event into the queue, coalescing the hottest high-volume event types.
+    ///
+    /// Some terminals can emit a very high rate of `Moved` events
+    /// (trackpad jitter, hover streams). Coalescing consecutive move events keeps
+    /// the queue bounded and prevents input storms from starving the render loop.
+    fn push_event_coalescing(&mut self, event: Event) {
+        if let Event::Mouse(m) = event
+            && matches!(m.kind, MouseEventKind::Moved)
+            && matches!(
+                self.event_queue.back(),
+                Some(Event::Mouse(prev)) if matches!(prev.kind, MouseEventKind::Moved)
+            )
+        {
+            let _ = self.event_queue.pop_back();
+        }
+        self.event_queue.push_back(event);
     }
 
     #[inline]
@@ -2318,16 +2397,28 @@ mod tests {
             MOUSE_ENABLE_MUX_SAFE
         );
         assert!(
-            !MOUSE_ENABLE_MUX_SAFE
-                .windows(b"\x1b[?1001l".len())
-                .any(|w| w == b"\x1b[?1001l"),
-            "mux-safe enable should avoid legacy reset bundle"
+            MOUSE_ENABLE_MUX_SAFE
+                .windows(b"\x1b[?1005l".len())
+                .any(|w| w == b"\x1b[?1005l"),
+            "mux-safe enable should clear UTF-8 mouse encoding (1005)"
+        );
+        assert!(
+            MOUSE_ENABLE_MUX_SAFE
+                .windows(b"\x1b[?1015l".len())
+                .any(|w| w == b"\x1b[?1015l"),
+            "mux-safe enable should clear urxvt mouse encoding (1015)"
         );
         assert!(
             MOUSE_ENABLE_MUX_SAFE
                 .windows(b"\x1b[?1006h".len())
                 .any(|w| w == b"\x1b[?1006h"),
             "mux-safe enable should keep SGR mouse mode"
+        );
+        assert!(
+            !MOUSE_ENABLE_MUX_SAFE
+                .windows(b"\x1b[?1003h".len())
+                .any(|w| w == b"\x1b[?1003h"),
+            "mux-safe enable should avoid 1003 any-event mode"
         );
         let pos_1016l = MOUSE_ENABLE_MUX_SAFE
             .windows(b"\x1b[?1016l".len())
@@ -2388,9 +2479,9 @@ mod tests {
             "feature delta should use mux-safe mouse enable sequence in mux contexts"
         );
         assert!(
-            !buf.windows(b"\x1b[?1001l".len())
-                .any(|w| w == b"\x1b[?1001l"),
-            "feature delta must avoid legacy reset bundle in mux contexts"
+            buf.windows(b"\x1b[?1005l".len())
+                .any(|w| w == b"\x1b[?1005l"),
+            "feature delta should clear UTF-8 mouse encoding (1005) in mux contexts"
         );
     }
 
@@ -2832,6 +2923,58 @@ mod tests {
         assert!(mouse.y < src.height);
         assert!(mouse.x > 0 && mouse.x < src.width.saturating_sub(1));
         assert!(mouse.y > 0 && mouse.y < src.height.saturating_sub(1));
+    }
+
+    #[test]
+    fn normalize_event_near_edge_outside_grid_clamps_without_sticky_pixel_mode() {
+        use ftui_core::event::{Modifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let mut src = TtyEventSource::new(100, 40);
+        src.capabilities = TerminalCapabilities::builder().mouse_sgr(true).build();
+        src.features = BackendFeatures {
+            mouse_capture: true,
+            ..BackendFeatures::default()
+        };
+        src.pixel_width = 1000;
+        src.pixel_height = 800;
+
+        let near_edge = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            x: 100,
+            y: 40,
+            modifiers: Modifiers::NONE,
+        });
+        let normalized = src.normalize_event(near_edge);
+        let mouse = match normalized {
+            Event::Mouse(mouse) => mouse,
+            other => {
+                panic!("expected mouse event, got {other:?}");
+            }
+        };
+        assert_eq!(mouse.x, 99);
+        assert_eq!(mouse.y, 39);
+        assert!(
+            !src.mouse_coords_pixels,
+            "edge clamp must not arm sticky pixel normalization"
+        );
+
+        let follow_up = Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            x: 50,
+            y: 20,
+            modifiers: Modifiers::NONE,
+        });
+        let normalized_follow_up = src.normalize_event(follow_up);
+        assert_eq!(
+            normalized_follow_up,
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                x: 50,
+                y: 20,
+                modifiers: Modifiers::NONE,
+            }),
+            "normal cell-space events should remain unchanged after edge clamp"
+        );
     }
 
     #[test]

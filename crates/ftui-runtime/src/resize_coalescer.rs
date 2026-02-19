@@ -287,6 +287,32 @@ impl Regime {
     }
 }
 
+/// Structured reason codes for regime transitions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransitionReasonCode {
+    /// Heuristic detector entered burst because event rate crossed enter threshold.
+    HeuristicEnterBurstRate,
+    /// Heuristic detector exited burst after cooldown with low event rate.
+    HeuristicExitBurstCooldown,
+    /// BOCPD posterior crossed burst threshold.
+    BocpdPosteriorBurst,
+    /// BOCPD posterior crossed steady threshold.
+    BocpdPosteriorSteady,
+}
+
+impl TransitionReasonCode {
+    /// Stable string form for JSONL evidence.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::HeuristicEnterBurstRate => "heuristic_enter_burst_rate",
+            Self::HeuristicExitBurstCooldown => "heuristic_exit_burst_cooldown",
+            Self::BocpdPosteriorBurst => "bocpd_posterior_burst",
+            Self::BocpdPosteriorSteady => "bocpd_posterior_steady",
+        }
+    }
+}
+
 /// Event emitted when a resize operation is applied (bd-bksf.6 stub).
 ///
 /// Used by [`ResizeSlaMonitor`](crate::resize_sla::ResizeSlaMonitor) for latency tracking.
@@ -313,6 +339,10 @@ pub struct RegimeChangeEvent {
     pub to: Regime,
     /// Event index when transition occurred.
     pub event_idx: u64,
+    /// Structured reason for the transition.
+    pub reason_code: TransitionReasonCode,
+    /// Transition confidence in [0, 1].
+    pub confidence: f64,
 }
 
 // =============================================================================
@@ -481,6 +511,10 @@ pub struct DecisionLog {
     pub coalesce_ms: Option<f64>,
     /// Was forced by deadline.
     pub forced: bool,
+    /// Transition reason code if this decision coincided with a regime transition.
+    pub transition_reason_code: Option<TransitionReasonCode>,
+    /// Transition confidence if this decision coincided with a regime transition.
+    pub transition_confidence: Option<f64>,
 }
 
 impl DecisionLog {
@@ -499,10 +533,19 @@ impl DecisionLog {
             Some(ms) => format!("{:.3}", ms),
             None => "null".to_string(),
         };
+        let transition_reason_code = self
+            .transition_reason_code
+            .map(TransitionReasonCode::as_str)
+            .map(|code| format!(r#""{code}""#))
+            .unwrap_or_else(|| "null".to_string());
+        let transition_confidence = self
+            .transition_confidence
+            .map(|confidence| format!("{confidence:.6}"))
+            .unwrap_or_else(|| "null".to_string());
         let prefix = evidence_prefix(run_id, screen_mode, cols, rows, self.event_idx);
 
         format!(
-            r#"{{{prefix},"event":"decision","idx":{},"elapsed_ms":{:.3},"dt_ms":{:.3},"event_rate":{:.3},"regime":"{}","action":"{}","pending_w":{},"pending_h":{},"applied_w":{},"applied_h":{},"time_since_render_ms":{:.3},"coalesce_ms":{},"forced":{}}}"#,
+            r#"{{{prefix},"event":"decision","idx":{},"elapsed_ms":{:.3},"dt_ms":{:.3},"event_rate":{:.3},"regime":"{}","action":"{}","pending_w":{},"pending_h":{},"applied_w":{},"applied_h":{},"time_since_render_ms":{:.3},"coalesce_ms":{},"forced":{},"transition_reason_code":{},"transition_confidence":{}}}"#,
             self.event_idx,
             self.elapsed_ms,
             self.dt_ms,
@@ -515,7 +558,60 @@ impl DecisionLog {
             applied_h,
             self.time_since_render_ms,
             coalesce_ms,
-            self.forced
+            self.forced,
+            transition_reason_code,
+            transition_confidence
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingTransitionEvidence {
+    reason_code: TransitionReasonCode,
+    confidence: f64,
+}
+
+/// Transition evidence entry emitted when the controller changes regime.
+#[derive(Debug, Clone)]
+pub struct RegimeTransitionLog {
+    /// Timestamp when transition occurred.
+    pub timestamp: Instant,
+    /// Event index when transition occurred.
+    pub event_idx: u64,
+    /// Previous regime.
+    pub from_regime: Regime,
+    /// New regime.
+    pub to_regime: Regime,
+    /// Structured reason code.
+    pub reason_code: TransitionReasonCode,
+    /// Confidence in [0, 1].
+    pub confidence: f64,
+    /// Event rate at transition time.
+    pub event_rate: f64,
+    /// BOCPD posterior probability of burst, if available.
+    pub p_burst: Option<f64>,
+    /// Current cooldown counter after transition accounting.
+    pub cooldown_remaining: u32,
+}
+
+impl RegimeTransitionLog {
+    /// Serialize transition evidence to JSONL format.
+    #[must_use]
+    pub fn to_jsonl(&self, run_id: &str, screen_mode: ScreenMode, cols: u16, rows: u16) -> String {
+        let prefix = evidence_prefix(run_id, screen_mode, cols, rows, self.event_idx);
+        let p_burst = self
+            .p_burst
+            .map(|value| format!("{value:.6}"))
+            .unwrap_or_else(|| "null".to_string());
+        format!(
+            r#"{{{prefix},"event":"regime_transition","from_regime":"{}","to_regime":"{}","reason_code":"{}","confidence":{:.6},"event_rate":{:.3},"p_burst":{},"cooldown_remaining":{}}}"#,
+            self.from_regime.as_str(),
+            self.to_regime.as_str(),
+            self.reason_code.as_str(),
+            self.confidence,
+            self.event_rate,
+            p_burst,
+            self.cooldown_remaining,
         )
     }
 }
@@ -559,6 +655,10 @@ pub struct ResizeCoalescer {
 
     /// Decision logs (if logging enabled).
     logs: Vec<DecisionLog>,
+    /// Regime transition evidence logs.
+    transition_logs: Vec<RegimeTransitionLog>,
+    /// Pending transition evidence to attach to the next decision row.
+    pending_transition_evidence: Option<PendingTransitionEvidence>,
     /// Evidence sink for JSONL decision logs.
     evidence_sink: Option<EvidenceSink>,
     /// Whether config has been logged to the evidence sink.
@@ -637,6 +737,8 @@ impl ResizeCoalescer {
             event_count: 0,
             log_start: None,
             logs: Vec::new(),
+            transition_logs: Vec::new(),
+            pending_transition_evidence: None,
             evidence_sink: None,
             config_logged: false,
             evidence_run_id: default_resize_run_id(),
@@ -856,7 +958,14 @@ impl ResizeCoalescer {
             if self.cooldown_remaining == 0 && self.regime == Regime::Burst {
                 let rate = self.calculate_event_rate(now);
                 if rate < self.config.burst_exit_rate {
-                    self.regime = Regime::Steady;
+                    self.record_regime_transition(
+                        now,
+                        Regime::Steady,
+                        TransitionReasonCode::HeuristicExitBurstCooldown,
+                        (1.0 - (rate / self.config.burst_exit_rate)).clamp(0.0, 1.0),
+                        rate,
+                        None,
+                    );
                 }
             }
         }
@@ -943,9 +1052,16 @@ impl ResizeCoalescer {
         &self.logs
     }
 
+    /// Get regime transition evidence logs.
+    pub fn transition_logs(&self) -> &[RegimeTransitionLog] {
+        &self.transition_logs
+    }
+
     /// Clear decision logs.
     pub fn clear_logs(&mut self) {
         self.logs.clear();
+        self.transition_logs.clear();
+        self.pending_transition_evidence = None;
         self.log_start = None;
         self.config_logged = false;
     }
@@ -1014,6 +1130,14 @@ impl ResizeCoalescer {
                 fnv_hash_bytes(&mut hash, &ms.to_bits().to_le_bytes());
             }
             fnv_hash_bytes(&mut hash, &[entry.forced as u8]);
+            fnv_hash_bytes(&mut hash, &[entry.transition_reason_code.is_some() as u8]);
+            if let Some(reason_code) = entry.transition_reason_code {
+                fnv_hash_bytes(&mut hash, reason_code.as_str().as_bytes());
+            }
+            fnv_hash_bytes(&mut hash, &[entry.transition_confidence.is_some() as u8]);
+            if let Some(confidence) = entry.transition_confidence {
+                fnv_hash_bytes(&mut hash, &confidence.to_bits().to_le_bytes());
+            }
         }
         hash
     }
@@ -1054,14 +1178,24 @@ impl ResizeCoalescer {
     /// Export config + decision logs + summary as JSONL.
     #[must_use]
     pub fn evidence_to_jsonl(&self) -> String {
-        let mut lines = Vec::with_capacity(self.logs.len() + 2);
+        let mut lines = Vec::with_capacity(self.logs.len() + self.transition_logs.len() + 2);
         let (cols, rows) = self.last_applied;
         let run_id = self.evidence_run_id.as_str();
         let screen_mode = self.evidence_screen_mode;
-        let summary_event_idx = self.logs.last().map(|entry| entry.event_idx).unwrap_or(0);
+        let summary_event_idx = self
+            .logs
+            .last()
+            .map(|entry| entry.event_idx)
+            .or_else(|| self.transition_logs.last().map(|entry| entry.event_idx))
+            .unwrap_or(0);
         lines.push(self.config.to_jsonl(run_id, screen_mode, cols, rows, 0));
         lines.extend(
             self.logs
+                .iter()
+                .map(|entry| entry.to_jsonl(run_id, screen_mode, cols, rows)),
+        );
+        lines.extend(
+            self.transition_logs
                 .iter()
                 .map(|entry| entry.to_jsonl(run_id, screen_mode, cols, rows)),
         );
@@ -1134,22 +1268,53 @@ impl ResizeCoalescer {
     }
 
     fn update_regime(&mut self, now: Instant) {
-        let old_regime = self.regime;
-
         // Use BOCPD for regime detection when enabled
-        if let Some(ref mut bocpd) = self.bocpd {
-            // Update BOCPD with the event timestamp (it calculates inter-arrival internally)
-            bocpd.observe_event(now);
+        if self.bocpd.is_some() {
+            let transition = {
+                let mut pending = None;
+                if let Some(bocpd) = self.bocpd.as_mut() {
+                    // Update BOCPD with the event timestamp (it calculates inter-arrival internally)
+                    bocpd.observe_event(now);
 
-            // Map BOCPD regime to coalescer regime
-            self.regime = match bocpd.regime() {
-                BocpdRegime::Steady => Regime::Steady,
-                BocpdRegime::Burst => Regime::Burst,
-                BocpdRegime::Transitional => {
-                    // During transition, maintain current regime to avoid thrashing
-                    self.regime
+                    let p_burst = bocpd.p_burst();
+                    // Map BOCPD regime to coalescer regime.
+                    let proposed = match bocpd.regime() {
+                        BocpdRegime::Steady => Regime::Steady,
+                        BocpdRegime::Burst => Regime::Burst,
+                        BocpdRegime::Transitional => {
+                            // During transition, maintain current regime to avoid thrashing
+                            self.regime
+                        }
+                    };
+                    if proposed != self.regime {
+                        let (reason_code, confidence) = if proposed == Regime::Burst {
+                            (
+                                TransitionReasonCode::BocpdPosteriorBurst,
+                                p_burst.clamp(0.0, 1.0),
+                            )
+                        } else {
+                            (
+                                TransitionReasonCode::BocpdPosteriorSteady,
+                                (1.0 - p_burst).clamp(0.0, 1.0),
+                            )
+                        };
+                        pending = Some((proposed, reason_code, confidence, p_burst));
+                    }
                 }
+                pending
             };
+
+            if let Some((proposed, reason_code, confidence, p_burst)) = transition {
+                let rate = self.calculate_event_rate(now);
+                self.record_regime_transition(
+                    now,
+                    proposed,
+                    reason_code,
+                    confidence,
+                    rate,
+                    Some(p_burst),
+                );
+            }
         } else {
             // Fall back to heuristic rate-based detection
             let rate = self.calculate_event_rate(now);
@@ -1157,8 +1322,16 @@ impl ResizeCoalescer {
             match self.regime {
                 Regime::Steady => {
                     if rate >= self.config.burst_enter_rate {
-                        self.regime = Regime::Burst;
                         self.cooldown_remaining = self.config.cooldown_frames;
+                        let confidence = (rate / self.config.burst_enter_rate).clamp(0.0, 1.0);
+                        self.record_regime_transition(
+                            now,
+                            Regime::Burst,
+                            TransitionReasonCode::HeuristicEnterBurstRate,
+                            confidence,
+                            rate,
+                            None,
+                        );
                     }
                 }
                 Regime::Burst => {
@@ -1174,12 +1347,52 @@ impl ResizeCoalescer {
                 }
             }
         }
+    }
 
-        // Track regime transitions and fire telemetry hooks (bd-1rz0.7)
-        if old_regime != self.regime {
-            self.regime_transitions += 1;
-            if let Some(ref hooks) = self.telemetry_hooks {
-                hooks.fire_regime_change(old_regime, self.regime);
+    fn record_regime_transition(
+        &mut self,
+        now: Instant,
+        to_regime: Regime,
+        reason_code: TransitionReasonCode,
+        confidence: f64,
+        event_rate: f64,
+        p_burst: Option<f64>,
+    ) {
+        let from_regime = self.regime;
+        if from_regime == to_regime {
+            return;
+        }
+        self.regime = to_regime;
+        self.regime_transitions += 1;
+        self.pending_transition_evidence = Some(PendingTransitionEvidence {
+            reason_code,
+            confidence,
+        });
+        self.transition_logs.push(RegimeTransitionLog {
+            timestamp: now,
+            event_idx: self.event_count,
+            from_regime,
+            to_regime,
+            reason_code,
+            confidence,
+            event_rate,
+            p_burst,
+            cooldown_remaining: self.cooldown_remaining,
+        });
+        if let Some(ref hooks) = self.telemetry_hooks {
+            hooks.fire_regime_change(from_regime, to_regime);
+        }
+
+        if let Some(ref sink) = self.evidence_sink {
+            let (cols, rows) = self.last_applied;
+            let run_id = self.evidence_run_id.as_str();
+            let screen_mode = self.evidence_screen_mode;
+            if !self.config_logged {
+                let _ = sink.write_jsonl(&self.config.to_jsonl(run_id, screen_mode, cols, rows, 0));
+                self.config_logged = true;
+            }
+            if let Some(entry) = self.transition_logs.last() {
+                let _ = sink.write_jsonl(&entry.to_jsonl(run_id, screen_mode, cols, rows));
             }
         }
     }
@@ -1242,6 +1455,11 @@ impl ResizeCoalescer {
             } else {
                 None
             };
+        let (transition_reason_code, transition_confidence) =
+            match self.pending_transition_evidence.take() {
+                Some(ev) => (Some(ev.reason_code), Some(ev.confidence)),
+                None => (None, None),
+            };
 
         self.logs.push(DecisionLog {
             timestamp: now,
@@ -1256,6 +1474,8 @@ impl ResizeCoalescer {
             time_since_render_ms,
             coalesce_ms,
             forced,
+            transition_reason_code,
+            transition_confidence,
         });
 
         if let Some(ref sink) = self.evidence_sink {
@@ -2085,6 +2305,8 @@ mod tests {
                         "time_since_render_ms",
                         "coalesce_ms",
                         "forced",
+                        "transition_reason_code",
+                        "transition_confidence",
                     ] {
                         assert!(value.get(key).is_some(), "missing decision field {key}");
                     }
@@ -2194,6 +2416,184 @@ mod tests {
             .collect();
 
         assert_eq!(results[0], results[1], "Results must be deterministic");
+    }
+
+    #[test]
+    fn transition_reason_codes_and_evidence_fields_are_logged() {
+        let mut config = test_config();
+        config.enable_logging = true;
+        config.hard_deadline_ms = 5_000;
+        config.burst_delay_ms = 50;
+        let base = Instant::now();
+        let mut c = ResizeCoalescer::new(config, (80, 24)).with_last_render(base);
+
+        for i in 0..12 {
+            c.handle_resize_at(90 + i, 30, base + Duration::from_millis(i as u64 * 10));
+        }
+
+        let transition = c
+            .transition_logs()
+            .first()
+            .expect("rapid events should trigger a transition");
+        assert_eq!(transition.from_regime, Regime::Steady);
+        assert_eq!(transition.to_regime, Regime::Burst);
+        assert_eq!(
+            transition.reason_code,
+            TransitionReasonCode::HeuristicEnterBurstRate
+        );
+        assert!(
+            (0.0..=1.0).contains(&transition.confidence),
+            "transition confidence should be normalized"
+        );
+        assert!(
+            transition.event_rate >= 0.0,
+            "event-rate evidence should be included"
+        );
+
+        let decision_with_transition = c
+            .logs()
+            .iter()
+            .find(|entry| entry.transition_reason_code.is_some())
+            .expect("transition decisions should include reason code/evidence");
+        assert_eq!(
+            decision_with_transition.transition_reason_code,
+            Some(TransitionReasonCode::HeuristicEnterBurstRate)
+        );
+        assert!(decision_with_transition.transition_confidence.is_some());
+
+        let jsonl = c.evidence_to_jsonl();
+        assert!(jsonl.contains("\"event\":\"regime_transition\""));
+        assert!(jsonl.contains("\"reason_code\":\"heuristic_enter_burst_rate\""));
+        assert!(jsonl.contains("\"transition_reason_code\":"));
+    }
+
+    #[test]
+    fn regime_transition_sequence_is_deterministic_for_fixed_schedule() {
+        let config = CoalescerConfig {
+            burst_enter_rate: 5.0,
+            burst_exit_rate: 2.0,
+            cooldown_frames: 3,
+            rate_window_size: 4,
+            steady_delay_ms: 10,
+            burst_delay_ms: 50,
+            hard_deadline_ms: 5_000,
+            enable_logging: true,
+            enable_bocpd: false,
+            bocpd_config: None,
+        };
+        let base = Instant::now();
+
+        let run = || {
+            let mut c = ResizeCoalescer::new(config.clone(), (80, 24)).with_last_render(base);
+
+            // Enter burst with rapid events.
+            for i in 0..8u64 {
+                let t = base + Duration::from_millis(30 * i);
+                c.handle_resize_at(80 + i as u16, 24, t);
+            }
+
+            // Apply pending and flush rate window with slow events.
+            let mut t = base + Duration::from_millis(280);
+            let _ = c.tick_at(t);
+            for i in 0..5u64 {
+                t += Duration::from_secs(1);
+                c.handle_resize_at(100 + i as u16, 30, t);
+                let _ = c.tick_at(t + Duration::from_millis(60));
+            }
+
+            // Drain cooldown without triggering apply.
+            t += Duration::from_secs(1);
+            c.handle_resize_at(120, 35, t);
+            for step in 1..=config.cooldown_frames {
+                let _ = c.tick_at(t + Duration::from_millis(step as u64 * 5));
+            }
+
+            c.transition_logs()
+                .iter()
+                .map(|entry| {
+                    (
+                        entry.from_regime,
+                        entry.to_regime,
+                        entry.reason_code,
+                        entry.event_idx,
+                        entry.cooldown_remaining,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let first = run();
+        let second = run();
+        assert_eq!(first, second);
+        assert!(
+            first.iter().any(|(_, to, reason, _, _)| {
+                *to == Regime::Burst && *reason == TransitionReasonCode::HeuristicEnterBurstRate
+            }),
+            "expected steady->burst transition with heuristic reason"
+        );
+        assert!(
+            first.iter().any(|(_, to, reason, _, _)| {
+                *to == Regime::Steady && *reason == TransitionReasonCode::HeuristicExitBurstCooldown
+            }),
+            "expected burst->steady transition with cooldown reason"
+        );
+    }
+
+    #[test]
+    fn bounded_oscillation_and_converges_to_steady() {
+        let config = CoalescerConfig {
+            burst_enter_rate: 5.0,
+            burst_exit_rate: 2.0,
+            cooldown_frames: 3,
+            rate_window_size: 4,
+            steady_delay_ms: 10,
+            burst_delay_ms: 50,
+            hard_deadline_ms: 5_000,
+            enable_logging: true,
+            enable_bocpd: false,
+            bocpd_config: None,
+        };
+        let base = Instant::now();
+        let mut c = ResizeCoalescer::new(config.clone(), (80, 24)).with_last_render(base);
+        let mut t = base;
+
+        // Alternate burst pulses with limited cooldown opportunities.
+        for cycle in 0..30u64 {
+            for pulse in 0..6u64 {
+                t += Duration::from_millis(30);
+                c.handle_resize_at(80 + ((cycle + pulse) % 40) as u16, 24, t);
+            }
+            t += Duration::from_millis(70);
+            let _ = c.tick_at(t);
+
+            t += Duration::from_secs(1);
+            c.handle_resize_at(120 + (cycle % 20) as u16, 30, t);
+            let _ = c.tick_at(t + Duration::from_millis(5));
+        }
+
+        let transitions_before_convergence = c.regime_transition_count();
+        assert!(
+            transitions_before_convergence <= 4,
+            "oscillation should stay bounded, transitions={}",
+            transitions_before_convergence
+        );
+
+        // Final quiet period: explicitly drain cooldown and verify convergence.
+        t += Duration::from_secs(1);
+        c.handle_resize_at(160, 40, t);
+        for step in 1..=config.cooldown_frames {
+            let _ = c.tick_at(t + Duration::from_millis(step as u64 * 5));
+        }
+        assert_eq!(c.regime(), Regime::Steady);
+        let last_transition = c
+            .transition_logs()
+            .last()
+            .expect("expected at least one transition");
+        assert_eq!(last_transition.to_regime, Regime::Steady);
+        assert_eq!(
+            last_transition.reason_code,
+            TransitionReasonCode::HeuristicExitBurstCooldown
+        );
     }
 
     #[test]
@@ -3084,6 +3484,8 @@ mod tests {
             time_since_render_ms: 16.2,
             coalesce_ms: Some(16.0),
             forced: false,
+            transition_reason_code: None,
+            transition_confidence: None,
         };
 
         let jsonl = log.to_jsonl("test-run-1", ScreenMode::AltScreen, 100, 40);
@@ -3115,6 +3517,8 @@ mod tests {
         assert!(parsed["time_since_render_ms"].as_f64().is_some());
         assert!(parsed["coalesce_ms"].as_f64().is_some());
         assert!(!parsed["forced"].as_bool().unwrap());
+        assert!(parsed["transition_reason_code"].is_null());
+        assert!(parsed["transition_confidence"].is_null());
     }
 
     #[test]
@@ -3132,6 +3536,8 @@ mod tests {
             time_since_render_ms: 0.0,
             coalesce_ms: None,
             forced: false,
+            transition_reason_code: None,
+            transition_confidence: None,
         };
 
         let jsonl = log.to_jsonl("test-run-2", ScreenMode::AltScreen, 80, 24);
@@ -3143,6 +3549,8 @@ mod tests {
         assert!(parsed["applied_w"].is_null());
         assert!(parsed["applied_h"].is_null());
         assert!(parsed["coalesce_ms"].is_null());
+        assert!(parsed["transition_reason_code"].is_null());
+        assert!(parsed["transition_confidence"].is_null());
     }
 
     #[test]
@@ -3181,6 +3589,8 @@ mod tests {
             time_since_render_ms: 5.0,
             coalesce_ms: None,
             forced: false,
+            transition_reason_code: None,
+            transition_confidence: None,
         };
 
         let jsonl = log.to_jsonl("inline-run", ScreenMode::Inline { ui_height: 12 }, 120, 40);
@@ -3838,10 +4248,17 @@ mod tests {
             from: Regime::Steady,
             to: Regime::Burst,
             event_idx: 42,
+            reason_code: TransitionReasonCode::HeuristicEnterBurstRate,
+            confidence: 0.91,
         };
         assert_eq!(event.from, Regime::Steady);
         assert_eq!(event.to, Regime::Burst);
         assert_eq!(event.event_idx, 42);
+        assert_eq!(
+            event.reason_code,
+            TransitionReasonCode::HeuristicEnterBurstRate
+        );
+        assert!((event.confidence - 0.91).abs() < f64::EPSILON);
     }
 
     // =========================================================================

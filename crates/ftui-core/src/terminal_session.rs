@@ -186,18 +186,26 @@ const RESET_SCROLL_REGION: &[u8] = b"\x1b[r";
 const RESET_STYLE: &[u8] = b"\x1b[0m";
 // Mouse mode hygiene:
 // 1) Reset legacy and alternate encodings.
-// 2) Enable canonical SGR cell mouse modes (1000 + 1002 + 1006).
+// 2) Enable canonical SGR mouse modes (1000 + 1002 + 1006).
 // 3) Clear 1016 before enabling SGR to avoid terminals that treat 1016l
 //    as a hard fallback to X10 when sent after 1006h.
-const MOUSE_ENABLE_SEQ: &[u8] = b"\x1b[?1001l\x1b[?1003l\x1b[?1005l\x1b[?1015l\x1b[?1016l\x1b[?1000;1002;1006h\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+// 4) Avoid DECSET 1003 (any-event mouse) because high-rate move streams can
+//    destabilize mux pipelines.
+// NOTE: Set SGR format (1006) before enabling mouse event modes for better
+// compatibility with terminals that key off "last mode set" ordering.
+const MOUSE_ENABLE_SEQ: &[u8] = b"\x1b[?1001l\x1b[?1003l\x1b[?1005l\x1b[?1015l\x1b[?1016l\x1b[?1006;1000;1002h\x1b[?1006h\x1b[?1000h\x1b[?1002h";
 // Conservative mouse enable sequence for mux sessions and runtime toggles.
-// Keep parser surface minimal and avoid legacy reset storms in mux pipelines.
-const MOUSE_ENABLE_MUX_SAFE_SEQ: &[u8] = b"\x1b[?1016l\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+// Keep to split DECSET/DECRST forms (better passthrough behavior), but still
+// reset alternate encodings so the inner terminal doesn't get "stuck" in a
+// format our parser won't decode.
+const MOUSE_ENABLE_MUX_SAFE_SEQ: &[u8] =
+    b"\x1b[?1001l\x1b[?1003l\x1b[?1005l\x1b[?1015l\x1b[?1016l\x1b[?1006h\x1b[?1000h\x1b[?1002h";
 const MOUSE_DISABLE_SEQ: &[u8] = b"\x1b[?1000;1002;1006l\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1001l\x1b[?1003l\x1b[?1005l\x1b[?1015l\x1b[?1016l";
 // Conservative mouse disable sequence for mux/panic cleanup paths. Keeps
 // parser surface minimal while still restoring canonical capture modes and
 // clearing any leaked SGR-pixel mode.
-const MOUSE_DISABLE_MUX_SAFE_SEQ: &[u8] = b"\x1b[?1016l\x1b[?1000l\x1b[?1002l\x1b[?1006l";
+const MOUSE_DISABLE_MUX_SAFE_SEQ: &[u8] =
+    b"\x1b[?1016l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1001l\x1b[?1005l\x1b[?1015l";
 
 static TERMINAL_SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -1149,12 +1157,12 @@ mod tests {
     }
 
     #[test]
-    fn mouse_enable_omits_any_event_mode() {
+    fn mouse_enable_excludes_any_event_mode() {
         assert!(
             !MOUSE_ENABLE_SEQ
                 .windows(b"\x1b[?1003h".len())
                 .any(|w| w == b"\x1b[?1003h"),
-            "mouse enable should avoid 1003 any-event mode"
+            "mouse enable must not include 1003 any-event mode"
         );
         assert!(
             MOUSE_ENABLE_SEQ
@@ -1199,16 +1207,28 @@ mod tests {
             MOUSE_ENABLE_MUX_SAFE_SEQ
         );
         assert!(
-            !MOUSE_ENABLE_MUX_SAFE_SEQ
-                .windows(b"\x1b[?1001l".len())
-                .any(|w| w == b"\x1b[?1001l"),
-            "mux-safe mouse enable must not emit legacy reset noise"
+            MOUSE_ENABLE_MUX_SAFE_SEQ
+                .windows(b"\x1b[?1005l".len())
+                .any(|w| w == b"\x1b[?1005l"),
+            "mux-safe mouse enable must clear UTF-8 mouse encoding (1005)"
+        );
+        assert!(
+            MOUSE_ENABLE_MUX_SAFE_SEQ
+                .windows(b"\x1b[?1015l".len())
+                .any(|w| w == b"\x1b[?1015l"),
+            "mux-safe mouse enable must clear urxvt mouse encoding (1015)"
         );
         assert!(
             MOUSE_ENABLE_MUX_SAFE_SEQ
                 .windows(b"\x1b[?1006h".len())
                 .any(|w| w == b"\x1b[?1006h"),
             "mux-safe mouse enable must keep SGR mode"
+        );
+        assert!(
+            !MOUSE_ENABLE_MUX_SAFE_SEQ
+                .windows(b"\x1b[?1003h".len())
+                .any(|w| w == b"\x1b[?1003h"),
+            "mux-safe mouse enable must not include 1003 any-event mode"
         );
         let pos_1016l = MOUSE_ENABLE_MUX_SAFE_SEQ
             .windows(b"\x1b[?1016l".len())

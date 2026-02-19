@@ -20,7 +20,7 @@ use ftui_render::diff::BufferDiff;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct BackendFeatures {
     /// SGR mouse capture
-    /// (`CSI ? 1000 h` + `CSI ? 1002 h` + `CSI ? 1006 h`, and matching `l` disables).
+    /// (`CSI ? 1000 h` + `CSI ? 1002 h` + `CSI ? 1003 h` + `CSI ? 1006 h`, and matching `l` disables).
     pub mouse_capture: bool,
     /// Bracketed paste mode (CSI ? 2004 h/l on native).
     pub bracketed_paste: bool,

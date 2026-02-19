@@ -471,6 +471,8 @@ mod tests {
             time_since_render_ms: latency_ms,
             coalesce_ms: Some(latency_ms),
             forced: false,
+            transition_reason_code: None,
+            transition_confidence: None,
         }
     }
 
@@ -655,6 +657,8 @@ mod tests {
             time_since_render_ms: 15.0,
             coalesce_ms: Some(15.0),
             forced: false,
+            transition_reason_code: None,
+            transition_confidence: None,
         };
 
         let result = monitor.on_decision(&entry);
@@ -675,6 +679,8 @@ mod tests {
                 time_since_render_ms: 15.0 + i as f64,
                 coalesce_ms: Some(15.0 + i as f64),
                 forced: false,
+                transition_reason_code: None,
+                transition_confidence: None,
             };
             monitor.on_decision(&entry);
         }
@@ -912,6 +918,8 @@ mod tests {
             time_since_render_ms: 10.0,
             coalesce_ms: Some(10.0),
             forced: false,
+            transition_reason_code: None,
+            transition_confidence: None,
         };
         let result = monitor.on_decision(&entry);
         assert!(
@@ -938,6 +946,8 @@ mod tests {
             time_since_render_ms: 42.0,
             coalesce_ms: None, // Falls back to time_since_render_ms
             forced: false,
+            transition_reason_code: None,
+            transition_confidence: None,
         };
         let result = monitor.on_decision(&entry);
         // Should process using time_since_render_ms (42.0)

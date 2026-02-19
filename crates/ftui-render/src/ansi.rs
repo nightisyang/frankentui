@@ -610,7 +610,9 @@ pub const BRACKETED_PASTE_DISABLE: &[u8] = b"\x1b[?2004l";
 /// - 1000: Normal mouse tracking
 /// - 1002: Button event tracking (motion while pressed)
 /// - 1006: SGR extended coordinates (supports > 223)
-pub const MOUSE_ENABLE: &[u8] = b"\x1b[?1001l\x1b[?1003l\x1b[?1005l\x1b[?1015l\x1b[?1016l\x1b[?1000;1002;1006h\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+// NOTE: Set SGR format (1006) before enabling mouse event modes for better
+// compatibility with terminals that key off "last mode set" ordering.
+pub const MOUSE_ENABLE: &[u8] = b"\x1b[?1001l\x1b[?1003l\x1b[?1005l\x1b[?1015l\x1b[?1016l\x1b[?1006;1000;1002h\x1b[?1006h\x1b[?1000h\x1b[?1002h";
 
 /// Disable mouse reporting and clear legacy/alternate modes.
 pub const MOUSE_DISABLE: &[u8] = b"\x1b[?1000;1002;1006l\x1b[?1000l\x1b[?1002l\x1b[?1006l\x1b[?1001l\x1b[?1003l\x1b[?1005l\x1b[?1015l\x1b[?1016l";
@@ -948,7 +950,7 @@ mod tests {
     fn mouse_mode() {
         assert_eq!(
             to_bytes(mouse_enable),
-            b"\x1b[?1001l\x1b[?1003l\x1b[?1005l\x1b[?1015l\x1b[?1016l\x1b[?1000;1002;1006h\x1b[?1000h\x1b[?1002h\x1b[?1006h"
+            b"\x1b[?1001l\x1b[?1003l\x1b[?1005l\x1b[?1015l\x1b[?1016l\x1b[?1006;1000;1002h\x1b[?1006h\x1b[?1000h\x1b[?1002h"
         );
         assert_eq!(
             to_bytes(mouse_disable),

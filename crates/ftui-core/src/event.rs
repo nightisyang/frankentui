@@ -509,7 +509,8 @@ fn map_mouse_event(event: cte::MouseEvent) -> MouseEvent {
         cte::MouseEventKind::ScrollRight => MouseEventKind::ScrollRight,
     };
 
-    MouseEvent::new(kind, event.column, event.row).with_modifiers(map_modifiers(event.modifiers))
+    let (x, y) = sanitize_crossterm_mouse_coords(event.column, event.row);
+    MouseEvent::new(kind, x, y).with_modifiers(map_modifiers(event.modifiers))
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "crossterm"))]
@@ -519,6 +520,28 @@ fn map_mouse_button(button: cte::MouseButton) -> MouseButton {
         cte::MouseButton::Right => MouseButton::Right,
         cte::MouseButton::Middle => MouseButton::Middle,
     }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "crossterm"))]
+const CROSSTERM_PIXEL_COORD_X_THRESHOLD: u16 = 512;
+#[cfg(all(not(target_arch = "wasm32"), feature = "crossterm"))]
+const CROSSTERM_PIXEL_COORD_Y_THRESHOLD: u16 = 256;
+#[cfg(all(not(target_arch = "wasm32"), feature = "crossterm"))]
+const CROSSTERM_DEFAULT_CELL_PIXEL_WIDTH: u16 = 8;
+#[cfg(all(not(target_arch = "wasm32"), feature = "crossterm"))]
+const CROSSTERM_DEFAULT_CELL_PIXEL_HEIGHT: u16 = 16;
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "crossterm"))]
+fn sanitize_crossterm_mouse_coords(x: u16, y: u16) -> (u16, u16) {
+    // Some terminals leak 1016-style pixel coordinates through crossterm.
+    // Use conservative cell-size fallback so pointer input remains usable.
+    if x < CROSSTERM_PIXEL_COORD_X_THRESHOLD && y < CROSSTERM_PIXEL_COORD_Y_THRESHOLD {
+        return (x, y);
+    }
+    (
+        x / CROSSTERM_DEFAULT_CELL_PIXEL_WIDTH,
+        y / CROSSTERM_DEFAULT_CELL_PIXEL_HEIGHT,
+    )
 }
 
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "crossterm"))]
@@ -806,6 +829,32 @@ mod tests {
         let mapped = map_mouse_event(ct_event);
         assert!(mapped.modifiers.contains(Modifiers::SHIFT));
         assert!(mapped.modifiers.contains(Modifiers::ALT));
+    }
+
+    #[test]
+    fn map_mouse_event_sanitizes_likely_pixel_coordinates() {
+        let ct_event = ct_event::MouseEvent {
+            kind: ct_event::MouseEventKind::Moved,
+            column: 1600,
+            row: 640,
+            modifiers: ct_event::KeyModifiers::NONE,
+        };
+        let mapped = map_mouse_event(ct_event);
+        assert_eq!(mapped.x, 200);
+        assert_eq!(mapped.y, 40);
+    }
+
+    #[test]
+    fn map_mouse_event_keeps_cell_coordinates() {
+        let ct_event = ct_event::MouseEvent {
+            kind: ct_event::MouseEventKind::Moved,
+            column: 120,
+            row: 40,
+            modifiers: ct_event::KeyModifiers::NONE,
+        };
+        let mapped = map_mouse_event(ct_event);
+        assert_eq!(mapped.x, 120);
+        assert_eq!(mapped.y, 40);
     }
 
     #[test]

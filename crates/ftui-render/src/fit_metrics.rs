@@ -443,7 +443,41 @@ pub enum MetricInvalidation {
     FullReset,
 }
 
+const METRIC_INVALIDATION_CANONICAL_ORDER: [MetricInvalidation; 6] = [
+    MetricInvalidation::FullReset,
+    MetricInvalidation::FontSizeChanged,
+    MetricInvalidation::DprChanged,
+    MetricInvalidation::ZoomChanged,
+    MetricInvalidation::FontLoaded,
+    MetricInvalidation::ContainerResized,
+];
+
 impl MetricInvalidation {
+    /// Bit mask used to track pending invalidation reasons.
+    #[must_use]
+    const fn bit(self) -> u8 {
+        match self {
+            Self::FontLoaded => 1 << 0,
+            Self::DprChanged => 1 << 1,
+            Self::ZoomChanged => 1 << 2,
+            Self::ContainerResized => 1 << 3,
+            Self::FontSizeChanged => 1 << 4,
+            Self::FullReset => 1 << 5,
+        }
+    }
+
+    /// Return pending invalidations in deterministic, canonical order.
+    #[must_use]
+    pub fn ordered_pending_from_mask(mask: u8) -> Vec<Self> {
+        let mut ordered = Vec::with_capacity(METRIC_INVALIDATION_CANONICAL_ORDER.len());
+        for reason in METRIC_INVALIDATION_CANONICAL_ORDER {
+            if mask & reason.bit() != 0 {
+                ordered.push(reason);
+            }
+        }
+        ordered
+    }
+
     /// Whether this invalidation requires recomputing glyph rasterization.
     ///
     /// DPR and font size changes affect pixel output; container resize does not.
@@ -507,6 +541,8 @@ pub struct MetricLifecycle {
     pending_refit: bool,
     /// Last invalidation reason.
     last_invalidation: Option<MetricInvalidation>,
+    /// Pending invalidation reasons (bit mask).
+    pending_invalidation_mask: u8,
     /// Last computed fit result.
     last_fit: Option<FitResult>,
     /// Total invalidation count for diagnostics.
@@ -526,6 +562,7 @@ impl MetricLifecycle {
             generation: MetricGeneration::ZERO,
             pending_refit: false,
             last_invalidation: None,
+            pending_invalidation_mask: 0,
             last_fit: None,
             total_invalidations: 0,
             total_refits: 0,
@@ -548,6 +585,18 @@ impl MetricLifecycle {
     #[must_use]
     pub fn is_pending(&self) -> bool {
         self.pending_refit
+    }
+
+    /// Last invalidation reason observed by the lifecycle.
+    #[must_use]
+    pub fn last_invalidation(&self) -> Option<MetricInvalidation> {
+        self.last_invalidation
+    }
+
+    /// Pending invalidation reasons in deterministic processing order.
+    #[must_use]
+    pub fn pending_invalidations(&self) -> Vec<MetricInvalidation> {
+        MetricInvalidation::ordered_pending_from_mask(self.pending_invalidation_mask)
     }
 
     /// Last computed fit result.
@@ -576,6 +625,7 @@ impl MetricLifecycle {
         self.generation = self.generation.next();
         self.pending_refit = true;
         self.last_invalidation = Some(reason);
+        self.pending_invalidation_mask |= reason.bit();
         self.total_invalidations += 1;
 
         if let Some(metrics) = new_metrics {
@@ -588,13 +638,34 @@ impl MetricLifecycle {
     /// If the viewport changed, marks a refit as pending.
     pub fn set_viewport(&mut self, viewport: ContainerViewport) {
         let changed = self.viewport.is_none_or(|v| v != viewport);
-        self.viewport = Some(viewport);
         if changed {
+            let mut primary_reason = MetricInvalidation::ContainerResized;
+            if let Some(previous) = self.viewport {
+                if previous.dpr_subpx != viewport.dpr_subpx {
+                    self.pending_invalidation_mask |= MetricInvalidation::DprChanged.bit();
+                    primary_reason = MetricInvalidation::DprChanged;
+                }
+                if previous.zoom_subpx != viewport.zoom_subpx {
+                    self.pending_invalidation_mask |= MetricInvalidation::ZoomChanged.bit();
+                    if primary_reason == MetricInvalidation::ContainerResized {
+                        primary_reason = MetricInvalidation::ZoomChanged;
+                    }
+                }
+                if previous.width_px != viewport.width_px
+                    || previous.height_px != viewport.height_px
+                {
+                    self.pending_invalidation_mask |= MetricInvalidation::ContainerResized.bit();
+                }
+            } else {
+                self.pending_invalidation_mask |= MetricInvalidation::ContainerResized.bit();
+            }
+
             self.generation = self.generation.next();
             self.pending_refit = true;
-            self.last_invalidation = Some(MetricInvalidation::ContainerResized);
+            self.last_invalidation = Some(primary_reason);
             self.total_invalidations += 1;
         }
+        self.viewport = Some(viewport);
     }
 
     /// Update the fit policy.
@@ -616,6 +687,7 @@ impl MetricLifecycle {
             return None;
         }
         self.pending_refit = false;
+        self.pending_invalidation_mask = 0;
         self.total_refits += 1;
 
         let viewport = self.viewport?;
@@ -644,6 +716,8 @@ impl MetricLifecycle {
             zoom_subpx: self.viewport.map(|v| v.zoom_subpx).unwrap_or(0),
             fit_cols: self.last_fit.map(|f| f.cols).unwrap_or(0),
             fit_rows: self.last_fit.map(|f| f.rows).unwrap_or(0),
+            pending_invalidation_mask: self.pending_invalidation_mask,
+            pending_invalidation_count: self.pending_invalidation_mask.count_ones() as u8,
             total_invalidations: self.total_invalidations,
             total_refits: self.total_refits,
         }
@@ -675,6 +749,10 @@ pub struct MetricSnapshot {
     pub fit_cols: u16,
     /// Last computed grid rows.
     pub fit_rows: u16,
+    /// Pending invalidation reasons (bit mask).
+    pub pending_invalidation_mask: u8,
+    /// Number of pending invalidation reasons.
+    pub pending_invalidation_count: u8,
     /// Total invalidation count.
     pub total_invalidations: u64,
     /// Total refit count.
@@ -1103,6 +1181,124 @@ mod tests {
         // Only one refit should be needed
         assert!(lc.is_pending());
         assert_eq!(lc.total_invalidations(), 4); // 1 from set_viewport + 3 explicit
+    }
+
+    #[test]
+    fn lifecycle_pending_invalidations_are_canonical() {
+        let mut lc = MetricLifecycle::new(CellMetrics::default(), FitPolicy::default());
+        lc.set_viewport(ContainerViewport::simple(640, 384).unwrap());
+        let _ = lc.refit();
+
+        lc.invalidate(MetricInvalidation::FontLoaded, None);
+        lc.invalidate(MetricInvalidation::ZoomChanged, None);
+        lc.invalidate(MetricInvalidation::FontLoaded, None); // duplicate should be de-duped
+        lc.invalidate(MetricInvalidation::FullReset, None);
+        lc.invalidate(MetricInvalidation::ContainerResized, None);
+
+        assert_eq!(
+            lc.pending_invalidations(),
+            vec![
+                MetricInvalidation::FullReset,
+                MetricInvalidation::ZoomChanged,
+                MetricInvalidation::FontLoaded,
+                MetricInvalidation::ContainerResized
+            ]
+        );
+    }
+
+    #[test]
+    fn lifecycle_set_viewport_tracks_dpr_and_zoom_invalidations() {
+        let mut lc = MetricLifecycle::new(CellMetrics::default(), FitPolicy::default());
+        lc.set_viewport(ContainerViewport::simple(800, 600).unwrap());
+        let _ = lc.refit();
+
+        // Change physical size + DPR + zoom in one event.
+        lc.set_viewport(ContainerViewport::new(1600, 1200, 2.0, 1.25).unwrap());
+        assert_eq!(lc.last_invalidation(), Some(MetricInvalidation::DprChanged));
+        assert_eq!(
+            lc.pending_invalidations(),
+            vec![
+                MetricInvalidation::DprChanged,
+                MetricInvalidation::ZoomChanged,
+                MetricInvalidation::ContainerResized
+            ]
+        );
+    }
+
+    #[test]
+    fn lifecycle_delayed_font_load_uses_latest_metrics() {
+        let mut lc = MetricLifecycle::new(CellMetrics::default(), FitPolicy::default());
+        lc.set_viewport(ContainerViewport::simple(800, 600).unwrap());
+        let baseline = lc.refit().unwrap();
+        assert_eq!(baseline.cols, 100);
+        assert_eq!(baseline.rows, 37);
+
+        // Temporary fallback metrics while font is still loading.
+        let fallback = CellMetrics::from_px(9.0, 18.0).unwrap();
+        lc.invalidate(MetricInvalidation::FontSizeChanged, Some(fallback));
+        let fallback_fit = lc.refit().unwrap();
+        assert_eq!(fallback_fit.cols, 88);
+        assert_eq!(fallback_fit.rows, 33);
+
+        // Delayed final font load must overwrite fallback metrics deterministically.
+        lc.invalidate(MetricInvalidation::FontLoaded, Some(CellMetrics::LARGE));
+        let final_fit = lc.refit().unwrap();
+        assert_eq!(final_fit.cols, 80);
+        assert_eq!(final_fit.rows, 30);
+        assert_eq!(*lc.cell_metrics(), CellMetrics::LARGE);
+    }
+
+    #[test]
+    fn lifecycle_font_swap_race_orders_invalidations_deterministically() {
+        let mut lc = MetricLifecycle::new(CellMetrics::default(), FitPolicy::default());
+        lc.set_viewport(ContainerViewport::simple(800, 600).unwrap());
+        let _ = lc.refit();
+
+        let fallback = CellMetrics::from_px(9.0, 18.0).unwrap();
+        let swapped = CellMetrics::from_px(11.0, 22.0).unwrap();
+        lc.invalidate(MetricInvalidation::FontLoaded, Some(fallback));
+        lc.invalidate(MetricInvalidation::FontLoaded, Some(swapped));
+        lc.set_viewport(ContainerViewport::new(1600, 1200, 2.0, 1.25).unwrap());
+
+        assert_eq!(
+            lc.pending_invalidations(),
+            vec![
+                MetricInvalidation::DprChanged,
+                MetricInvalidation::ZoomChanged,
+                MetricInvalidation::FontLoaded,
+                MetricInvalidation::ContainerResized
+            ]
+        );
+
+        // Single coalesced refit uses latest swapped metrics (no stale fallback).
+        let fit = lc.refit().unwrap();
+        assert_eq!(fit.cols, 58); // floor(640 / 11)
+        assert_eq!(fit.rows, 21); // floor(480 / 22)
+        assert_eq!(*lc.cell_metrics(), swapped);
+    }
+
+    #[test]
+    fn lifecycle_dynamic_font_event_stream_keeps_fit_in_sync() {
+        let mut lc = MetricLifecycle::new(CellMetrics::default(), FitPolicy::default());
+        lc.set_viewport(ContainerViewport::simple(800, 600).unwrap());
+        let _ = lc.refit();
+
+        // E2E-style dynamic sequence: fallback font metrics, viewport regime change,
+        // then delayed final font load before the next coalesced refit.
+        let fallback = CellMetrics::from_px(9.0, 18.0).unwrap();
+        lc.invalidate(MetricInvalidation::FontLoaded, Some(fallback));
+        lc.set_viewport(ContainerViewport::new(1600, 1200, 2.0, 1.25).unwrap());
+        lc.invalidate(MetricInvalidation::FontLoaded, Some(CellMetrics::LARGE));
+
+        let fit = lc.refit().unwrap();
+        assert_eq!(fit.cols, 64); // floor(640 / 10)
+        assert_eq!(fit.rows, 24); // floor(480 / 20)
+
+        let snap = lc.snapshot();
+        assert_eq!(snap.fit_cols, fit.cols);
+        assert_eq!(snap.fit_rows, fit.rows);
+        assert_eq!(snap.pending_invalidation_mask, 0);
+        assert_eq!(snap.pending_invalidation_count, 0);
     }
 
     #[test]
