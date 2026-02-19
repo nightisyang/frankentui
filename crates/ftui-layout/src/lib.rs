@@ -866,27 +866,22 @@ where
         }
 
         let space_to_distribute = remaining;
-        let mut allocated = 0u16;
         let mut shares = vec![0u16; constraints.len()];
-        let last_weighted_pos = last_weighted_pos.unwrap_or_default();
 
-        for (grow_pos, &i) in grow_indices.iter().enumerate() {
-            let weight = grow_weight(constraints[i]);
-            if weight == 0 {
-                continue;
-            }
+        // Calculate float targets for fair distribution (Largest Remainder Method)
+        let targets: Vec<f64> = grow_indices
+            .iter()
+            .map(|&i| {
+                let weight = grow_weight(constraints[i]);
+                (space_to_distribute as f64 * weight as f64) / total_weight as f64
+            })
+            .collect();
 
-            // Last item gets the rest to ensure exact sum conservation
-            let size = if grow_pos == last_weighted_pos {
-                space_to_distribute.saturating_sub(allocated)
-            } else {
-                let scaled = (u128::from(space_to_distribute) * u128::from(weight)) / total_weight;
-                let s = u16::try_from(scaled).unwrap_or(u16::MAX);
-                min(s, space_to_distribute.saturating_sub(allocated))
-            };
+        // Distribute space with stable rounding to minimize jitter and error
+        let distributed = round_layout_stable(&targets, space_to_distribute, None);
 
-            shares[i] = size;
-            allocated = allocated.saturating_add(size);
+        for (k, &i) in grow_indices.iter().enumerate() {
+            shares[i] = distributed[k];
         }
 
         // Check for Max constraint violations

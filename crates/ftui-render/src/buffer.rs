@@ -1027,21 +1027,25 @@ impl Buffer {
                 // Left boundary: if first fill cell is a continuation, its wide-char
                 // head is outside the fill region and would be orphaned. Clear it.
                 if x_start > 0 && self.cells[row_start + x_start].is_continuation() {
+                    let mut head_found = None;
                     for hx in (0..x_start).rev() {
-                        let c = self.cells[row_start + hx];
-                        if c.is_continuation() {
-                            self.cells[row_start + hx] = Cell::default();
-                            dirty_left = hx as u16;
-                        } else {
-                            // Only clear the head if it actually overlaps the fill region.
-                            // If it doesn't overlap, x_start was an orphan continuation,
-                            // and we shouldn't destroy the valid wide char to its left.
-                            let width = c.content.width();
-                            if width > 1 && hx + width as usize > x_start {
-                                self.cells[row_start + hx] = Cell::default();
-                                dirty_left = hx as u16;
-                            }
+                        if !self.cells[row_start + hx].is_continuation() {
+                            head_found = Some(hx);
                             break;
+                        }
+                    }
+
+                    if let Some(hx) = head_found {
+                        let c = self.cells[row_start + hx];
+                        let width = c.content.width();
+                        // Only clear if the head actually overlaps the fill region.
+                        if width > 1 && hx + width as usize > x_start {
+                            // Clear the head and any tails before x_start.
+                            // Tails from x_start onwards will be overwritten by the fill.
+                            for cx in hx..x_start {
+                                self.cells[row_start + cx] = Cell::default();
+                            }
+                            dirty_left = hx as u16;
                         }
                     }
                 }
@@ -1063,11 +1067,19 @@ impl Buffer {
             return;
         }
 
+        // Enforce strict bounds for wide characters to prevent spilling.
+        self.push_scissor(clipped);
+
+        let step = cell.content.width().max(1) as u16;
         for y in clipped.y..clipped.bottom() {
-            for x in clipped.x..clipped.right() {
+            let mut x = clipped.x;
+            while x < clipped.right() {
                 self.set(x, y, cell);
+                x = x.saturating_add(step);
             }
         }
+
+        self.pop_scissor();
     }
 
     /// Clear all cells to the default.
@@ -1222,6 +1234,7 @@ impl Buffer {
         // from leaking outside the requested copy region.
         let copy_bounds = Rect::new(dst_x, dst_y, src_rect.width, src_rect.height);
         self.push_scissor(copy_bounds);
+        let clip = self.current_scissor();
 
         for dy in 0..src_rect.height {
             // Compute destination y with overflow check
@@ -1255,12 +1268,22 @@ impl Buffer {
                     }
 
                     let width = cell.content.width();
+                    let target_right = target_x.saturating_add(width as u16);
 
-                    // If the wide character's tail extends beyond the copy region,
-                    // write a default cell instead to avoid silent rejection by `set`
-                    // (which atomically rejects writes where not all cells fit).
-                    if width > 1 && dx.saturating_add(width as u16) > src_rect.width {
-                        self.set(target_x, target_y, Cell::default());
+                    // Check for clipping.
+                    // 1. Source clipping: tail extends beyond the source copy region.
+                    // 2. Destination clipping: tail extends beyond the effective scissor.
+                    let src_clipped = width > 1 && dx.saturating_add(width as u16) > src_rect.width;
+                    let dst_clipped = target_right > clip.right();
+
+                    if src_clipped || dst_clipped {
+                        // Write default cells to all valid positions in the span to ensure
+                        // previous content is cleared. `set` is atomic for wide chars,
+                        // so we must write single-width default cells individually.
+                        let valid_width = (clip.right().saturating_sub(target_x)).min(width as u16);
+                        for i in 0..valid_width {
+                            self.set(target_x + i, target_y, Cell::default());
+                        }
                     } else {
                         self.set(target_x, target_y, *cell);
                     }

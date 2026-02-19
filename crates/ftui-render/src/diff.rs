@@ -1085,6 +1085,20 @@ impl BufferDiff {
         );
     }
 
+    /// Populate the diff with all cells (full redraw) reusing existing capacity.
+    pub fn fill_full(&mut self, width: u16, height: u16) {
+        self.changes.clear();
+        let total = width as usize * height as usize;
+        if self.changes.capacity() < total {
+            self.changes.reserve(total - self.changes.len());
+        }
+        for y in 0..height {
+            for x in 0..width {
+                self.changes.push((x, y));
+            }
+        }
+    }
+
     /// Number of changed cells.
     #[inline]
     pub fn len(&self) -> usize {

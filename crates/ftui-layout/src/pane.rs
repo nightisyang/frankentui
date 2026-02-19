@@ -104,13 +104,13 @@ impl PaneSplitRatio {
     /// Numerator (always > 0).
     #[must_use]
     pub const fn numerator(self) -> u32 {
-        self.numerator
+        if self.numerator == 0 { 1 } else { self.numerator }
     }
 
     /// Denominator (always > 0).
     #[must_use]
     pub const fn denominator(self) -> u32 {
-        self.denominator
+        if self.denominator == 0 { 1 } else { self.denominator }
     }
 }
 
@@ -1743,12 +1743,12 @@ impl PaneScaleFactor {
 
     #[must_use]
     pub const fn numerator(self) -> u32 {
-        self.numerator
+        if self.numerator == 0 { 1 } else { self.numerator }
     }
 
     #[must_use]
     pub const fn denominator(self) -> u32 {
-        self.denominator
+        if self.denominator == 0 { 1 } else { self.denominator }
     }
 }
 
@@ -2114,7 +2114,7 @@ impl PaneSnapTuning {
     /// Decide whether to snap an input ratio using deterministic tie-breaking.
     #[must_use]
     pub fn decide(self, ratio_bps: u16, previous_snap: Option<u16>) -> PaneSnapDecision {
-        let step = u32::from(self.step_bps);
+        let step = u32::from(self.step_bps).max(1);
         let ratio = u32::from(ratio_bps).min(10_000);
         let low = ((ratio / step) * step).min(10_000);
         let high = (low + step).min(10_000);

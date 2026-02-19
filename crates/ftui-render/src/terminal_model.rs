@@ -383,6 +383,9 @@ impl TerminalModel {
                 self.parse_state = ParseState::CsiParam;
             }
             b';' => {
+                // Semicolon at entry means "default first param, start second param".
+                // Push 0 for first param (default) AND 0 for the start of the second.
+                self.csi_params.push(0);
                 self.csi_params.push(0);
                 self.parse_state = ParseState::CsiParam;
             }
