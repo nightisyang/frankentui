@@ -185,6 +185,9 @@ else
     if [[ -x "$SCRIPT_DIR/test_embedded_terminal.sh" ]]; then
         run_suite "embedded_terminal" "$SCRIPT_DIR/test_embedded_terminal.sh"
     fi
+    if [[ -x "$SCRIPT_DIR/test_remote_resize_storm.sh" ]]; then
+        run_suite "remote_resize_storm" "$SCRIPT_DIR/test_remote_resize_storm.sh"
+    fi
     if [[ -x "$SCRIPT_DIR/test_remote_unicode.sh" ]]; then
         run_suite "remote_unicode" "$SCRIPT_DIR/test_remote_unicode.sh"
     fi

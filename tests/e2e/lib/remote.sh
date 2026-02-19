@@ -27,6 +27,15 @@ REMOTE_BRIDGE_PID=""
 REMOTE_TELEMETRY_FILE=""
 REMOTE_WS_CLIENT="${REMOTE_LIB_DIR}/ws_client.py"
 
+# Run cargo build commands via rch when available (falls back to local cargo).
+remote_run_cargo_build() {
+    if command -v rch >/dev/null 2>&1; then
+        rch exec -- cargo "$@"
+        return
+    fi
+    cargo "$@"
+}
+
 # Build the ws_bridge binary if not already built.
 remote_build_bridge() {
     local bin_path
@@ -35,7 +44,7 @@ remote_build_bridge() {
         return 0
     fi
     echo "[remote] Building frankenterm_ws_bridge..." >&2
-    if cargo build -p ftui-pty --bin frankenterm_ws_bridge --release \
+    if remote_run_cargo_build build -p ftui-pty --bin frankenterm_ws_bridge --release \
         --target-dir /data/tmp/cargo-target 2>&1 | tail -3 >&2; then
         return 0
     fi
@@ -43,7 +52,7 @@ remote_build_bridge() {
     # Some environments have rustup configured without cargo for nightly.
     # Fall back to stable so remote E2E fixtures can still run.
     echo "[remote] cargo build failed; retrying with stable toolchain..." >&2
-    if cargo +stable build -p ftui-pty --bin frankenterm_ws_bridge --release \
+    if remote_run_cargo_build +stable build -p ftui-pty --bin frankenterm_ws_bridge --release \
         --target-dir /data/tmp/cargo-target 2>&1 | tail -3 >&2; then
         if [[ -x "$bin_path" ]]; then
             return 0

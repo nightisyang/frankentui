@@ -8,6 +8,7 @@ set -euo pipefail
 # Usage:
 #   ./test_remote_all.sh
 #   E2E_SEED=42 ./test_remote_all.sh
+#   E2E_REMOTE_CROSS_BROWSER_DIFF=1 ./test_remote_all.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -20,6 +21,19 @@ TESTS=(
     test_remote_osc8_links
     test_remote_scrollback
 )
+
+RUN_CROSS_BROWSER_DIFF="${E2E_REMOTE_CROSS_BROWSER_DIFF:-}"
+if [[ -z "$RUN_CROSS_BROWSER_DIFF" ]]; then
+    if [[ "${CI:-}" == "1" || "${CI:-}" == "true" ]]; then
+        RUN_CROSS_BROWSER_DIFF="1"
+    else
+        RUN_CROSS_BROWSER_DIFF="0"
+    fi
+fi
+
+if [[ "$RUN_CROSS_BROWSER_DIFF" == "1" ]]; then
+    TESTS+=(test_remote_resize_storm_cross_browser_diff)
+fi
 
 PASSED=0
 FAILED=0

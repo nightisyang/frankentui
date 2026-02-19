@@ -1,0 +1,16 @@
+# class	left_browser	right_browser	path_pattern	rationale
+#
+# Policy for tests/e2e/scripts/test_remote_resize_storm_cross_browser_diff.sh
+# --------------------------------------------------------------------------
+# - Fields in `browser_env` (browser name/version/user agent/platform/headless)
+#   are intentionally excluded from semantic diff checks because host metadata
+#   is expected to vary per browser by design.
+# - Timing-dependent fields (for example duration_ms) are intentionally excluded
+#   from semantic diff checks because they are non-deterministic across hosts.
+# - Current policy accepts zero semantic divergences by default.
+#
+# Add entries only when a divergence is explicitly approved and documented:
+# <class>\t<left_browser>\t<right_browser>\t<path_pattern>\t<rationale>
+#
+# Example (disabled):
+# frame_count	chromium	webkit	frames.length	Transport flush ordering can emit one extra frame in webkit during close-drain; tracked by bd-2vr05.15.1.7 follow-up.
