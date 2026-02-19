@@ -164,7 +164,11 @@ fn render_html(summary: &ReportSummary, suite_dir: &Path) -> String {
 
 pub fn run_report(args: ReportArgs) -> Result<()> {
     let integration = OutputIntegration::detect();
-    let ui = output_for(&integration);
+    run_report_with_integration(args, &integration)
+}
+
+fn run_report_with_integration(args: ReportArgs, integration: &OutputIntegration) -> Result<()> {
+    let ui = output_for(integration);
 
     if !args.suite_dir.exists() {
         return Err(DoctorError::MissingPath {
@@ -233,11 +237,15 @@ pub fn run_report(args: ReportArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use tempfile::tempdir;
 
+    use crate::error::DoctorError;
     use crate::runmeta::RunMeta;
+    use crate::util::OutputIntegration;
 
-    use super::{ReportArgs, run_report};
+    use super::{ReportArgs, find_run_meta_files, run_report, run_report_with_integration};
 
     #[test]
     fn report_generation_writes_outputs() {
@@ -246,11 +254,17 @@ mod tests {
         let run_dir = suite_dir.join("run_01");
         std::fs::create_dir_all(&run_dir).expect("mkdir");
 
+        let output_path = run_dir.join("capture.mp4");
+        let snapshot_path = run_dir.join("snapshot.png");
+        fs::write(&output_path, b"dummy").expect("write dummy video");
+        fs::write(&snapshot_path, b"dummy").expect("write dummy snapshot");
+
         let run_meta = RunMeta {
             status: "ok".to_string(),
             started_at: "2026-02-17T00:00:00Z".to_string(),
             profile: "analytics-empty".to_string(),
-            output: run_dir.join("capture.mp4").display().to_string(),
+            output: output_path.display().to_string(),
+            snapshot: snapshot_path.display().to_string(),
             run_dir: run_dir.display().to_string(),
             ..RunMeta::default()
         };
@@ -270,5 +284,220 @@ mod tests {
 
         assert!(suite_dir.join("index.html").exists());
         assert!(suite_dir.join("report.json").exists());
+    }
+
+    #[test]
+    fn find_run_meta_files_sorts_and_skips_non_directories() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        let a_run = suite_dir.join("a_run");
+        let b_run = suite_dir.join("b_run");
+        let c_run = suite_dir.join("c_run");
+        fs::create_dir_all(&a_run).expect("mkdir a_run");
+        fs::create_dir_all(&b_run).expect("mkdir b_run");
+        fs::create_dir_all(&c_run).expect("mkdir c_run");
+        fs::write(suite_dir.join("not_a_dir"), b"ignore").expect("write file");
+
+        RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "alpha".to_string(),
+            output: a_run.join("capture.mp4").display().to_string(),
+            run_dir: a_run.display().to_string(),
+            ..RunMeta::default()
+        }
+        .write_to_path(&a_run.join("run_meta.json"))
+        .expect("write a run meta");
+
+        RunMeta {
+            status: "failed".to_string(),
+            started_at: "2026-02-17T00:00:01Z".to_string(),
+            profile: "beta".to_string(),
+            output: b_run.join("capture.mp4").display().to_string(),
+            run_dir: b_run.display().to_string(),
+            ..RunMeta::default()
+        }
+        .write_to_path(&b_run.join("run_meta.json"))
+        .expect("write b run meta");
+
+        let files = find_run_meta_files(&suite_dir).expect("find run meta files");
+        let display = files
+            .iter()
+            .map(|path| {
+                path.strip_prefix(&suite_dir)
+                    .unwrap_or(path)
+                    .display()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(display, vec!["a_run/run_meta.json", "b_run/run_meta.json"]);
+    }
+
+    #[test]
+    fn run_report_fails_when_suite_dir_missing() {
+        let temp = tempdir().expect("tempdir");
+        let missing_suite_dir = temp.path().join("does_not_exist");
+
+        let error = run_report(ReportArgs {
+            suite_dir: missing_suite_dir.clone(),
+            output_html: None,
+            output_json: None,
+            title: "Report".to_string(),
+        })
+        .expect_err("missing suite dir should fail");
+
+        assert!(matches!(&error, DoctorError::MissingPath { .. }));
+        if let DoctorError::MissingPath { path } = error {
+            assert_eq!(path, missing_suite_dir);
+        }
+    }
+
+    #[test]
+    fn run_report_fails_when_no_run_meta_files_present() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        fs::create_dir_all(&suite_dir).expect("mkdir suite");
+
+        let error = run_report(ReportArgs {
+            suite_dir: suite_dir.clone(),
+            output_html: None,
+            output_json: None,
+            title: "Report".to_string(),
+        })
+        .expect_err("suite dir without run meta files should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("No run_meta.json files found under"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn run_report_respects_output_path_overrides() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        let run_dir = suite_dir.join("run_01");
+        fs::create_dir_all(&run_dir).expect("mkdir");
+
+        let run_meta = RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            output: run_dir.join("capture.mp4").display().to_string(),
+            run_dir: run_dir.display().to_string(),
+            ..RunMeta::default()
+        };
+        run_meta
+            .write_to_path(&run_dir.join("run_meta.json"))
+            .expect("write run meta");
+
+        let output_html = temp.path().join("custom.html");
+        let output_json = temp.path().join("custom.json");
+
+        run_report(ReportArgs {
+            suite_dir: suite_dir.clone(),
+            output_html: Some(output_html.clone()),
+            output_json: Some(output_json.clone()),
+            title: "Custom Report".to_string(),
+        })
+        .expect("run report");
+
+        assert!(output_html.exists());
+        assert!(output_json.exists());
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&output_json).expect("read json"))
+                .expect("parse json");
+        assert_eq!(parsed["title"], "Custom Report");
+        assert_eq!(parsed["suite_dir"], suite_dir.display().to_string());
+        assert_eq!(parsed["total_runs"], 1);
+        assert_eq!(parsed["ok_runs"], 1);
+        assert_eq!(parsed["failed_runs"], 0);
+    }
+
+    #[test]
+    fn run_report_escapes_html_title() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        let run_dir = suite_dir.join("run_01");
+        fs::create_dir_all(&run_dir).expect("mkdir");
+
+        let video_path = run_dir.join("capture.mp4");
+        fs::write(&video_path, b"not-a-real-mp4").expect("write dummy video");
+
+        let snapshot_path = run_dir.join("snapshot.png");
+        fs::write(&snapshot_path, b"not-a-real-png").expect("write dummy snapshot");
+
+        let run_meta = RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            output: video_path.display().to_string(),
+            snapshot: snapshot_path.display().to_string(),
+            run_dir: run_dir.display().to_string(),
+            ..RunMeta::default()
+        };
+        run_meta
+            .write_to_path(&run_dir.join("run_meta.json"))
+            .expect("write run meta");
+
+        let title = "Report <script>alert(1)</script>";
+        run_report(ReportArgs {
+            suite_dir: suite_dir.clone(),
+            output_html: None,
+            output_json: None,
+            title: title.to_string(),
+        })
+        .expect("run report");
+
+        let html = fs::read_to_string(suite_dir.join("index.html")).expect("read html");
+        assert!(
+            html.contains("Report &lt;script&gt;alert(1)&lt;&#x2f;script&gt;"),
+            "expected escaped title, got: {html}"
+        );
+        assert!(!html.contains("<script>alert(1)</script>"));
+
+        // Ensure the file-exists conditionals emit links when the artifacts exist.
+        assert!(html.contains("video file"));
+        assert!(html.contains("snapshot file"));
+    }
+
+    #[test]
+    fn run_report_emits_machine_json_when_sqlmodel_json_enabled() {
+        let temp = tempdir().expect("tempdir");
+        let suite_dir = temp.path().join("suite");
+        let run_dir = suite_dir.join("run_01");
+        fs::create_dir_all(&run_dir).expect("mkdir");
+
+        RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            output: run_dir.join("capture.mp4").display().to_string(),
+            run_dir: run_dir.display().to_string(),
+            ..RunMeta::default()
+        }
+        .write_to_path(&run_dir.join("run_meta.json"))
+        .expect("write run meta");
+
+        let integration = OutputIntegration {
+            fastapi_mode: "plain".to_string(),
+            fastapi_agent: false,
+            fastapi_ci: false,
+            fastapi_tty: false,
+            sqlmodel_mode: "json".to_string(),
+            sqlmodel_agent: false,
+        };
+        run_report_with_integration(
+            ReportArgs {
+                suite_dir,
+                output_html: None,
+                output_json: None,
+                title: "JSON Report".to_string(),
+            },
+            &integration,
+        )
+        .expect("report should succeed in json mode");
     }
 }

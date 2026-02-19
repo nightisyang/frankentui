@@ -1,5 +1,5 @@
 {
-  "schema_name": "doctor_franktentui_e2e_event",
+  "schema_name": "doctor_frankentui_e2e_event",
   "schema_version": "1.0.0",
   "required_fields": [
     "schema_version",

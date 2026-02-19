@@ -142,7 +142,7 @@ mod tests {
             evidence_terms: vec!["profile=analytics-empty".to_string()],
             fallback_active: false,
             fallback_reason: None,
-            policy_id: "doctor_franktentui/v1".to_string(),
+            policy_id: "doctor_frankentui/v1".to_string(),
         };
         let second = DecisionRecord {
             timestamp: "2026-02-17T00:00:01Z".to_string(),
@@ -152,7 +152,7 @@ mod tests {
             evidence_terms: vec!["final_status=ok".to_string()],
             fallback_active: true,
             fallback_reason: Some("capture timeout exceeded 30s".to_string()),
-            policy_id: "doctor_franktentui/v1".to_string(),
+            policy_id: "doctor_frankentui/v1".to_string(),
         };
 
         first.append_jsonl(&ledger).expect("append first record");
@@ -170,5 +170,25 @@ mod tests {
         assert_eq!(parsed_first.decision_id, "decision-1");
         assert_eq!(parsed_second.decision_id, "decision-2");
         assert!(parsed_second.fallback_active);
+    }
+
+    #[test]
+    fn runmeta_write_to_path_creates_parent_directories() {
+        let temp = tempdir().expect("tempdir");
+        let nested = temp.path().join("a/b/run_meta.json");
+
+        let meta = RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: "analytics-empty".to_string(),
+            ..RunMeta::default()
+        };
+
+        meta.write_to_path(&nested).expect("write nested run_meta");
+        assert!(nested.exists());
+
+        let decoded = RunMeta::from_path(&nested).expect("read nested run_meta");
+        assert_eq!(decoded.status, meta.status);
+        assert_eq!(decoded.profile, meta.profile);
     }
 }

@@ -9,7 +9,7 @@ use crate::suite::{SuiteArgs, run_suite};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "doctor_franktentui",
+    name = "doctor_frankentui",
     about = "Integrated TUI capture and diagnostics toolkit for FrankenTUI agents",
     version
 )]
@@ -68,6 +68,9 @@ mod tests {
     use crate::capture::CaptureArgs;
     use crate::error::DoctorError;
     use crate::report::ReportArgs;
+    use crate::seed::SeedDemoArgs;
+    use crate::suite::SuiteArgs;
+    use tempfile::tempdir;
 
     use super::{Cli, Commands, run};
 
@@ -91,7 +94,7 @@ mod tests {
                 host: None,
                 port: None,
                 http_path: None,
-                auth_token: None,
+                auth_bearer: None,
                 run_root: None,
                 run_name: None,
                 output: None,
@@ -127,31 +130,83 @@ mod tests {
             }),
         });
 
-        match result.expect_err("missing profile should fail") {
-            DoctorError::ProfileNotFound { name } => assert_eq!(name, "not-a-real-profile"),
-            other => panic!("expected ProfileNotFound, got {other}"),
-        }
+        let error = result.expect_err("missing profile should fail");
+        assert!(matches!(
+            error,
+            DoctorError::ProfileNotFound { name } if name == "not-a-real-profile"
+        ));
     }
 
     #[test]
     fn report_command_dispatches_missing_path_error() {
         let result = run(Cli {
             command: Commands::Report(ReportArgs {
-                suite_dir: PathBuf::from("/tmp/doctor_franktentui/does-not-exist"),
+                suite_dir: PathBuf::from("/tmp/doctor_frankentui/does-not-exist"),
                 output_html: None,
                 output_json: None,
                 title: "x".to_string(),
             }),
         });
 
-        match result.expect_err("missing suite directory should fail") {
-            DoctorError::MissingPath { path } => {
-                assert_eq!(
-                    path,
-                    PathBuf::from("/tmp/doctor_franktentui/does-not-exist")
-                );
-            }
-            other => panic!("expected MissingPath, got {other}"),
-        }
+        let error = result.expect_err("missing suite directory should fail");
+        assert!(matches!(
+            error,
+            DoctorError::MissingPath { path }
+                if path == std::path::Path::new("/tmp/doctor_frankentui/does-not-exist")
+        ));
+    }
+
+    #[test]
+    fn seed_demo_command_dispatches_fast_timeout_error() {
+        let error = run(Cli {
+            command: Commands::SeedDemo(SeedDemoArgs {
+                host: "127.0.0.1".to_string(),
+                port: "not-a-port".to_string(),
+                http_path: "/mcp/".to_string(),
+                auth_bearer: String::new(),
+                project_key: "/tmp/doctor-cli-seed-demo-dispatch".to_string(),
+                agent_a: "A".to_string(),
+                agent_b: "B".to_string(),
+                messages: 1,
+                timeout_seconds: 0,
+                log_file: None,
+            }),
+        })
+        .expect_err("seed-demo should fail fast");
+
+        assert!(
+            matches!(error, DoctorError::InvalidArgument { message } if message.contains("Timed out waiting for server"))
+        );
+    }
+
+    #[test]
+    fn suite_command_dispatches_invalid_profiles_error() {
+        let temp = tempdir().expect("tempdir");
+        let project_dir = temp.path().join("project");
+        let run_root = temp.path().join("suite_runs");
+        std::fs::create_dir_all(&project_dir).expect("project dir");
+
+        let error = run(Cli {
+            command: Commands::Suite(SuiteArgs {
+                profiles: Some("   ".to_string()),
+                binary: None,
+                app_command: Some("echo demo".to_string()),
+                project_dir: Some(project_dir),
+                run_root: Some(run_root),
+                suite_name: Some("suite_dispatch".to_string()),
+                host: None,
+                port: None,
+                http_path: None,
+                auth_bearer: None,
+                fail_fast: false,
+                skip_report: true,
+                keep_going: false,
+            }),
+        })
+        .expect_err("suite should fail for empty profiles");
+
+        assert!(
+            matches!(error, DoctorError::InvalidArgument { message } if message.contains("No profiles available"))
+        );
     }
 }

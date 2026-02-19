@@ -1,5 +1,5 @@
 [package]
-name = "doctor_franktentui"
+name = "doctor_frankentui"
 version = "0.2.0"
 edition = "2024"
 publish = false
@@ -7,7 +7,7 @@ license-file = "../../LICENSE"
 description = "Integrated TUI capture, seeding, suite reporting, and diagnostics for FrankenTUI agent workflows."
 repository = "https://github.com/Dicklesworthstone/frankentui"
 homepage = "https://github.com/Dicklesworthstone/frankentui"
-documentation = "https://docs.rs/doctor_franktentui"
+documentation = "https://docs.rs/doctor_frankentui"
 readme = "../../README.md"
 
 [dependencies]

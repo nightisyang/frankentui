@@ -88,7 +88,11 @@ pub fn parse_profile_content(content: &str) -> BTreeMap<String, String> {
             continue;
         };
 
-        let key = key.trim().to_string();
+        let key = key.trim();
+        if key.is_empty() {
+            continue;
+        }
+        let key = key.to_string();
         let mut value = value_raw.trim().to_string();
 
         if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
@@ -122,6 +126,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_profile_content_skips_invalid_lines_and_empty_keys() {
+        let parsed = parse_profile_content(
+            r#"
+                no_equals
+                =bad
+                good = value
+            "#,
+        );
+
+        assert!(!parsed.contains_key(""));
+        assert_eq!(parsed.get("good"), Some(&"value".to_string()));
+        assert!(!parsed.contains_key("no_equals"));
+    }
+
+    #[test]
     fn builtins_listed() {
         let names = list_profile_names();
         assert_eq!(names.len(), 4);
@@ -134,6 +153,7 @@ mod tests {
         let parsed = parse_profile_content(
             r#"
                 bool_true=true
+                bool_caps= YES
                 bool_false=no
                 u16_value=42
                 u32_value=60000
@@ -149,6 +169,7 @@ mod tests {
         };
 
         assert_eq!(profile.get_bool("bool_true"), Some(true));
+        assert_eq!(profile.get_bool("bool_caps"), Some(true));
         assert_eq!(profile.get_bool("bool_false"), Some(false));
         assert_eq!(profile.get_u16("u16_value"), Some(42));
         assert_eq!(profile.get_u32("u32_value"), Some(60_000));
@@ -163,11 +184,9 @@ mod tests {
         let error =
             load_profile("definitely-not-a-real-profile").expect_err("unknown profile should fail");
 
-        match error {
-            DoctorError::ProfileNotFound { name } => {
-                assert_eq!(name, "definitely-not-a-real-profile")
-            }
-            other => panic!("expected ProfileNotFound error, got {other}"),
-        }
+        assert!(matches!(
+            error,
+            DoctorError::ProfileNotFound { name } if name == "definitely-not-a-real-profile"
+        ));
     }
 }

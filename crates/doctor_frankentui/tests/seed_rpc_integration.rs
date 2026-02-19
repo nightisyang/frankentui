@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use doctor_franktentui::seed::{SeedDemoConfig, run_seed_with_config};
+use doctor_frankentui::seed::{SeedDemoArgs, SeedDemoConfig, run_seed_demo, run_seed_with_config};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tempfile::tempdir;
@@ -275,7 +275,7 @@ fn start_scripted_server(mut responses: Vec<ScriptedResponse>) -> ServerHarness 
 fn configured_seed_run(
     endpoint: &str,
     http_path: &str,
-    auth_token: &str,
+    auth_bearer: &str,
     log_file: Option<std::path::PathBuf>,
     timeout_seconds: u64,
 ) -> SeedDemoConfig {
@@ -288,7 +288,7 @@ fn configured_seed_run(
         host,
         port,
         http_path: http_path.to_string(),
-        auth_token: auth_token.to_string(),
+        auth_bearer: auth_bearer.to_string(),
         project_key: "/tmp/doctor-seed-demo-project".to_string(),
         agent_a: "SeedAlpha".to_string(),
         agent_b: "SeedBeta".to_string(),
@@ -305,6 +305,91 @@ fn write_transcript_jsonl(path: &std::path::Path, entries: &[TranscriptEntry]) {
         content.push('\n');
     }
     std::fs::write(path, content).expect("write transcript jsonl");
+}
+
+#[test]
+fn seed_demo_run_seed_demo_wrapper_converts_args_and_succeeds() {
+    let temp = tempdir().expect("tempdir");
+    let log_file = temp.path().join("seed_args.log");
+
+    let server = start_scripted_server(vec![
+        ScriptedResponse::success("health_check"),
+        ScriptedResponse::success("ensure_project"),
+        ScriptedResponse::success("register_agent"),
+        ScriptedResponse::success("register_agent"),
+        ScriptedResponse::success("send_message"),
+        ScriptedResponse::success("send_message"),
+        ScriptedResponse::success("fetch_inbox"),
+        ScriptedResponse::success("search_messages"),
+        ScriptedResponse::success("file_reservation_paths"),
+    ]);
+
+    let without_scheme = server
+        .endpoint
+        .trim_start_matches("http://")
+        .trim_end_matches('/');
+    let mut parts = without_scheme.split(':');
+    let host = parts.next().unwrap_or("127.0.0.1").to_string();
+    let port = parts.next().unwrap_or("80").to_string();
+
+    run_seed_demo(SeedDemoArgs {
+        host,
+        port,
+        http_path: "/mcp/".to_string(),
+        auth_bearer: "example-auth".to_string(),
+        project_key: "/tmp/doctor-seed-demo-args-project".to_string(),
+        agent_a: "SeedAlpha".to_string(),
+        agent_b: "SeedBeta".to_string(),
+        messages: 2,
+        timeout_seconds: 3,
+        log_file: Some(log_file),
+    })
+    .expect("run_seed_demo should succeed");
+
+    let entries = server.transcripts.lock().expect("transcript lock").clone();
+    assert!(entries.iter().all(|entry| entry.expected_tool_matched));
+    assert!(entries.iter().all(|entry| entry.path == "/mcp/"));
+    assert!(
+        entries
+            .iter()
+            .all(|entry| entry.authorization.as_deref() == Some("Bearer example-auth"))
+    );
+
+    let send_messages: Vec<&TranscriptEntry> = entries
+        .iter()
+        .filter(|entry| entry.tool.as_deref() == Some("send_message"))
+        .collect();
+    assert_eq!(send_messages.len(), 2);
+
+    let first_send_body: Value =
+        serde_json::from_str(&send_messages[0].request_body).expect("parse send_message payload");
+    assert_eq!(
+        first_send_body
+            .pointer("/params/arguments/sender_name")
+            .and_then(Value::as_str),
+        Some("SeedAlpha")
+    );
+    assert_eq!(
+        first_send_body
+            .pointer("/params/arguments/to/0")
+            .and_then(Value::as_str),
+        Some("SeedBeta")
+    );
+
+    let second_send_body: Value =
+        serde_json::from_str(&send_messages[1].request_body).expect("parse send_message payload");
+    assert_eq!(
+        second_send_body
+            .pointer("/params/arguments/sender_name")
+            .and_then(Value::as_str),
+        Some("SeedBeta")
+    );
+    assert_eq!(
+        second_send_body
+            .pointer("/params/arguments/to/0")
+            .and_then(Value::as_str),
+        Some("SeedAlpha")
+    );
 }
 
 #[test]

@@ -7,7 +7,7 @@ use serde_json::Value;
 use tempfile::tempdir;
 
 fn doctor_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_doctor_franktentui"))
+    PathBuf::from(env!("CARGO_BIN_EXE_doctor_frankentui"))
 }
 
 fn resolve_command_path(command: &str) -> Option<PathBuf> {
@@ -59,8 +59,12 @@ fn build_path_with_selected_commands(tool_dir: &Path, commands: &[&str]) -> Stri
     fs::create_dir_all(tool_dir).expect("tool dir");
 
     for command in commands {
-        let source = resolve_command_path(command)
-            .unwrap_or_else(|| panic!("required command not found in PATH: {command}"));
+        let source = resolve_command_path(command);
+        assert!(
+            source.is_some(),
+            "required command not found in PATH: {command}"
+        );
+        let source = source.expect("required command path");
         let target = tool_dir.join(command);
         if target.exists() {
             fs::remove_file(&target).expect("remove existing symlink target");
@@ -74,24 +78,26 @@ fn build_path_with_selected_commands(tool_dir: &Path, commands: &[&str]) -> Stri
 fn link_or_copy_command(source: &Path, target: &Path) {
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(source, target).unwrap_or_else(|error| {
-            panic!(
-                "failed creating command symlink {} -> {}: {error}",
-                target.display(),
-                source.display()
-            )
-        });
+        let result = std::os::unix::fs::symlink(source, target);
+        assert!(
+            result.is_ok(),
+            "failed creating command symlink {} -> {}: {}",
+            target.display(),
+            source.display(),
+            result.as_ref().unwrap_err()
+        );
     }
 
     #[cfg(not(unix))]
     {
-        fs::copy(source, target).unwrap_or_else(|error| {
-            panic!(
-                "failed copying command binary {} -> {}: {error}",
-                source.display(),
-                target.display()
-            )
-        });
+        let result = fs::copy(source, target);
+        assert!(
+            result.is_ok(),
+            "failed copying command binary {} -> {}: {}",
+            source.display(),
+            target.display(),
+            result.as_ref().unwrap_err()
+        );
     }
 }
 
@@ -107,7 +113,7 @@ fn run_doctor_command_with_path(
         command.env(key, value);
     }
 
-    command.output().expect("run doctor_franktentui binary")
+    command.output().expect("run doctor_frankentui binary")
 }
 
 fn run_doctor_command(args: &[&str], extra_env: &[(&str, &str)]) -> Output {
@@ -129,15 +135,25 @@ fn stderr_text(output: &Output) -> String {
 fn parse_stdout_json(output: &Output) -> Value {
     let text = stdout_text(output);
     let trimmed = text.trim();
-    serde_json::from_str::<Value>(trimmed)
-        .unwrap_or_else(|error| panic!("failed parsing JSON stdout ({trimmed}): {error}"))
+    let parsed = serde_json::from_str::<Value>(trimmed);
+    assert!(
+        parsed.is_ok(),
+        "failed parsing JSON stdout ({trimmed}): {}",
+        parsed.as_ref().unwrap_err()
+    );
+    parsed.expect("parse stdout json")
 }
 
 fn parse_stderr_json(output: &Output) -> Value {
     let text = stderr_text(output);
     let trimmed = text.trim();
-    serde_json::from_str::<Value>(trimmed)
-        .unwrap_or_else(|error| panic!("failed parsing JSON stderr ({trimmed}): {error}"))
+    let parsed = serde_json::from_str::<Value>(trimmed);
+    assert!(
+        parsed.is_ok(),
+        "failed parsing JSON stderr ({trimmed}): {}",
+        parsed.as_ref().unwrap_err()
+    );
+    parsed.expect("parse stderr json")
 }
 
 #[test]
@@ -423,6 +439,58 @@ fn doctor_missing_dependency_and_json_output_contract() {
 }
 
 #[test]
+fn doctor_json_mode_missing_vhs_emits_machine_readable_stderr_payload() {
+    if skip_if_missing(
+        &["bash"],
+        "doctor_json_mode_missing_vhs_emits_machine_readable_stderr_payload",
+    ) {
+        return;
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let project_dir = temp.path().join("project");
+    let run_root = temp.path().join("doctor_json_missing_vhs");
+    let tool_dir = temp.path().join("tools");
+
+    fs::create_dir_all(&project_dir).expect("project dir");
+    fs::create_dir_all(&run_root).expect("run root");
+
+    let path_env = build_path_with_selected_commands(&tool_dir, &["bash"]);
+    let output = run_doctor_command_with_path(
+        &[
+            "doctor",
+            "--project-dir",
+            project_dir.to_str().expect("project dir str"),
+            "--run-root",
+            run_root.to_str().expect("run root str"),
+            "--app-command",
+            "echo demo",
+        ],
+        &path_env,
+        &[("SQLMODEL_JSON", "1")],
+    );
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stdout_text(&output).trim().is_empty(),
+        "expected no stdout on JSON-mode failure, got: {}",
+        stdout_text(&output)
+    );
+
+    let payload = parse_stderr_json(&output);
+    assert_eq!(payload["status"], "error");
+    assert_eq!(payload["exit_code"], 1);
+    assert!(
+        payload["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("missing dependency command: vhs"),
+        "unexpected error payload: {payload}"
+    );
+    assert_eq!(payload["integration"]["sqlmodel_mode"], "json");
+}
+
+#[test]
 fn json_mode_failure_emits_machine_readable_stderr_payload() {
     let temp = tempdir().expect("tempdir");
     let project_dir = temp.path().join("project");
@@ -462,6 +530,147 @@ fn json_mode_failure_emits_machine_readable_stderr_payload() {
             .contains("profile not found")
     );
     assert_eq!(payload["integration"]["sqlmodel_mode"], "json");
+}
+
+#[test]
+fn capture_dry_run_honors_conservative_env_and_output_override_contract() {
+    if skip_if_missing(
+        &["vhs"],
+        "capture_dry_run_honors_conservative_env_and_output_override_contract",
+    ) {
+        return;
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let project_dir = temp.path().join("project");
+    let run_root = temp.path().join("capture_runs");
+    let output_dir = temp.path().join("custom_output");
+    let output_path = output_dir.join("capture.mp4");
+
+    fs::create_dir_all(&project_dir).expect("project dir");
+    fs::create_dir_all(&output_dir).expect("output dir");
+
+    let output = run_doctor_command(
+        &[
+            "capture",
+            "--profile",
+            "analytics-empty",
+            "--project-dir",
+            project_dir.to_str().expect("project dir str"),
+            "--run-root",
+            run_root.to_str().expect("run root str"),
+            "--output",
+            output_path.to_str().expect("output path str"),
+            "--jump-key",
+            "7",
+            "--capture-sleep",
+            "9",
+            "--seed-demo",
+            "--seed-required",
+            "--snapshot-required",
+            "--capture-timeout-seconds",
+            "77",
+            "--dry-run",
+        ],
+        &[
+            ("DOCTOR_FRANKENTUI_CONSERVATIVE", "1"),
+            ("SQLMODEL_JSON", "1"),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "capture dry-run failed: {}",
+        stderr_text(&output)
+    );
+
+    let payload = parse_stdout_json(&output);
+    assert_eq!(payload["command"], "capture");
+    assert_eq!(payload["status"], "dry_run_ok");
+
+    let run_dir = output_path
+        .parent()
+        .expect("output path parent should exist")
+        .to_path_buf();
+    assert_eq!(payload["run_dir"], run_dir.display().to_string());
+
+    let meta: Value = serde_json::from_str(
+        &fs::read_to_string(run_dir.join("run_meta.json")).expect("read meta"),
+    )
+    .expect("parse run meta json");
+    assert_eq!(meta["status"], "running");
+    assert_eq!(meta["output"], output_path.display().to_string());
+    assert_eq!(meta["run_dir"], run_dir.display().to_string());
+    assert_eq!(meta["seed_demo"], 0);
+    assert_eq!(meta["seed_required"], 0);
+    assert_eq!(meta["snapshot_required"], 0);
+    assert_eq!(meta["fallback_active"], true);
+    assert_eq!(meta["fallback_reason"], "conservative mode enabled");
+
+    let summary = fs::read_to_string(run_dir.join("run_summary.txt")).expect("read run summary");
+    assert!(summary.contains("keys=7,sleep:9,q"));
+    assert!(summary.contains("conservative_mode=true"));
+    assert!(summary.contains("capture_timeout_seconds=77"));
+
+    let ledger_path = run_dir.join("evidence_ledger.jsonl");
+    assert!(ledger_path.exists(), "expected evidence ledger for dry run");
+}
+
+#[test]
+fn capture_dry_run_legacy_binary_mode_writes_legacy_runtime_command() {
+    if skip_if_missing(
+        &["vhs"],
+        "capture_dry_run_legacy_binary_mode_writes_legacy_runtime_command",
+    ) {
+        return;
+    }
+
+    let temp = tempdir().expect("tempdir");
+    let project_dir = temp.path().join("project");
+    let run_root = temp.path().join("legacy_capture_runs");
+    fs::create_dir_all(&project_dir).expect("project dir");
+
+    let output = run_doctor_command(
+        &[
+            "capture",
+            "--profile",
+            "analytics-empty",
+            "--project-dir",
+            project_dir.to_str().expect("project dir str"),
+            "--run-root",
+            run_root.to_str().expect("run root str"),
+            "--run-name",
+            "legacy_dry_case",
+            "--binary",
+            "/bin/echo",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "9988",
+            "--path",
+            "custom",
+            "--auth-token",
+            "legacy-token",
+            "--no-snapshot",
+            "--dry-run",
+        ],
+        &[],
+    );
+    assert!(
+        output.status.success(),
+        "capture legacy dry-run failed: {}",
+        stderr_text(&output)
+    );
+
+    let run_dir = run_root.join("legacy_dry_case");
+    let summary = fs::read_to_string(run_dir.join("run_summary.txt")).expect("read run summary");
+    let tape = fs::read_to_string(run_dir.join("capture.tape")).expect("read capture tape");
+
+    assert!(summary.contains("runtime_command=/bin/echo"));
+    assert!(summary.contains("host=0.0.0.0"));
+    assert!(summary.contains("port=9988"));
+    assert!(summary.contains("path=/custom/"));
+    assert!(summary.contains("auth_bearer_set=true"));
+    assert!(tape.contains("'/bin/echo' serve --host '0.0.0.0' --port '9988' --path '/custom/'"));
 }
 
 #[test]

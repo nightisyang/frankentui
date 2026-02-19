@@ -257,12 +257,17 @@ pub fn relative_to(base: &Path, path: &Path) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
 
+    use tempfile::tempdir;
+
+    use crate::error::DoctorError;
+
     use super::{
-        OutputIntegration, duration_literal, normalize_http_path, output_for, parse_duration_value,
-        relative_to, shell_single_quote, tape_escape,
+        OutputIntegration, append_line, bool_to_u8, command_exists, duration_literal, ensure_dir,
+        ensure_executable, ensure_exists, normalize_http_path, output_for, parse_duration_value,
+        relative_to, require_command, shell_single_quote, tape_escape, write_string,
     };
 
     #[test]
@@ -344,5 +349,109 @@ mod tests {
 
         assert!(!json_output.enabled);
         assert!(human_output.enabled);
+    }
+
+    #[test]
+    fn output_integration_as_json_line_round_trips() {
+        let integration = OutputIntegration {
+            fastapi_mode: "plain".to_string(),
+            fastapi_agent: true,
+            fastapi_ci: false,
+            fastapi_tty: true,
+            sqlmodel_mode: "json".to_string(),
+            sqlmodel_agent: true,
+        };
+
+        let line = integration.as_json_line();
+        let parsed = serde_json::from_str::<serde_json::Value>(&line).expect("as_json_line JSON");
+
+        assert_eq!(parsed["sqlmodel_mode"], "json");
+        assert_eq!(parsed["fastapi_tty"], true);
+    }
+
+    #[test]
+    fn bool_to_u8_converts_values() {
+        assert_eq!(bool_to_u8(false), 0);
+        assert_eq!(bool_to_u8(true), 1);
+    }
+
+    #[test]
+    fn ensure_dir_creates_nested_directory() {
+        let temp = tempdir().expect("tempdir");
+        let nested = temp.path().join("a/b/c");
+        ensure_dir(&nested).expect("ensure_dir");
+        assert!(nested.is_dir());
+    }
+
+    #[test]
+    fn ensure_exists_reports_missing_path_error() {
+        let temp = tempdir().expect("tempdir");
+        let missing = temp.path().join("does-not-exist");
+        let error = ensure_exists(&missing).expect_err("missing path should error");
+        assert!(matches!(error, DoctorError::MissingPath { path } if path == missing));
+    }
+
+    #[test]
+    fn write_string_creates_parent_dirs_and_writes_content() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("nested/dir/file.txt");
+        write_string(&target, "hello").expect("write_string");
+        let content = std::fs::read_to_string(&target).expect("read file");
+        assert_eq!(content, "hello");
+    }
+
+    #[test]
+    fn append_line_creates_parent_dirs_and_appends_newlines() {
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("logs/out.txt");
+
+        append_line(&target, "first").expect("append first");
+        append_line(&target, "second").expect("append second");
+
+        let content = std::fs::read_to_string(&target).expect("read file");
+        let lines = content.lines().collect::<Vec<_>>();
+        assert_eq!(lines, vec!["first", "second"]);
+    }
+
+    #[test]
+    fn command_exists_and_require_command_agree_on_missing_binary() {
+        let missing = "definitely-not-a-real-doctor-frankentui-command";
+        assert!(!command_exists(missing));
+
+        let error = require_command(missing).expect_err("missing command should fail");
+        assert!(matches!(error, DoctorError::MissingCommand { command } if command == missing));
+    }
+
+    #[test]
+    fn ensure_executable_reports_missing_path_error() {
+        let missing = PathBuf::from("/tmp/doctor_frankentui/missing-executable");
+        let error = ensure_executable(&missing).expect_err("missing executable should fail");
+        assert!(matches!(error, DoctorError::MissingPath { path } if path == missing));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_executable_rejects_non_exec_file_and_accepts_exec_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempdir().expect("tempdir");
+        let target = temp.path().join("script.sh");
+        // doctor_frankentui:no-fake-allow (unit test) writes a temp shell script to
+        // validate unix executable-bit handling (real filesystem permissions, no binary shims).
+        write_string(&target, "#!/bin/sh\necho hi\n").expect("write script");
+
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644))
+            .expect("chmod 644");
+
+        let error = ensure_executable(&target).expect_err("non-exec file should fail");
+        assert!(matches!(error, DoctorError::NotExecutable { path } if path == target));
+
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod 755");
+        ensure_executable(&target).expect("exec file should pass");
+
+        let explicit = target.display().to_string();
+        assert!(command_exists(&explicit));
+        require_command(&explicit).expect("require_command should accept explicit executable path");
     }
 }

@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 
 fn main() {
-    let integration = doctor_franktentui::util::OutputIntegration::detect();
-    if let Err(error) = doctor_franktentui::run_from_env() {
+    let integration = doctor_frankentui::util::OutputIntegration::detect();
+    if let Err(error) = doctor_frankentui::run_from_env() {
         if integration.should_emit_json() {
             eprintln!(
                 "{}",

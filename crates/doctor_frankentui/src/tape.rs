@@ -58,6 +58,9 @@ pub fn build_capture_tape(spec: &TapeSpec<'_>) -> String {
     }
 
     for raw_token in spec.keys.split(',') {
+        if raw_token.trim().is_empty() {
+            continue;
+        }
         let emitted = emit_token(raw_token);
         lines.push(emitted.line);
         if !emitted.is_sleep {
@@ -66,7 +69,16 @@ pub fn build_capture_tape(spec: &TapeSpec<'_>) -> String {
     }
 
     lines.push(format!("Sleep {}", duration_literal(spec.tail_sleep)));
+    // Robust shutdown tail:
+    // - first Ctrl+C handles normal SIGINT shutdown
+    // - second Ctrl+C handles apps with confirmation-on-interrupt
+    // - explicit shell exit closes fallback prompt when app already exited
     lines.push("Ctrl+C".to_string());
+    lines.push("Sleep 500ms".to_string());
+    lines.push("Ctrl+C".to_string());
+    lines.push("Sleep 500ms".to_string());
+    lines.push("Type \"exit\"".to_string());
+    lines.push("Enter".to_string());
     lines.push("Sleep 500ms".to_string());
     lines.push(String::new());
 
@@ -102,7 +114,8 @@ mod tests {
         assert!(tape.contains("Set Theme \"GruvboxDark\""));
         assert!(tape.contains("Type \"#\""));
         assert!(tape.contains("Sleep 2s"));
-        assert!(tape.contains("Ctrl+C"));
+        assert_eq!(tape.matches("Ctrl+C").count(), 2);
+        assert!(tape.contains("Type \"exit\""));
     }
 
     #[test]
@@ -174,5 +187,29 @@ mod tests {
         assert!(tape.contains("Output \"/tmp/out \\\"quoted\\\".mp4\""));
         assert!(tape.contains("Require \"/tmp/bin \\\"quoted\\\"\""));
         assert!(tape.contains("Type \"cd '/tmp/project dir'\""));
+    }
+
+    #[test]
+    fn tape_skips_empty_tokens_in_key_sequence() {
+        let spec = TapeSpec {
+            output: Path::new("/tmp/out.mp4"),
+            required_binary: None,
+            project_dir: Path::new("/tmp/project"),
+            server_command: "echo run",
+            font_size: 20,
+            width: 1600,
+            height: 900,
+            framerate: 30,
+            theme: "Theme",
+            boot_sleep: "1",
+            step_sleep: "3",
+            tail_sleep: "1",
+            keys: "a,,  ,sleep:1,,b,",
+        };
+
+        let tape = build_capture_tape(&spec);
+        assert!(!tape.contains("Type \"\""));
+        assert_eq!(tape.matches("Sleep 3s").count(), 2);
+        assert!(tape.contains("Sleep 1s"));
     }
 }

@@ -20,8 +20,8 @@ pub struct SeedDemoArgs {
     #[arg(long = "path", default_value = "/mcp/")]
     pub http_path: String,
 
-    #[arg(long, default_value = "")]
-    pub auth_token: String,
+    #[arg(long = "auth-token", default_value = "")]
+    pub auth_bearer: String,
 
     #[arg(long, default_value = "/tmp/tui_inspector_demo_project")]
     pub project_key: String,
@@ -47,7 +47,7 @@ pub struct SeedDemoConfig {
     pub host: String,
     pub port: String,
     pub http_path: String,
-    pub auth_token: String,
+    pub auth_bearer: String,
     pub project_key: String,
     pub agent_a: String,
     pub agent_b: String,
@@ -62,7 +62,7 @@ impl From<SeedDemoArgs> for SeedDemoConfig {
             host: args.host,
             port: args.port,
             http_path: args.http_path,
-            auth_token: args.auth_token,
+            auth_bearer: args.auth_bearer,
             project_key: args.project_key,
             agent_a: args.agent_a,
             agent_b: args.agent_b,
@@ -77,7 +77,7 @@ impl From<SeedDemoArgs> for SeedDemoConfig {
 struct RpcClient {
     client: Client,
     endpoint: String,
-    auth_token: String,
+    auth_bearer: String,
     counter: u64,
     log_file: Option<PathBuf>,
 }
@@ -94,7 +94,7 @@ impl RpcClient {
         Ok(Self {
             client,
             endpoint,
-            auth_token: config.auth_token.clone(),
+            auth_bearer: config.auth_bearer.clone(),
             counter: 0,
             log_file: config.log_file.clone(),
         })
@@ -138,8 +138,8 @@ impl RpcClient {
             .header("Content-Type", "application/json")
             .json(&request_payload);
 
-        if !self.auth_token.is_empty() {
-            request = request.bearer_auth(&self.auth_token);
+        if !self.auth_bearer.is_empty() {
+            request = request.bearer_auth(&self.auth_bearer);
         }
 
         let response_text = request.send()?.text()?;
@@ -260,7 +260,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
         "register_agent",
         json!({
             "project_key": config.project_key,
-            "program": "doctor_franktentui",
+            "program": "doctor_frankentui",
             "model": "gpt-5-codex",
             "name": agent_a,
             "task_description": "demo sender",
@@ -270,7 +270,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
         "register_agent",
         json!({
             "project_key": config.project_key,
-            "program": "doctor_franktentui",
+            "program": "doctor_frankentui",
             "model": "gpt-5-codex",
             "name": agent_b,
             "task_description": "demo receiver",
@@ -291,7 +291,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
                 "sender_name": from_agent,
                 "to": [to_agent],
                 "subject": format!("Inspector demo message {i}"),
-                "body_md": format!("Seeded by doctor_franktentui run. Iteration {i}."),
+                "body_md": format!("Seeded by doctor_frankentui run. Iteration {i}."),
             }),
         )?;
     }
@@ -322,7 +322,7 @@ pub fn run_seed_with_config(config: SeedDemoConfig) -> Result<()> {
             "paths": ["crates/mcp-agent-mail-server/src/tui_screens/analytics.rs"],
             "ttl_seconds": 3600,
             "exclusive": false,
-            "reason": "doctor-franktentui-demo",
+            "reason": "doctor-frankentui-demo",
         }),
     ) {
         ui.warning(&format!("file_reservation_paths failed: {error}"));
@@ -348,6 +348,7 @@ mod tests {
     use super::{RpcClient, SeedDemoConfig, wait_for_server};
     use crate::error::DoctorError;
     use crate::util::OutputIntegration;
+    use serde_json::json;
 
     #[test]
     fn should_retry_matches_retryable_invalid_argument_messages() {
@@ -366,12 +367,35 @@ mod tests {
     }
 
     #[test]
+    fn should_retry_returns_true_for_http_errors() {
+        let config = SeedDemoConfig {
+            host: "127.0.0.1".to_string(),
+            port: "not-a-port".to_string(),
+            http_path: "/mcp/".to_string(),
+            auth_bearer: String::new(),
+            project_key: "/tmp/project".to_string(),
+            agent_a: "A".to_string(),
+            agent_b: "B".to_string(),
+            messages: 1,
+            timeout_seconds: 1,
+            log_file: None,
+        };
+
+        let mut client = RpcClient::new(&config).expect("rpc client");
+        let error = client
+            .call_tool_once("health_check", json!({}))
+            .expect_err("invalid URL should surface HTTP error");
+        assert!(matches!(error, DoctorError::Http(_)));
+        assert!(RpcClient::should_retry(&error));
+    }
+
+    #[test]
     fn rpc_client_new_normalizes_http_path_in_endpoint() {
         let config = SeedDemoConfig {
             host: "127.0.0.1".to_string(),
             port: "8879".to_string(),
             http_path: "mcp".to_string(),
-            auth_token: String::new(),
+            auth_bearer: String::new(),
             project_key: "/tmp/project".to_string(),
             agent_a: "A".to_string(),
             agent_b: "B".to_string(),
@@ -390,7 +414,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: "1".to_string(),
             http_path: "/mcp/".to_string(),
-            auth_token: String::new(),
+            auth_bearer: String::new(),
             project_key: "/tmp/project".to_string(),
             agent_a: "A".to_string(),
             agent_b: "B".to_string(),
@@ -410,7 +434,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: "8879".to_string(),
             http_path: "/mcp/".to_string(),
-            auth_token: String::new(),
+            auth_bearer: String::new(),
             project_key: "/tmp/project".to_string(),
             agent_a: "Alpha".to_string(),
             agent_b: "Beta".to_string(),

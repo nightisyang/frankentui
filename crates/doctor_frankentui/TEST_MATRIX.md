@@ -1,10 +1,10 @@
-# doctor_franktentui Test Matrix and Acceptance Contract
+# doctor_frankentui Test Matrix and Acceptance Contract
 
-This document is the canonical verification contract for `crates/doctor_franktentui`.
+This document is the canonical verification contract for `crates/doctor_frankentui`.
 
 ## Scope
 
-- Code scope: every production module in `crates/doctor_franktentui/src`.
+- Code scope: every production module in `crates/doctor_frankentui/src`.
 - Verification levels:
   - `unit`: pure logic and deterministic transforms.
   - `integration`: real subprocess/network/filesystem interactions on local host.
@@ -33,6 +33,27 @@ This document is the canonical verification contract for `crates/doctor_frankten
   - machine-readable results summary (`json`) and human summary (`txt/md`).
   - retention of failure diagnostics without rerun.
 
+## CI Evidence Pointers (Canonical)
+
+When a matrix row is marked `implemented`, evidence is expected to be produced by the
+canonical CI verification jobs:
+
+- PR gate: `.github/workflows/ci.yml` job `doctor-frankentui-verification`
+- Extended lane (nightly/main): `.github/workflows/doctor_frankentui_extended.yml`
+
+Both lanes publish an `artifact_map.txt` and `artifact_map.json` under the artifact root:
+
+- PR gate artifact root: `/tmp/doctor_frankentui_ci/`
+- Extended artifact root: `/tmp/doctor_frankentui_ci_extended/`
+
+The artifact map provides stable keys for evidence discovery (examples):
+
+- `unit_integration_log`, `no_fake_gate_log`
+- `happy_events_jsonl`, `happy_events_validation_report`, `happy_artifact_manifest`
+- `failure_events_jsonl`, `failure_case_results`, `replay_triage_report_json`
+- `determinism_report_json`, `determinism_run_index`
+- `coverage_report_json`, `coverage_thresholds_toml`, `telemetry_schema_json`
+
 ## Status Legend
 
 - `planned`: row defined, test not yet implemented.
@@ -44,7 +65,7 @@ This document is the canonical verification contract for `crates/doctor_frankten
 | behavior_id | module | level | behavior_description | deterministic_input | expected_output_or_side_effect | failure_signature | log_artifacts_required | status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | DF-CLI-001 | `src/cli.rs` | unit | dispatches each subcommand to the correct runner | synthetic `Cli { command: ... }` | returns downstream `Result` unchanged | wrong command routed or swallowed error | n/a | implemented |
-| DF-CLI-002 | `src/main.rs` + `src/error.rs` | integration | process exit code equals `DoctorError::exit_code()` | invoke binary with invalid args/profile | non-zero process exit matches mapped error code | mismatched exit code mapping | stderr + exit code | planned |
+| DF-CLI-002 | `src/main.rs` + `src/error.rs` | integration | process exit code equals `DoctorError::exit_code()` | invoke binary with invalid args/profile | non-zero process exit matches mapped error code | mismatched exit code mapping | stderr + exit code | implemented |
 | DF-ERR-001 | `src/error.rs` | unit | `DoctorError::exit` preserves code/message | explicit constructor input | `exit_code()` equals provided code | code collapsed to default `1` | n/a | implemented |
 | DF-ERR-002 | `src/error.rs` | unit | external command failure maps to exact code | construct `ExternalCommandFailed` variant | `exit_code()` returns `exit_code` field | returns incorrect fallback code | n/a | implemented |
 | DF-UTIL-001 | `src/util.rs` | unit | duration parser supports `ms`, `s`, and bare seconds | `500ms`, `5s`, `5` | returns expected `Duration` | invalid parsing accepted/rejected incorrectly | n/a | implemented |
@@ -52,7 +73,7 @@ This document is the canonical verification contract for `crates/doctor_frankten
 | DF-UTIL-003 | `src/util.rs` | unit | `normalize_http_path` enforces leading/trailing slash | `mcp`, `/mcp`, `mcp/` | all normalize to `/mcp/` | malformed endpoint path | n/a | implemented |
 | DF-UTIL-004 | `src/util.rs` | unit | `shell_single_quote` escapes embedded single quotes safely | values containing `'` | shell-safe quoted string | broken runtime command quoting | n/a | implemented |
 | DF-UTIL-005 | `src/util.rs` | unit | `output_for` suppresses human output in JSON mode | synthetic `OutputIntegration` modes | `CliOutput` disabled when `sqlmodel_mode=json` | mixed human + json output contract break | stdout contract assertions | implemented |
-| DF-UTIL-006 | `src/util.rs` | integration | ensure path helpers (`ensure_dir`, `ensure_exists`, `write_string`, `append_line`) handle parent creation correctly | temp dirs and nested files | files written and appended deterministically | missing parent dir creation; truncated append | created files and contents | planned |
+| DF-UTIL-006 | `src/util.rs` | integration | ensure path helpers (`ensure_dir`, `ensure_exists`, `write_string`, `append_line`) handle parent creation correctly | temp dirs and nested files | files written and appended deterministically | missing parent dir creation; truncated append | created files and contents | implemented |
 | DF-PROF-001 | `src/profile.rs` | unit | lists all built-in profile names | built-in table | deterministic list contains 4 expected profiles | missing profile in list | n/a | implemented |
 | DF-PROF-002 | `src/profile.rs` | unit | profile parsing handles comments and quoted values | env fragment with comments/quotes | expected key/value map | quotes/comments parsed incorrectly | n/a | implemented |
 | DF-PROF-003 | `src/profile.rs` | unit | typed getters (`get_bool/u16/u32/u64`) accept valid values and reject invalid | representative strings | `Some(parsed)` or `None` per type | type coercion bugs | n/a | implemented |
@@ -86,26 +107,24 @@ This document is the canonical verification contract for `crates/doctor_frankten
 | DF-SUITE-004 | `src/suite.rs` | integration | report failures propagate to failed suite status/exit | induce report failure | suite returns non-zero with explicit report-failed indicator | silent pass on broken report | stdout/stderr + suite_report.log + exit code | implemented |
 | DF-SUITE-005 | `src/suite.rs` | integration | JSON mode summary matches human status decisions | run suite with JSON mode in success/failure | `status` and `report_failed` fields consistent | inconsistent machine status | raw stdout + suite artifacts | implemented |
 | DF-REPORT-001 | `src/report.rs` | unit | report generation builds JSON + HTML from run_meta files | temp suite dir with run_meta fixtures | `report.json` + `index.html` created | missing artifacts from valid input | output files | implemented |
-| DF-REPORT-002 | `src/report.rs` | unit | missing suite dir and missing run_meta fail clearly | invalid dirs / empty suite | deterministic invalid/missing-path errors | silent empty reports | error text assertion | planned |
-| DF-REPORT-003 | `src/report.rs` | unit | HTML escaping and relative path rendering are safe | run_meta with special chars and nested paths | escaped HTML, stable links | broken HTML or unsafe injection | generated html snapshot | planned |
+| DF-REPORT-002 | `src/report.rs` | unit | missing suite dir and missing run_meta fail clearly | invalid dirs / empty suite | deterministic invalid/missing-path errors | silent empty reports | error text assertion | implemented |
+| DF-REPORT-003 | `src/report.rs` | unit | HTML escaping and relative path rendering are safe | run_meta with special chars and nested paths | escaped HTML, stable links | broken HTML or unsafe injection | generated html snapshot | implemented |
 | DF-REPORT-004 | `src/report.rs` | integration | JSON mode output contract emits machine summary only | `SQLMODEL_JSON=1 report ...` | clean JSON summary output | mixed human and machine output | raw stdout capture | implemented |
 | DF-SEED-001 | `src/seed.rs` | integration | wait loop succeeds when health endpoint eventually returns result | local scripted server: fail then success | success within timeout window | premature timeout | request transcript + logs | implemented |
 | DF-SEED-002 | `src/seed.rs` | integration | retry policy handles empty/non-JSON/JSON-RPC error responses | scripted response sequence | retries with bounded attempts and final failure/success | no retry or infinite retry | transcript + retry lines in log file | implemented |
 | DF-SEED-003 | `src/seed.rs` | integration | bearer auth is forwarded when token provided | local server asserting `Authorization` | header present for all requests | missing auth header | captured request headers | implemented |
 | DF-SEED-004 | `src/seed.rs` | integration | endpoint path normalization is respected | path variants (`mcp`, `/mcp`, `/mcp/`) | requests hit normalized endpoint | wrong URL formation | captured request path | implemented |
 | DF-SEED-005 | `src/seed.rs` | integration | optional `file_reservation_paths` failure is warning-only | server returns error for reservation call | command succeeds with warning | hard-fail on optional operation | stdout/stderr + log file | implemented |
-| DF-SEED-006 | `src/seed.rs` | integration | JSON mode output summary is machine readable | `SQLMODEL_JSON=1 seed-demo ...` | final JSON summary includes endpoint/messages | mixed output in json mode | raw stdout capture | planned |
+| DF-SEED-006 | `src/seed.rs` | integration | JSON mode output summary is machine readable | `SQLMODEL_JSON=1 seed-demo ...` | final JSON summary includes endpoint/messages | mixed output in json mode | raw stdout capture | implemented |
 | DF-E2E-001 | command workflow | e2e | happy-path command chain across doctor/capture/suite/report | scripted shell workflow + deterministic profile set | all commands pass and produce complete artifact tree | hidden failures despite zero exit | per-step stdout/stderr + artifact manifest + summary | implemented |
 | DF-E2E-002 | command workflow | e2e | failure-path matrix validates expected non-zero exits and messages | scripted negative cases | each case asserts expected code and signature | ambiguous or silent failure semantics | case logs + case_results.json | implemented |
 | DF-E2E-003 | command workflow | e2e | JSON mode contract preserved end-to-end for all commands | run key commands with `SQLMODEL_JSON=1` | output parseable as JSON per command | human status leakage into JSON streams | raw stdout archives | implemented |
 
-## Traceability to Current Beads
+## Traceability to Current Beads (bd-36je8)
 
-- `bd-1p2xv.2` targets: `DF-UTIL-*`, `DF-PROF-*`, `DF-KEY-*`, `DF-TAPE-*`, `DF-RMETA-*`.
-- `bd-1p2xv.3` targets: `DF-CLI-*`, `DF-ERR-*`, `DF-CAP-001..004`, `DF-SUITE-001..002`, `DF-DOCTOR-001..005`, `DF-SEED-006`.
-- `bd-1p2xv.4` targets: `DF-SEED-001..005`.
-- `bd-1p2xv.5` targets: `DF-DOCTOR-*`, `DF-CAP-005..009`, `DF-SUITE-003..005`, `DF-REPORT-004`.
-- `bd-1p2xv.7` targets: `DF-E2E-001`.
-- `bd-1p2xv.6` targets: `DF-E2E-002..003`.
-- `bd-1p2xv.8` applies coverage policy across all rows.
-- `bd-1p2xv.9` wires CI and docs for all rows.
+- `bd-36je8.2` (coverage closure): unit + integration rows (`DF-*` except `DF-E2E-*`) and coverage gating.
+- `bd-36je8.3` (e2e observability): `DF-E2E-*` plus JSONL schema validation, determinism soak, replay/triage outputs.
+- `bd-36je8.4` (CI enforcement): PR gate job + extended lane job, no-fake gate, artifact maps, and retention.
+- `bd-36je8.5` (closeout): matrix truth reconciliation and final verification report.
+- `bd-36je8.5.1` (this task): reconcile row statuses + traceability links.
+- `bd-36je8.5.2` (next): final verification report linking each major matrix slice to evidence artifacts.

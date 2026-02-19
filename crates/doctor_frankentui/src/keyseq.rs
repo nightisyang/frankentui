@@ -8,11 +8,15 @@ pub struct EmittedToken {
 
 #[must_use]
 pub fn emit_token(raw: &str) -> EmittedToken {
-    let token = raw.trim();
-    let lower = token.to_ascii_lowercase();
+    let fragment = raw.trim();
+    let lower = fragment.to_ascii_lowercase();
 
     if lower.starts_with("sleep:") || lower.starts_with("wait:") {
-        let duration = token.split_once(':').map_or("0", |(_, value)| value).trim();
+        let duration = fragment
+            .split_once(':')
+            .map_or("0", |(_, value)| value)
+            .trim();
+        let duration = if duration.is_empty() { "0" } else { duration };
         return EmittedToken {
             line: format!("Sleep {}", duration_literal(duration)),
             is_sleep: true,
@@ -41,7 +45,7 @@ pub fn emit_token(raw: &str) -> EmittedToken {
     }
 
     if lower.starts_with("text:") {
-        let text = token
+        let text = fragment
             .split_once(':')
             .map_or("", |(_, value)| value)
             .to_string();
@@ -51,15 +55,15 @@ pub fn emit_token(raw: &str) -> EmittedToken {
         };
     }
 
-    if token.chars().count() == 1 {
+    if fragment.chars().count() == 1 {
         return EmittedToken {
-            line: format!("Type \"{}\"", tape_escape(token)),
+            line: format!("Type \"{}\"", tape_escape(fragment)),
             is_sleep: false,
         };
     }
 
     EmittedToken {
-        line: format!("Type \"{}\"", tape_escape(token)),
+        line: format!("Type \"{}\"", tape_escape(fragment)),
         is_sleep: false,
     }
 }
@@ -107,6 +111,20 @@ mod tests {
     fn single_character_token_is_typed_directly() {
         let result = emit_token("#");
         assert_eq!(result.line, "Type \"#\"");
+        assert!(!result.is_sleep);
+    }
+
+    #[test]
+    fn sleep_token_without_value_defaults_to_zero() {
+        let result = emit_token("sleep:");
+        assert_eq!(result.line, "Sleep 0s");
+        assert!(result.is_sleep);
+    }
+
+    #[test]
+    fn token_whitespace_is_trimmed_before_mapping() {
+        let result = emit_token("  TAB  ");
+        assert_eq!(result.line, "Tab");
         assert!(!result.is_sleep);
     }
 }

@@ -1,6 +1,6 @@
-# doctor_franktentui Coverage Gate
+# doctor_frankentui Coverage Gate
 
-This directory contains the reproducible coverage policy for `doctor_franktentui`.
+This directory contains the reproducible coverage policy for `doctor_frankentui`.
 
 ## Artifacts
 
@@ -12,13 +12,13 @@ This directory contains the reproducible coverage policy for `doctor_franktentui
 From repo root:
 
 ```bash
-./scripts/doctor_franktentui_coverage.sh
+./scripts/doctor_frankentui_coverage.sh
 ```
 
 Optional output directory override:
 
 ```bash
-./scripts/doctor_franktentui_coverage.sh /tmp/doctor_franktentui_coverage_gate
+./scripts/doctor_frankentui_coverage.sh /tmp/doctor_frankentui_coverage_gate
 ```
 
 The script writes:

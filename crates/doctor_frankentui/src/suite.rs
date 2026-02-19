@@ -45,7 +45,7 @@ pub struct SuiteArgs {
     pub http_path: Option<String>,
 
     #[arg(long = "auth-token")]
-    pub auth_token: Option<String>,
+    pub auth_bearer: Option<String>,
 
     #[arg(long)]
     pub fail_fast: bool,
@@ -81,13 +81,13 @@ fn resolve_app_command(
     host: &Option<String>,
     port: &Option<String>,
     http_path: &Option<String>,
-    auth_token: &Option<String>,
+    auth_bearer: &Option<String>,
 ) -> Option<String> {
     let requested_legacy_runtime = binary.is_some()
         || host.is_some()
         || port.is_some()
         || http_path.is_some()
-        || auth_token.is_some();
+        || auth_bearer.is_some();
 
     if let Some(command) = app_command {
         Some(command)
@@ -130,7 +130,11 @@ fn suite_outcome_error(outcome: SuiteOutcome) -> Option<DoctorError> {
 
 pub fn run_suite(args: SuiteArgs) -> Result<()> {
     let integration = OutputIntegration::detect();
-    let ui = output_for(&integration);
+    run_suite_with_integration(args, &integration)
+}
+
+fn run_suite_with_integration(args: SuiteArgs, integration: &OutputIntegration) -> Result<()> {
+    let ui = output_for(integration);
 
     let binary = args.binary.clone();
     let app_command = resolve_app_command(
@@ -139,14 +143,14 @@ pub fn run_suite(args: SuiteArgs) -> Result<()> {
         &args.host,
         &args.port,
         &args.http_path,
-        &args.auth_token,
+        &args.auth_bearer,
     );
     let project_dir = args
         .project_dir
         .unwrap_or_else(|| PathBuf::from("/data/projects/frankentui"));
     let run_root = args
         .run_root
-        .unwrap_or_else(|| PathBuf::from("/tmp/doctor_franktentui/suites"));
+        .unwrap_or_else(|| PathBuf::from("/tmp/doctor_frankentui/suites"));
     let suite_name = args
         .suite_name
         .unwrap_or_else(|| format!("suite_{}", now_compact_timestamp()));
@@ -232,8 +236,8 @@ pub fn run_suite(args: SuiteArgs) -> Result<()> {
         if let Some(http_path) = &args.http_path {
             command.arg("--path").arg(http_path);
         }
-        if let Some(auth_token) = &args.auth_token {
-            command.arg("--auth-token").arg(auth_token);
+        if let Some(auth_bearer) = &args.auth_bearer {
+            command.arg("--auth-token").arg(auth_bearer);
         }
 
         ui.info(&format!("suite running profile={profile}"));
@@ -365,9 +369,31 @@ pub fn run_suite(args: SuiteArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
 
+    use tempfile::tempdir;
+
     use super::SuiteArgs;
+    use crate::util::OutputIntegration;
+
+    fn base_suite_args(project_dir: PathBuf, run_root: PathBuf, suite_name: &str) -> SuiteArgs {
+        SuiteArgs {
+            profiles: Some("analytics-empty".to_string()),
+            binary: None,
+            app_command: Some("echo demo".to_string()),
+            project_dir: Some(project_dir),
+            run_root: Some(run_root),
+            suite_name: Some(suite_name.to_string()),
+            host: None,
+            port: None,
+            http_path: None,
+            auth_bearer: None,
+            fail_fast: false,
+            skip_report: true,
+            keep_going: false,
+        }
+    }
 
     #[test]
     fn keep_going_overrides_fail_fast() {
@@ -381,7 +407,7 @@ mod tests {
             host: None,
             port: None,
             http_path: None,
-            auth_token: None,
+            auth_bearer: None,
             fail_fast: true,
             skip_report: true,
             keep_going: true,
@@ -469,5 +495,235 @@ mod tests {
             super::suite_status_label(super::SuiteOutcome::ReportFailed),
             "failed"
         );
+    }
+
+    #[test]
+    fn run_suite_rejects_empty_profiles_after_trimming() {
+        let temp = tempdir().expect("tempdir");
+        let project_dir = temp.path().join("project");
+        let run_root = temp.path().join("suite_runs");
+        fs::create_dir_all(&project_dir).expect("project dir");
+
+        let mut args = base_suite_args(project_dir, run_root, "empty_profiles_case");
+        args.profiles = Some(" , , ".to_string());
+
+        let error = super::run_suite(args).expect_err("empty profiles must fail");
+        assert!(
+            error.to_string().contains("No profiles available."),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn run_suite_rejects_whitespace_only_profiles_csv() {
+        let temp = tempdir().expect("tempdir");
+        let project_dir = temp.path().join("project");
+        let run_root = temp.path().join("suite_runs");
+        fs::create_dir_all(&project_dir).expect("project dir");
+
+        let mut args = base_suite_args(project_dir, run_root, "whitespace_profiles_case");
+        args.profiles = Some("   ".to_string());
+
+        let error = super::run_suite(args).expect_err("whitespace profiles csv must fail");
+        assert!(
+            error.to_string().contains("No profiles available."),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn run_suite_fail_fast_stops_after_first_failed_profile() {
+        let temp = tempdir().expect("tempdir");
+        let project_dir = temp.path().join("project");
+        let run_root = temp.path().join("suite_runs");
+        fs::create_dir_all(&project_dir).expect("project dir");
+
+        let suite_name = "fail_fast_case";
+        let mut args = base_suite_args(project_dir, run_root.clone(), suite_name);
+        // Use invalid profiles so capture fails deterministically without invoking external tools.
+        args.profiles = Some("not-a-real-profile,also-not-real".to_string());
+        args.fail_fast = true;
+        args.keep_going = false;
+
+        let error =
+            super::run_suite(args).expect_err("suite should fail when capture subprocesses fail");
+        assert!(
+            error.to_string().contains("suite contains failed runs"),
+            "unexpected error: {error}"
+        );
+
+        let suite_dir = run_root.join(suite_name);
+        let summary =
+            fs::read_to_string(suite_dir.join("suite_summary.txt")).expect("read summary");
+        assert!(summary.contains("[suite] profile=not-a-real-profile status=failed exit="));
+        assert!(summary.contains("[suite] fail-fast enabled; stopping."));
+        assert!(
+            !summary.contains("profile=also-not-real"),
+            "fail-fast should stop before second profile"
+        );
+        assert!(
+            suite_dir
+                .join(format!("{}_not-a-real-profile.runner.log", suite_name))
+                .exists()
+        );
+        assert!(
+            !suite_dir
+                .join(format!("{}_also-not-real.runner.log", suite_name))
+                .exists()
+        );
+    }
+
+    #[test]
+    fn run_suite_forwards_legacy_runtime_flags_to_capture_subprocess() {
+        let temp = tempdir().expect("tempdir");
+        let project_dir = temp.path().join("project");
+        let run_root = temp.path().join("suite_runs");
+        fs::create_dir_all(&project_dir).expect("project dir");
+
+        let suite_name = "legacy_flags_case";
+        let mut args = base_suite_args(project_dir, run_root.clone(), suite_name);
+        args.profiles = Some("not-a-real-profile".to_string());
+        args.binary = Some(PathBuf::from("/bin/echo"));
+        args.host = Some("0.0.0.0".to_string());
+        args.port = Some("9988".to_string());
+        args.http_path = Some("custom".to_string());
+        args.auth_bearer = Some("example-auth".to_string());
+
+        let _ = super::run_suite(args);
+
+        let suite_dir = run_root.join(suite_name);
+        assert!(
+            suite_dir
+                .join(format!("{}_not-a-real-profile.runner.log", suite_name))
+                .exists(),
+            "expected runner log to be written"
+        );
+    }
+
+    #[test]
+    fn run_suite_keep_going_records_all_failed_profiles() {
+        let temp = tempdir().expect("tempdir");
+        let project_dir = temp.path().join("project");
+        let run_root = temp.path().join("suite_runs");
+        fs::create_dir_all(&project_dir).expect("project dir");
+
+        let suite_name = "keep_going_case";
+        let mut args = base_suite_args(project_dir, run_root.clone(), suite_name);
+        // Use invalid profiles so capture fails deterministically without invoking external tools.
+        args.profiles = Some("not-a-real-profile,also-not-real".to_string());
+        args.fail_fast = true;
+        args.keep_going = true;
+
+        let error =
+            super::run_suite(args).expect_err("suite should fail when capture subprocesses fail");
+        assert!(
+            error.to_string().contains("suite contains failed runs"),
+            "unexpected error: {error}"
+        );
+
+        let suite_dir = run_root.join(suite_name);
+        let summary =
+            fs::read_to_string(suite_dir.join("suite_summary.txt")).expect("read summary");
+        assert!(summary.contains("[suite] profile=not-a-real-profile status=failed exit="));
+        assert!(summary.contains("[suite] profile=also-not-real status=failed exit="));
+        assert!(!summary.contains("fail-fast enabled; stopping."));
+        assert!(
+            suite_dir
+                .join(format!("{}_not-a-real-profile.runner.log", suite_name))
+                .exists()
+        );
+        assert!(
+            suite_dir
+                .join(format!("{}_also-not-real.runner.log", suite_name))
+                .exists()
+        );
+    }
+
+    #[test]
+    fn run_suite_records_report_generation_failure_log() {
+        let temp = tempdir().expect("tempdir");
+        let project_dir = temp.path().join("project");
+        let run_root = temp.path().join("suite_runs");
+        fs::create_dir_all(&project_dir).expect("project dir");
+
+        let suite_name = "report_fail_case";
+        let mut args = base_suite_args(project_dir, run_root.clone(), suite_name);
+        // Use invalid profiles so capture fails deterministically without invoking external tools.
+        args.profiles = Some("not-a-real-profile".to_string());
+        args.skip_report = false;
+
+        let error =
+            super::run_suite(args).expect_err("suite should fail when capture subprocesses fail");
+        assert!(
+            error.to_string().contains("suite contains failed runs"),
+            "unexpected error: {error}"
+        );
+
+        let suite_dir = run_root.join(suite_name);
+        let report_log = fs::read_to_string(suite_dir.join("suite_report.log"))
+            .expect("suite_report.log should exist");
+        assert!(report_log.contains("report generation failed"));
+        assert!(
+            report_log.contains("No run_meta.json files found under"),
+            "unexpected suite report log: {report_log}"
+        );
+    }
+
+    #[test]
+    fn run_suite_writes_manifest_and_report_when_run_meta_present() {
+        let temp = tempdir().expect("tempdir");
+        let project_dir = temp.path().join("project");
+        let run_root = temp.path().join("suite_runs");
+        fs::create_dir_all(&project_dir).expect("project dir");
+
+        let suite_name = "manifest_case";
+        let suite_dir = run_root.join(suite_name);
+        let profile = "not-a-real-profile";
+        let run_name = format!("{suite_name}_{profile}");
+        let run_dir = suite_dir.join(&run_name);
+        fs::create_dir_all(&run_dir).expect("mkdir run dir");
+
+        crate::runmeta::RunMeta {
+            status: "ok".to_string(),
+            started_at: "2026-02-17T00:00:00Z".to_string(),
+            profile: profile.to_string(),
+            output: run_dir.join("capture.mp4").display().to_string(),
+            run_dir: run_dir.display().to_string(),
+            ..crate::runmeta::RunMeta::default()
+        }
+        .write_to_path(&run_dir.join("run_meta.json"))
+        .expect("write run meta");
+
+        let mut args = base_suite_args(project_dir, run_root.clone(), suite_name);
+        args.profiles = Some(profile.to_string());
+        args.skip_report = false;
+
+        let _ = super::run_suite(args);
+
+        assert!(suite_dir.join("suite_manifest.json").exists());
+        assert!(suite_dir.join("report.json").exists());
+        assert!(suite_dir.join("index.html").exists());
+    }
+
+    #[test]
+    fn run_suite_emits_machine_json_when_sqlmodel_json_enabled() {
+        let temp = tempdir().expect("tempdir");
+        let project_dir = temp.path().join("project");
+        let run_root = temp.path().join("suite_runs");
+        fs::create_dir_all(&project_dir).expect("project dir");
+
+        let suite_name = "suite_json_case";
+        let mut args = base_suite_args(project_dir, run_root, suite_name);
+        args.profiles = Some("not-a-real-profile".to_string());
+
+        let integration = OutputIntegration {
+            fastapi_mode: "plain".to_string(),
+            fastapi_agent: false,
+            fastapi_ci: false,
+            fastapi_tty: false,
+            sqlmodel_mode: "json".to_string(),
+            sqlmodel_agent: false,
+        };
+        let _ = super::run_suite_with_integration(args, &integration);
     }
 }
