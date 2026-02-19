@@ -2,7 +2,7 @@
 name = "ftui-text"
 version = "0.2.0"
 edition = "2024"
-license = "MIT"
+license-file = "../../LICENSE"
 description = "Text layout, wrapping, and grapheme width for FrankenTUI."
 repository = "https://github.com/Dicklesworthstone/frankentui"
 homepage = "https://github.com/Dicklesworthstone/frankentui"

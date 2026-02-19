@@ -2,7 +2,7 @@
 name = "ftui"
 version = "0.2.0"
 edition = "2024"
-license = "MIT"
+license-file = "../../LICENSE"
 description = "FrankenTUI public facade and prelude."
 repository = "https://github.com/Dicklesworthstone/frankentui"
 homepage = "https://github.com/Dicklesworthstone/frankentui"

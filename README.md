@@ -17,7 +17,7 @@ Minimal, high‑performance terminal UI kernel focused on correctness, determini
 
 ![status](https://img.shields.io/badge/status-WIP-yellow)
 ![rust](https://img.shields.io/badge/rust-nightly-blue)
-![license](https://img.shields.io/badge/license-MIT-green)
+![license](https://img.shields.io/badge/license-MIT%2BOpenAI%2FAnthropic%20Rider-green)
 
 ## Quick Run (from source)
 
@@ -1704,4 +1704,4 @@ let historical_frame = recorder.current();
 
 ## License
 
-MIT © 2026 Jeffrey Emanuel. See `LICENSE`.
+MIT License (with OpenAI/Anthropic Rider) © 2026 Jeffrey Emanuel. See `LICENSE`.

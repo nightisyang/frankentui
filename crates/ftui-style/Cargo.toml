@@ -2,7 +2,7 @@
 name = "ftui-style"
 version = "0.2.0"
 edition = "2024"
-license = "MIT"
+license-file = "../../LICENSE"
 description = "Style, theme, and color primitives for FrankenTUI."
 repository = "https://github.com/Dicklesworthstone/frankentui"
 homepage = "https://github.com/Dicklesworthstone/frankentui"

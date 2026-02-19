@@ -2,7 +2,7 @@
 name = "ftui-layout"
 version = "0.2.0"
 edition = "2024"
-license = "MIT"
+license-file = "../../LICENSE"
 description = "Flex and grid layout solvers for FrankenTUI."
 repository = "https://github.com/Dicklesworthstone/frankentui"
 homepage = "https://github.com/Dicklesworthstone/frankentui"

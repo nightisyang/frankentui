@@ -2,7 +2,7 @@
 name = "ftui-tty"
 version = "0.2.0"
 edition = "2024"
-license = "MIT"
+license-file = "../../LICENSE"
 description = "Native Unix terminal backend for FrankenTUI (replaces Crossterm)."
 repository = "https://github.com/Dicklesworthstone/frankentui"
 homepage = "https://github.com/Dicklesworthstone/frankentui"
