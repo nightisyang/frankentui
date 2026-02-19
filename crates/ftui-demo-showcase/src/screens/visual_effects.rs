@@ -4447,8 +4447,17 @@ impl Screen for VisualEffectsScreen {
                         EffectType::SpinLattice => {
                             self.spin_lattice.render(&mut painter, pw, ph, quality)
                         }
-                        // Replaced with high-fidelity BackdropFx (see below)
-                        EffectType::DoomE1M1 | EffectType::QuakeE1M1 => {}
+                        EffectType::DoomE1M1 => {
+                            self.with_doom_melt_mut(|fx| {
+                                fx.render_painter(&mut painter);
+                            });
+                        }
+                        EffectType::QuakeE1M1 => {
+                            self.with_quake_console_mut(|fx| {
+                                fx.set_progress(1.0);
+                                fx.render_painter(&mut painter, &theme_inputs);
+                            });
+                        }
                         // Canvas adapters for metaballs and plasma (bd-l8x9.5.3)
                         EffectType::Metaballs => {
                             self.with_metaballs_adapter_mut(|adapter| {

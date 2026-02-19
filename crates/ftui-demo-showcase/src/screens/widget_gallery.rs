@@ -84,7 +84,7 @@ struct GalleryVirtualItem {
 }
 
 impl RenderItem for GalleryVirtualItem {
-    fn render(&self, area: Rect, frame: &mut Frame, selected: bool) {
+    fn render(&self, area: Rect, frame: &mut Frame, selected: bool, _row: u16) {
         if area.is_empty() {
             return;
         }

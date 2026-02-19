@@ -7,6 +7,8 @@
 
 use crate::visual_fx::{BackdropFx, FxContext};
 use ftui_render::cell::PackedRgba;
+#[cfg(feature = "canvas")]
+use crate::canvas::Painter;
 
 /// Quake-style drop-down console effect.
 pub struct QuakeConsoleFx {
@@ -31,7 +33,7 @@ impl QuakeConsoleFx {
     }
 
     /// Generate a procedural grunge texture.
-    fn generate_texture(&mut self, width: u16, height: u16, theme: &crate::visual_fx::ThemeInputs) {
+    fn generate_texture(&mut self, width: u16, height: u16, base_color: PackedRgba, highlight_color: PackedRgba) {
         let w = width as usize;
         let h = height as usize;
         let len = w * h;
@@ -40,15 +42,11 @@ impl QuakeConsoleFx {
         self.texture_size = (width, height);
 
         // Simple value noise / fractional brownian motion approximation
-        // We use a fixed seed LCG for determinism without external deps
         let mut rng = 0xCAFEBABE_u32;
         let mut rand = || {
             rng = rng.wrapping_mul(1664525).wrapping_add(1013904223);
             (rng >> 16) as f32 / 65536.0
         };
-
-        let base = theme.bg_base; // Dark brown/grey
-        let highlight = theme.bg_surface; // Lighter brown
 
         // Generate noise
         for y in 0..h {
@@ -60,13 +58,40 @@ impl QuakeConsoleFx {
                 // Cheap noise: sin combination
                 let v = (nx.sin() + ny.cos() + rand() * 0.5).abs().clamp(0.0, 1.0);
                 
-                // Mix colors: base + v * (highlight - base)
-                // Since we can't easily lerp packed colors without unpacking,
-                // we'll just overlay the highlight with opacity `v`.
-                let pixel = highlight.with_opacity(v * 0.3).over(base);
+                // Mix colors
+                let pixel = highlight_color.with_opacity(v * 0.3).over(base_color);
                 
                 self.texture[y * w + x] = pixel;
             }
+        }
+    }
+
+    /// Render to a sub-pixel painter (high-resolution console).
+    #[cfg(feature = "canvas")]
+    pub fn render_painter(&mut self, painter: &mut Painter, theme: &crate::visual_fx::ThemeInputs) {
+        let (w, h) = painter.size();
+        let width = w as usize;
+        let height = h as usize;
+        let drop_height = (height as f32 * self.drop_progress).round() as usize;
+
+        if self.texture_size != (w, h) {
+            self.generate_texture(w, h, theme.bg_base, theme.bg_surface);
+        }
+
+        for y in 0..drop_height {
+            let row_start = y * width;
+            // Blit texture pixel by pixel
+            for x in 0..width {
+                let color = self.texture[row_start + x];
+                painter.point_colored(x as i32, y as i32, color);
+            }
+        }
+        
+        // Draw the bottom edge/highlight
+        if drop_height < height && drop_height > 0 {
+             let y = (drop_height - 1) as i32;
+             let color = theme.accent_primary;
+             painter.line_colored(0, y, (width - 1) as i32, y, Some(color));
         }
     }
 }
@@ -76,9 +101,7 @@ impl BackdropFx for QuakeConsoleFx {
         "quake-console"
     }
 
-    fn resize(&mut self, width: u16, height: u16) {
-        // We defer generation to render to access the theme,
-        // but we track size here if needed.
+    fn resize(&mut self, _width: u16, _height: u16) {
     }
 
     fn render(&mut self, ctx: FxContext<'_>, out: &mut [PackedRgba]) {
@@ -90,9 +113,8 @@ impl BackdropFx for QuakeConsoleFx {
         let height = ctx.height as usize;
         let drop_height = (height as f32 * self.drop_progress).round() as usize;
 
-        // Regenerate texture if size changed (or first run)
         if self.texture_size != (ctx.width, ctx.height) {
-            self.generate_texture(ctx.width, ctx.height, ctx.theme);
+            self.generate_texture(ctx.width, ctx.height, ctx.theme.bg_base, ctx.theme.bg_surface);
         }
 
         // Blit texture for the dropped portion

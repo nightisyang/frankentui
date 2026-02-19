@@ -9,8 +9,11 @@
 
 use crate::visual_fx::{BackdropFx, FxContext};
 use ftui_render::cell::PackedRgba;
+#[cfg(feature = "canvas")]
+use crate::canvas::Painter;
 use rand::Rng;
 use rand::rngs::SmallRng;
+use rand::SeedableRng;
 
 /// The Doom Fire effect.
 pub struct DoomMeltFx {
@@ -62,11 +65,6 @@ impl DoomMeltFx {
         if self.heat.len() != len {
             self.heat.resize(len, 0);
             self.size = (width, height);
-            
-            // Seed the bottom row with maximum heat
-            // Note: In the classic algo, there's a specific "fire source" row below the screen.
-            // We'll just treat the last row as the source for simplicity, or keep a separate buffer?
-            // To be safe, we'll clamp writes.
         }
     }
 
@@ -87,6 +85,35 @@ impl DoomMeltFx {
                     
                     let new_heat = pixel.saturating_sub(rand_idx as u8 & 1);
                     self.heat[dst_idx] = new_heat;
+                }
+            }
+        }
+    }
+
+    /// Render to a sub-pixel painter (high-resolution fire).
+    #[cfg(feature = "canvas")]
+    pub fn render_painter(&mut self, painter: &mut Painter) {
+        let (w, h) = painter.size();
+        let width = w as usize;
+        let height = h as usize;
+
+        self.resize_buffer(w, h);
+
+        // Fill bottom row
+        let last_row_start = (height - 1) * width;
+        for i in 0..width {
+            self.heat[last_row_start + i] = 36;
+        }
+
+        self.spread_fire(width, height);
+
+        for y in 0..height {
+            for x in 0..width {
+                let idx = y * width + x;
+                let heat = self.heat[idx];
+                if heat > 0 {
+                    let color = self.palette[heat as usize];
+                    painter.point_colored(x as i32, y as i32, color);
                 }
             }
         }

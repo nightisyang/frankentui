@@ -4,6 +4,10 @@ pub mod plasma;
 pub mod sampling;
 pub mod screen_melt;
 pub mod underwater_warp;
+#[cfg(feature = "doom")]
+pub mod doom_melt;
+#[cfg(feature = "quake")]
+pub mod quake_console;
 
 #[cfg(feature = "canvas")]
 pub mod canvas_adapters;
@@ -17,6 +21,10 @@ pub use sampling::{
 };
 pub use screen_melt::ScreenMeltFx;
 pub use underwater_warp::UnderwaterWarpFx;
+#[cfg(feature = "doom")]
+pub use doom_melt::DoomMeltFx;
+#[cfg(feature = "quake")]
+pub use quake_console::QuakeConsoleFx;
 
 #[cfg(feature = "canvas")]
 pub use canvas_adapters::{MetaballsCanvasAdapter, PlasmaCanvasAdapter};
