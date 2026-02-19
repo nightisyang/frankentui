@@ -18,6 +18,7 @@ TESTS=(
     test_remote_selection_copy
     test_remote_search
     test_remote_unicode
+    test_remote_typography_rescale
     test_remote_osc8_links
     test_remote_scrollback
 )

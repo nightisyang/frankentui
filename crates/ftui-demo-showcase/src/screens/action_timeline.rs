@@ -249,6 +249,14 @@ impl ActionTimeline {
                 ];
                 (summary, fields, Severity::Info)
             }
+            Event::Ime(ime) => {
+                let summary = format!("IME {:?}", ime.phase);
+                let fields = vec![
+                    ("phase".to_string(), format!("{:?}", ime.phase)),
+                    ("chars".to_string(), grapheme_count(&ime.text).to_string()),
+                ];
+                (summary, fields, Severity::Info)
+            }
             Event::Focus(gained) => {
                 let summary = if *gained {
                     "Focus gained".to_string()

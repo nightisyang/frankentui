@@ -183,6 +183,7 @@ impl AdvancedFeatures {
             mouse: true,
             resize: false,
             paste: true,
+            ime: true,
             focus: false,
         };
         let mut recorder = FilteredEventRecorder::new(name, filter);

@@ -350,6 +350,7 @@ pub fn event_type_name(event: &Event) -> &'static str {
         Event::Key(_) => "key",
         Event::Mouse(_) => "mouse",
         Event::Paste(_) => "paste",
+        Event::Ime(_) => "ime",
         Event::Resize { .. } => "resize",
         Event::Focus(_) => "focus",
         Event::Clipboard(_) => "clipboard",

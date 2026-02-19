@@ -1285,6 +1285,7 @@ fn format_event(event: &Event) -> String {
         Event::Key(key) => format_key_event(key),
         Event::Mouse(mouse) => format_mouse_event(mouse),
         Event::Paste(text) => format!("Paste({} chars)", text.text.len()),
+        Event::Ime(ime) => format!("IME({:?}, {} chars)", ime.phase, ime.text.chars().count()),
         Event::Resize { width, height } => format!("Resize {}x{}", width, height),
         Event::Focus(focus) => format!("Focus({:?})", focus),
         Event::Clipboard(_) => "Clipboard".to_string(),
