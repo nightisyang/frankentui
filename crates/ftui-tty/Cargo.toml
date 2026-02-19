@@ -10,9 +10,9 @@ documentation = "https://docs.rs/ftui-tty"
 readme = "../../README.md"
 
 [dependencies]
-ftui-backend = { path = "../ftui-backend", version = "0.2.0" }
-ftui-core = { path = "../ftui-core", version = "0.2.0" }
-ftui-render = { path = "../ftui-render", version = "0.2.0" }
+ftui-backend = { path = "../ftui-backend", version = "0.2.1" }
+ftui-core = { path = "../ftui-core", version = "0.2.1" }
+ftui-render = { path = "../ftui-render", version = "0.2.1" }
 
 # Safe Unix terminal control (termios, ioctl).
 [target.'cfg(unix)'.dependencies]

@@ -10,5 +10,5 @@ documentation = "https://docs.rs/ftui-backend"
 readme = "../../README.md"
 
 [dependencies]
-ftui-core = { path = "../ftui-core", version = "0.2.0" }
-ftui-render = { path = "../ftui-render", version = "0.2.0" }
+ftui-core = { path = "../ftui-core", version = "0.2.1" }
+ftui-render = { path = "../ftui-render", version = "0.2.1" }
