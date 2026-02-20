@@ -881,8 +881,7 @@ fn point_in_convex_polygon(x: i32, y: i32, points: &[(i32, i32)]) -> bool {
     for i in 0..len {
         let (x0, y0) = points[i];
         let (x1, y1) = points[(i + 1) % len];
-        let cross =
-            i64::from(x - x0) * i64::from(y1 - y0) - i64::from(y - y0) * i64::from(x1 - x0);
+        let cross = i64::from(x - x0) * i64::from(y1 - y0) - i64::from(y - y0) * i64::from(x1 - x0);
         if cross == 0 {
             continue;
         }

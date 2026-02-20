@@ -727,8 +727,7 @@ impl BocpdDetector {
         }
 
         // Merge at K (truncation)
-        new_posterior[k] +=
-            self.run_length_posterior[k] * (1.0 - self.hazard) * mixture_likelihood;
+        new_posterior[k] += self.run_length_posterior[k] * (1.0 - self.hazard) * mixture_likelihood;
 
         // Changepoint: P(r_t = 0) ∝ Σ P(r_{t-1}) * H * P(x | 0)
         // Note: P(x | 0) is same mixture likelihood since we assume regime continuity across CP for now

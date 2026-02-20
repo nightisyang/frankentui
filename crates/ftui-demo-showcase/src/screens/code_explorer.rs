@@ -222,6 +222,7 @@ fn c_tokenizer() -> GenericTokenizer {
         line_comment: "//",
         block_comment_start: "/*",
         block_comment_end: "*/",
+        nested_comments: false,
     })
 }
 

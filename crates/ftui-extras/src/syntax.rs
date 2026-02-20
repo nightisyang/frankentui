@@ -679,13 +679,17 @@ impl GenericTokenizer {
                             TokenKind::CommentBlock,
                             base_offset + start..base_offset + bytes.len(),
                         ));
-                        return (tokens, LineState::InComment(CommentKind::Nested(final_depth)));
+                        return (
+                            tokens,
+                            LineState::InComment(CommentKind::Nested(final_depth)),
+                        );
                     }
                 } else {
                     let after_open = pos + self.config.block_comment_start.len();
                     let rest = &line[after_open..];
                     if let Some(end_pos) = rest.find(self.config.block_comment_end) {
-                        let comment_end = after_open + end_pos + self.config.block_comment_end.len();
+                        let comment_end =
+                            after_open + end_pos + self.config.block_comment_end.len();
                         tokens.push(Token::new(
                             TokenKind::CommentBlock,
                             base_offset + start..base_offset + comment_end,
@@ -2113,7 +2117,7 @@ pub fn sql_tokenizer() -> GenericTokenizer {
         line_comment: "--",
         block_comment_start: "/*",
         block_comment_end: "*/",
-        nested_comments: false,
+        nested_comments: true,
     })
 }
 
@@ -5143,6 +5147,7 @@ fn main() {
             line_comment: "",
             block_comment_start: "",
             block_comment_end: "",
+            nested_comments: false,
         });
         reg.register(Box::new(custom));
         // The newer registration should win for "txt"
