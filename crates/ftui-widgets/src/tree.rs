@@ -559,7 +559,7 @@ impl Tree {
     }
 }
 
-fn filter_node(node: &TreeNode, query: &str, query_lower: &str) -> Option<TreeNode> {
+fn filter_node(node: &TreeNode, query_lower: &str) -> Option<TreeNode> {
     let label_matches = node.label.to_lowercase().contains(query_lower)
         || node
             .icon
@@ -568,7 +568,7 @@ fn filter_node(node: &TreeNode, query: &str, query_lower: &str) -> Option<TreeNo
 
     let mut filtered_children = Vec::new();
     for child in &node.children {
-        if let Some(filtered) = filter_node(child, query, query_lower) {
+        if let Some(filtered) = filter_node(child, query_lower) {
             filtered_children.push(filtered);
         }
     }
@@ -576,7 +576,7 @@ fn filter_node(node: &TreeNode, query: &str, query_lower: &str) -> Option<TreeNo
     let mut filtered_lazy = Vec::new();
     if let Some(lazy) = &node.lazy_children {
         for child in lazy {
-            if let Some(filtered) = filter_node(child, query, query_lower) {
+            if let Some(filtered) = filter_node(child, query_lower) {
                 filtered_lazy.push(filtered);
             }
         }
@@ -633,7 +633,7 @@ impl Widget for Tree {
                 return Some(self.root.clone());
             }
             let query_lower = query.to_lowercase();
-            filter_node(&self.root, query, &query_lower)
+            filter_node(&self.root, &query_lower)
         });
         let root = filtered_root.as_ref().unwrap_or(&self.root);
 
@@ -950,7 +950,7 @@ impl Tree {
                 return Some(self.root.clone());
             }
             let query_lower = query.to_lowercase();
-            filter_node(&self.root, query, &query_lower)
+            filter_node(&self.root, &query_lower)
         });
         let root = filtered_root.as_ref().unwrap_or(&self.root);
         if self.show_root {

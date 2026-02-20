@@ -71,7 +71,7 @@ use ftui_core::inline_mode::InlineStrategy;
 use ftui_core::terminal_capabilities::TerminalCapabilities;
 use ftui_render::buffer::{Buffer, DirtySpanConfig, DirtySpanStats};
 use ftui_render::counting_writer::CountingWriter;
-use ftui_render::diff::{BufferDiff, ChangeRun, TileDiffConfig, TileDiffFallback, TileDiffStats};
+use ftui_render::diff::{BufferDiff, TileDiffConfig, TileDiffFallback, TileDiffStats};
 use ftui_render::diff_strategy::{DiffStrategy, DiffStrategyConfig, DiffStrategySelector};
 use ftui_render::grapheme_pool::GraphemePool;
 use ftui_render::link_registry::LinkRegistry;
@@ -95,11 +95,10 @@ const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
 /// Synchronized output end (DEC 2026).
 const SYNC_END: &[u8] = b"\x1b[?2026l";
 
-/// Maximum hyperlink URL length allowed in OSC 8 payloads.
-const MAX_SAFE_HYPERLINK_URL_BYTES: usize = 4096;
-
 /// Erase entire line (CSI 2 K).
 const ERASE_LINE: &[u8] = b"\x1b[2K";
+/// Reset background to terminal default (CSI 49 m).
+const SGR_BG_DEFAULT: &[u8] = b"\x1b[49m";
 
 /// How often to probe with a real diff when FullRedraw is selected.
 #[allow(dead_code)] // API for future diff strategy integration
@@ -200,11 +199,6 @@ fn sanitize_auto_bounds(min_height: u16, max_height: u16) -> (u16, u16) {
     let min = min_height.max(1);
     let max = max_height.max(min);
     (min, max)
-}
-
-#[inline]
-fn is_safe_hyperlink_url(url: &str) -> bool {
-    url.len() <= MAX_SAFE_HYPERLINK_URL_BYTES && !url.chars().any(char::is_control)
 }
 
 /// Screen mode determines whether we use alternate screen or inline mode.
@@ -486,8 +480,6 @@ pub struct TerminalWriter<W: Write> {
     diff_strategy: DiffStrategySelector,
     /// Reusable diff buffer to avoid per-frame allocations.
     diff_scratch: BufferDiff,
-    /// Reusable runs buffer to avoid per-frame allocations in emit_diff.
-    runs_buf: Vec<ChangeRun>,
     /// Frames since last diff probe while in FullRedraw.
     full_redraw_probe: u64,
     /// Runtime diff configuration.
@@ -634,7 +626,6 @@ impl<W: Write> TerminalWriter<W> {
             last_inline_region: None,
             diff_strategy,
             diff_scratch,
-            runs_buf: Vec::new(),
             full_redraw_probe: 0,
             diff_config,
             evidence_sink: None,
@@ -987,6 +978,13 @@ impl<W: Write> TerminalWriter<W> {
     fn clear_rows(&mut self, start_row: u16, height: u16) -> io::Result<()> {
         let start_row = start_row.min(self.term_height);
         let end_row = start_row.saturating_add(height).min(self.term_height);
+        if start_row >= end_row {
+            return Ok(());
+        }
+
+        // Ensure erase operations clear to the terminal default background.
+        // Without this, stale background fills can persist when inline regions shrink.
+        self.writer().write_all(SGR_BG_DEFAULT)?;
         for row in start_row..end_row {
             write!(self.writer(), "\x1b[{};1H", row.saturating_add(1))?;
             self.writer().write_all(ERASE_LINE)?;
@@ -1620,13 +1618,16 @@ impl<W: Write> TerminalWriter<W> {
             };
 
             if visible_height > 0 {
-                // If this is a full redraw (no previous buffer), we must clear the
-                // entire UI region first to ensure we aren't diffing against garbage.
-                if self.prev_buffer.is_none() {
+                // If this is a full redraw (no previous buffer) OR dimensions changed,
+                // we must clear the entire UI region to prevent ghosting (e.g. if width shrank).
+                let dims_changed = self.prev_buffer.as_ref().map(|b| (b.width(), b.height()))
+                    != Some((buffer.width(), buffer.height()));
+
+                if self.prev_buffer.is_none() || dims_changed {
                     self.clear_rows(ui_y_start, visible_height)?;
                 } else {
-                    // If the buffer is shorter than the visible height, clear the remaining rows
-                    // to prevent ghosting from previous larger buffers.
+                    // If dimensions match but the buffer is shorter than the visible height,
+                    // clear the remaining rows to prevent garbage from logs or previous frames.
                     let buf_height = buffer.height().min(visible_height);
                     if buf_height < visible_height {
                         let clear_start = ui_y_start.saturating_add(buf_height);
@@ -2068,6 +2069,26 @@ impl<W: Write> TerminalWriter<W> {
             buffers.push(buf);
         }
         self.pool.gc(&buffers);
+    }
+
+    /// Estimate total memory usage in bytes (buffers + pools).
+    pub fn estimate_memory_usage(&self) -> usize {
+        let mut total = 0;
+        // Buffers (16 bytes per cell)
+        if let Some(b) = &self.prev_buffer {
+            total += b.width() as usize * b.height() as usize * 16;
+        }
+        if let Some(b) = &self.spare_buffer {
+            total += b.width() as usize * b.height() as usize * 16;
+        }
+        if let Some(b) = &self.clone_buf {
+            total += b.width() as usize * b.height() as usize * 16;
+        }
+        // Grapheme pool (approx 32 bytes per slot: 24 for String + overhead)
+        total += self.pool.capacity() * 32;
+        // Link registry
+        total += self.links.estimate_memory();
+        total
     }
 
     /// Best-effort cleanup when inline present fails mid-frame.
@@ -3018,8 +3039,16 @@ mod tests {
             .windows(ERASE_LINE.len())
             .filter(|w| *w == ERASE_LINE)
             .count();
+        let bg_reset_count = segment
+            .windows(SGR_BG_DEFAULT.len())
+            .filter(|w| *w == SGR_BG_DEFAULT)
+            .count();
 
         assert_eq!(erase_count, 6, "expected clears for stale + new rows");
+        assert!(
+            bg_reset_count >= 2,
+            "expected background resets before row clears"
+        );
     }
 
     // --- Scroll-region optimization tests ---
@@ -5360,29 +5389,31 @@ mod tests {
     fn test_altscreen_wide_char_rendering() {
         use ftui_render::cell::Cell;
         let mut output = Vec::new();
-        let mut writer = TerminalWriter::new(
-            &mut output,
-            ScreenMode::AltScreen,
-            UiAnchor::Bottom,
-            basic_caps(),
-        );
-        writer.set_size(10, 5);
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::AltScreen,
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            writer.set_size(10, 5);
 
-        let mut buf = Buffer::new(10, 1);
-        // Wide char at x=0 (width 2)
-        buf.set_raw(0, 0, Cell::from_char('中'));
-        // x=1 is implicitly CONTINUATION from Buffer::new init (or empty)
-        // Wait, set_raw only sets one cell.
-        // But Presenter logic depends on Buffer content.
-        // For the test, we want to simulate the state where we have a wide char.
-        // The proper way is to use `set` which handles continuations, or manually set them.
-        buf.set(0, 0, Cell::from_char('中')); // This sets x=0 to '中', x=1 to CONTINUATION
+            let mut buf = Buffer::new(10, 1);
+            // Wide char at x=0 (width 2)
+            buf.set_raw(0, 0, Cell::from_char('中'));
+            // x=1 is implicitly CONTINUATION from Buffer::new init (or empty)
+            // Wait, set_raw only sets one cell.
+            // But Presenter logic depends on Buffer content.
+            // For the test, we want to simulate the state where we have a wide char.
+            // The proper way is to use `set` which handles continuations, or manually set them.
+            buf.set(0, 0, Cell::from_char('中')); // This sets x=0 to '中', x=1 to CONTINUATION
 
-        // Force a diff by having a different previous buffer
-        let prev = Buffer::new(10, 1);
-        writer.prev_buffer = Some(prev);
+            // Force a diff by having a different previous buffer
+            let prev = Buffer::new(10, 1);
+            writer.prev_buffer = Some(prev);
 
-        writer.present_ui(&buf, None, true).unwrap();
+            writer.present_ui(&buf, None, true).unwrap();
+        }
 
         let output_str = String::from_utf8_lossy(&output);
 
@@ -5399,7 +5430,10 @@ mod tests {
         let after = pos.unwrap() + 3;
         if after < bytes.len() {
             // It might be ANSI sequence or nothing. It should NOT be space (0x20).
-            assert_ne!(bytes[after], 0x20, "Wide char continuation clobbered with space");
+            assert_ne!(
+                bytes[after], 0x20,
+                "Wide char continuation clobbered with space"
+            );
         }
     }
 }

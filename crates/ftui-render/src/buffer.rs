@@ -1039,7 +1039,7 @@ impl Buffer {
                         let c = self.cells[row_start + hx];
                         let width = c.content.width();
                         // Only clear if the head actually overlaps the fill region.
-                        if width > 1 && hx + width as usize > x_start {
+                        if width > 1 && hx + width > x_start {
                             // Clear the head and any tails before x_start.
                             // Tails from x_start onwards will be overwritten by the fill.
                             for cx in hx..x_start {
@@ -4017,5 +4017,38 @@ mod tests {
         buf.mark_dirty_span(0, 5, 5);
         let spans = buf.dirty_span_row(0).unwrap().spans();
         assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn buffer_fill_wide_char_clipping() {
+        // Regression test for wide character clipping during fill.
+        // Verifies that wide characters are not written if they would be clipped,
+        // and that previous wide characters are cleared correctly.
+        let mut buf = Buffer::new(10, 5);
+        let wide_cell = Cell::from_char('🦀'); // Width 2
+
+        // 1. Fill with wide char
+        buf.fill(Rect::new(0, 0, 10, 5), wide_cell);
+
+        // Verify head and tail
+        let head = buf.get(0, 0).unwrap();
+        assert_eq!(head.content.as_char(), Some('🦀'));
+        assert_eq!(head.content.width(), 2);
+
+        let tail = buf.get(1, 0).unwrap();
+        assert!(tail.is_continuation());
+
+        // 2. Overwrite with clipping
+        // Push a scissor that splits the wide char at (0,0)
+        buf.push_scissor(Rect::new(0, 0, 1, 5));
+        // Fill with 'X'
+        let x_cell = Cell::from_char('X');
+        buf.fill(Rect::new(0, 0, 10, 5), x_cell);
+
+        // (0,0) should be 'X'. (1,0) should be cleared (orphaned tail).
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('X'));
+        assert!(buf.get(1, 0).unwrap().is_empty()); // Should be default/empty, not continuation
+
+        buf.pop_scissor();
     }
 }

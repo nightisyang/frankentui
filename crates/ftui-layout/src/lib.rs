@@ -108,7 +108,7 @@ pub enum Constraint {
     Min(u16),
     /// A maximum size in cells.
     Max(u16),
-    /// A ratio of the remaining space (numerator, denominator).
+    /// A ratio of the total available space (numerator, denominator).
     Ratio(u32, u32),
     /// Fill remaining space (like Min(0) but semantically clearer).
     Fill,
@@ -825,22 +825,13 @@ where
 
     let grow_weight = |constraint: Constraint| -> u64 {
         match constraint {
-            Constraint::Ratio(n, d) => {
-                if n == 0 {
-                    0
-                } else {
-                    let scaled = (u128::from(n) * u128::from(WEIGHT_SCALE)) / u128::from(d.max(1));
-                    scaled.max(1).min(u128::from(u64::MAX)) as u64
-                }
-            }
-            Constraint::Min(_) | Constraint::Max(_) | Constraint::Fill | Constraint::FitMin => {
-                WEIGHT_SCALE
-            }
+            Constraint::Min(_) | Constraint::Max(_) | Constraint::Fill => WEIGHT_SCALE,
             _ => 0,
         }
     };
 
-    // 1. First pass: Allocate fixed/absolute constraints and seed grow pool.
+    // Pass 1: Allocate hard minimums (Fixed, Min, FitMin, FitContentBounded min).
+    // These constraints are non-negotiable and take precedence over relative/soft constraints.
     for (i, &constraint) in constraints.iter().enumerate() {
         match constraint {
             Constraint::Fixed(size) => {
@@ -848,68 +839,86 @@ where
                 sizes[i] = size;
                 remaining = remaining.saturating_sub(size);
             }
-            Constraint::Percentage(p) => {
-                let size = (available_size as f32 * p / 100.0)
-                    .round()
-                    .min(u16::MAX as f32) as u16;
-                let size = min(size, remaining);
-                sizes[i] = size;
-                remaining = remaining.saturating_sub(size);
-            }
-            Constraint::Ratio(_, _) => {
-                // Ratio participates in weighted grow distribution, not absolute first-pass sizing.
-                grow_indices.push(i);
-            }
             Constraint::Min(min_size) => {
                 let size = min(min_size, remaining);
                 sizes[i] = size;
                 remaining = remaining.saturating_sub(size);
-                grow_indices.push(i);
+                // Min will also be added to grow_indices in Pass 2
             }
-            Constraint::Max(_) => {
-                // Max initially takes 0, but is a candidate for growth
-                grow_indices.push(i);
+            Constraint::FitMin => {
+                let hint = measurer(i, remaining);
+                let size = min(hint.min, remaining);
+                sizes[i] = size;
+                remaining = remaining.saturating_sub(size);
             }
-            Constraint::Fill => {
-                // Fill takes 0 initially, candidate for growth
-                grow_indices.push(i);
+            Constraint::FitContentBounded { min: min_bound, .. } => {
+                // Reserve the minimum bound immediately
+                let size = min(min_bound, remaining);
+                sizes[i] = size;
+                remaining = remaining.saturating_sub(size);
+            }
+            _ => {} // Soft constraints handled in Pass 2
+        }
+    }
+
+    // Pass 2: Allocate soft/relative constraints (Percentage, Ratio, FitContent preferred).
+    // These fill remaining space after hard minimums.
+    for (i, &constraint) in constraints.iter().enumerate() {
+        match constraint {
+            Constraint::Percentage(p) => {
+                let target = (available_size as f32 * p / 100.0)
+                    .round()
+                    .min(u16::MAX as f32) as u16;
+                let needed = target.saturating_sub(sizes[i]);
+                let alloc = min(needed, remaining);
+                sizes[i] = sizes[i].saturating_add(alloc);
+                remaining = remaining.saturating_sub(alloc);
+            }
+            Constraint::Ratio(n, d) => {
+                let target = if d == 0 {
+                    0
+                } else {
+                    (u64::from(available_size) * u64::from(n) / u64::from(d)).min(u16::MAX as u64)
+                        as u16
+                };
+                let needed = target.saturating_sub(sizes[i]);
+                let alloc = min(needed, remaining);
+                sizes[i] = sizes[i].saturating_add(alloc);
+                remaining = remaining.saturating_sub(alloc);
             }
             Constraint::FitContent => {
-                // Use measurer to get preferred size, clamped to hint bounds
                 let hint = measurer(i, remaining);
                 let preferred = hint
                     .preferred
                     .max(hint.min)
                     .min(hint.max.unwrap_or(u16::MAX));
-                let size = min(preferred, remaining);
-                sizes[i] = size;
-                remaining = remaining.saturating_sub(size);
-                // FitContent items don't grow beyond preferred
+                let needed = preferred.saturating_sub(sizes[i]);
+                let alloc = min(needed, remaining);
+                sizes[i] = sizes[i].saturating_add(alloc);
+                remaining = remaining.saturating_sub(alloc);
             }
-            Constraint::FitContentBounded {
-                min: min_bound,
-                max: max_bound,
-            } => {
-                // Use measurer to get preferred size, clamped to bounds
+            Constraint::FitContentBounded { max: max_bound, .. } => {
                 let hint = measurer(i, remaining);
-                let preferred = hint.preferred.max(min_bound).min(max_bound);
-                let size = min(preferred, remaining);
-                sizes[i] = size;
-                remaining = remaining.saturating_sub(size);
+                let preferred = hint.preferred.max(sizes[i]).min(max_bound);
+                let needed = preferred.saturating_sub(sizes[i]);
+                let alloc = min(needed, remaining);
+                sizes[i] = sizes[i].saturating_add(alloc);
+                remaining = remaining.saturating_sub(alloc);
             }
-            Constraint::FitMin => {
-                // Use measurer to get minimum size
-                let hint = measurer(i, remaining);
-                let size = min(hint.min, remaining);
-                sizes[i] = size;
-                remaining = remaining.saturating_sub(size);
-                // FitMin items can grow to fill remaining space
+            Constraint::Min(_) => {
                 grow_indices.push(i);
             }
+            Constraint::Max(_) => {
+                grow_indices.push(i);
+            }
+            Constraint::Fill => {
+                grow_indices.push(i);
+            }
+            _ => {} // Hard constraints handled in Pass 1
         }
     }
 
-    // 2. Iterative distribution to flexible constraints
+    // 3. Iterative distribution to flexible constraints
     loop {
         if remaining == 0 || grow_indices.is_empty() {
             break;
@@ -974,9 +983,14 @@ where
                 sizes[i] = sizes[i].saturating_add(shares[i]);
             }
             if let Some((cache, id)) = coherence.as_mut() {
-                // Only store if length matches (steady state)
+                // Store full-sized vector mapping constraint index -> share.
+                // We must inflate the dense `distributed` vector to the sparse constraint space.
                 if distributed.len() == targets.len() {
-                    cache.store(*id, distributed);
+                    let mut full_shares = vec![0u16; constraints.len()];
+                    for (k, &i) in grow_indices.iter().enumerate() {
+                        full_shares[i] = distributed[k];
+                    }
+                    cache.store(*id, full_shares);
                 }
             }
             break;
@@ -997,77 +1011,6 @@ where
                 }
             }
         }
-    }
-
-    if let Some((_cache, _id)) = coherence {
-        // Store only the flexible shares part? No, store the final sizes.
-        // But wait, round_layout_stable only sees the *flexible* part.
-        // We need to store the *flexible shares* so next time we can pass them as `prev`.
-        // Actually, `round_layout_stable` expects `prev` to match `targets` length/order.
-        // `targets` corresponds to `grow_indices`.
-        // So we should store the full `sizes` vector, but `round_layout_stable` only cares about the flexible parts.
-
-        // Coherence cache maps CoherenceId -> Vec<u16>.
-        // Ideally we store the flexible shares.
-        // But `solve_constraints_with_hints` is iterative. The final distribution might differ.
-        // The last successful distribution is what matters.
-
-        // Let's store the flexible shares extracted from the final `sizes`.
-        // But `sizes` includes base (min/fixed) + flexible share.
-        // `round_layout_stable` computes the *flexible share*.
-
-        // So we need to reconstruct the flexible shares.
-        // share[i] = sizes[i] - base_size[i].
-        // But we lost base_size (it was mutated into sizes in pass 1).
-
-        // Alternative: Layout stability is most critical for the *final* result.
-        // But `round_layout_stable` operates on the distribution delta.
-        // If we store the flexible shares, we need to extract them.
-
-        // Actually, if we just use `sizes` as `prev`, `round_layout_stable` will see huge numbers.
-        // It expects values comparable to `targets`.
-
-        // We must extract the flexible parts.
-        // This is complex because `grow_indices` changes during iterations (violations).
-        // But `round_layout_stable` is only called for the active `grow_indices`.
-
-        // Simpler approach: Store the *flexible shares* corresponding to the *last successful distribution*.
-        // In the loop, when `violations.is_empty()`, `distributed` contains exactly what we want!
-        // We just need to persist `distributed` associated with `grow_indices`.
-        // But `grow_indices` depends on available space (violations).
-        // If available space changes slightly, violations might not change, so `grow_indices` is stable.
-
-        // So: `cache.store(id, distributed)` inside the success branch?
-        // But `distributed` only covers `grow_indices`.
-        // `CoherenceId` hashes ALL constraints.
-        // If we store a partial vector, we implicitly assume `grow_indices` order is stable.
-        // It is stable for a fixed set of constraints.
-
-        // But wait, `round_layout_stable` expects `prev` to align with `targets`.
-        // `targets` aligns with `grow_indices`.
-        // If `grow_indices` changes (e.g. one item hits Max), `targets` shrinks.
-        // The cached vector would be wrong size.
-
-        // Optimization: Only cache if `grow_indices` matches the initial flexible set?
-        // Or make `CoherenceId` include the `grow_indices` state? No, that's too granular.
-
-        // Practical fix: Store the full `sizes` vector in the cache? No, that doesn't help `round_layout_stable`.
-        // We need to store `shares` for `grow_indices`.
-        // But we need to handle the case where `grow_indices` changes.
-
-        // If we pass `None` to `round_layout_stable` when `grow_indices` structure mismatches, we lose stability during constraint saturation transitions.
-        // That is acceptable. Stability is most important in the steady state (no new violations).
-
-        // So: inside `if violations.is_empty()`:
-        // `cache.store(id, distributed);`
-        // And when loading `prev`, check `prev.len() == targets.len()`.
-
-        // Wait, `distributed` is a local variable inside the loop.
-        // I need to capture it.
-        // And I need to access `coherence` which is moved/borrowed.
-
-        // Refactor:
-        // Use `Option<Vec<u16>>` for `final_distributed`.
     }
 
     sizes
@@ -1449,7 +1392,7 @@ mod tests {
     }
 
     #[test]
-    fn ratio_is_weighted_not_an_absolute_fraction() {
+    fn ratio_is_absolute_fraction() {
         let area = Rect::new(0, 0, 100, 1);
 
         // Percentage is absolute against the total available.
@@ -1458,24 +1401,24 @@ mod tests {
             .split(area);
         assert_eq!(rects[0].width, 25);
 
-        // A lone Ratio is a grow item, so it takes all space.
+        // Ratio(1, 4) should also be absolute (25% of 100 = 25).
+        // It does NOT grow to fill remaining space.
         let rects = Flex::horizontal()
             .constraints([Constraint::Ratio(1, 4)])
             .split(area);
-        assert_eq!(rects[0].width, 100);
+        assert_eq!(rects[0].width, 25);
     }
 
     #[test]
-    fn ratio_is_weighted_against_other_grow_items() {
+    fn ratio_is_independent_of_grow_items() {
         let area = Rect::new(0, 0, 100, 1);
 
-        // Ratio weight is (n/d). Fill has weight 1.0.
-        // Ratio(1,4) vs Fill => 0.25 vs 1.0 => 20% vs 80%.
+        // Ratio(1, 4) takes 25 fixed. Fill takes remaining 75.
         let rects = Flex::horizontal()
             .constraints([Constraint::Ratio(1, 4), Constraint::Fill])
             .split(area);
-        assert_eq!(rects[0].width, 20);
-        assert_eq!(rects[1].width, 80);
+        assert_eq!(rects[0].width, 25);
+        assert_eq!(rects[1].width, 75);
     }
 
     #[test]
@@ -1871,32 +1814,20 @@ mod tests {
                 LayoutSizeHint::ZERO
             }
         });
-        // FitMin gets minimum (15) + grows with remaining
-        // Since Fill is also a grow candidate, they share the 85 remaining
-        // FitMin base: 15, grows by (85/2) = 42.5 rounded to 42
-        // Actually: FitMin gets 15 initially, remaining = 85
-        // Then both FitMin and Fill compete for 85 with equal weight
-        // FitMin gets 15 + 42 = 57, Fill gets 43
-        // Wait, let me trace through the logic more carefully.
-        //
-        // After first pass: FitMin gets 15, remaining = 85. FitMin added to grow_indices.
-        // Fill gets 0, added to grow_indices.
-        // In grow loop: 85 distributed evenly (weight 1 each) = 42.5 each
-        // FitMin: 15 + 42 = 57 (or 58 if rounding gives it the extra)
-        // Actually the last item gets remainder to ensure exact sum
-        let total: u16 = rects.iter().map(|r| r.width).sum();
-        assert_eq!(total, 100);
-        assert!(rects[0].width >= 15, "FitMin should get at least minimum");
+        // FitMin gets minimum (15) and DOES NOT grow.
+        // Fill gets the remaining 85.
+        assert_eq!(rects[0].width, 15, "FitMin should strict size to min");
+        assert_eq!(rects[1].width, 85, "Fill should take remaining space");
     }
 
     #[test]
     fn fit_min_without_measurer_gets_zero() {
         let flex = Flex::horizontal().constraints([Constraint::FitMin, Constraint::Fill]);
         let rects = flex.split(Rect::new(0, 0, 100, 10));
-        // Without measurer, min is 0, so FitMin gets 0 initially, then grows
-        // Both FitMin and Fill share 100 evenly
-        assert_eq!(rects[0].width, 50);
-        assert_eq!(rects[1].width, 50);
+        // Without measurer, min is 0. FitMin gets 0 and does not grow.
+        // Fill takes all 100.
+        assert_eq!(rects[0].width, 0);
+        assert_eq!(rects[1].width, 100);
     }
 
     // --- LayoutSizeHint tests ---

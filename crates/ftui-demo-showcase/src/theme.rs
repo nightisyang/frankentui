@@ -744,7 +744,8 @@ pub fn content_border() -> Style {
 
 /// Help overlay background.
 pub fn help_overlay() -> Style {
-    apply_large_text(Style::new().bg(alpha::OVERLAY).fg(fg::PRIMARY))
+    // Use an opaque modal background for readability over high-frequency visuals.
+    apply_large_text(Style::new().bg(bg::OVERLAY).fg(fg::PRIMARY))
 }
 
 // ---------------------------------------------------------------------------

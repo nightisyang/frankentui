@@ -138,9 +138,10 @@ struct StyleEntry {
 /// let text = parse_markup("[bold]Hello[/bold]!").unwrap();
 /// assert_eq!(text.to_plain_text(), "Hello!");
 /// ```
-pub fn parse_markup(input: &str) -> Result<Text, MarkupError> {
+pub fn parse_markup(input: &str) -> Result<Text<'static>, MarkupError> {
     let mut parser = MarkupParser::new();
-    parser.parse(input)
+    let parsed: Text<'static> = parser.parse(input)?;
+    Ok(parsed)
 }
 
 /// A parser for BBCode-style markup.
@@ -176,7 +177,7 @@ impl MarkupParser {
     }
 
     /// Parse a markup string into styled Text.
-    pub fn parse(&mut self, input: &str) -> Result<Text, MarkupError> {
+    pub fn parse(&mut self, input: &str) -> Result<Text<'static>, MarkupError> {
         self.reset();
 
         let mut spans: Vec<Span<'static>> = Vec::new();

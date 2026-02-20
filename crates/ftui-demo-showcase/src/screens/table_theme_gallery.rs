@@ -437,7 +437,7 @@ impl TableThemeGallery {
         theme
     }
 
-    fn preview_controls_text(&self) -> Text {
+    fn preview_controls_text(&self) -> Text<'_> {
         let header = if self.header_emphasis { "On" } else { "Off" };
         let highlight = if self.highlight_row { "On" } else { "Off" };
         let line_one = Line::from(format!(

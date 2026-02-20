@@ -676,15 +676,11 @@ impl<'a> DragPreview<'a> {
             .or_else(|| self.drag_state.payload.as_text())
             .unwrap_or("…");
 
-        // Truncate to available width
-        let max_chars = area.width as usize;
-        let display: String = text.chars().take(max_chars).collect();
-
         crate::draw_text_span(
             frame,
             area.x,
             area.y,
-            &display,
+            text,
             Style::default(),
             area.x + area.width,
         );

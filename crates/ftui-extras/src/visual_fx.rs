@@ -747,10 +747,10 @@ impl StackedFx {
     #[inline]
     pub fn pop(&mut self) -> Option<FxLayer> {
         let buf = self.layer_bufs.pop();
-        if let Some(buf) = buf {
-            if buf.capacity() > 0 {
-                release_buffer(buf);
-            }
+        if let Some(buf) = buf
+            && buf.capacity() > 0
+        {
+            release_buffer(buf);
         }
         self.layers.pop()
     }

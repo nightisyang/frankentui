@@ -11,8 +11,8 @@ How to use:
 ---
 
 ## A) Project + Docs
-- [ ] Definition of Done (Ship Checklist) → bd-tb84
-- [ ] Track Quality Gates (v1 Stop-Ship Criteria) → bd-2gx
+- [x] Definition of Done (Ship Checklist) → bd-tb84
+- [x] Track Quality Gates (v1 Stop-Ship Criteria) → bd-2gx
 - [ ] ADR discipline (locked decisions) → bd-10i.10 + children (bd-10i.10.1..bd-10i.10.6)
 - [ ] Operational Playbook (Chapter 17) → bd-10i.12.1
 - [ ] Glossary (Appendix B) → bd-10i.12.2

@@ -6,7 +6,16 @@ use crate::{Widget, draw_text_span_scrolled, draw_text_span_with_link, set_style
 use ftui_core::geometry::{Rect, Size};
 use ftui_render::frame::Frame;
 use ftui_style::Style;
-use ftui_text::{Text, WrapMode, display_width};
+use ftui_text::{Line, Span, Text as FtuiText, WrapMode, display_width};
+
+type Text = FtuiText<'static>;
+
+fn text_into_owned(text: FtuiText<'_>) -> FtuiText<'static> {
+    FtuiText::from_lines(
+        text.into_iter()
+            .map(|line| Line::from_spans(line.into_iter().map(Span::into_owned))),
+    )
+}
 
 /// A widget that renders multi-line styled text.
 #[derive(Debug, Clone, Default)]
@@ -22,9 +31,9 @@ pub struct Paragraph<'a> {
 impl<'a> Paragraph<'a> {
     /// Create a new paragraph from the given text.
     #[must_use]
-    pub fn new(text: impl Into<Text>) -> Self {
+    pub fn new<'t>(text: impl Into<FtuiText<'t>>) -> Self {
         Self {
-            text: text.into(),
+            text: text_into_owned(text.into()),
             block: None,
             style: Style::default(),
             wrap: None,

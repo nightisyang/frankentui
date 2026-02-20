@@ -89,6 +89,7 @@ use ftui_render::budget::{BudgetDecision, DegradationLevel, FrameBudgetConfig, R
 use ftui_render::buffer::Buffer;
 use ftui_render::diff_strategy::DiffStrategy;
 use ftui_render::frame::{Frame, HitData, HitId, HitRegion, WidgetBudget, WidgetSignal};
+use ftui_render::frame_guardrails::{FrameGuardrails, GuardrailsConfig};
 use ftui_render::sanitize::sanitize;
 use std::collections::HashMap;
 use std::io::{self, Stdout, Write};
@@ -2012,6 +2013,13 @@ pub struct ProgramConfig {
     pub widget_refresh: WidgetRefreshConfig,
     /// Effect queue scheduling configuration.
     pub effect_queue: EffectQueueConfig,
+    /// Frame guardrails configuration (memory + queue safety limits).
+    pub guardrails: GuardrailsConfig,
+    /// Install signal handlers for cleanup on SIGINT/SIGTERM/SIGHUP.
+    ///
+    /// Defaults to `true` for application safety. Set to `false` in tests or
+    /// when the embedding application manages signals.
+    pub intercept_signals: bool,
 }
 
 impl Default for ProgramConfig {
@@ -2038,6 +2046,8 @@ impl Default for ProgramConfig {
             inline_auto_remeasure: None,
             widget_refresh: WidgetRefreshConfig::default(),
             effect_queue: EffectQueueConfig::default(),
+            guardrails: GuardrailsConfig::default(),
+            intercept_signals: true,
         }
     }
 }
@@ -2243,6 +2253,20 @@ impl ProgramConfig {
     #[must_use]
     pub fn without_inline_auto_remeasure(mut self) -> Self {
         self.inline_auto_remeasure = None;
+        self
+    }
+
+    /// Enable or disable signal interception (SIGHUP/SIGTERM/SIGINT) for cleanup.
+    #[must_use]
+    pub fn with_signal_interception(mut self, enabled: bool) -> Self {
+        self.intercept_signals = enabled;
+        self
+    }
+
+    /// Set frame guardrails configuration.
+    #[must_use]
+    pub fn with_guardrails(mut self, config: GuardrailsConfig) -> Self {
+        self.guardrails = config;
         self
     }
 }
@@ -3119,6 +3143,8 @@ pub struct Program<M: Model, E: BackendEventSource<Error = io::Error>, W: Write 
     inline_auto_remeasure: Option<InlineAutoRemeasureState>,
     /// Per-frame bump arena for temporary render-path allocations.
     frame_arena: FrameArena,
+    /// Unified frame guardrails (memory/queue limits).
+    guardrails: FrameGuardrails,
 }
 
 #[cfg(feature = "crossterm-compat")]
@@ -3152,6 +3178,7 @@ impl<M: Model> Program<M, CrosstermEventSource, Stdout> {
             bracketed_paste: initial_features.bracketed_paste,
             focus_events: initial_features.focus_events,
             kitty_keyboard: initial_features.kitty_keyboard,
+            intercept_signals: config.intercept_signals,
         })?;
         let events = CrosstermEventSource::new(session, initial_features);
 
@@ -3217,6 +3244,7 @@ impl<M: Model> Program<M, CrosstermEventSource, Stdout> {
         } else {
             None
         };
+        let guardrails = FrameGuardrails::new(config.guardrails);
 
         Ok(Self {
             model,
@@ -3258,6 +3286,7 @@ impl<M: Model> Program<M, CrosstermEventSource, Stdout> {
             last_checkpoint: Instant::now(),
             inline_auto_remeasure,
             frame_arena: FrameArena::default(),
+            guardrails,
         })
     }
 }
@@ -3335,6 +3364,8 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             None
         };
 
+        let guardrails = FrameGuardrails::new(config.guardrails);
+
         Ok(Self {
             model,
             writer,
@@ -3375,6 +3406,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             last_checkpoint: Instant::now(),
             inline_auto_remeasure,
             frame_arena: FrameArena::default(),
+            guardrails,
         })
     }
 }
@@ -3424,6 +3456,7 @@ impl<M: Model> Program<M, ftui_tty::TtyBackend, Stdout> {
         let options = ftui_tty::TtySessionOptions {
             alternate_screen: matches!(config.screen_mode, ScreenMode::AltScreen),
             features,
+            intercept_signals: config.intercept_signals,
         };
         let backend = ftui_tty::TtyBackend::open(0, 0, options)?;
 
@@ -3935,6 +3968,24 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
 
         // Reset budget for new frame, potentially upgrading quality
         self.budget.next_frame();
+
+        // Check frame guardrails (memory/queue limits)
+        let memory_bytes = self.writer.estimate_memory_usage() + self.frame_arena.allocated_bytes();
+        // Synchronous program has effectively zero queue depth.
+        let verdict = self.guardrails.check_frame(memory_bytes, 0);
+
+        if verdict.should_drop_frame() {
+            // Emergency shed: skip this frame entirely to prevent OOM
+            return Ok(());
+        }
+
+        if verdict.should_degrade() {
+            // Apply guardrail-recommended degradation if it's stricter than budget's
+            let current = self.budget.degradation();
+            if verdict.recommended_level > current {
+                self.budget.set_degradation(verdict.recommended_level);
+            }
+        }
 
         // Apply conformal risk gate before rendering (if enabled)
         let mut conformal_prediction = None;
@@ -7404,6 +7455,7 @@ mod tests {
             .inline_auto_remeasure
             .clone()
             .map(InlineAutoRemeasureState::new);
+        let guardrails = FrameGuardrails::new(config.guardrails);
 
         Program {
             model,
@@ -7445,6 +7497,7 @@ mod tests {
             last_checkpoint: Instant::now(),
             inline_auto_remeasure,
             frame_arena: FrameArena::default(),
+            guardrails,
         }
     }
 

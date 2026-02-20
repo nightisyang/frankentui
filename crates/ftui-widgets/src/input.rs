@@ -564,13 +564,35 @@ impl TextInput {
     }
 
     fn delete_word_back(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+
+        let graphemes: Vec<&str> = self.value.graphemes(true).collect();
         let old_cursor = self.cursor;
-        self.move_cursor_word_left(false);
-        let new_cursor = self.cursor;
+        let mut pos = old_cursor;
+
+        // 1. Skip trailing whitespace
+        let mut skipped_whitespace = false;
+        while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) == 0 {
+            pos -= 1;
+            skipped_whitespace = true;
+        }
+
+        // 2. If we didn't skip whitespace, delete the token (Word or Punctuation)
+        if !skipped_whitespace && pos > 0 {
+            let target_class = Self::get_grapheme_class(graphemes[pos - 1]);
+            while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) == target_class {
+                pos -= 1;
+            }
+        }
+
+        let new_cursor = pos;
         if new_cursor < old_cursor {
             let byte_start = self.grapheme_byte_offset(new_cursor);
             let byte_end = self.grapheme_byte_offset(old_cursor);
             self.value.drain(byte_start..byte_end);
+            self.cursor = new_cursor;
         }
     }
 
@@ -1427,9 +1449,13 @@ mod tests {
         input.delete_word_back();
         assert_eq!(input.value(), "hello "); // Deleted "world"
 
-        // "hello |" — word-left skips space then "hello"
+        // "hello |" — word-left skips space then stops
         input.delete_word_back();
-        assert_eq!(input.value(), ""); // Deleted "hello "
+        assert_eq!(input.value(), "hello"); // Deleted " "
+
+        // "hello|" — word-left deletes "hello"
+        input.delete_word_back();
+        assert_eq!(input.value(), ""); // Deleted "hello"
     }
 
     #[test]
@@ -1973,13 +1999,13 @@ mod tests {
     #[test]
     fn test_wide_char_scroll_snapping() {
         // Verify that effective_scroll snaps to grapheme boundaries
-        let mut input = TextInput::new().with_value("a\u{3000}b"); // "a", "ID_SPACE", "b"
+        let _input = TextInput::new().with_value("a\u{3000}b"); // "a", "ID_SPACE", "b"
         // Widths: 1, 2, 1. Positions: 0, 1, 3. Total 4.
-        
+
         // Force scroll to 2 (middle of wide char)
         // We can't directly set scroll_cells (private), but we can manipulate cursor/viewport
         // to force the logic.
-        
+
         // Viewport width 2.
         // Move cursor to end (pos 4).
         // effective_scroll tries to show cursor.
@@ -1987,8 +2013,8 @@ mod tests {
         // candidate = 4 - 2 + 1 = 3.
         // prev_width (b) = 1. max_scroll_for_prev = 4 - 1 = 3.
         // scroll = 3.
-        // At scroll 3, we show "b" (pos 3). 
-        // 
+        // At scroll 3, we show "b" (pos 3).
+        //
         // Let's try to force it to land on 2.
         // value: "\u{3000}a" (Wide, a).
         // Pos: 0, 2. Total 3.
@@ -1999,62 +2025,62 @@ mod tests {
         // prev_width = 2. max_scroll_for_prev = 2 - 2 = 0.
         // scroll = min(2, 0) = 0.
         // It snaps to 0!
-        
+
         // Let's use the internal logic test if possible, or observe via render.
-        
+
         let wide_char = "\u{3000}";
-        let text = format!("a{wide_char}b"); 
+        let text = format!("a{wide_char}b");
         let mut input = TextInput::new().with_value(&text);
-        
+
         // We simulate the logic by calling effective_scroll via render logic paths
-        // or by unit testing the private method if we expose it? 
+        // or by unit testing the private method if we expose it?
         // No, we rely on behavior.
-        
+
         // Case 1: Scroll lands on 2 (start of wide char). Valid.
         // Case 2: Scroll lands on 1 (start of 'a' is 0, wide is 1..3).
         // Scroll 1 means we skip 'a'. Wide char moves to x=0. Valid.
-        
+
         // Wait, grapheme 1 starts at visual pos 1.
         // If scroll is 2. We skip 'a' (1) and half of wide char?
         // No. "a" width 1. "Wide" width 2.
         // Visual positions: "a"@[0], "Wide"@[1,2].
         // If scroll = 1. "a" is at -1. "Wide" is at 0,1. Visible.
-        // If scroll = 2. "a" at -2. "Wide" at -1,0. 
+        // If scroll = 2. "a" at -2. "Wide" at -1,0.
         //   Render loop: g="Wide", w=2. visual_x starts at 1.
         //   visual_x (1) < scroll (2). visual_x += 2 -> 3. Continue.
         //   Wide char is SKIPPED.
         //   We see nothing (or 'b').
         //   This is the "pop" artifact.
-        
+
         // We want scroll to NOT be 2. It should be 1 or 3.
-        
+
         // How to force scroll=2?
         // Cursor at 3 (after 'b'?).
         // 'b' is at 3. width 1.
         // If we want 'b' visible at x=0. Scroll must be 3.
-        
+
         // We need a setup where candidate_scroll lands on 2.
         // Let cursor be at 4 (end of string).
         // Viewport 2.
         // candidate = 4 - 2 + 1 = 3.
-        
+
         // Let cursor be at 3 (start of b).
         // candidate = 3 - 2 + 1 = 2.
         // If we force scroll=2.
-        
+
         input.cursor = 3; // Before 'b', after wide char.
-        let area = Rect::new(0, 0, 2, 1); // Width 2
+        let _area = Rect::new(0, 0, 2, 1); // Width 2
         // effective_scroll logic:
         // cursor_visual = 3.
         // candidate = 3 - 2 + 1 = 2.
         // prev_width (Wide) = 2. max_scroll_for_prev = 3 - 2 = 1.
         // min(2, 1) = 1.
         // The existing logic `max_scroll_for_prev` ALREADY protects the previous char!
-        
+
         // So when does the bug happen?
-        // When we are NOT near the cursor? 
+        // When we are NOT near the cursor?
         // No, effective_scroll is driven by cursor.
-        
+
         // What if we have multiple wide chars?
         // "\u{3000}\u{3000}" (Wide, Wide).
         // Widths: 2, 2. Pos: 0, 2. Total 4.
@@ -2065,7 +2091,7 @@ mod tests {
         // Render:
         //   Wide#1 @ 0..2. scroll=2. 0 < 2. Skipped. Correct.
         //   Wide#2 @ 2..4. scroll=2. 2 >= 2. Rendered at 0. Correct.
-        
+
         // Wait, what if scroll lands *inside* a wide char?
         // Text: "a" (1) + "Wide" (2). Total 3.
         // Cursor at 3. Viewport 2.
@@ -2076,7 +2102,7 @@ mod tests {
         //   'a' @ 0. < 1. Skipped.
         //   Wide @ 1. >= 1. Rendered at 0.
         // Correct.
-        
+
         // So `max_scroll_for_prev` protects the char *immediately* before the cursor.
         // But what about chars before THAT?
         // Text: "Wide1" (2) + "Wide2" (2).
@@ -2084,11 +2110,11 @@ mod tests {
         // scroll = 2.
         // Wide1 @ 0. < 2. Skipped.
         // Wide2 @ 2. >= 2. Rendered.
-        
+
         // Is it possible for scroll to land on 1?
         // If we manually scroll? Input widget doesn't expose manual scroll.
         // It relies on cursor position.
-        
+
         // What if viewport is 1?
         // Cursor at 4.
         // candidate = 4 - 1 + 1 = 4.
@@ -2096,10 +2122,10 @@ mod tests {
         // scroll = 2.
         // Wide1 @ 0. Skipped.
         // Wide2 @ 2. Rendered at 0. (Clipped to width 1).
-        
+
         // It seems `max_scroll_for_prev` handles the "hole" issue for the active character.
         // But the user issue mentioned "partial scrolling".
-        
+
         // Let's assume the fix `snap_scroll_to_grapheme_boundary` is robust regardless.
         // It prevents ANY scroll value from landing inside a grapheme.
     }
@@ -2144,5 +2170,61 @@ mod tests {
             "unexpected operations: {:?}",
             snapshot.operations
         );
+    }
+}
+
+#[cfg(test)]
+mod scroll_edge_tests {
+    use super::*;
+    use ftui_render::frame::Frame;
+    use ftui_render::grapheme_pool::GraphemePool;
+
+    #[test]
+    fn test_scroll_snap_left_cursor_visibility() {
+        // Test the scenario: [Char A][Char B][Char C]
+        // Viewport width 1.
+        // Scroll is at B.
+        // Move cursor to A (left).
+        // Cursor visual pos = 0.
+        // effective_scroll must become 0.
+
+        let mut input = TextInput::new().with_value("ABC");
+        input.cursor = 1; // At B
+
+        // Force internal scroll to 1 (B) by rendering with narrow viewport
+        // We can't set private scroll_cells directly, but we can simulate state
+        let area = Rect::new(0, 0, 1, 1);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(1, 1, &mut pool);
+        input.render(area, &mut frame); // Scroll should be 1
+
+        // Now move left
+        input.move_cursor_left(); // Cursor at A (0)
+
+        // Render again
+        input.render(area, &mut frame);
+
+        // Cell should be A
+        let cell = frame.buffer.get(0, 0).unwrap();
+        assert_eq!(cell.content.as_char(), Some('A'));
+    }
+
+    #[test]
+    fn test_max_length_replacement_failure() {
+        // "abc", max 3. Select "b". Insert "de".
+        // Should delete "b" -> "ac".
+        // Try insert "de" -> "adec" (len 4).
+        // Should revert insert -> "ac".
+
+        let mut input = TextInput::new().with_value("abc").with_max_length(3);
+        input.selection_anchor = Some(1); // "b" start
+        input.cursor = 2; // "b" end
+
+        // Simulate paste "de"
+        let event = Event::Paste(ftui_core::event::PasteEvent::new("de", false));
+        input.handle_event(&event);
+
+        assert_eq!(input.value(), "ac");
+        assert_eq!(input.cursor(), 1);
     }
 }

@@ -31,20 +31,20 @@ use crate::char_width;
 /// # Layout
 ///
 /// ```text
-/// [30-24: width (7 bits)][23-16: generation (8 bits)][15-0: pool slot (16 bits)]
+/// [30-27: width (4 bits)][26-16: generation (11 bits)][15-0: pool slot (16 bits)]
 /// ```
 ///
 /// # Capacity
 ///
 /// - Pool slots: 65,536 (16 bits = 64K entries)
-/// - Generation: 256 versions (8 bits) for stale access detection
-/// - Width range: 0-127 (7 bits)
+/// - Generation: 2048 versions (11 bits) for stale access detection
+/// - Width range: 0-15 (4 bits)
 ///
 /// # Design Rationale
 ///
 /// - 16 bits for slot (64K) is sufficient for any single frame's unique graphemes.
-/// - 8 bits for generation allows detecting access to reused slots (fixing the ABA problem).
-/// - 7 bits for width allows display widths 0-127.
+/// - 11 bits for generation allows detecting access to reused slots (fixing the ABA problem).
+/// - 4 bits for width allows display widths 0-15.
 /// - Total 31 bits leaves bit 31 for `CellContent` type discrimination.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(transparent)]
@@ -1159,7 +1159,7 @@ mod tests {
 
     #[test]
     fn cell_content_as_char_none_for_grapheme() {
-        let id = GraphemeId::new(1, 2);
+        let id = GraphemeId::new(1, 2, 1);
         let c = CellContent::from_grapheme(id);
         assert_eq!(c.as_char(), None);
     }
@@ -1219,7 +1219,7 @@ mod tests {
 
     #[test]
     fn cell_content_debug_grapheme() {
-        let id = GraphemeId::new(1, 2);
+        let id = GraphemeId::new(1, 2, 1);
         let s = format!("{:?}", CellContent::from_grapheme(id));
         assert!(s.starts_with("CellContent::Grapheme("), "got: {s}");
     }
@@ -1229,7 +1229,7 @@ mod tests {
         let c = CellContent::from_char('A');
         assert_eq!(c.raw(), 'A' as u32);
 
-        let g = CellContent::from_grapheme(GraphemeId::new(5, 2));
+        let g = CellContent::from_grapheme(GraphemeId::new(5, 2, 1));
         assert_ne!(g.raw() & 0x8000_0000, 0);
     }
 
@@ -1931,7 +1931,7 @@ mod cell_proptests {
     fn arb_grapheme_id() -> impl Strategy<Value = GraphemeId> {
         (
             0u32..=GraphemeId::MAX_SLOT,
-            0u8..=GraphemeId::MAX_GENERATION,
+            0u16..=GraphemeId::MAX_GENERATION,
             0u8..=GraphemeId::MAX_WIDTH,
         )
             .prop_map(|(slot, generation, width)| GraphemeId::new(slot, generation, width))
@@ -1982,14 +1982,14 @@ mod cell_proptests {
         fn grapheme_id_components_roundtrip(
             tuple in (
                 0u32..=GraphemeId::MAX_SLOT,
-                0u8..=GraphemeId::MAX_GENERATION,
+                0u16..=GraphemeId::MAX_GENERATION,
                 0u8..=GraphemeId::MAX_WIDTH,
             )
         ) {
-            let (slot, gen, width) = tuple;
-            let id = GraphemeId::new(slot, gen, width);
+            let (slot, generation, width) = tuple;
+            let id = GraphemeId::new(slot, generation, width);
             prop_assert_eq!(id.slot(), slot as usize);
-            prop_assert_eq!(id.generation(), gen);
+            prop_assert_eq!(id.generation(), generation);
             prop_assert_eq!(id.width(), width as usize);
         }
 
@@ -2142,5 +2142,42 @@ mod cell_proptests {
         let cell = Cell::default();
         assert!(cell.is_empty());
         assert_eq!(cell.width_hint(), 0);
+    }
+}
+
+#[cfg(test)]
+mod bit_layout_tests {
+    use super::GraphemeId;
+
+    #[test]
+    fn grapheme_id_bit_layout_verification() {
+        // Layout verification to match corrected documentation:
+        // [30-27: width (4 bits)][26-16: generation (11 bits)][15-0: pool slot (16 bits)]
+
+        // Slot = 0xFFFF (max 16 bits)
+        let t1 = GraphemeId::new(0xFFFF, 0, 0);
+        assert_eq!(t1.raw(), 0xFFFF, "Slot 0xFFFF should be 0xFFFF");
+
+        // Generation = 0x7FF (max 11 bits)
+        let t2 = GraphemeId::new(0, 0x7FF, 0);
+        // 0x7FF << 16 = 0x07FF0000
+        assert_eq!(t2.raw(), 0x07FF0000, "Gen 0x7FF should be 0x07FF0000");
+
+        // Width = 0xF (max 4 bits)
+        let t3 = GraphemeId::new(0, 0, 0xF);
+        // 0xF << 27 = 0x78000000
+        assert_eq!(t3.raw(), 0x78000000, "Width 0xF should be 0x78000000");
+
+        // Combined max values
+        let t4 = GraphemeId::new(0xFFFF, 0x7FF, 0xF);
+        // 0x78000000 | 0x07FF0000 | 0xFFFF = 0x7FFFFFFF
+        assert_eq!(
+            t4.raw(),
+            0x7FFFFFFF,
+            "Combined max values should be 0x7FFFFFFF"
+        );
+
+        // Ensure bit 31 is clear (reserved for CellContent discriminator)
+        assert_eq!(t4.raw() & 0x80000000, 0, "Bit 31 must be clear");
     }
 }

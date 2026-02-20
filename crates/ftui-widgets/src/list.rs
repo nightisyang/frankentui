@@ -14,10 +14,19 @@ use ftui_core::event::{KeyCode, KeyEvent, Modifiers, MouseButton, MouseEvent, Mo
 use ftui_core::geometry::{Rect, Size};
 use ftui_render::frame::{Frame, HitId, HitRegion};
 use ftui_style::Style;
-use ftui_text::{Text, display_width};
+use ftui_text::{Line, Span, Text as FtuiText, display_width};
 use std::collections::BTreeSet;
 #[cfg(feature = "tracing")]
 use web_time::Instant;
+
+type Text = FtuiText<'static>;
+
+fn text_into_owned(text: FtuiText<'_>) -> FtuiText<'static> {
+    FtuiText::from_lines(
+        text.into_iter()
+            .map(|line| Line::from_spans(line.into_iter().map(Span::into_owned))),
+    )
+}
 
 /// A single item in a list.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,9 +39,9 @@ pub struct ListItem<'a> {
 impl<'a> ListItem<'a> {
     /// Create a new list item with the given content.
     #[must_use]
-    pub fn new(content: impl Into<Text>) -> Self {
+    pub fn new<'t>(content: impl Into<FtuiText<'t>>) -> Self {
         Self {
-            content: content.into(),
+            content: text_into_owned(content.into()),
             style: Style::default(),
             marker: "",
         }
@@ -158,9 +167,9 @@ impl<'a> List<'a> {
                     ""
                 };
 
-                let marker_matches =
-                    !item.marker.is_empty() && item.marker.to_lowercase().contains(&query_lower);
-                if marker_matches || line_text_ref.to_lowercase().contains(&query_lower) {
+                let marker_matches = !item.marker.is_empty()
+                    && crate::contains_ignore_case(item.marker, &query_lower);
+                if marker_matches || crate::contains_ignore_case(line_text_ref, &query_lower) {
                     Some(idx)
                 } else {
                     None

@@ -207,7 +207,7 @@ impl CursorManager {
             CursorSaveStrategy::Emulated => {
                 if let Some((col, row)) = self.saved_position {
                     // CUP uses 1-indexed coordinates
-                    write!(writer, "\x1b[{};{}H", row + 1, col + 1)
+                    write!(writer, "\x1b[{};{}H", (row as u32) + 1, (col as u32) + 1)
                 } else {
                     Ok(())
                 }
@@ -252,7 +252,7 @@ impl Default for CursorManager {
 /// Returns an error if writing to the output fails.
 pub fn move_to<W: Write>(writer: &mut W, col: u16, row: u16) -> io::Result<()> {
     // CUP uses 1-indexed coordinates
-    write!(writer, "\x1b[{};{}H", row + 1, col + 1)
+    write!(writer, "\x1b[{};{}H", (row as u32) + 1, (col as u32) + 1)
 }
 
 /// Hide the cursor.

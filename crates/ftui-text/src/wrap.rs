@@ -20,6 +20,7 @@
 //! assert_eq!(lines.len(), 2);
 //! ```
 
+use std::borrow::Cow;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Text wrapping mode.
@@ -303,39 +304,11 @@ fn split_words(text: &str) -> Vec<String> {
 
 /// Finalize a line (apply trimming, etc.).
 fn finalize_line(line: &str, options: &WrapOptions) -> String {
-    let mut result = if options.trim_trailing {
+    if options.trim_trailing {
         line.trim_end().to_string()
     } else {
         line.to_string()
-    };
-
-    if !options.preserve_indent {
-        // We only trim start if the user explicitly opted out of preserving indent.
-        // However, standard wrapping usually preserves start indent of the first line
-        // and only indents continuations.
-        // The `preserve_indent` option in `WrapOptions` usually refers to *hanging* indent
-        // or preserving leading whitespace on new lines.
-        //
-        // In this implementation, `wrap_paragraph` logic trims start of *continuation* lines
-        // if they fit.
-        //
-        // But for `finalize_line`, which handles the *completed* line string,
-        // we generally don't want to aggressively strip leading whitespace unless
-        // it was a blank line.
-        //
-        // Let's stick to the requested change: trim start if not preserving indent.
-        // But wait, `line.trim_start()` would kill paragraph indentation.
-        //
-        // Re-reading intent: "trim leading indentation if preserve_indent is false".
-        // This implies that if `preserve_indent` is false, we want flush-left text.
-
-        let trimmed = result.trim_start();
-        if trimmed.len() != result.len() {
-            result = trimmed.to_string();
-        }
     }
-
-    result
 }
 
 /// Truncate text to fit within a width, adding ellipsis if needed.
@@ -667,60 +640,100 @@ pub(crate) fn is_breaking_whitespace(c: char) -> bool {
 }
 
 /// A word token with its measured cell width.
+///
+/// Optimization: Uses `Cow` to avoid allocating Strings for words that are
+/// simple slices of the original text (the common case).
 #[derive(Debug, Clone)]
-struct KpWord {
-    /// The word text (including any trailing space).
-    text: String,
-    /// Cell width of the content (excluding trailing space for break purposes).
+struct KpWord<'a> {
+    /// The word content (excluding trailing space).
+    content: Cow<'a, str>,
+    /// The trailing space (if any).
+    space: Cow<'a, str>,
+    /// Cell width of the content.
     content_width: usize,
     /// Cell width of the trailing space (0 if none).
     space_width: usize,
 }
 
 /// Split text into KpWord tokens for Knuth-Plass processing.
-fn kp_tokenize(text: &str) -> Vec<KpWord> {
+///
+/// Splits by `split_word_bounds`.
+/// - Contiguous non-whitespace segments are accumulated into `content`.
+/// - A following whitespace segment is captured as `space` and finishes the word.
+/// - Adjacent whitespace segments are merged into `space`.
+fn kp_tokenize(text: &str) -> Vec<KpWord<'_>> {
     let mut words = Vec::new();
-    let raw_segments: Vec<&str> = text.split_word_bounds().collect();
+    let raw_segments = text.split_word_bounds();
 
-    let mut current_text = String::new();
-    let mut current_width = 0;
+    let mut current_content: Option<Cow<'_, str>> = None;
+    let mut current_content_width = 0;
 
     for seg in raw_segments {
-        if seg.chars().all(is_breaking_whitespace) {
-            // This is a break point (space).
-            // Finish current word if any.
-            if !current_text.is_empty() {
+        let is_space = seg.chars().all(is_breaking_whitespace);
+        let width = display_width(seg);
+
+        if is_space {
+            // Space finishes the current word.
+            // If no content, it attaches to the previous word's space (if any),
+            // or starts a new "empty" word if we are at start of text.
+            if let Some(content) = current_content.take() {
                 words.push(KpWord {
-                    text: std::mem::take(&mut current_text),
-                    content_width: current_width,
-                    space_width: display_width(seg), // attach space to it
+                    content,
+                    space: Cow::Borrowed(seg),
+                    content_width: current_content_width,
+                    space_width: width,
                 });
-                current_width = 0;
+                current_content_width = 0;
             } else if let Some(last) = words.last_mut() {
-                // Attach space to previous word
-                last.text.push_str(seg);
-                last.space_width += display_width(seg);
+                // Append to previous word's space
+                match &mut last.space {
+                    Cow::Borrowed(s) => {
+                        let mut new = String::with_capacity(s.len() + seg.len());
+                        new.push_str(s);
+                        new.push_str(seg);
+                        last.space = Cow::Owned(new);
+                    }
+                    Cow::Owned(s) => s.push_str(seg),
+                }
+                last.space_width += width;
             } else {
-                // Handle leading whitespace as a word with 0 content width
+                // Leading whitespace (no previous word)
                 words.push(KpWord {
-                    text: seg.to_string(),
+                    content: Cow::Borrowed(""),
+                    space: Cow::Borrowed(seg),
                     content_width: 0,
-                    space_width: display_width(seg),
+                    space_width: width,
                 });
             }
         } else {
-            // Content (word or NBSP).
-            // Append to current accumulator.
-            current_text.push_str(seg);
-            current_width += display_width(seg);
+            // Content segment.
+            match current_content {
+                None => {
+                    current_content = Some(Cow::Borrowed(seg));
+                    current_content_width = width;
+                }
+                Some(Cow::Borrowed(s)) => {
+                    // Merge segments -> promote to Owned
+                    let mut new = String::with_capacity(s.len() + seg.len());
+                    new.push_str(s);
+                    new.push_str(seg);
+                    current_content = Some(Cow::Owned(new));
+                    current_content_width += width;
+                }
+                Some(Cow::Owned(ref mut s)) => {
+                    s.push_str(seg);
+                    current_content_width += width;
+                }
+            }
         }
     }
 
-    // Push remaining content
-    if !current_text.is_empty() {
+    // Flush remaining content
+    if let Some(content) = current_content {
         words.push(KpWord {
-            text: current_text,
-            content_width: current_width,
+            content,
+            space: Cow::Borrowed(""),
+            content_width: current_content_width,
             space_width: 0,
         });
     }
@@ -839,11 +852,15 @@ pub fn wrap_optimal(text: &str, width: usize) -> KpBreakResult {
 
         // Reconstruct line text
         let mut line = String::new();
-        for word in words.iter().take(end).skip(start) {
-            line.push_str(&word.text);
+        for (i, word) in words.iter().take(end).skip(start).enumerate() {
+            line.push_str(&word.content);
+            // Append space if not the last word on the line
+            if i < (end - start) - 1 {
+                line.push_str(&word.space);
+            }
         }
 
-        // Trim trailing whitespace from each line
+        // Trim trailing whitespace from each line (standard behavior)
         let trimmed = line.trim_end().to_string();
 
         // Compute this line's badness for diagnostics

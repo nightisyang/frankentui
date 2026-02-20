@@ -5,10 +5,10 @@
 //! A drop-down console background with a procedural grunge/cloud texture.
 //! Simulates the look of Quake's `conback.lmp` using fractal noise.
 
-use crate::visual_fx::{BackdropFx, FxContext};
-use ftui_render::cell::PackedRgba;
 #[cfg(feature = "canvas")]
 use crate::canvas::Painter;
+use crate::visual_fx::{BackdropFx, FxContext};
+use ftui_render::cell::PackedRgba;
 
 /// Quake-style drop-down console effect.
 pub struct QuakeConsoleFx {
@@ -21,7 +21,7 @@ pub struct QuakeConsoleFx {
 
 impl QuakeConsoleFx {
     pub fn new() -> Self {
-        Self { 
+        Self {
             drop_progress: 1.0,
             texture: Vec::new(),
             texture_size: (0, 0),
@@ -33,11 +33,17 @@ impl QuakeConsoleFx {
     }
 
     /// Generate a procedural grunge texture.
-    fn generate_texture(&mut self, width: u16, height: u16, base_color: PackedRgba, highlight_color: PackedRgba) {
+    fn generate_texture(
+        &mut self,
+        width: u16,
+        height: u16,
+        base_color: PackedRgba,
+        highlight_color: PackedRgba,
+    ) {
         let w = width as usize;
         let h = height as usize;
         let len = w * h;
-        
+
         self.texture.resize(len, PackedRgba::default());
         self.texture_size = (width, height);
 
@@ -54,13 +60,13 @@ impl QuakeConsoleFx {
                 // Coordinate scaling for "cloudy" look
                 let nx = x as f32 * 0.1;
                 let ny = y as f32 * 0.2;
-                
+
                 // Cheap noise: sin combination
                 let v = (nx.sin() + ny.cos() + rand() * 0.5).abs().clamp(0.0, 1.0);
-                
+
                 // Mix colors
                 let pixel = highlight_color.with_opacity(v * 0.3).over(base_color);
-                
+
                 self.texture[y * w + x] = pixel;
             }
         }
@@ -86,12 +92,12 @@ impl QuakeConsoleFx {
                 painter.point_colored(x as i32, y as i32, color);
             }
         }
-        
+
         // Draw the bottom edge/highlight
         if drop_height < height && drop_height > 0 {
-             let y = (drop_height - 1) as i32;
-             let color = theme.accent_primary;
-             painter.line_colored(0, y, (width - 1) as i32, y, Some(color));
+            let y = (drop_height - 1) as i32;
+            let color = theme.accent_primary;
+            painter.line_colored(0, y, (width - 1) as i32, y, Some(color));
         }
     }
 }
@@ -101,8 +107,7 @@ impl BackdropFx for QuakeConsoleFx {
         "quake-console"
     }
 
-    fn resize(&mut self, _width: u16, _height: u16) {
-    }
+    fn resize(&mut self, _width: u16, _height: u16) {}
 
     fn render(&mut self, ctx: FxContext<'_>, out: &mut [PackedRgba]) {
         if ctx.is_empty() {
@@ -114,7 +119,12 @@ impl BackdropFx for QuakeConsoleFx {
         let drop_height = (height as f32 * self.drop_progress).round() as usize;
 
         if self.texture_size != (ctx.width, ctx.height) {
-            self.generate_texture(ctx.width, ctx.height, ctx.theme.bg_base, ctx.theme.bg_surface);
+            self.generate_texture(
+                ctx.width,
+                ctx.height,
+                ctx.theme.bg_base,
+                ctx.theme.bg_surface,
+            );
         }
 
         // Blit texture for the dropped portion
@@ -124,14 +134,14 @@ impl BackdropFx for QuakeConsoleFx {
             let dst_row = &mut out[row_start..row_start + width];
             dst_row.copy_from_slice(src_row);
         }
-        
+
         // Draw the bottom edge/highlight
         if drop_height < height && drop_height > 0 {
-             let y = drop_height - 1;
-             for x in 0..width {
-                 let idx = y * width + x;
-                 out[idx] = ctx.theme.accent_primary;
-             }
+            let y = drop_height - 1;
+            for x in 0..width {
+                let idx = y * width + x;
+                out[idx] = ctx.theme.accent_primary;
+            }
         }
     }
 }

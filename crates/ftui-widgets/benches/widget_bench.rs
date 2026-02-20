@@ -69,7 +69,7 @@ fn bench_block_render(c: &mut Criterion) {
 // Paragraph widget
 // ============================================================================
 
-fn make_paragraph_text(chars: usize) -> Text {
+fn make_paragraph_text(chars: usize) -> Text<'static> {
     let content: String = "The quick brown fox jumps over the lazy dog. "
         .chars()
         .cycle()

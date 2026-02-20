@@ -278,10 +278,12 @@ impl<T> Virtualized<T> {
         } else {
             self.len().saturating_sub(1)
         };
-        let new_offset = (self.scroll_offset as i64 + delta as i64)
-            .max(0)
-            .min(max_offset as i64);
-        self.scroll_offset = new_offset as usize;
+        // Use saturating_add_signed to safely handle negative deltas and usize bounds
+        let new_offset = self
+            .scroll_offset
+            .saturating_add_signed(delta as isize)
+            .min(max_offset);
+        self.scroll_offset = new_offset;
 
         // Disable follow mode on manual scroll
         if delta != 0 {
@@ -905,10 +907,12 @@ impl VirtualizedListState {
         } else {
             total_items.saturating_sub(1)
         };
-        let new_offset = (self.scroll_offset as i64 + delta as i64)
-            .max(0)
-            .min(max_offset as i64);
-        self.scroll_offset = new_offset as usize;
+        // Use saturating_add_signed to safely handle negative deltas and usize bounds
+        let new_offset = self
+            .scroll_offset
+            .saturating_add_signed(delta as isize)
+            .min(max_offset);
+        self.scroll_offset = new_offset;
 
         if delta != 0 {
             self.follow_mode = false;
@@ -928,12 +932,10 @@ impl VirtualizedListState {
     }
 
     /// Scroll to bottom.
-    pub fn scroll_to_bottom(&mut self, total_items: usize) {
-        if total_items > self.visible_count && self.visible_count > 0 {
-            self.scroll_offset = total_items - self.visible_count;
-        } else {
-            self.scroll_offset = 0;
-        }
+    pub fn scroll_to_bottom(&mut self, _total_items: usize) {
+        // Set to MAX; render() will clamp to (total - viewport)
+        // once viewport height is known.
+        self.scroll_offset = usize::MAX;
     }
 
     /// Page up (scroll by visible count - 1).
@@ -1317,7 +1319,7 @@ impl<T: RenderItem> StatefulWidget for VirtualizedList<'_, T> {
             let y = i32::from(area.y)
                 .saturating_add(y_offset)
                 .clamp(i32::from(area.y), i32::from(u16::MAX)) as u16;
-            
+
             if y >= area.bottom() {
                 break;
             }
@@ -1326,7 +1328,7 @@ impl<T: RenderItem> StatefulWidget for VirtualizedList<'_, T> {
                 .fixed_height
                 .saturating_sub(skip_rows)
                 .min(area.bottom().saturating_sub(y));
-            
+
             if visible_height == 0 {
                 continue;
             }
@@ -2728,6 +2730,25 @@ mod tests {
         let mut virt: Virtualized<i32> = Virtualized::external(100, 10);
         let removed = virt.trim_front(5);
         assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn scroll_to_bottom_sets_sentinel_for_lazy_clamping() {
+        let mut virt: Virtualized<i32> = Virtualized::new(100);
+        for i in 0..20 {
+            virt.push(i);
+        }
+
+        // Before rendering, visible_count is 0.
+        // scroll_to_bottom should set MAX instead of 0.
+        virt.scroll_to_bottom();
+        assert_eq!(virt.scroll_offset, usize::MAX);
+
+        // Render (simulate by calling visible_range with height 10)
+        // Should clamp start to 20 - 10 = 10.
+        let range = virt.visible_range(10);
+        assert_eq!(range, 10..20);
+        assert_eq!(virt.visible_count(), 10);
     }
 
     // ── Virtualized: clear edge cases ───────────────────────────────────

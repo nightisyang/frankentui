@@ -247,6 +247,7 @@ let paneWorkspaceToken = "";
 const paneActivePointers = new Set();
 const paneTouchPointers = new Set();
 let paneGhostDecay = null;
+let paneOverlaySyncFailed = false;
 
 function showError(msg) {
   errorDiv.textContent = msg;
@@ -471,9 +472,36 @@ let lastGeometrySignature = "";
 const runner = new ShowcaseRunner(currentCols, currentRows);
 runner.init();
 
+function disablePaneOverlaySync(error, context = "pane overlay sync") {
+  if (!paneOverlaySyncFailed) {
+    paneOverlaySyncFailed = true;
+  }
+  try {
+    paneGhostDecay = null;
+    hideAlternateDockGhosts();
+    paneGhost.style.display = "none";
+    paneGhost.style.opacity = "0";
+    if (paneSelectionHalo) {
+      paneSelectionHalo.style.display = "none";
+      paneSelectionHalo.style.opacity = "0";
+    }
+    paneDockHint.style.display = "none";
+  } catch (_) {}
+  const errorText = error && typeof error === "object" && "stack" in error
+    ? String(error.stack)
+    : String(error);
+  console.error(`[ShowcaseDemo] Disabled pane overlay sync after ${context} failure:`, errorText);
+}
+
 function paneStateSnapshot() {
+  if (paneOverlaySyncFailed) return null;
   if (typeof runner.paneLayoutState === "function") {
-    return runner.paneLayoutState();
+    try {
+      return runner.paneLayoutState();
+    } catch (error) {
+      disablePaneOverlaySync(error, "pane state snapshot");
+      return null;
+    }
   }
   return null;
 }
@@ -669,16 +697,29 @@ function updatePaneStatusSuffix(state) {
 }
 
 function syncPaneOverlayFromRunner() {
-  const state = paneStateSnapshot();
-  renderPaneGhost(state);
-  updatePaneStatusSuffix(state);
-  persistPaneWorkspaceIfChanged(state);
-  return state;
+  if (paneOverlaySyncFailed) return null;
+  try {
+    const state = paneStateSnapshot();
+    renderPaneGhost(state);
+    updatePaneStatusSuffix(state);
+    persistPaneWorkspaceIfChanged(state);
+    return state;
+  } catch (error) {
+    disablePaneOverlaySync(error, "runtime sync");
+    return null;
+  }
 }
 
 function persistPaneWorkspace(state) {
+  if (paneOverlaySyncFailed) return;
   if (typeof runner.paneExportWorkspaceSnapshot !== "function") return;
-  const snapshot = runner.paneExportWorkspaceSnapshot();
+  let snapshot = null;
+  try {
+    snapshot = runner.paneExportWorkspaceSnapshot();
+  } catch (error) {
+    disablePaneOverlaySync(error, "pane snapshot export");
+    return;
+  }
   if (snapshot) {
     storageSet(PANE_WORKSPACE_KEY, snapshot);
     const tokenState = state || paneStateSnapshot();
@@ -696,10 +737,17 @@ function persistPaneWorkspaceIfChanged(state) {
 }
 
 function restorePaneWorkspace() {
+  if (paneOverlaySyncFailed) return false;
   if (typeof runner.paneImportWorkspaceSnapshot !== "function") return false;
   const snapshot = storageGet(PANE_WORKSPACE_KEY);
   if (!snapshot) return false;
-  const restored = runner.paneImportWorkspaceSnapshot(snapshot);
+  let restored = false;
+  try {
+    restored = runner.paneImportWorkspaceSnapshot(snapshot);
+  } catch (error) {
+    disablePaneOverlaySync(error, "pane snapshot import");
+    return false;
+  }
   if (restored) {
     paneWorkspaceToken = paneWorkspaceSnapshotToken(paneStateSnapshot());
   }

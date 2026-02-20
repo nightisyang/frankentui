@@ -113,6 +113,14 @@ pub struct ScrollbarState {
     pub viewport_length: usize,
     /// Drag anchor point (offset from thumb top) to prevent jumping.
     pub drag_anchor: Option<usize>,
+    /// Cache of the track geometry for hit-testing fallback during drag.
+    track_layout: Option<TrackLayout>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TrackLayout {
+    rect: Rect,
+    is_vertical: bool,
 }
 
 impl ScrollbarState {
@@ -124,6 +132,7 @@ impl ScrollbarState {
             position,
             viewport_length,
             drag_anchor: None,
+            track_layout: None,
         }
     }
 
@@ -217,6 +226,12 @@ impl ScrollbarState {
                                 let pos = (num + (denom as u128 / 2)) / denom as u128;
                                 pos as usize
                             };
+
+                            // Update drag anchor to match the new thumb position immediately,
+                            // preventing a jump if the user drags after clicking the track.
+                            let (thumb_offset, _) = self.calc_thumb_geometry(track_len);
+                            self.drag_anchor = Some(track_pos.saturating_sub(thumb_offset));
+
                             return MouseResult::Scrolled;
                         }
                         _ => {}
@@ -225,44 +240,68 @@ impl ScrollbarState {
                 MouseResult::Ignored
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                if let Some((id, HitRegion::Scrollbar, data)) = hit
+                // Determine track length and mouse position relative to track.
+                // 1. Try Hit data (accurate for wide chars, complex layouts).
+                // 2. Fallback to cached layout (if dragging outside component).
+                let (track_len, track_pos) = if let Some((id, HitRegion::Scrollbar, data)) = hit
                     && id == expected_id
                 {
                     let part = data >> 56;
                     if matches!(part, SCROLLBAR_PART_TRACK | SCROLLBAR_PART_THUMB) {
-                        let track_len = ((data >> 28) & 0x0FFF_FFFF) as usize;
-                        let track_pos = (data & 0x0FFF_FFFF) as usize;
-
-                        if track_len == 0 {
-                            return MouseResult::Ignored;
-                        }
-
-                        let (_, thumb_size) = self.calc_thumb_geometry(track_len);
-                        let available = track_len.saturating_sub(thumb_size);
-                        let denom = available.max(1);
-
-                        // If we have an anchor, align that point on thumb to mouse.
-                        // Otherwise (drag started outside thumb?), center it or use raw pos.
-                        let anchor = self.drag_anchor.unwrap_or(thumb_size / 2);
-
-                        // Desired top of thumb
-                        let target_thumb_top = track_pos.saturating_sub(anchor);
-                        let clamped_top = target_thumb_top.min(denom);
-
-                        let max_pos = self.content_length.saturating_sub(self.viewport_length);
-                        self.position = if max_pos == 0 {
-                            0
-                        } else {
-                            // Map thumb top range [0, available] to content range [0, max_pos]
-                            let num = (clamped_top as u128) * (max_pos as u128);
-                            // Round to nearest
-                            let pos = (num + (denom as u128 / 2)) / denom as u128;
-                            pos as usize
-                        };
-                        return MouseResult::Scrolled;
+                        let len = ((data >> 28) & 0x0FFF_FFFF) as usize;
+                        let pos = (data & 0x0FFF_FFFF) as usize;
+                        (len, pos)
+                    } else {
+                        // Dragging on button? Ignore or handle as button repeat (not impl)
+                        return MouseResult::Ignored;
                     }
+                } else if self.drag_anchor.is_some()
+                    && let Some(layout) = self.track_layout
+                {
+                    // Fallback: calculate from mouse event relative to track rect
+                    let rel = if layout.is_vertical {
+                        event.y.saturating_sub(layout.rect.y)
+                    } else {
+                        event.x.saturating_sub(layout.rect.x)
+                    };
+                    let len = if layout.is_vertical {
+                        layout.rect.height as usize
+                    } else {
+                        layout.rect.width as usize
+                    };
+                    let pos = rel.min(len.saturating_sub(1) as u16) as usize;
+                    (len, pos)
+                } else {
+                    return MouseResult::Ignored;
+                };
+
+                if track_len == 0 {
+                    return MouseResult::Ignored;
                 }
-                MouseResult::Ignored
+
+                let (_, thumb_size) = self.calc_thumb_geometry(track_len);
+                let available = track_len.saturating_sub(thumb_size);
+                let denom = available.max(1);
+
+                // If we have an anchor, align that point on thumb to mouse.
+                // Otherwise (drag started outside thumb?), center it or use raw pos.
+                let anchor = self.drag_anchor.unwrap_or(thumb_size / 2);
+
+                // Desired top of thumb
+                let target_thumb_top = track_pos.saturating_sub(anchor);
+                let clamped_top = target_thumb_top.min(denom);
+
+                let max_pos = self.content_length.saturating_sub(self.viewport_length);
+                self.position = if max_pos == 0 {
+                    0
+                } else {
+                    // Map thumb top range [0, available] to content range [0, max_pos]
+                    let num = (clamped_top as u128) * (max_pos as u128);
+                    // Round to nearest
+                    let pos = (num + (denom as u128 / 2)) / denom as u128;
+                    pos as usize
+                };
+                MouseResult::Scrolled
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 self.drag_anchor = None;
@@ -330,20 +369,12 @@ impl<'a> StatefulWidget for Scrollbar<'a> {
 
         // Calculate layout
         let start_offset = if let Some(s) = self.begin_symbol {
-            if is_vertical {
-                1
-            } else {
-                display_width(s)
-            }
+            if is_vertical { 1 } else { display_width(s) }
         } else {
             0
         };
         let end_offset = if let Some(s) = self.end_symbol {
-            if is_vertical {
-                1
-            } else {
-                display_width(s)
-            }
+            if is_vertical { 1 } else { display_width(s) }
         } else {
             0
         };
@@ -365,6 +396,42 @@ impl<'a> StatefulWidget for Scrollbar<'a> {
         let end_char = self
             .end_symbol
             .unwrap_or(if is_vertical { "▼" } else { "►" });
+
+        // Update track layout for mouse interaction fallback
+        let max_w = display_width(track_char)
+            .max(display_width(thumb_char))
+            .max(1);
+        let track_rect = if is_vertical {
+            let x = match self.orientation {
+                ScrollbarOrientation::VerticalRight => {
+                    area.right().saturating_sub(max_w as u16).max(area.left())
+                }
+                ScrollbarOrientation::VerticalLeft => area.left(),
+                _ => unreachable!(),
+            };
+            Rect::new(
+                x,
+                area.top().saturating_add(start_offset as u16),
+                max_w as u16,
+                track_len as u16,
+            )
+        } else {
+            let y = match self.orientation {
+                ScrollbarOrientation::HorizontalBottom => area.bottom().saturating_sub(1),
+                ScrollbarOrientation::HorizontalTop => area.top(),
+                _ => unreachable!(),
+            };
+            Rect::new(
+                area.left().saturating_add(start_offset as u16),
+                y,
+                track_len as u16,
+                1,
+            )
+        };
+        state.track_layout = Some(TrackLayout {
+            rect: track_rect,
+            is_vertical,
+        });
 
         // Draw
         let mut next_draw_index = 0;

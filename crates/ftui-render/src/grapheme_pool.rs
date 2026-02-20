@@ -157,7 +157,7 @@ impl GraphemePool {
         if (slot_idx as usize) < self.generations.len() {
             // Reuse: increment generation to invalidate old IDs
             self.generations[slot_idx as usize] =
-                self.generations[slot_idx as usize].wrapping_add(1);
+                self.generations[slot_idx as usize].wrapping_add(1) & GraphemeId::MAX_GENERATION;
             generation = self.generations[slot_idx as usize];
         } else {
             // New slot
@@ -1217,5 +1217,34 @@ mod tests {
         pool.release(b);
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn generation_overflow_handling() {
+        let mut pool = GraphemePool::new();
+        // Intern one item to occupy slot 0
+        let id = pool.intern("initial", 0);
+        pool.release(id); // refcount 0, slot 0 is free
+
+        // Cycle slot 0 2048 times to push generation to 2048 (if not masked).
+        // MAX_GENERATION is 2047.
+        for i in 0..=GraphemeId::MAX_GENERATION {
+            let s = format!("g{}", i);
+            let id = pool.intern(&s, 0);
+            assert_eq!(id.slot(), 0);
+            pool.release(id);
+        }
+
+        // Intern one more time.
+        // If bug exists: generation=2048 sets bit 27.
+        // width=0.
+        // Result: bit 27 set -> width becomes 1.
+        let id_overflow = pool.intern("overflow", 0);
+
+        // Should retrieve correctly
+        assert_eq!(pool.get(id_overflow), Some("overflow"));
+
+        // Width should remain 0
+        assert_eq!(id_overflow.width(), 0);
     }
 }

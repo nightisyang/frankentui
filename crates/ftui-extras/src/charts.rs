@@ -401,14 +401,14 @@ impl Widget for BarChart<'_> {
         }
 
         match self.direction {
-            BarDirection::Vertical => self.render_vertical(area, &mut frame.buffer, max_val),
-            BarDirection::Horizontal => self.render_horizontal(area, &mut frame.buffer, max_val),
+            BarDirection::Vertical => self.render_vertical(area, frame, max_val),
+            BarDirection::Horizontal => self.render_horizontal(area, frame, max_val),
         }
     }
 }
 
 impl BarChart<'_> {
-    fn render_vertical(&self, area: Rect, buf: &mut Buffer, max_val: f64) {
+    fn render_vertical(&self, area: Rect, frame: &mut Frame, max_val: f64) {
         // Reserve 1 row at bottom for labels.
         let chart_height = area.height.saturating_sub(1) as f64;
         if chart_height <= 0.0 {
@@ -449,7 +449,7 @@ impl BarChart<'_> {
                                 if x < area.right() {
                                     let mut cell = Cell::from_char('█');
                                     cell.fg = color;
-                                    buf.set_fast(x, y, cell);
+                                    frame.buffer.set_fast(x, y, cell);
                                 }
                             }
                         }
@@ -464,7 +464,7 @@ impl BarChart<'_> {
                                     if x < area.right() {
                                         let mut cell = Cell::from_char(ch);
                                         cell.fg = color;
-                                        buf.set_fast(x, y, cell);
+                                        frame.buffer.set_fast(x, y, cell);
                                     }
                                 }
                             }
@@ -495,7 +495,7 @@ impl BarChart<'_> {
                                 if x < area.right() {
                                     let mut cell = Cell::from_char('█');
                                     cell.fg = color;
-                                    buf.set_fast(x, y, cell);
+                                    frame.buffer.set_fast(x, y, cell);
                                 }
                             }
                         }
@@ -507,18 +507,30 @@ impl BarChart<'_> {
             // Group label (truncated to bar group width).
             let group_width = x_cursor.saturating_sub(group_start_x);
             let label_x = group_start_x.saturating_add(group_width.saturating_sub(1) / 2);
-            if let Some(ch) = group.label.chars().next()
+            if let Some(grapheme) = group.label.graphemes(true).next()
                 && label_x < area.right()
                 && label_y < area.bottom()
             {
-                let mut cell = Cell::from_char(ch);
-                style_cell(&mut cell, self.style);
-                buf.set_fast(label_x, label_y, cell);
+                let width = grapheme_width(grapheme);
+                let content = if width > 1 || grapheme.chars().count() > 1 {
+                    let id = frame.intern_with_width(grapheme, width as u8);
+                    CellContent::from_grapheme(id)
+                } else if let Some(c) = grapheme.chars().next() {
+                    CellContent::from_char(c)
+                } else {
+                    CellContent::EMPTY
+                };
+
+                if !content.is_empty() {
+                    let mut cell = Cell::new(content);
+                    style_cell(&mut cell, self.style);
+                    frame.buffer.set_fast(label_x, label_y, cell);
+                }
             }
         }
     }
 
-    fn render_horizontal(&self, area: Rect, buf: &mut Buffer, max_val: f64) {
+    fn render_horizontal(&self, area: Rect, frame: &mut Frame, max_val: f64) {
         // Reserve 2 columns at left for labels.
         let label_width = 2_u16;
         let chart_width = area.width.saturating_sub(label_width) as f64;
@@ -557,7 +569,7 @@ impl BarChart<'_> {
                                 if x < area.right() {
                                     let mut cell = Cell::from_char('█');
                                     cell.fg = color;
-                                    buf.set_fast(x, y, cell);
+                                    frame.buffer.set_fast(x, y, cell);
                                 }
                             }
                         }
@@ -590,7 +602,7 @@ impl BarChart<'_> {
                                 if x < area.right() {
                                     let mut cell = Cell::from_char('█');
                                     cell.fg = color;
-                                    buf.set_fast(x, y, cell);
+                                    frame.buffer.set_fast(x, y, cell);
                                 }
                             }
                         }
@@ -601,7 +613,7 @@ impl BarChart<'_> {
             }
 
             // Group label at left edge.
-            if let Some(ch) = group.label.chars().next() {
+            if let Some(grapheme) = group.label.graphemes(true).next() {
                 let ly = match self.mode {
                     BarMode::Grouped => y_cursor.saturating_sub(
                         (group.values.len() as u16) * self.bar_width
@@ -610,9 +622,21 @@ impl BarChart<'_> {
                     BarMode::Stacked => y_cursor.saturating_sub(self.bar_width),
                 };
                 if ly < area.bottom() {
-                    let mut cell = Cell::from_char(ch);
-                    style_cell(&mut cell, self.style);
-                    buf.set_fast(area.x, ly, cell);
+                    let width = grapheme_width(grapheme);
+                    let content = if width > 1 || grapheme.chars().count() > 1 {
+                        let id = frame.intern_with_width(grapheme, width as u8);
+                        CellContent::from_grapheme(id)
+                    } else if let Some(c) = grapheme.chars().next() {
+                        CellContent::from_char(c)
+                    } else {
+                        CellContent::EMPTY
+                    };
+
+                    if !content.is_empty() {
+                        let mut cell = Cell::new(content);
+                        style_cell(&mut cell, self.style);
+                        frame.buffer.set_fast(area.x, ly, cell);
+                    }
                 }
             }
         }

@@ -425,9 +425,18 @@ impl Painter {
     /// Draw a filled rectangle.
     #[inline]
     pub fn rect_filled(&mut self, x: i32, y: i32, w: i32, h: i32) {
-        for dy in 0..h {
-            for dx in 0..w {
-                self.point(x + dx, y + dy);
+        if w <= 0 || h <= 0 {
+            return;
+        }
+
+        let start_x = x.max(0);
+        let start_y = y.max(0);
+        let end_x = (x.saturating_add(w)).min(self.width_i32);
+        let end_y = (y.saturating_add(h)).min(self.height_i32);
+
+        for py in start_y..end_y {
+            for px in start_x..end_x {
+                self.point(px, py);
             }
         }
     }
@@ -447,8 +456,13 @@ impl Painter {
             max_y = max_y.max(y);
         }
 
-        for y in min_y..=max_y {
-            for x in min_x..=max_x {
+        let start_x = min_x.max(0);
+        let end_x = max_x.min(self.width_i32 - 1);
+        let start_y = min_y.max(0);
+        let end_y = max_y.min(self.height_i32 - 1);
+
+        for y in start_y..=end_y {
+            for x in start_x..=end_x {
                 if point_in_convex_polygon(x, y, points) {
                     self.point(x, y);
                 }
@@ -862,12 +876,13 @@ impl Painter {
 }
 
 fn point_in_convex_polygon(x: i32, y: i32, points: &[(i32, i32)]) -> bool {
-    let mut sign: i32 = 0;
+    let mut sign: i64 = 0;
     let len = points.len();
     for i in 0..len {
         let (x0, y0) = points[i];
         let (x1, y1) = points[(i + 1) % len];
-        let cross = (x - x0) * (y1 - y0) - (y - y0) * (x1 - x0);
+        let cross =
+            i64::from(x - x0) * i64::from(y1 - y0) - i64::from(y - y0) * i64::from(x1 - x0);
         if cross == 0 {
             continue;
         }

@@ -109,6 +109,7 @@ pub struct WidgetGallery {
     layout_tabs: Cell<Rect>,
     layout_virtualized: Cell<Rect>,
     pane_workspace: LayoutLab,
+    pane_workspace_visible: Cell<bool>,
 }
 
 impl Default for WidgetGallery {
@@ -185,6 +186,7 @@ impl WidgetGallery {
             layout_tabs: Cell::new(Rect::default()),
             layout_virtualized: Cell::new(Rect::default()),
             pane_workspace: LayoutLab::new(),
+            pane_workspace_visible: Cell::new(false),
         }
     }
 }
@@ -194,25 +196,12 @@ impl Screen for WidgetGallery {
 
     fn update(&mut self, event: &Event) -> Cmd<Self::Message> {
         if let Event::Mouse(mouse) = event {
-            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-                let tabs = self.layout_tabs.get();
-                if !tabs.is_empty() && tabs.contains(mouse.x, mouse.y) && tabs.width > 0 {
-                    let rel = mouse.x.saturating_sub(tabs.x) as usize;
-                    let idx = (rel * SECTION_COUNT) / tabs.width as usize;
-                    if idx < SECTION_COUNT {
-                        if idx != 5 {
-                            self.pane_workspace.cancel_embedded_pane_workspace_drag();
-                            self.pane_workspace.clear_embedded_pane_workspace_bounds();
-                        }
-                        self.current_section = idx;
-                    }
-                }
-            }
-
-            if self.current_section == 5
-                && self
-                    .pane_workspace
-                    .pane_workspace_wants_mouse(mouse.x, mouse.y)
+            if !self.pane_workspace_visible.get() {
+                self.pane_workspace.cancel_embedded_pane_workspace_drag();
+                self.pane_workspace.clear_embedded_pane_workspace_bounds();
+            } else if self
+                .pane_workspace
+                .pane_workspace_wants_mouse(mouse.x, mouse.y)
             {
                 self.pane_workspace.update_embedded_pane_workspace_mouse(
                     mouse.kind,
@@ -223,9 +212,16 @@ impl Screen for WidgetGallery {
                 return Cmd::None;
             }
 
-            if self.current_section != 5 {
-                self.pane_workspace.cancel_embedded_pane_workspace_drag();
-                self.pane_workspace.clear_embedded_pane_workspace_bounds();
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                let tabs = self.layout_tabs.get();
+                if !tabs.is_empty() && tabs.contains(mouse.x, mouse.y) && tabs.width > 0 {
+                    let rel = mouse.x.saturating_sub(tabs.x) as usize;
+                    let idx = (rel * SECTION_COUNT) / tabs.width as usize;
+                    if idx < SECTION_COUNT {
+                        self.pane_workspace.cancel_embedded_pane_workspace_drag();
+                        self.current_section = idx;
+                    }
+                }
             }
 
             // Wire the virtualized list mouse semantics (including scrollbar drag/click)
@@ -273,6 +269,7 @@ impl Screen for WidgetGallery {
             ..
         }) = event
         {
+            self.pane_workspace.cancel_embedded_pane_workspace_drag();
             let before_section = self.current_section;
             // Section-specific widget navigation
             if self.current_section == 7 {
@@ -310,7 +307,10 @@ impl Screen for WidgetGallery {
                 _ => {}
             }
 
-            if before_section == 5 && self.current_section != 5 {
+            if self.current_section != before_section {
+                self.pane_workspace.cancel_embedded_pane_workspace_drag();
+            }
+            if !self.pane_workspace_visible.get() {
                 self.pane_workspace.cancel_embedded_pane_workspace_drag();
                 self.pane_workspace.clear_embedded_pane_workspace_bounds();
             }
@@ -325,6 +325,8 @@ impl Screen for WidgetGallery {
 
     fn view(&self, frame: &mut Frame, area: Rect) {
         if area.height < 5 || area.width < 20 {
+            self.pane_workspace_visible.set(false);
+            self.pane_workspace.clear_embedded_pane_workspace_bounds();
             let msg = Paragraph::new("Terminal too small").style(theme::muted());
             msg.render(area, frame);
             return;
@@ -341,7 +343,21 @@ impl Screen for WidgetGallery {
 
         self.layout_tabs.set(v_chunks[0]);
         self.render_section_tabs(frame, v_chunks[0]);
-        self.render_section_content(frame, v_chunks[1]);
+
+        let content = v_chunks[1];
+        if content.width >= 108 && content.height >= 14 {
+            let cols = Flex::horizontal()
+                .constraints([Constraint::Percentage(70.0), Constraint::Percentage(30.0)])
+                .gap(theme::spacing::SM)
+                .split(content);
+            self.pane_workspace_visible.set(true);
+            self.render_section_content(frame, cols[0]);
+            self.render_pane_workspace_rail(frame, cols[1]);
+        } else {
+            self.pane_workspace_visible.set(false);
+            self.pane_workspace.clear_embedded_pane_workspace_bounds();
+            self.render_section_content(frame, content);
+        }
         self.render_paginator(frame, v_chunks[2]);
     }
 
@@ -360,8 +376,8 @@ impl Screen for WidgetGallery {
                 action: "Click tab to switch",
             },
             HelpEntry {
-                key: "Layout tab",
-                action: "Drag pane studio (right rail)",
+                key: "Pane rail",
+                action: "Drag panes · right click mode · wheel magnetism",
             },
         ]
     }
@@ -1342,28 +1358,6 @@ impl WidgetGallery {
     // Section F: Layout Widgets
     // -----------------------------------------------------------------------
     fn render_layout_widgets(&self, frame: &mut Frame, area: Rect) {
-        if area.width < 48 || area.height < 12 {
-            self.pane_workspace.clear_embedded_pane_workspace_bounds();
-            let rows = Flex::vertical()
-                .constraints([
-                    Constraint::Percentage(30.0),
-                    Constraint::Percentage(25.0),
-                    Constraint::Percentage(25.0),
-                    Constraint::Percentage(20.0),
-                ])
-                .split(area);
-            self.render_columns_demo(frame, rows[0]);
-            self.render_flex_demo(frame, rows[1]);
-            self.render_grid_demo(frame, rows[2]);
-            self.render_panel_demo(frame, rows[3]);
-            return;
-        }
-
-        let cols = Flex::horizontal()
-            .constraints([Constraint::Percentage(58.0), Constraint::Percentage(42.0)])
-            .gap(theme::spacing::SM)
-            .split(area);
-
         let rows = Flex::vertical()
             .constraints([
                 Constraint::Percentage(30.0),
@@ -1371,29 +1365,37 @@ impl WidgetGallery {
                 Constraint::Percentage(24.0),
                 Constraint::Percentage(22.0),
             ])
-            .split(cols[0]);
+            .split(area);
 
         self.render_columns_demo(frame, rows[0]);
         self.render_flex_demo(frame, rows[1]);
         self.render_grid_demo(frame, rows[2]);
         self.render_panel_demo(frame, rows[3]);
+    }
 
-        let right_rows = Flex::vertical()
+    fn render_pane_workspace_rail(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            self.pane_workspace_visible.set(false);
+            self.pane_workspace.clear_embedded_pane_workspace_bounds();
+            return;
+        }
+        let rows = Flex::vertical()
             .constraints([Constraint::Min(6), Constraint::Fixed(4)])
             .gap(theme::spacing::XS)
-            .split(cols[1]);
+            .split(area);
+
         self.pane_workspace
-            .render_embedded_pane_workspace(frame, right_rows[0]);
+            .render_embedded_pane_workspace(frame, rows[0]);
 
         let hint_block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title("Pane Interaction")
+            .title("Pane Studio")
             .style(theme::content_border());
-        let hint_inner = hint_block.inner(right_rows[1]);
-        hint_block.render(right_rows[1], frame);
+        let hint_inner = hint_block.inner(rows[1]);
+        hint_block.render(rows[1], frame);
         if !hint_inner.is_empty() {
-            Paragraph::new("Drag: dock/reflow | Right click: mode | Wheel: magnetism")
+            Paragraph::new("Drag docks | Right click mode | Wheel magnetism")
                 .style(theme::muted())
                 .render(hint_inner, frame);
         }
@@ -2241,9 +2243,9 @@ mod tests {
     }
 
     #[test]
-    fn gallery_layout_section_embeds_pane_workspace() {
+    fn gallery_wide_layout_embeds_pane_workspace() {
         let mut gallery = WidgetGallery::new();
-        gallery.current_section = 5;
+        gallery.current_section = 0;
 
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(120, 40, &mut pool);
@@ -2257,9 +2259,9 @@ mod tests {
     }
 
     #[test]
-    fn gallery_leaving_layout_section_clears_pane_workspace_bounds() {
+    fn gallery_narrow_layout_clears_pane_workspace_bounds() {
         let mut gallery = WidgetGallery::new();
-        gallery.current_section = 5;
+        gallery.current_section = 2;
 
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(120, 40, &mut pool);
@@ -2271,19 +2273,60 @@ mod tests {
                 .is_empty()
         );
 
-        let next_section = Event::Key(KeyEvent {
-            code: KeyCode::Char('j'),
-            modifiers: Default::default(),
-            kind: KeyEventKind::Press,
-        });
-        gallery.update(&next_section);
-        assert_eq!(gallery.current_section, 6);
+        let mut narrow_frame = Frame::new(90, 24, &mut pool);
+        gallery.view(&mut narrow_frame, Rect::new(0, 0, 90, 24));
         assert!(
             gallery
                 .pane_workspace
                 .embedded_pane_workspace_bounds()
                 .is_empty(),
-            "pane workspace bounds should clear when leaving layout section"
+            "pane workspace bounds should clear when gallery is too narrow"
+        );
+    }
+
+    #[test]
+    fn gallery_pane_workspace_mouse_does_not_switch_section() {
+        let mut gallery = WidgetGallery::new();
+        gallery.current_section = 1;
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(120, 40, &mut pool);
+        gallery.view(&mut frame, Rect::new(0, 0, 120, 40));
+        let pane = gallery.pane_workspace.embedded_pane_workspace_bounds();
+        assert!(!pane.is_empty(), "pane workspace should be visible");
+
+        gallery.update(&Event::Mouse(ftui_core::event::MouseEvent::new(
+            MouseEventKind::Down(MouseButton::Left),
+            pane.x + pane.width / 2,
+            pane.y + pane.height / 2,
+        )));
+        assert_eq!(
+            gallery.current_section, 1,
+            "pane workspace mouse input should not mutate section selection"
+        );
+    }
+
+    #[test]
+    fn gallery_tab_click_switches_section_with_pane_rail_visible() {
+        let mut gallery = WidgetGallery::new();
+        gallery.current_section = 1;
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(120, 40, &mut pool);
+        gallery.view(&mut frame, Rect::new(0, 0, 120, 40));
+        let tabs = gallery.layout_tabs.get();
+        assert!(!tabs.is_empty(), "tabs layout should be populated");
+
+        gallery.update(&Event::Mouse(ftui_core::event::MouseEvent::new(
+            MouseEventKind::Down(MouseButton::Left),
+            tabs.x + tabs.width.saturating_sub(1),
+            tabs.y,
+        )));
+
+        assert_eq!(
+            gallery.current_section,
+            SECTION_COUNT - 1,
+            "tab click should still switch sections when pane rail is visible"
         );
     }
 

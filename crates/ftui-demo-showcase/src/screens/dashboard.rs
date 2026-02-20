@@ -3272,7 +3272,7 @@ pub struct Dashboard {
     highlighter: Arc<SyntaxHighlighter>,
 
     // Cached highlighted code samples
-    code_cache: Vec<Text>,
+    code_cache: Vec<Text<'static>>,
 
     // Markdown renderer (cached)
     md_renderer: MarkdownRenderer,
@@ -3389,7 +3389,7 @@ impl Dashboard {
         self.fps = 0.0;
     }
 
-    fn build_code_cache(highlighter: &SyntaxHighlighter) -> Vec<Text> {
+    fn build_code_cache(highlighter: &SyntaxHighlighter) -> Vec<Text<'static>> {
         CODE_SAMPLES
             .iter()
             .map(|sample| highlighter.highlight(sample.code, sample.lang))
@@ -3546,7 +3546,7 @@ impl Dashboard {
         &CODE_SAMPLES[self.code_index % CODE_SAMPLES.len()]
     }
 
-    fn current_code_text(&self) -> &Text {
+    fn current_code_text(&self) -> &Text<'_> {
         let idx = self.code_index % self.code_cache.len().max(1);
         &self.code_cache[idx]
     }
@@ -5174,7 +5174,7 @@ impl Dashboard {
             .render(bar_area, frame);
     }
 
-    fn wrap_markdown_for_panel(&self, text: &Text, width: u16) -> Text {
+    fn wrap_markdown_for_panel<'a>(&self, text: &Text<'a>, width: u16) -> Text<'a> {
         let width = usize::from(width);
         if width == 0 {
             return text.clone();
@@ -5340,15 +5340,7 @@ impl Dashboard {
             ])
             .split(inner);
 
-        let (fx_area, pane_area) = if rows[1].width >= 38 && rows[1].height >= 7 {
-            let cols = Flex::horizontal()
-                .constraints([Constraint::Percentage(58.0), Constraint::Percentage(42.0)])
-                .gap(theme::spacing::XS)
-                .split(rows[1]);
-            (cols[0], Some(cols[1]))
-        } else {
-            (rows[1], None)
-        };
+        let fx_area = rows[1];
         self.layout_text_fx_primary.set(fx_area);
         self.layout_text_fx_secondary.set(if rows[2].is_empty() {
             Rect::default()
@@ -5410,25 +5402,11 @@ impl Dashboard {
             }
         }
 
-        if let Some(pane_area) = pane_area {
-            if !pane_area.is_empty() {
-                self.pane_workspace_visible.set(true);
-                self.pane_workspace
-                    .render_embedded_pane_workspace(frame, pane_area);
-            } else {
-                self.pane_workspace_visible.set(false);
-                self.pane_workspace.clear_embedded_pane_workspace_bounds();
-            }
-        } else {
-            self.pane_workspace_visible.set(false);
-            self.pane_workspace.clear_embedded_pane_workspace_bounds();
-        }
-
         if !rows[2].is_empty() {
             let hint = self
                 .scroll_hint_text(DashboardFocus::TextFx)
                 .unwrap_or(
-                    "drag panes in right rail · right click: mode · wheel: magnetic field · left body click → Layout Lab · hint row → DragDrop",
+                    "drag panes in dashboard rail · right click: mode · wheel: magnetic field · left body click → Layout Lab · hint row → DragDrop",
                 );
             self.render_panel_hint(frame, rows[2], hint);
         }
@@ -5687,6 +5665,34 @@ impl Dashboard {
         );
     }
 
+    fn render_pane_workspace_rail(&self, frame: &mut Frame, area: Rect) {
+        if area.is_empty() {
+            self.pane_workspace_visible.set(false);
+            self.pane_workspace.clear_embedded_pane_workspace_bounds();
+            return;
+        }
+        self.pane_workspace_visible.set(true);
+        let rows = Flex::vertical()
+            .constraints([Constraint::Min(6), Constraint::Fixed(4)])
+            .gap(theme::spacing::XS)
+            .split(area);
+        self.pane_workspace
+            .render_embedded_pane_workspace(frame, rows[0]);
+
+        let hint_block = Block::new()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .title("Pane Studio")
+            .style(theme::content_border());
+        let hint_inner = hint_block.inner(rows[1]);
+        hint_block.render(rows[1], frame);
+        if !hint_inner.is_empty() {
+            Paragraph::new("Drag docks | Right click mode | Wheel magnetism")
+                .style(theme::muted())
+                .render(hint_inner, frame);
+        }
+    }
+
     // =========================================================================
     // Layout Variants
     // =========================================================================
@@ -5705,10 +5711,20 @@ impl Dashboard {
         self.render_header(frame, main[0]);
         self.render_footer(frame, main[2]);
 
+        let (content_area, pane_rail) = if main[1].width >= 100 && main[1].height >= 20 {
+            let cols = Flex::horizontal()
+                .constraints([Constraint::Percentage(74.0), Constraint::Percentage(26.0)])
+                .gap(theme::spacing::SM)
+                .split(main[1]);
+            (cols[0], Some(cols[1]))
+        } else {
+            (main[1], None)
+        };
+
         // Content area: split into top row and bottom row
         let content_rows = Flex::vertical()
             .constraints([Constraint::Percentage(55.0), Constraint::Percentage(45.0)])
-            .split(main[1]);
+            .split(content_area);
 
         // Top row: 4 panels (plasma, charts, code, info)
         let top_cols = Flex::horizontal()
@@ -5761,6 +5777,13 @@ impl Dashboard {
         self.render_activity_feed(frame, bottom_cols[1]);
         self.render_markdown(frame, bottom_cols[2]);
         self.render_bottom_splitter_handles(frame);
+
+        if let Some(pane_rail) = pane_rail {
+            self.render_pane_workspace_rail(frame, pane_rail);
+        } else {
+            self.pane_workspace_visible.set(false);
+            self.pane_workspace.clear_embedded_pane_workspace_bounds();
+        }
     }
 
     /// Medium layout (70x20+).
@@ -5776,10 +5799,20 @@ impl Dashboard {
         self.render_header(frame, main[0]);
         self.render_footer(frame, main[2]);
 
+        let (content_area, pane_rail) = if main[1].width >= 90 && main[1].height >= 20 {
+            let cols = Flex::horizontal()
+                .constraints([Constraint::Percentage(72.0), Constraint::Percentage(28.0)])
+                .gap(theme::spacing::SM)
+                .split(main[1]);
+            (cols[0], Some(cols[1]))
+        } else {
+            (main[1], None)
+        };
+
         // Content: top row with panels, bottom row with stats + activity
         let content_rows = Flex::vertical()
             .constraints([Constraint::Percentage(60.0), Constraint::Percentage(40.0)])
-            .split(main[1]);
+            .split(content_area);
 
         // Top row: 3 panels
         let top_cols = Flex::horizontal()
@@ -5837,6 +5870,13 @@ impl Dashboard {
         self.render_activity_feed(frame, bottom_cols[1]);
         self.render_markdown(frame, bottom_cols[2]);
         self.render_bottom_splitter_handles(frame);
+
+        if let Some(pane_rail) = pane_rail {
+            self.render_pane_workspace_rail(frame, pane_rail);
+        } else {
+            self.pane_workspace_visible.set(false);
+            self.pane_workspace.clear_embedded_pane_workspace_bounds();
+        }
     }
 
     /// Tiny layout (<70x20).
@@ -6039,9 +6079,10 @@ impl Screen for Dashboard {
             if !self.pane_workspace_visible.get() {
                 self.pane_workspace.cancel_embedded_pane_workspace_drag();
                 self.pane_workspace.clear_embedded_pane_workspace_bounds();
-            } else if self
-                .pane_workspace
-                .pane_workspace_wants_mouse(mouse.x, mouse.y)
+            } else if self.active_splitter_drag.is_none()
+                && self
+                    .pane_workspace
+                    .pane_workspace_wants_mouse(mouse.x, mouse.y)
             {
                 self.pane_workspace.update_embedded_pane_workspace_mouse(
                     mouse.kind,
@@ -6049,8 +6090,6 @@ impl Screen for Dashboard {
                     mouse.y,
                     mouse.modifiers,
                 );
-                self.focus = DashboardFocus::TextFx;
-                self.hover = DashboardFocus::TextFx;
                 return Cmd::None;
             }
             match mouse.kind {
@@ -6217,6 +6256,8 @@ impl Screen for Dashboard {
 
     fn view(&self, frame: &mut Frame, area: Rect) {
         if area.is_empty() {
+            self.pane_workspace_visible.set(false);
+            self.pane_workspace.clear_embedded_pane_workspace_bounds();
             return;
         }
 
@@ -6288,7 +6329,7 @@ impl Screen for Dashboard {
                 action: "Resize bottom panes (TextFX/Activity/Markdown)",
             },
             HelpEntry {
-                key: "TextFX right rail",
+                key: "Pane rail",
                 action: "Drag pane studio + dock targets",
             },
             HelpEntry {
@@ -6389,7 +6430,7 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_text_fx_embeds_pane_workspace_when_room_allows() {
+    fn dashboard_wide_layout_embeds_pane_workspace_rail() {
         let mut state = Dashboard::new();
         state.tick(1);
 
@@ -6401,18 +6442,37 @@ mod tests {
         let primary = state.layout_text_fx_primary.get();
         let pane = state.pane_workspace.embedded_pane_workspace_bounds();
         assert!(!text_fx.is_empty(), "text fx panel should be laid out");
-        assert!(!primary.is_empty(), "primary text fx area should be laid out");
+        assert!(
+            !primary.is_empty(),
+            "primary text fx area should be laid out"
+        );
         assert!(
             !pane.is_empty(),
             "embedded pane workspace should be visible on large dashboard"
         );
         assert!(
-            text_fx.contains(pane.x, pane.y),
-            "embedded pane workspace should live inside text fx panel"
+            !text_fx.contains(pane.x, pane.y),
+            "embedded pane workspace should live in the dedicated right rail"
         );
         assert!(
             !primary.contains(pane.x, pane.y),
-            "primary text fx link area should not overlap pane workspace"
+            "text fx body should remain independent from pane workspace rail"
+        );
+    }
+
+    #[test]
+    fn dashboard_medium_layout_embeds_pane_workspace_rail() {
+        let mut state = Dashboard::new();
+        state.tick(1);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(95, 24, &mut pool);
+        state.view(&mut frame, Rect::new(0, 0, 95, 24));
+
+        let pane = state.pane_workspace.embedded_pane_workspace_bounds();
+        assert!(
+            !pane.is_empty(),
+            "embedded pane workspace should appear in medium layout when width allows"
         );
     }
 
@@ -6426,17 +6486,47 @@ mod tests {
         state.view(&mut frame, Rect::new(0, 0, 120, 40));
 
         let pane = state.pane_workspace.embedded_pane_workspace_bounds();
-        assert!(!pane.is_empty(), "embedded pane workspace should be visible");
+        assert!(
+            !pane.is_empty(),
+            "embedded pane workspace should be visible"
+        );
         let x = pane.x + pane.width / 2;
         let y = pane.y + pane.height / 2;
+        let focus_before = state.focus;
+        let hover_before = state.hover;
 
         state.update(&Event::Mouse(ftui_core::event::MouseEvent::new(
             MouseEventKind::Down(MouseButton::Left),
             x,
             y,
         )));
-        assert_eq!(state.focus, DashboardFocus::TextFx);
+        assert_eq!(
+            state.focus, focus_before,
+            "pane workspace mouse routing should not force panel focus"
+        );
+        assert_eq!(
+            state.hover, hover_before,
+            "pane workspace mouse routing should not mutate hover state"
+        );
         assert!(!state.is_splitter_drag_active());
+    }
+
+    #[test]
+    fn dashboard_large_layout_keeps_pane_workspace_at_min_width() {
+        let mut state = Dashboard::new();
+        state.tick(1);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(100, 30, &mut pool);
+        state.view(&mut frame, Rect::new(0, 0, 100, 30));
+
+        assert!(
+            !state
+                .pane_workspace
+                .embedded_pane_workspace_bounds()
+                .is_empty(),
+            "pane workspace should stay visible at minimum large-layout width"
+        );
     }
 
     #[test]
@@ -6473,6 +6563,46 @@ mod tests {
         assert_ne!(
             state.bottom_primary_bps, before,
             "dragging splitter should resize bottom-pane ratios"
+        );
+    }
+
+    #[test]
+    fn dashboard_splitter_release_not_blocked_by_pane_rail() {
+        let mut state = Dashboard::new();
+        state.tick(1);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(120, 40, &mut pool);
+        state.view(&mut frame, Rect::new(0, 0, 120, 40));
+
+        let splitter = state.layout_bottom_split_primary.get();
+        let pane = state.pane_workspace.embedded_pane_workspace_bounds();
+        assert!(!splitter.is_empty(), "splitter should be visible");
+        assert!(!pane.is_empty(), "pane rail should be visible");
+
+        let splitter_y = splitter.y + splitter.height / 2;
+        let pane_x = pane.x + pane.width / 2;
+        let pane_y = pane.y + pane.height / 2;
+
+        state.update(&Event::Mouse(ftui_core::event::MouseEvent::new(
+            MouseEventKind::Down(MouseButton::Left),
+            splitter.x,
+            splitter_y,
+        )));
+        state.update(&Event::Mouse(ftui_core::event::MouseEvent::new(
+            MouseEventKind::Drag(MouseButton::Left),
+            pane_x,
+            pane_y,
+        )));
+        state.update(&Event::Mouse(ftui_core::event::MouseEvent::new(
+            MouseEventKind::Up(MouseButton::Left),
+            pane_x,
+            pane_y,
+        )));
+
+        assert!(
+            !state.is_splitter_drag_active(),
+            "splitter drag should release even when pointer ends inside pane rail"
         );
     }
 

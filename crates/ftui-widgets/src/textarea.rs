@@ -765,7 +765,9 @@ impl TextArea {
 
         Self::run_wrapping_logic(line_text, max_width, |_, width, flush| {
             if flush {
-                count += 1;
+                if width > 0 {
+                    count += 1;
+                }
                 current_width = 0;
                 has_content = false;
             } else {
@@ -1162,11 +1164,10 @@ impl Widget for TextArea {
         let cursor = self.editor.cursor();
 
         // Initialize scroll_top from state, handling sentinel
-        let (anchor_line, _anchor_vrow) = if self.scroll_anchor.get().0 == usize::MAX {
-            (0, 0)
-        } else {
-            self.scroll_anchor.get()
-        };
+        if self.scroll_anchor.get().0 == usize::MAX {
+            self.scroll_anchor.set((0, 0));
+        }
+        let (anchor_line, _anchor_vrow) = self.scroll_anchor.get();
 
         // If NOT soft wrapping, scroll_anchor.0 is the logical line index.
         // Ensure cursor is visible by adjusting scroll_anchor.
@@ -1398,6 +1399,16 @@ impl Widget for TextArea {
                 let g_width = display_width(g);
                 let g_byte_len = g.len();
 
+                // Determine style (selection highlight)
+                let mut g_style = self.style;
+                if let Some((sel_start, sel_end)) = sel_range
+                    && grapheme_byte_offset >= sel_start
+                    && grapheme_byte_offset < sel_end
+                    && deg.apply_styling()
+                {
+                    g_style = g_style.merge(&self.selection_style);
+                }
+
                 // Skip graphemes before horizontal scroll
                 if visual_x + g_width <= scroll_left {
                     visual_x += g_width;
@@ -1407,6 +1418,19 @@ impl Widget for TextArea {
 
                 // Handle partial overlap at left edge
                 if visual_x < scroll_left {
+                    // Calculate visible width of the partially scrolled grapheme
+                    let end_x = visual_x + g_width;
+                    let visible_width = end_x.saturating_sub(scroll_left);
+
+                    // Render padding spaces for the visible portion to preserve background style
+                    for i in 0..visible_width {
+                        let screen_x = i; // Starts at 0 relative to text area
+                        let px = text_area_x + screen_x as u16;
+                        if px < area.right() {
+                            draw_text_span(frame, px, y, " ", g_style, area.right());
+                        }
+                    }
+
                     visual_x += g_width;
                     grapheme_byte_offset += g_byte_len;
                     continue;
@@ -1419,16 +1443,6 @@ impl Widget for TextArea {
                 }
 
                 let px = text_area_x + screen_x as u16;
-
-                // Determine style (selection highlight)
-                let mut g_style = self.style;
-                if let Some((sel_start, sel_end)) = sel_range
-                    && grapheme_byte_offset >= sel_start
-                    && grapheme_byte_offset < sel_end
-                    && deg.apply_styling()
-                {
-                    g_style = g_style.merge(&self.selection_style);
-                }
 
                 // Write grapheme to buffer
                 if g_width > 0 {
@@ -1568,13 +1582,13 @@ mod tests {
         for i in 0..50 {
             ta.insert_text(&format!("line {}\n", i));
         }
-        // Cursor should be at the bottom, scroll_top adjusted
-        assert!(ta.scroll_top.get() > 0);
+        // Cursor should be at the bottom, scroll anchor adjusted.
+        assert!(ta.scroll_anchor.get().0 > 0);
         assert!(ta.cursor().line >= 49);
 
         // Move to top
         ta.move_to_document_start();
-        assert_eq!(ta.scroll_top.get(), 0);
+        assert_eq!(ta.scroll_anchor.get().0, 0);
     }
 
     #[test]

@@ -1078,7 +1078,7 @@ pub fn render_a11y_panel(state: &A11yPanelState<'_>, frame: &mut Frame, area: Re
         let value_style = if enabled { on_style } else { off_style };
         Line::from_spans([
             Span::styled(format!(" [{key}] "), key_style),
-            Span::styled(label, label_style),
+            Span::styled(label.to_string(), label_style),
             Span::styled(": ", label_style),
             Span::styled(value, value_style),
         ])
@@ -1207,6 +1207,9 @@ pub fn render_help_overlay(
         .style(theme::help_overlay());
 
     let inner = block.inner(overlay_area);
+    Paragraph::new("")
+        .style(theme::help_overlay())
+        .render(overlay_area, frame);
     block.render(overlay_area, frame);
 
     // Register hit regions for mouse interaction (bd-iuvb.17.4).

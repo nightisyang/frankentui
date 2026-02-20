@@ -37,7 +37,7 @@ use std::hint::black_box;
 // =============================================================================
 
 /// Generate a single log line matching the LogSearch screen format.
-fn generate_log_line(seq: u64) -> Text {
+fn generate_log_line(seq: u64) -> Text<'static> {
     let severity_label = match seq % 13 {
         0..=5 => "INFO",
         6..=8 => "DEBUG",

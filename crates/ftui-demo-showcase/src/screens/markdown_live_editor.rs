@@ -67,7 +67,7 @@ fn render(frame: &mut Frame) {
 
 const RULE_WIDTH: u16 = 36;
 
-fn wrap_markdown_for_panel(text: &Text, width: u16) -> Text {
+fn wrap_markdown_for_panel<'a>(text: &Text<'a>, width: u16) -> Text<'a> {
     let width = usize::from(width);
     if width == 0 {
         return text.clone();
@@ -277,7 +277,7 @@ impl MarkdownLiveEditor {
         }
     }
 
-    fn render_preview_text(&self, width: u16) -> Text {
+    fn render_preview_text(&self, width: u16) -> Text<'_> {
         MarkdownRenderer::new(self.md_theme.clone())
             .rule_width(RULE_WIDTH.min(width))
             .table_max_width(width)

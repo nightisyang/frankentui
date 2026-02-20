@@ -274,7 +274,9 @@ pub struct CodeExplorer {
     layout_info: Cell<Rect>,
     layout_context: Cell<Rect>,
     layout_hotspots: Cell<Rect>,
+    layout_hotspots_list: Cell<Rect>,
     layout_radar: Cell<Rect>,
+    layout_radar_list: Cell<Rect>,
     layout_spotlight: Cell<Rect>,
 }
 
@@ -332,7 +334,9 @@ impl CodeExplorer {
             layout_info: Cell::new(Rect::default()),
             layout_context: Cell::new(Rect::default()),
             layout_hotspots: Cell::new(Rect::default()),
+            layout_hotspots_list: Cell::new(Rect::default()),
             layout_radar: Cell::new(Rect::default()),
+            layout_radar_list: Cell::new(Rect::default()),
             layout_spotlight: Cell::new(Rect::default()),
         }
     }
@@ -552,8 +556,31 @@ impl CodeExplorer {
         self.layout_info.set(Rect::default());
         self.layout_context.set(Rect::default());
         self.layout_hotspots.set(Rect::default());
+        self.layout_hotspots_list.set(Rect::default());
         self.layout_radar.set(Rect::default());
+        self.layout_radar_list.set(Rect::default());
         self.layout_spotlight.set(Rect::default());
+    }
+
+    fn hotspot_window_start(&self, list_height: u16) -> usize {
+        let visible = list_height.max(1) as usize;
+        let mut start = self.current_hotspot.saturating_sub(visible / 2);
+        if start + visible > self.hotspots.len() {
+            start = self.hotspots.len().saturating_sub(visible);
+        }
+        start
+    }
+
+    fn radar_match_window_start(&self, visible_rows: usize) -> usize {
+        if self.search_matches.is_empty() {
+            return 0;
+        }
+        let visible = visible_rows.max(1);
+        let mut start = self.current_match.saturating_sub(visible / 2);
+        if start + visible > self.search_matches.len() {
+            start = self.search_matches.len().saturating_sub(visible);
+        }
+        start
     }
 
     fn query_index(&self) -> usize {
@@ -731,18 +758,24 @@ impl Screen for CodeExplorer {
                 MouseEventKind::Down(MouseButton::Left) => {
                     self.focus_from_point(mouse.x, mouse.y);
                     if self.focus == FocusPanel::Hotspots {
-                        let area = self.layout_hotspots.get();
-                        let rel_y = mouse.y.saturating_sub(area.y);
-                        let idx = rel_y as usize;
+                        let list_area = self.layout_hotspots_list.get();
+                        if list_area.is_empty() || !list_area.contains(mouse.x, mouse.y) {
+                            return Cmd::None;
+                        }
+                        let rel_y = mouse.y.saturating_sub(list_area.y) as usize;
+                        let idx = self.hotspot_window_start(list_area.height) + rel_y;
                         if idx < self.hotspots.len() {
                             self.current_hotspot = idx;
                             let line = self.hotspots[self.current_hotspot].line;
                             self.scroll_to(line.saturating_sub(3));
                         }
                     } else if self.focus == FocusPanel::Radar {
-                        let area = self.layout_radar.get();
-                        let rel_y = mouse.y.saturating_sub(area.y);
-                        let idx = self.current_match.saturating_sub(2) + rel_y as usize;
+                        let list_area = self.layout_radar_list.get();
+                        if list_area.is_empty() || !list_area.contains(mouse.x, mouse.y) {
+                            return Cmd::None;
+                        }
+                        let rel_y = mouse.y.saturating_sub(list_area.y) as usize;
+                        let idx = self.radar_match_window_start(list_area.height as usize) + rel_y;
                         self.set_current_match(idx);
                     }
                 }
@@ -1905,6 +1938,7 @@ impl CodeExplorer {
     }
 
     fn render_match_radar(&self, frame: &mut Frame, area: Rect) {
+        self.layout_radar_list.set(Rect::default());
         if area.is_empty() {
             return;
         }
@@ -1946,15 +1980,13 @@ impl CodeExplorer {
 
         let list_area = if rows.len() > 2 { rows[2] } else { rows[1] };
         if !list_area.is_empty() {
+            self.layout_radar_list.set(list_area);
             let mut lines = Vec::new();
             if self.search_matches.is_empty() {
                 lines.push("Awaiting query...".to_owned());
             } else {
                 let visible = list_area.height as usize;
-                let mut start = self.current_match.saturating_sub(visible / 2);
-                if start + visible > self.search_matches.len() {
-                    start = self.search_matches.len().saturating_sub(visible);
-                }
+                let start = self.radar_match_window_start(visible);
                 let end = (start + visible).min(self.search_matches.len());
                 for (i, idx) in self.search_matches[start..end].iter().enumerate() {
                     let marker = if start + i == self.current_match {
@@ -1979,6 +2011,7 @@ impl CodeExplorer {
     }
 
     fn render_hotspot_panel(&self, frame: &mut Frame, area: Rect) {
+        self.layout_hotspots_list.set(Rect::default());
         let block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -1996,23 +2029,22 @@ impl CodeExplorer {
         }
 
         let list_height = inner.height.saturating_sub(1).max(1);
-        let visible = list_height as usize;
-        let mut start = self.current_hotspot.saturating_sub(visible / 2);
-        if start + visible > self.hotspots.len() {
-            start = self.hotspots.len().saturating_sub(visible);
-        }
+        let list_area = Rect::new(inner.x, inner.y, inner.width, list_height);
+        self.layout_hotspots_list.set(list_area);
+        let visible = list_area.height as usize;
+        let start = self.hotspot_window_start(list_area.height);
         let end = (start + visible).min(self.hotspots.len());
         let is_focused = self.focus == FocusPanel::Hotspots;
 
         for (i, hotspot) in self.hotspots[start..end].iter().enumerate() {
-            let y = inner.y + i as u16;
-            if y >= inner.y + list_height {
+            let y = list_area.y + i as u16;
+            if y >= list_area.bottom() {
                 break;
             }
-            let row_area = Rect::new(inner.x, y, inner.width, 1);
+            let row_area = Rect::new(list_area.x, y, list_area.width, 1);
             let label = truncate_to_width(
                 &format!("{:>6}  {}", hotspot.line + 1, hotspot.label),
-                inner.width.saturating_sub(2),
+                list_area.width.saturating_sub(2),
             );
             if start + i == self.current_hotspot {
                 if is_focused {
@@ -2282,6 +2314,24 @@ fn truncate_to_grapheme_count(text: &str, max_count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_core::event::MouseEvent;
+    use ftui_render::frame::Frame;
+    use ftui_render::grapheme_pool::GraphemePool;
+
+    fn render_screen(screen: &CodeExplorer) {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(120, 40, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 120, 40));
+    }
+
+    fn mouse_click(x: u16, y: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            x,
+            y,
+            modifiers: Modifiers::NONE,
+        })
+    }
 
     #[test]
     fn code_explorer_initial_render() {
@@ -2383,5 +2433,51 @@ mod tests {
         for line in SCHEMA_PREVIEW {
             assert!(!line.is_empty());
         }
+    }
+
+    #[test]
+    fn hotspot_click_maps_to_visible_window_index() {
+        let mut ce = CodeExplorer::new();
+        ce.current_hotspot = ce.hotspots.len().saturating_sub(2);
+        render_screen(&ce);
+
+        let list_area = ce.layout_hotspots_list.get();
+        assert!(
+            !list_area.is_empty(),
+            "hotspot list hitbox should be populated"
+        );
+
+        let expected = ce.hotspot_window_start(list_area.height);
+        ce.update(&mouse_click(list_area.x, list_area.y));
+        assert_eq!(
+            ce.current_hotspot, expected,
+            "clicking first visible row should select first visible hotspot entry"
+        );
+    }
+
+    #[test]
+    fn radar_click_maps_to_visible_window_index() {
+        let mut ce = CodeExplorer::new();
+        ce.search_input.set_value("sqlite3");
+        ce.perform_search();
+        assert!(
+            !ce.search_matches.is_empty(),
+            "search should populate radar matches"
+        );
+        ce.current_match = ce.search_matches.len().saturating_sub(2);
+        render_screen(&ce);
+
+        let list_area = ce.layout_radar_list.get();
+        assert!(
+            !list_area.is_empty(),
+            "radar list hitbox should be populated"
+        );
+
+        let expected = ce.radar_match_window_start(list_area.height as usize);
+        ce.update(&mouse_click(list_area.x, list_area.y));
+        assert_eq!(
+            ce.current_match, expected,
+            "clicking first visible radar row should select first visible match entry"
+        );
     }
 }

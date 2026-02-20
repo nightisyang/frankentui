@@ -195,9 +195,7 @@ fn render_loop<W: Write + Send>(
                 let should_render =
                     is_last_chunk || now.duration_since(last_render_time).as_millis() >= 33;
 
-                if should_render
-                    && let Some((buffer, cursor, cursor_visible)) = &latest_render
-                {
+                if should_render && let Some((buffer, cursor, cursor_visible)) = &latest_render {
                     if let Err(e) = writer.present_ui(buffer, *cursor, *cursor_visible) {
                         let _ = err_tx.try_send(e);
                         return;

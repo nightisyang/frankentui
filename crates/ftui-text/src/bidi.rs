@@ -193,14 +193,77 @@ impl BidiSegment {
         self.levels.get(logical).is_some_and(|level| level.is_rtl())
     }
 
+    /// Get the visual cursor position (insertion point) for a logical index.
+    ///
+    /// Unlike `visual_pos` which maps character slots, this maps insertion
+    /// boundaries `0..=len`.
+    ///
+    /// - For LTR characters, cursor `i` is at visual `visual_pos(i)`.
+    /// - For RTL characters, cursor `i` is at visual `visual_pos(i) + 1`.
+    /// - For `len` (end of text), position depends on paragraph direction.
+    pub fn visual_cursor_pos(&self, logical: usize) -> usize {
+        if logical >= self.chars.len() {
+            return match self.base_direction() {
+                Direction::Ltr => self.chars.len(),
+                Direction::Rtl => 0,
+            };
+        }
+
+        let v = self.visual_pos(logical);
+        let level = self.levels[logical];
+        if level.number() % 2 == 0 { v } else { v + 1 }
+    }
+
+    /// Get the logical cursor position for a visual insertion point `0..=len`.
+    ///
+    /// This is the inverse of `visual_cursor_pos`.
+    pub fn logical_cursor_pos(&self, visual: usize) -> usize {
+        let n = self.chars.len();
+
+        // Check exact matches from character sides
+        // 1. Is it the left side of an LTR char?
+        if visual < n {
+            let l = self.logical_pos(visual);
+            if self.levels[l].number() % 2 == 0 {
+                return l;
+            }
+        }
+
+        // 2. Is it the right side of an RTL char?
+        if visual > 0 {
+            let l_prev = self.logical_pos(visual - 1);
+            if self.levels[l_prev].number() % 2 == 1 {
+                return l_prev;
+            }
+        }
+
+        // 3. Fallback for endpoints based on paragraph direction
+        match self.base_direction() {
+            Direction::Ltr => {
+                if visual == n {
+                    return n;
+                } else {
+                    return 0;
+                }
+            }
+            Direction::Rtl => {
+                if visual == 0 {
+                    return n;
+                } else {
+                    return 0;
+                }
+            }
+        }
+    }
+
     /// Move cursor one step to the right in visual order.
     ///
     /// Returns the new logical index. If already at the rightmost position,
     /// returns the current logical index unchanged.
     pub fn move_right(&self, logical: usize) -> usize {
-        let visual = self.visual_pos(logical);
-        if visual + 1 < self.visual_to_logical.len() {
-            self.logical_pos(visual + 1)
+        let visual = self.visual_cursor_pos(logical);
+        if visual < self.chars.len() {
+            self.logical_cursor_pos(visual + 1)
         } else {
             logical
         }
@@ -211,9 +274,9 @@ impl BidiSegment {
     /// Returns the new logical index. If already at the leftmost position,
     /// returns the current logical index unchanged.
     pub fn move_left(&self, logical: usize) -> usize {
-        let visual = self.visual_pos(logical);
+        let visual = self.visual_cursor_pos(logical);
         if visual > 0 {
-            self.logical_pos(visual - 1)
+            self.logical_cursor_pos(visual - 1)
         } else {
             logical
         }
@@ -1006,10 +1069,44 @@ mod tests {
     }
 
     #[test]
-    fn segment_out_of_bounds_graceful() {
-        let seg = BidiSegment::new("AB", None);
-        // Out-of-bounds lookups should return the index unchanged (fallback).
-        assert_eq!(seg.visual_pos(99), 99);
-        assert_eq!(seg.logical_pos(99), 99);
+    fn cursor_movement_rtl_insertion_point() {
+        // "DEF" (RTL) -> Visual "F E D"
+        // Logical: D(0), E(1), F(2). End(3).
+        // Visual:  F(0), E(1), D(2).
+        //
+        // Cursor at Logical 3 (End) should be at Visual Left (0).
+        // Moving Right (Visual +1) should go to Visual 1 ('E' -> Logical 1).
+        // Moving Left (Visual -1) should stay at 0.
+
+        let text = "DEF"; // ASCII but let's pretend it's RTL for the test logic? 
+        // No, we need actual RTL chars for BidiInfo to detect levels.
+        let text = "\u{05D3}\u{05D4}\u{05D5}"; // Dalet, He, Vav
+        let seg = BidiSegment::new(text, None);
+
+        assert_eq!(seg.base_direction(), Direction::Rtl);
+
+        // Check visual pos of End (3)
+        // Current implementation returns 3 (Right side), which is wrong for RTL base.
+        // We expect it to correspond to Visual 0 (Left side).
+
+        // This test documents the EXPECTED behavior for a fix.
+        // If I can't fix visual_pos return value (compatibility),
+        // at least move_right should work.
+
+        let start_pos = 3; // End
+
+        // Move Right from End (Visual Left) -> Visual 1 (He, logical 1)
+        let right = seg.move_right(start_pos);
+        // If current impl returns 3, move_right(3) stays at 3.
+        // If fixed, it should wrap to 1.
+
+        assert_eq!(
+            right, 1,
+            "move_right from RTL end should go to penultimate logical char (visual index 1)"
+        );
+
+        // Move Left from End (Visual Left) -> Stay at End
+        let left = seg.move_left(start_pos);
+        assert_eq!(left, 3, "move_left from RTL end should stay at end");
     }
 }

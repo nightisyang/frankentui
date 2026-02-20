@@ -7,13 +7,12 @@
 //! Algorithm adapted from Fabien Sanglard's analysis:
 //! <https://fabiensanglard.net/doom_fire_psx/>
 
-use crate::visual_fx::{BackdropFx, FxContext};
-use ftui_render::cell::PackedRgba;
 #[cfg(feature = "canvas")]
 use crate::canvas::Painter;
-use rand::Rng;
+use crate::visual_fx::{BackdropFx, FxContext};
+use ftui_render::cell::PackedRgba;
+use rand::RngExt;
 use rand::rngs::SmallRng;
-use rand::SeedableRng;
 
 /// The Doom Fire effect.
 pub struct DoomMeltFx {
@@ -33,7 +32,7 @@ impl DoomMeltFx {
             heat: Vec::new(),
             palette: Self::build_palette(),
             size: (0, 0),
-            rng: SmallRng::from_os_rng(),
+            rng: rand::make_rng::<SmallRng>(),
         }
     }
 
@@ -41,15 +40,45 @@ impl DoomMeltFx {
     fn build_palette() -> [PackedRgba; 37] {
         // Doom Fire Palette (approximate RGB values)
         let colors = [
-            (7, 7, 7), (31, 7, 7), (47, 15, 7), (71, 15, 7), (87, 23, 7), (103, 31, 7),
-            (119, 31, 7), (143, 39, 7), (159, 47, 7), (175, 63, 7), (191, 71, 7), (199, 71, 7),
-            (223, 79, 7), (223, 87, 7), (223, 87, 7), (215, 95, 7), (215, 95, 7), (215, 103, 15),
-            (207, 111, 15), (207, 119, 15), (207, 127, 15), (207, 135, 23), (199, 135, 23), (199, 143, 23),
-            (199, 151, 31), (191, 159, 31), (191, 159, 31), (191, 167, 39), (191, 167, 39), (191, 175, 47),
-            (183, 175, 47), (183, 183, 47), (183, 183, 55), (207, 207, 111), (223, 223, 159), (239, 239, 199),
+            (7, 7, 7),
+            (31, 7, 7),
+            (47, 15, 7),
+            (71, 15, 7),
+            (87, 23, 7),
+            (103, 31, 7),
+            (119, 31, 7),
+            (143, 39, 7),
+            (159, 47, 7),
+            (175, 63, 7),
+            (191, 71, 7),
+            (199, 71, 7),
+            (223, 79, 7),
+            (223, 87, 7),
+            (223, 87, 7),
+            (215, 95, 7),
+            (215, 95, 7),
+            (215, 103, 15),
+            (207, 111, 15),
+            (207, 119, 15),
+            (207, 127, 15),
+            (207, 135, 23),
+            (199, 135, 23),
+            (199, 143, 23),
+            (199, 151, 31),
+            (191, 159, 31),
+            (191, 159, 31),
+            (191, 167, 39),
+            (191, 167, 39),
+            (191, 175, 47),
+            (183, 175, 47),
+            (183, 183, 47),
+            (183, 183, 55),
+            (207, 207, 111),
+            (223, 223, 159),
+            (239, 239, 199),
             (255, 255, 255),
         ];
-        
+
         let mut palette = [PackedRgba::default(); 37];
         for (i, &(r, g, b)) in colors.iter().enumerate() {
             palette[i] = PackedRgba::rgb(r, g, b);
@@ -61,7 +90,7 @@ impl DoomMeltFx {
         let w = width as usize;
         let h = height as usize;
         let len = w * h;
-        
+
         if self.heat.len() != len {
             self.heat.resize(len, 0);
             self.size = (width, height);
@@ -80,9 +109,10 @@ impl DoomMeltFx {
                     self.heat[dst_idx] = 0;
                 } else {
                     let rand_idx = (self.rng.random::<u8>() & 3) as usize; // 0..3
-                    let dst_x = (x as isize - rand_idx as isize + 1).rem_euclid(width as isize) as usize;
+                    let dst_x =
+                        (x as isize - rand_idx as isize + 1).rem_euclid(width as isize) as usize;
                     let dst_idx = (y - 1) * width + dst_x;
-                    
+
                     let new_heat = pixel.saturating_sub(rand_idx as u8 & 1);
                     self.heat[dst_idx] = new_heat;
                 }

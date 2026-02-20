@@ -547,6 +547,125 @@ fn resolve_ttyd_path() -> Option<PathBuf> {
     }
 }
 
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name).ok().is_some_and(|value| {
+        matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+fn ttyd_help_text(real_ttyd: &Path) -> Option<String> {
+    let output = Command::new(real_ttyd)
+        .arg("--help")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let mut help = String::from_utf8_lossy(&output.stdout).to_string();
+    if help.trim().is_empty() {
+        help = String::from_utf8_lossy(&output.stderr).to_string();
+    }
+    (!help.trim().is_empty()).then_some(help)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TtydFeatureSupport {
+    supports_once: bool,
+    supports_client_option: bool,
+}
+
+fn parse_ttyd_feature_support(help: &str) -> TtydFeatureSupport {
+    TtydFeatureSupport {
+        supports_once: help.contains("--once"),
+        supports_client_option: help.contains("--client-option"),
+    }
+}
+
+fn detect_ttyd_feature_support(real_ttyd: &Path) -> Option<TtydFeatureSupport> {
+    let help = ttyd_help_text(real_ttyd)?;
+    Some(parse_ttyd_feature_support(&help))
+}
+
+fn ttyd_requires_compat_shim(real_ttyd: &Path) -> bool {
+    if env_flag_enabled("DOCTOR_FRANKENTUI_FORCE_TTYD_SHIM") {
+        return true;
+    }
+
+    let Some(support) = detect_ttyd_feature_support(real_ttyd) else {
+        return true;
+    };
+
+    !(support.supports_once && support.supports_client_option)
+}
+
+fn collect_playwright_chromium_candidates(base_dir: &Path, candidates: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(base_dir) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.starts_with("chromium-") {
+            continue;
+        }
+
+        let candidate = entry.path().join("chrome-linux").join("chrome");
+        if candidate.is_file() {
+            candidates.push(candidate);
+        }
+    }
+}
+
+fn playwright_chromium_build_id(path: &Path) -> u64 {
+    path.ancestors()
+        .filter_map(|ancestor| ancestor.file_name().and_then(|value| value.to_str()))
+        .find_map(|name| {
+            name.strip_prefix("chromium-")
+                .and_then(|value| value.parse::<u64>().ok())
+        })
+        .unwrap_or(0)
+}
+
+fn choose_latest_playwright_chromium(mut candidates: Vec<PathBuf>) -> Option<PathBuf> {
+    candidates.sort_by(|left, right| {
+        playwright_chromium_build_id(left)
+            .cmp(&playwright_chromium_build_id(right))
+            .then_with(|| left.cmp(right))
+    });
+    candidates.pop()
+}
+
+fn resolve_browser_compat_path() -> Option<PathBuf> {
+    if let Some(value) = std::env::var_os("DOCTOR_FRANKENTUI_VHS_BROWSER") {
+        let path = PathBuf::from(value);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    let mut candidates = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        collect_playwright_chromium_candidates(&home.join(".cache/ms-playwright"), &mut candidates);
+        collect_playwright_chromium_candidates(
+            &home.join(".cache/giil/ms-playwright"),
+            &mut candidates,
+        );
+    }
+
+    choose_latest_playwright_chromium(candidates)
+}
+
 #[derive(Debug, Clone)]
 struct TtydCompatShim {
     shim_dir: PathBuf,
@@ -559,6 +678,16 @@ fn install_ttyd_compat_shim(run_dir: &Path) -> Result<Option<TtydCompatShim>> {
     let Some(real_ttyd) = resolve_ttyd_path() else {
         return Ok(None);
     };
+    let feature_support = detect_ttyd_feature_support(&real_ttyd).unwrap_or(TtydFeatureSupport {
+        supports_once: false,
+        supports_client_option: false,
+    });
+
+    if !ttyd_requires_compat_shim(&real_ttyd) {
+        return Ok(None);
+    }
+    let drop_once = !feature_support.supports_once;
+    let drop_client_option = !feature_support.supports_client_option;
 
     let shim_dir = run_dir.join("shim_bin");
     ensure_dir(&shim_dir)?;
@@ -572,6 +701,8 @@ set -euo pipefail
 real_ttyd={}
 shim_log={}
 runtime_log={}
+drop_once={}
+drop_client_option={}
 args=()
 compat_notes=()
 
@@ -595,19 +726,59 @@ fi
 
 while (($#)); do
   if [[ \"$1\" == \"--once\" ]]; then
-    compat_notes+=(\"drop:--once\")
+    if [[ \"$drop_once\" == \"1\" ]]; then
+      compat_notes+=(\"drop:--once\")
+      shift
+      continue
+    fi
+    args+=(\"$1\")
     shift
     continue
   fi
 
-  if [[ \"$1\" == \"-t\" ]]; then
+  if [[ \"$1\" == --client-option=* ]]; then
+    if [[ \"$drop_client_option\" == \"1\" ]]; then
+      compat_notes+=(\"drop:--client-option:${{1#--client-option=}}\")
+      shift
+      continue
+    fi
+    args+=(\"$1\")
+    shift
+    continue
+  fi
+
+  if [[ \"$1\" == \"--client-option\" ]]; then
+    if [[ \"$drop_client_option\" != \"1\" ]]; then
+      args+=(\"$1\")
+      shift
+      continue
+    fi
+
     client_opt=\"\"
     if [[ $# -ge 2 && \"$2\" == *=* ]]; then
       client_opt=\"$2\"
       shift 2
-    elif [[ $# -ge 3 ]]; then
-      client_opt=\"$2=$3\"
-      shift 3
+    else
+      args+=(\"$1\")
+      shift
+      continue
+    fi
+
+    compat_notes+=(\"drop:--client-option:$client_opt\")
+    continue
+  fi
+
+  if [[ \"$1\" == \"-t\" ]]; then
+    if [[ \"$drop_client_option\" != \"1\" ]]; then
+      args+=(\"$1\")
+      shift
+      continue
+    fi
+
+    client_opt=\"\"
+    if [[ $# -ge 2 && \"$2\" == *=* ]]; then
+      client_opt=\"$2\"
+      shift 2
     else
       args+=(\"$1\")
       shift
@@ -642,6 +813,8 @@ exec \"$real_ttyd\" \"${{args[@]}}\" >> \"$runtime_log\" 2>&1
         shell_single_quote(&real_ttyd.display().to_string()),
         shell_single_quote(&shim_log.display().to_string()),
         shell_single_quote(&runtime_log.display().to_string()),
+        bool_to_u8(drop_once),
+        bool_to_u8(drop_client_option),
     );
     write_string(&shim_path, &shim_body)?;
 
@@ -662,20 +835,86 @@ exec \"$real_ttyd\" \"${{args[@]}}\" >> \"$runtime_log\" 2>&1
     }))
 }
 
-const VHS_FATAL_OPEN_TTYD_EOF: &str = "could not open ttyd: EOF";
-const VHS_FATAL_RECORDING_FAILED: &str = "recording failed";
+#[derive(Debug, Clone)]
+struct BrowserCompatShim {
+    shim_dir: PathBuf,
+    shim_log: PathBuf,
+    real_browser: PathBuf,
+}
+
+fn install_browser_compat_shim(run_dir: &Path) -> Result<Option<BrowserCompatShim>> {
+    let Some(real_browser) = resolve_browser_compat_path() else {
+        return Ok(None);
+    };
+
+    let shim_dir = run_dir.join("shim_browser_bin");
+    ensure_dir(&shim_dir)?;
+    let shim_log = run_dir.join("browser_shim.log");
+    let shim_body = format!(
+        "#!/usr/bin/env bash
+set -euo pipefail
+
+real_browser={}
+shim_log={}
+
+{{
+  printf 'ts=%s' \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
+  for arg in \"$@\"; do
+    printf ' arg=%q' \"$arg\"
+  done
+  printf '\\n'
+}} >> \"$shim_log\"
+
+exec \"$real_browser\" \"$@\"
+",
+        shell_single_quote(&real_browser.display().to_string()),
+        shell_single_quote(&shim_log.display().to_string()),
+    );
+
+    for shim_name in [
+        "google-chrome",
+        "google-chrome-stable",
+        "chrome",
+        "chromium",
+        "chromium-browser",
+    ] {
+        let shim_path = shim_dir.join(shim_name);
+        write_string(&shim_path, &shim_body)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = fs::metadata(&shim_path)?.permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&shim_path, permissions)?;
+        }
+    }
+
+    Ok(Some(BrowserCompatShim {
+        shim_dir,
+        shim_log,
+        real_browser,
+    }))
+}
+
+const VHS_FATAL_OPEN_TTYD: &str = "could not open ttyd";
+const VHS_FATAL_EOF: &str = "eof";
 const VHS_FATAL_TTYD_VERSION_REJECTED: &str = "ttyd version";
 const VHS_FATAL_OUT_OF_DATE: &str = "out of date";
 
 fn infer_vhs_fatal_reason(line: &str) -> Option<String> {
-    if line.contains(VHS_FATAL_OPEN_TTYD_EOF) {
-        return Some("vhs could not open ttyd (EOF)".to_string());
+    let lowered = line.to_ascii_lowercase();
+
+    if lowered.contains(VHS_FATAL_OPEN_TTYD) {
+        if lowered.contains(VHS_FATAL_EOF) {
+            return Some("vhs could not open ttyd (EOF)".to_string());
+        }
+        return Some("vhs could not open ttyd".to_string());
     }
-    if line.contains(VHS_FATAL_TTYD_VERSION_REJECTED) && line.contains(VHS_FATAL_OUT_OF_DATE) {
+    if lowered.contains(VHS_FATAL_TTYD_VERSION_REJECTED) && lowered.contains(VHS_FATAL_OUT_OF_DATE)
+    {
         return Some("vhs rejected ttyd version string".to_string());
-    }
-    if line.contains(VHS_FATAL_RECORDING_FAILED) {
-        return Some("vhs reported recording failed".to_string());
     }
     None
 }
@@ -797,10 +1036,7 @@ fn should_try_docker_fallback(
 
     fatal_capture_reason.is_some_and(|reason| {
         let lowered = reason.to_ascii_lowercase();
-        lowered.contains("ttyd")
-            || lowered.contains("eof")
-            || lowered.contains("recording failed")
-            || lowered.contains("handshake")
+        lowered.contains("ttyd") || lowered.contains("eof") || lowered.contains("handshake")
     })
 }
 
@@ -1009,17 +1245,22 @@ fn run_vhs_with_driver(
     #[cfg(unix)]
     vhs.process_group(0);
 
+    let mut shim_paths: Vec<PathBuf> = Vec::new();
+    if let Some(browser_shim) = install_browser_compat_shim(run_dir)? {
+        shim_paths.push(browser_shim.shim_dir.clone());
+        ui.info(&format!(
+            "browser compat shim enabled: real={} log={}",
+            browser_shim.real_browser.display(),
+            browser_shim.shim_log.display()
+        ));
+    }
+
     let mut ttyd_shim_log: Option<PathBuf> = None;
     let mut ttyd_runtime_log: Option<PathBuf> = None;
     if let Some(shim) = install_ttyd_compat_shim(run_dir)? {
-        let mut path_entries = vec![shim.shim_dir.clone()];
-        if let Some(current_path) = std::env::var_os("PATH") {
-            path_entries.extend(std::env::split_paths(&current_path));
+        if !shim_paths.iter().any(|existing| existing == &shim.shim_dir) {
+            shim_paths.push(shim.shim_dir.clone());
         }
-        let path = std::env::join_paths(path_entries).map_err(|error| {
-            DoctorError::invalid(format!("failed to build PATH with ttyd shim: {error}"))
-        })?;
-        vhs.env("PATH", path);
         ttyd_shim_log = Some(shim.shim_log.clone());
         ttyd_runtime_log = Some(shim.runtime_log.clone());
         ui.info(&format!(
@@ -1028,6 +1269,16 @@ fn run_vhs_with_driver(
             shim.shim_log.display(),
             shim.runtime_log.display()
         ));
+    }
+
+    if !shim_paths.is_empty() {
+        if let Some(current_path) = std::env::var_os("PATH") {
+            shim_paths.extend(std::env::split_paths(&current_path));
+        }
+        let path = std::env::join_paths(shim_paths).map_err(|error| {
+            DoctorError::invalid(format!("failed to build PATH with capture shims: {error}"))
+        })?;
+        vhs.env("PATH", path);
     }
 
     let mut vhs_no_sandbox_forced = false;
@@ -1055,6 +1306,7 @@ fn run_vhs_with_driver(
     let deadline = std::time::Instant::now() + timeout;
     let mut fatal_capture_reason: Option<String> = None;
     let mut timed_out = false;
+    let mut defunct_ttyd_observed = false;
     let child_pid = child.id();
     let mut vhs_exit = loop {
         if let Some(status) = child.try_wait()? {
@@ -1082,12 +1334,11 @@ fn run_vhs_with_driver(
             break status.and_then(|value| value.code()).unwrap_or(125);
         }
 
-        if fatal_capture_reason.is_none() && has_defunct_ttyd_child(child_pid) {
-            fatal_capture_reason = Some("ttyd child exited unexpectedly (defunct)".to_string());
-            terminate_process_group(child_pid);
-            let _ = child.kill();
-            let status = child.wait_timeout(Duration::from_secs(2))?;
-            break status.and_then(|value| value.code()).unwrap_or(125);
+        if !defunct_ttyd_observed && has_defunct_ttyd_child(child_pid) {
+            defunct_ttyd_observed = true;
+            ui.warning(
+                "observed defunct ttyd child while VHS still running; continuing until VHS exits or timeout",
+            );
         }
 
         if std::time::Instant::now() >= deadline {
@@ -1180,6 +1431,19 @@ struct FinalizationInput {
     timed_out: bool,
     conservative: bool,
     capture_timeout_seconds: u64,
+}
+
+fn resolve_snapshot_capture_result(
+    ffmpeg_exit_code: i32,
+    snapshot_exists: bool,
+) -> (&'static str, i32) {
+    if ffmpeg_exit_code == 0 && snapshot_exists {
+        ("ok", 0)
+    } else if ffmpeg_exit_code == 0 {
+        ("failed", 1)
+    } else {
+        ("failed", ffmpeg_exit_code)
+    }
 }
 
 fn resolve_finalization_result(input: &FinalizationInput) -> FinalizationResult {
@@ -1576,12 +1840,21 @@ pub fn run_capture(args: CaptureArgs) -> Result<()> {
                 .stderr(Stdio::null())
                 .status()?;
 
-            if status.success() {
-                snapshot_status = "ok".to_string();
-                snapshot_exit_code = Some(0);
+            let ffmpeg_exit_code = status.code().unwrap_or(1);
+            let snapshot_written = snapshot_path.exists();
+            let (next_status, next_exit_code) =
+                resolve_snapshot_capture_result(ffmpeg_exit_code, snapshot_written);
+            snapshot_status = next_status.to_string();
+            snapshot_exit_code = Some(next_exit_code);
+
+            if next_status == "ok" {
                 ui.success(&format!("snapshot: {}", snapshot_path.display()));
+            } else if ffmpeg_exit_code == 0 && !snapshot_written {
+                ui.warning(&format!(
+                    "snapshot extraction produced no frame at second {}",
+                    cfg.snapshot_second
+                ));
             } else {
-                snapshot_exit_code = Some(status.code().unwrap_or(1));
                 ui.warning(&format!(
                     "snapshot extraction failed at second {}",
                     cfg.snapshot_second
@@ -2494,6 +2767,27 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_result_ok_requires_success_exit_and_written_file() {
+        assert_eq!(super::resolve_snapshot_capture_result(0, true), ("ok", 0));
+    }
+
+    #[test]
+    fn snapshot_result_flags_missing_frame_when_ffmpeg_exits_zero() {
+        assert_eq!(
+            super::resolve_snapshot_capture_result(0, false),
+            ("failed", 1)
+        );
+    }
+
+    #[test]
+    fn snapshot_result_propagates_nonzero_ffmpeg_exit() {
+        assert_eq!(
+            super::resolve_snapshot_capture_result(17, false),
+            ("failed", 17)
+        );
+    }
+
+    #[test]
     fn detect_vhs_fatal_reason_identifies_ttyd_eof_signature() {
         let temp = tempdir().expect("tempdir");
         let log_path = temp.path().join("vhs.log");
@@ -2508,6 +2802,20 @@ mod tests {
     }
 
     #[test]
+    fn detect_vhs_fatal_reason_identifies_non_eof_ttyd_open_failure() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("vhs.log");
+        fs::write(
+            &log_path,
+            "File: /tmp/run/capture.tape\nCould not open ttyd: refused\n",
+        )
+        .expect("write vhs log");
+
+        let reason = super::detect_vhs_fatal_reason(&log_path);
+        assert_eq!(reason.as_deref(), Some("vhs could not open ttyd"));
+    }
+
+    #[test]
     fn detect_vhs_fatal_reason_returns_none_without_fatal_markers() {
         let temp = tempdir().expect("tempdir");
         let log_path = temp.path().join("vhs.log");
@@ -2515,6 +2823,31 @@ mod tests {
 
         let reason = super::detect_vhs_fatal_reason(&log_path);
         assert!(reason.is_none());
+    }
+
+    #[test]
+    fn detect_vhs_fatal_reason_ignores_recording_failed_without_ttyd_markers() {
+        let temp = tempdir().expect("tempdir");
+        let log_path = temp.path().join("vhs.log");
+        fs::write(&log_path, "File: /tmp/run/capture.tape\nrecording failed\n")
+            .expect("write vhs log");
+
+        let reason = super::detect_vhs_fatal_reason(&log_path);
+        assert!(reason.is_none());
+    }
+
+    #[test]
+    fn docker_fallback_decision_requires_real_handshake_markers() {
+        assert!(!super::should_try_docker_fallback(
+            1,
+            false,
+            Some("vhs reported recording failed")
+        ));
+        assert!(super::should_try_docker_fallback(
+            1,
+            false,
+            Some("vhs could not open ttyd (EOF)")
+        ));
     }
 
     #[test]
@@ -2527,5 +2860,45 @@ mod tests {
     fn parse_defunct_ttyd_from_ps_ignores_non_ttyd_or_non_zombie_rows() {
         let ps = b"S ttyd\nZ bash\n";
         assert!(!super::parse_defunct_ttyd_from_ps(ps));
+    }
+
+    #[test]
+    fn parse_ttyd_feature_support_detects_once_and_client_option_flags() {
+        let help = "Usage: ttyd\n  --once\n  -t, --client-option [key=value]\n";
+        let support = super::parse_ttyd_feature_support(help);
+        assert!(support.supports_once);
+        assert!(support.supports_client_option);
+    }
+
+    #[test]
+    fn parse_ttyd_feature_support_handles_missing_compat_flags() {
+        let help = "Usage: ttyd\n  --port\n  --interface\n";
+        let support = super::parse_ttyd_feature_support(help);
+        assert!(!support.supports_once);
+        assert!(!support.supports_client_option);
+    }
+
+    #[test]
+    fn choose_latest_playwright_chromium_prefers_highest_build() {
+        let paths = vec![
+            PathBuf::from("/tmp/ms-playwright/chromium-1110/chrome-linux/chrome"),
+            PathBuf::from("/tmp/ms-playwright/chromium-1203/chrome-linux/chrome"),
+            PathBuf::from("/tmp/ms-playwright/chromium-0999/chrome-linux/chrome"),
+        ];
+
+        let selected = super::choose_latest_playwright_chromium(paths)
+            .expect("expected at least one playwright chromium candidate");
+        assert!(
+            selected
+                .display()
+                .to_string()
+                .contains("chromium-1203/chrome-linux/chrome")
+        );
+    }
+
+    #[test]
+    fn playwright_chromium_build_id_returns_zero_for_nonmatching_paths() {
+        let path = PathBuf::from("/tmp/not-playwright/chrome-linux/chrome");
+        assert_eq!(super::playwright_chromium_build_id(&path), 0);
     }
 }

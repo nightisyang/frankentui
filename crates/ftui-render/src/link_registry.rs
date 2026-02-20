@@ -131,6 +131,29 @@ impl LinkRegistry {
     pub fn contains(&self, id: u32) -> bool {
         self.get(id).is_some()
     }
+
+    /// Estimate heap memory usage in bytes.
+    ///
+    /// This is an approximate accounting used by runtime guardrails/telemetry.
+    #[must_use]
+    pub fn estimate_memory(&self) -> usize {
+        let mut total = 0usize;
+
+        total += self.links.capacity() * core::mem::size_of::<Option<String>>();
+        total += self
+            .links
+            .iter()
+            .flatten()
+            .map(String::capacity)
+            .sum::<usize>();
+
+        total += self.lookup.capacity() * core::mem::size_of::<(String, u32)>();
+        total += self.lookup.keys().map(String::capacity).sum::<usize>();
+
+        total += self.free_list.capacity() * core::mem::size_of::<u32>();
+
+        total
+    }
 }
 
 #[cfg(test)]

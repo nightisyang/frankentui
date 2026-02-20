@@ -656,7 +656,7 @@ impl TerminalCapabilitiesScreen {
         }
     }
 
-    fn status_text(enabled: bool) -> Text {
+    fn status_text(enabled: bool) -> Text<'static> {
         if enabled {
             Text::styled("yes", theme::success())
         } else {

@@ -54,12 +54,15 @@ use ftui_render::buffer::Buffer;
 use ftui_render::cell::Cell;
 use ftui_render::cell::PackedRgba;
 use ftui_style::{Style, TableEffectScope, TableSection, TableTheme};
-use ftui_text::text::{Line, Span, Text};
+use ftui_text::text::Span;
 use pulldown_cmark::{
     Alignment, BlockQuoteKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
 };
 #[cfg(feature = "syntax")]
 use std::sync::Arc;
+
+type Line = ftui_text::text::Line<'static>;
+type Text = ftui_text::text::Text<'static>;
 
 // ---------------------------------------------------------------------------
 // GFM Auto-Detection
@@ -1667,18 +1670,46 @@ impl<'t> RenderState<'t> {
 
         // Image - show alt text
         if html_trimmed.starts_with("<img ") {
-            // Try to extract alt text
-            if let Some(alt_start) = html_lower.find("alt=\"") {
-                let after_alt = &html[alt_start + 5..];
-                if let Some(alt_end) = after_alt.find('"') {
-                    let alt_text = &after_alt[..alt_end];
-                    if !alt_text.is_empty() {
-                        self.current_spans
-                            .push(Span::styled(format!("[{alt_text}]"), self.theme.emphasis));
-                        return;
+            let mut alt_text = None;
+
+            // Search for "alt" attribute
+            for (idx, _) in html_lower.match_indices("alt") {
+                // Ensure word boundary before "alt" (e.g. avoid matching "salt")
+                // We know it's not at 0 because the string starts with "<img "
+                if idx > 0 {
+                    let prev_char = html_lower.as_bytes()[idx - 1];
+                    if prev_char.is_ascii_alphanumeric() || prev_char == b'-' || prev_char == b'_' {
+                        continue;
                     }
                 }
+
+                // Look ahead for '='
+                let remainder = &html[idx + 3..];
+                let trimmed = remainder.trim_start();
+                if !trimmed.starts_with('=') {
+                    continue;
+                }
+
+                // Look for quote after '='
+                let after_equals = trimmed[1..].trim_start();
+                if let Some(quote) = after_equals.chars().next()
+                    && (quote == '"' || quote == '\'')
+                    && let Some(close_idx) = after_equals[1..].find(quote)
+                {
+                    // Extract content between quotes
+                    alt_text = Some(after_equals[1..close_idx + 1].to_string());
+                    break;
+                }
             }
+
+            if let Some(text) = alt_text
+                && !text.is_empty()
+            {
+                self.current_spans
+                    .push(Span::styled(format!("[{text}]"), self.theme.emphasis));
+                return;
+            }
+
             // Fallback: show [image]
             self.current_spans
                 .push(Span::styled(String::from("[image]"), self.theme.emphasis));
@@ -1686,24 +1717,24 @@ impl<'t> RenderState<'t> {
         }
 
         // Subscript - convert to Unicode subscript if possible
-        if let Some(start_pos) = html_lower.find("<sub>") {
-            if let Some(end_rel) = html_lower[start_pos..].find("</sub>") {
-                let end_pos = start_pos + end_rel;
-                let content = &html[start_pos + 5..end_pos];
-                let subscript = to_unicode_subscript(content);
-                self.current_spans.push(Span::raw(subscript));
-                return;
-            }
+        if let Some(start_pos) = html_lower.find("<sub>")
+            && let Some(end_rel) = html_lower[start_pos..].find("</sub>")
+        {
+            let end_pos = start_pos + end_rel;
+            let content = &html[start_pos + 5..end_pos];
+            let subscript = to_unicode_subscript(content);
+            self.current_spans.push(Span::raw(subscript));
+            return;
         }
 
         // Superscript - convert to Unicode superscript if possible
-        if let Some(start_pos) = html_lower.find("<sup>") {
-            if let Some(end_rel) = html_lower[start_pos..].find("</sup>") {
-                let end_pos = start_pos + end_rel;
-                let content = &html[start_pos + 5..end_pos];
-                let superscript = to_unicode_superscript(content);
-                self.current_spans.push(Span::raw(superscript));
-            }
+        if let Some(start_pos) = html_lower.find("<sup>")
+            && let Some(end_rel) = html_lower[start_pos..].find("</sup>")
+        {
+            let end_pos = start_pos + end_rel;
+            let content = &html[start_pos + 5..end_pos];
+            let superscript = to_unicode_superscript(content);
+            self.current_spans.push(Span::raw(superscript));
         }
 
         // Other HTML is ignored in terminal output

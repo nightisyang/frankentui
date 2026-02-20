@@ -668,17 +668,19 @@ mod tests {
     }
 
     #[test]
-    fn ratio_constraints_rounding_sums_to_available() {
+    fn ratio_constraints_calculate_strictly() {
         let grid = Grid::new()
             .rows([Constraint::Fixed(1)])
             .columns([Constraint::Ratio(1, 3), Constraint::Ratio(2, 3)]);
 
         let layout = grid.split(Rect::new(0, 0, 5, 1));
 
-        let total = layout.col_width(0) + layout.col_width(1);
-        assert_eq!(total, 5);
+        // 5 * 1/3 = 1
+        // 5 * 2/3 = 3
+        // Total allocated = 4. Remaining = 1.
+        // Ratio is no longer a grow constraint, so it doesn't consume the remainder.
         assert_eq!(layout.col_width(0), 1);
-        assert_eq!(layout.col_width(1), 4);
+        assert_eq!(layout.col_width(1), 3);
     }
 
     // --- Additional Grid tests ---
@@ -860,5 +862,19 @@ mod tests {
                 area.bottom()
             );
         }
+    }
+
+    #[test]
+    fn grid_layout_span_clamps_zero() {
+        let grid = Grid::new()
+            .rows([Constraint::Fixed(10)])
+            .columns([Constraint::Fixed(20)]);
+        let layout = grid.split(Rect::new(0, 0, 100, 50));
+
+        // span(..., 0, 0) should be clamped to 1x1 (the cell itself)
+        let r = layout.span(0, 0, 0, 0);
+        assert_eq!(r, layout.cell(0, 0));
+        assert_eq!(r.width, 20);
+        assert_eq!(r.height, 10);
     }
 }

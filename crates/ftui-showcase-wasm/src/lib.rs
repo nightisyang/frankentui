@@ -270,6 +270,55 @@ mod tests {
     }
 
     #[test]
+    fn runner_core_files_and_sizing_cycle_with_pane_state_queries_is_stable() {
+        let mut core = RunnerCore::new(120, 40);
+        core.init();
+
+        // Jump to Files first (Digit9 shortcut), then cycle with Shift+L.
+        assert!(push_key(&mut core, "Digit9", 0));
+        let first = core.step();
+        assert!(first.running);
+        core.prepare_flat_patches();
+
+        for i in 0..240u16 {
+            if i % 10 == 0 {
+                assert!(push_key_with_key(&mut core, "L", "KeyL", 1));
+            }
+
+            assert!(push_mouse_move(
+                &mut core,
+                if i % 4 == 0 { -1 } else { 0 },
+                i as i32 % 140 - 10,
+                i as i32 % 60 - 10,
+            ));
+
+            match i % 6 {
+                0 => core.resize(0, 0),
+                1 => core.resize(80, 24),
+                2 => core.resize(120, 40),
+                3 => core.resize(150, 45),
+                4 => core.resize(90, 28),
+                _ => core.resize(64, 20),
+            }
+
+            core.advance_time_ms(16.0);
+            let result = core.step();
+            assert!(result.running);
+
+            core.prepare_flat_patches();
+            let _ = core.patch_hash();
+            let _ = core.patch_stats();
+
+            // Mirrors host pane overlay polling (`paneLayoutState` path).
+            let _ = core.pane_preview_state();
+            let _ = core.pane_timeline_status();
+            let _ = core.pane_layout_hash();
+            let _ = core.pane_selected_ids();
+            let _ = core.pane_primary_id();
+        }
+    }
+
+    #[test]
     fn runner_core_resize() {
         let mut core = RunnerCore::new(80, 24);
         core.init();

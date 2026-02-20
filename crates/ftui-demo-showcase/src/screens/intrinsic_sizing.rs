@@ -546,6 +546,8 @@ impl Screen for IntrinsicSizingDemo {
 
     fn view(&self, frame: &mut Frame, area: Rect) {
         if area.is_empty() {
+            self.pane_workspace_visible.set(false);
+            self.pane_workspace.clear_embedded_pane_workspace_bounds();
             return;
         }
 
@@ -919,7 +921,7 @@ mod tests {
 
     #[test]
     fn pane_workspace_embeds_on_wide_layout() {
-        let mut screen = IntrinsicSizingDemo::new();
+        let screen = IntrinsicSizingDemo::new();
         let mut pool = ftui_render::grapheme_pool::GraphemePool::new();
         let mut frame = Frame::new(120, 30, &mut pool);
         screen.view(&mut frame, Rect::new(0, 0, 120, 30));
@@ -953,6 +955,31 @@ mod tests {
         assert_eq!(
             screen.scenario, before,
             "pane workspace click should not trigger scenario cycling"
+        );
+    }
+
+    #[test]
+    fn empty_area_clears_pane_workspace_bounds() {
+        let screen = IntrinsicSizingDemo::new();
+        let mut pool = ftui_render::grapheme_pool::GraphemePool::new();
+        let mut frame = Frame::new(120, 30, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 120, 30));
+        assert!(
+            !screen
+                .pane_workspace
+                .embedded_pane_workspace_bounds()
+                .is_empty(),
+            "wide layout should populate pane workspace bounds"
+        );
+
+        let mut tiny = Frame::new(1, 1, &mut pool);
+        screen.view(&mut tiny, Rect::new(0, 0, 0, 0));
+        assert!(
+            screen
+                .pane_workspace
+                .embedded_pane_workspace_bounds()
+                .is_empty(),
+            "empty area should clear pane workspace bounds"
         );
     }
 }

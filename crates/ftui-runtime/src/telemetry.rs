@@ -116,10 +116,11 @@ pub enum EndpointSource {
 }
 
 /// OTLP transport protocol.
+///
+/// Only HTTP/protobuf is supported. gRPC/tonic transport was removed
+/// to eliminate the tokio dependency from the workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Protocol {
-    /// gRPC transport (localhost:4317 default).
-    Grpc,
     /// HTTP with protobuf encoding (localhost:4318 default).
     #[default]
     HttpProtobuf,
@@ -128,7 +129,6 @@ pub enum Protocol {
 impl Protocol {
     fn default_endpoint(self) -> &'static str {
         match self {
-            Self::Grpc => "http://localhost:4317",
             Self::HttpProtobuf => "http://localhost:4318",
         }
     }
@@ -352,17 +352,9 @@ impl TelemetryConfig {
             return Self::disabled(enabled_reason);
         }
 
-        // Step 4: Parse protocol
-        let protocol = get("OTEL_EXPORTER_OTLP_PROTOCOL")
-            .or_else(|| get("OTEL_EXPORTER_OTLP_TRACES_PROTOCOL"))
-            .map(|v| {
-                if v.eq_ignore_ascii_case("grpc") {
-                    Protocol::Grpc
-                } else {
-                    Protocol::HttpProtobuf
-                }
-            })
-            .unwrap_or_default();
+        // Step 4: Protocol is always HTTP/protobuf (gRPC/tonic removed
+        // to eliminate tokio dependency).
+        let protocol = Protocol::HttpProtobuf;
 
         // Step 5: Resolve endpoint
         let (endpoint, endpoint_source) =
@@ -545,13 +537,10 @@ impl TelemetryConfig {
     > {
         use opentelemetry::KeyValue;
         use opentelemetry::trace::TracerProvider as _;
-        use opentelemetry_otlp::{
-            Protocol as OtlpProtocol, WithExportConfig, WithHttpConfig, WithTonicConfig,
-        };
+        use opentelemetry_otlp::{Protocol as OtlpProtocol, WithExportConfig, WithHttpConfig};
         use opentelemetry_sdk::Resource;
         use opentelemetry_sdk::trace::SdkTracerProvider;
         use std::collections::HashMap;
-        use std::str::FromStr;
 
         if !self.enabled {
             return Err(TelemetryError::ExporterInit(
@@ -578,56 +567,26 @@ impl TelemetryConfig {
             }
         }
 
-        // Build the exporter
-        let exporter = match self.protocol {
-            Protocol::Grpc => {
-                let mut builder = opentelemetry_otlp::SpanExporter::builder()
-                    .with_tonic()
-                    .with_endpoint(endpoint);
-                if !self.headers.is_empty() {
-                    use tonic::metadata::{MetadataKey, MetadataMap, MetadataValue};
-                    let mut metadata = MetadataMap::with_capacity(self.headers.len());
-                    for (key, value) in &self.headers {
-                        let key = key.trim();
-                        if key.is_empty() {
-                            continue;
-                        }
-                        let lower_key = key.to_ascii_lowercase();
-                        let Ok(meta_key) = MetadataKey::from_str(&lower_key) else {
-                            continue;
-                        };
-                        let Ok(meta_value) = MetadataValue::from_str(value) else {
-                            continue;
-                        };
-                        metadata.insert(meta_key, meta_value);
-                    }
-                    builder = builder.with_metadata(metadata);
-                }
-                builder
-                    .build()
-                    .map_err(|e: opentelemetry_otlp::ExporterBuildError| {
-                        TelemetryError::ExporterInit(e.to_string())
-                    })?
+        // Build the exporter (HTTP/protobuf only; gRPC/tonic removed
+        // to eliminate tokio dependency).
+        let exporter = {
+            let mut builder = opentelemetry_otlp::SpanExporter::builder()
+                .with_http()
+                .with_protocol(OtlpProtocol::HttpBinary)
+                .with_endpoint(endpoint);
+            if !self.headers.is_empty() {
+                let headers: HashMap<String, String> = self
+                    .headers
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect();
+                builder = builder.with_headers(headers);
             }
-            Protocol::HttpProtobuf => {
-                let mut builder = opentelemetry_otlp::SpanExporter::builder()
-                    .with_http()
-                    .with_protocol(OtlpProtocol::HttpBinary)
-                    .with_endpoint(endpoint);
-                if !self.headers.is_empty() {
-                    let headers: HashMap<String, String> = self
-                        .headers
-                        .iter()
-                        .map(|(key, value)| (key.clone(), value.clone()))
-                        .collect();
-                    builder = builder.with_headers(headers);
-                }
-                builder
-                    .build()
-                    .map_err(|e: opentelemetry_otlp::ExporterBuildError| {
-                        TelemetryError::ExporterInit(e.to_string())
-                    })?
-            }
+            builder
+                .build()
+                .map_err(|e: opentelemetry_otlp::ExporterBuildError| {
+                    TelemetryError::ExporterInit(e.to_string())
+                })?
         };
 
         // Build the provider with configured span processor.
@@ -1356,7 +1315,6 @@ mod tests {
 
     #[test]
     fn test_protocol_default_endpoint() {
-        assert_eq!(Protocol::Grpc.default_endpoint(), "http://localhost:4317");
         assert_eq!(
             Protocol::HttpProtobuf.default_endpoint(),
             "http://localhost:4318"
@@ -2083,11 +2041,6 @@ mod in_memory_exporter_tests {
     // =========================================================================
     // Protocol Default Tests
     // =========================================================================
-
-    #[test]
-    fn test_grpc_uses_port_4317() {
-        assert_eq!(Protocol::Grpc.default_endpoint(), "http://localhost:4317");
-    }
 
     #[test]
     fn test_http_uses_port_4318() {

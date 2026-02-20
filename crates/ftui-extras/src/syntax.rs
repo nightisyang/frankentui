@@ -2489,7 +2489,7 @@ impl SyntaxHighlighter {
     ///
     /// Falls back to plain text if the language is not recognized.
     #[must_use]
-    pub fn highlight(&self, code: &str, lang: &str) -> Text {
+    pub fn highlight<'a>(&self, code: &'a str, lang: &str) -> Text<'a> {
         let tokenizer = self
             .registry
             .for_extension(lang)
@@ -2512,7 +2512,7 @@ impl SyntaxHighlighter {
 
     /// Highlight code with line numbers prepended.
     #[must_use]
-    pub fn highlight_numbered(&self, code: &str, lang: &str, start_line: usize) -> Text {
+    pub fn highlight_numbered<'a>(&self, code: &'a str, lang: &str, start_line: usize) -> Text<'a> {
         let tokenizer = self
             .registry
             .for_extension(lang)

@@ -706,11 +706,11 @@ fn panel_block(title: &str, accent: theme::ColorToken, focused: bool) -> Block<'
         .style(Style::new().fg(accent))
 }
 
-fn empty_panel_line(message: &str) -> Line {
+fn empty_panel_line(message: &str) -> Line<'_> {
     Line::from_spans([Span::styled(message, theme::muted())])
 }
 
-fn diff_lines(summary: &DiffSummary) -> Vec<Line> {
+fn diff_lines(summary: &DiffSummary) -> Vec<Line<'_>> {
     let mut lines = Vec::new();
     let mut why_parts = Vec::new();
     if let Some(reason) = summary.guard_reason.as_ref().filter(|s| !s.is_empty()) {
@@ -780,7 +780,7 @@ fn diff_lines(summary: &DiffSummary) -> Vec<Line> {
     lines
 }
 
-fn resize_lines(summary: &ResizeSummary) -> Vec<Line> {
+fn resize_lines(summary: &ResizeSummary) -> Vec<Line<'_>> {
     let mut lines = Vec::new();
     lines.push(Line::from_spans([
         Span::styled("Decision: ", theme::muted()),
@@ -829,7 +829,7 @@ fn resize_lines(summary: &ResizeSummary) -> Vec<Line> {
     lines
 }
 
-fn budget_lines(summary: &BudgetSummary) -> Vec<Line> {
+fn budget_lines(summary: &BudgetSummary) -> Vec<Line<'_>> {
     let mut lines = Vec::new();
     let decision = summary.decision.clone();
     lines.push(Line::from_spans([

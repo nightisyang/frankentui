@@ -110,16 +110,26 @@ impl<'a> Span<'a> {
         }
 
         let (byte_pos, _actual_width) = find_cell_boundary(&self.content, cell_pos);
-        let (left, right) = self.content.split_at(byte_pos);
+
+        let (left_cow, right_cow) = match &self.content {
+            Cow::Borrowed(s) => {
+                let (l, r) = s.split_at(byte_pos);
+                (Cow::Borrowed(l), Cow::Borrowed(r))
+            }
+            Cow::Owned(s) => {
+                let (l, r) = s.split_at(byte_pos);
+                (Cow::Owned(l.to_string()), Cow::Owned(r.to_string()))
+            }
+        };
 
         (
             Self {
-                content: Cow::Owned(left.to_string()),
+                content: left_cow,
                 style: self.style,
                 link: self.link.clone(),
             },
             Self {
-                content: Cow::Owned(right.to_string()),
+                content: right_cow,
                 style: self.style,
                 link: self.link.clone(),
             },
@@ -212,23 +222,21 @@ impl Default for Span<'_> {
 /// - Truncating and wrapping to widths
 ///
 /// # Ownership
-/// `Text` uses `Cow<'static, str>` for storage, which means:
-/// - String literals are stored by reference (zero-copy)
-/// - Owned strings are stored inline
-/// - The API is ergonomic (no lifetime parameters on Text)
+/// `Text` supports borrowing via `Cow` in `Span`. Use `Text<'a>` to hold
+/// references, or `Text<'static>` (or just `Text` if aliased) for owned data.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Text {
+pub struct Text<'a> {
     /// The lines of styled spans.
-    lines: Vec<Line>,
+    lines: Vec<Line<'a>>,
 }
 
 /// A single line of styled spans.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Line {
-    spans: Vec<Span<'static>>,
+pub struct Line<'a> {
+    spans: Vec<Span<'a>>,
 }
 
-impl Line {
+impl<'a> Line<'a> {
     /// Create an empty line.
     #[inline]
     #[must_use]
@@ -238,27 +246,27 @@ impl Line {
 
     /// Create a line from spans.
     #[must_use]
-    pub fn from_spans<'a>(spans: impl IntoIterator<Item = Span<'a>>) -> Self {
+    pub fn from_spans(spans: impl IntoIterator<Item = Span<'a>>) -> Self {
         Self {
-            spans: spans.into_iter().map(|s| s.into_owned()).collect(),
+            spans: spans.into_iter().collect(),
         }
     }
 
     /// Create a line from a single raw string.
     #[inline]
     #[must_use]
-    pub fn raw(content: impl Into<String>) -> Self {
+    pub fn raw(content: impl Into<Cow<'a, str>>) -> Self {
         Self {
-            spans: vec![Span::raw(content.into())],
+            spans: vec![Span::raw(content)],
         }
     }
 
     /// Create a line from a single styled string.
     #[inline]
     #[must_use]
-    pub fn styled(content: impl Into<String>, style: Style) -> Self {
+    pub fn styled(content: impl Into<Cow<'a, str>>, style: Style) -> Self {
         Self {
-            spans: vec![Span::styled(content.into(), style)],
+            spans: vec![Span::styled(content, style)],
         }
     }
 
@@ -296,20 +304,20 @@ impl Line {
     /// Get the spans.
     #[inline]
     #[must_use]
-    pub fn spans(&self) -> &[Span<'static>] {
+    pub fn spans(&self) -> &[Span<'a>] {
         &self.spans
     }
 
     /// Add a span to the line.
     #[inline]
-    pub fn push_span<'a>(&mut self, span: Span<'a>) {
-        self.spans.push(span.into_owned());
+    pub fn push_span(&mut self, span: Span<'a>) {
+        self.spans.push(span);
     }
 
     /// Append a span (builder pattern).
     #[inline]
     #[must_use]
-    pub fn with_span<'a>(mut self, span: Span<'a>) -> Self {
+    pub fn with_span(mut self, span: Span<'a>) -> Self {
         self.push_span(span);
         self
     }
@@ -335,7 +343,7 @@ impl Line {
 
     /// Wrap this line to the given width, preserving span styles.
     #[must_use]
-    pub fn wrap(&self, width: usize, mode: WrapMode) -> Vec<Line> {
+    pub fn wrap(&self, width: usize, mode: WrapMode) -> Vec<Line<'a>> {
         if mode == WrapMode::None || width == 0 {
             return vec![self.clone()];
         }
@@ -354,61 +362,59 @@ impl Line {
 
     /// Convert to segments.
     #[must_use]
-    pub fn into_segments(self) -> Vec<Segment<'static>> {
+    pub fn into_segments(self) -> Vec<Segment<'a>> {
         self.spans.into_iter().map(|s| s.into_segment()).collect()
     }
 
     /// Convert to a SegmentLine.
     #[must_use]
-    pub fn into_segment_line(self) -> SegmentLine<'static> {
+    pub fn into_segment_line(self) -> SegmentLine<'a> {
         SegmentLine::from_segments(self.into_segments())
     }
 
     /// Iterate over spans.
-    pub fn iter(&self) -> impl Iterator<Item = &Span<'static>> {
+    pub fn iter(&self) -> impl Iterator<Item = &Span<'a>> {
         self.spans.iter()
     }
 }
 
-impl<'a> From<Span<'a>> for Line {
+impl<'a> From<Span<'a>> for Line<'a> {
     fn from(span: Span<'a>) -> Self {
-        Self {
-            spans: vec![span.into_owned()],
-        }
+        Self { spans: vec![span] }
     }
 }
 
-impl From<&str> for Line {
-    fn from(s: &str) -> Self {
+impl<'a> From<&'a str> for Line<'a> {
+    fn from(s: &'a str) -> Self {
         Self::raw(s)
     }
 }
 
-impl From<String> for Line {
+impl From<String> for Line<'static> {
     fn from(s: String) -> Self {
         Self::raw(s)
     }
 }
 
-impl IntoIterator for Line {
-    type Item = Span<'static>;
-    type IntoIter = std::vec::IntoIter<Span<'static>>;
+impl<'a> IntoIterator for Line<'a> {
+    type Item = Span<'a>;
+    type IntoIter = std::vec::IntoIter<Span<'a>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.spans.into_iter()
     }
 }
 
-impl<'a> IntoIterator for &'a Line {
-    type Item = &'a Span<'static>;
-    type IntoIter = std::slice::Iter<'a, Span<'static>>;
+impl<'a> IntoIterator for &'a Line<'a> {
+    type Item = &'a Span<'a>;
+    type IntoIter = std::slice::Iter<'a, Span<'a>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.spans.iter()
     }
 }
 
-impl Text {
+impl<'a> Text<'a> {
     /// Create an empty text.
     #[inline]
     #[must_use]
@@ -418,29 +424,41 @@ impl Text {
 
     /// Create text from a raw string (may contain newlines).
     #[must_use]
-    pub fn raw(content: impl AsRef<str>) -> Self {
-        let content = content.as_ref();
+    pub fn raw(content: impl Into<Cow<'a, str>>) -> Self {
+        let content = content.into();
         if content.is_empty() {
             return Self::new();
         }
 
-        let lines: Vec<Line> = content.split('\n').map(Line::raw).collect();
+        // We can't easily split Cow<'a, str> by newline and keep Cows.
+        // So we convert to string or slice.
+        // If borrowed, we can slice. If owned, we must allocate lines.
+        let lines: Vec<Line<'a>> = match content {
+            Cow::Borrowed(s) => s.split('\n').map(Line::raw).collect(),
+            Cow::Owned(s) => s
+                .split('\n')
+                .map(|line| Line::raw(line.to_string()))
+                .collect(),
+        };
 
         Self { lines }
     }
 
     /// Create styled text from a string (may contain newlines).
     #[must_use]
-    pub fn styled(content: impl AsRef<str>, style: Style) -> Self {
-        let content = content.as_ref();
+    pub fn styled(content: impl Into<Cow<'a, str>>, style: Style) -> Self {
+        let content = content.into();
         if content.is_empty() {
             return Self::new();
         }
 
-        let lines: Vec<Line> = content
-            .split('\n')
-            .map(|s| Line::styled(s, style))
-            .collect();
+        let lines: Vec<Line<'a>> = match content {
+            Cow::Borrowed(s) => s.split('\n').map(|l| Line::styled(l, style)).collect(),
+            Cow::Owned(s) => s
+                .split('\n')
+                .map(|l| Line::styled(l.to_string(), style))
+                .collect(),
+        };
 
         Self { lines }
     }
@@ -448,13 +466,13 @@ impl Text {
     /// Create text from a single line.
     #[inline]
     #[must_use]
-    pub fn from_line(line: Line) -> Self {
+    pub fn from_line(line: Line<'a>) -> Self {
         Self { lines: vec![line] }
     }
 
     /// Create text from multiple lines.
     #[must_use]
-    pub fn from_lines(lines: impl IntoIterator<Item = Line>) -> Self {
+    pub fn from_lines(lines: impl IntoIterator<Item = Line<'a>>) -> Self {
         Self {
             lines: lines.into_iter().collect(),
         }
@@ -462,7 +480,7 @@ impl Text {
 
     /// Create text from spans (single line).
     #[must_use]
-    pub fn from_spans<'a>(spans: impl IntoIterator<Item = Span<'a>>) -> Self {
+    pub fn from_spans(spans: impl IntoIterator<Item = Span<'a>>) -> Self {
         Self {
             lines: vec![Line::from_spans(spans)],
         }
@@ -470,9 +488,9 @@ impl Text {
 
     /// Create text from segments.
     #[must_use]
-    pub fn from_segments<'a>(segments: impl IntoIterator<Item = Segment<'a>>) -> Self {
+    pub fn from_segments(segments: impl IntoIterator<Item = Segment<'a>>) -> Self {
         let segment_lines = split_into_lines(segments);
-        let lines: Vec<Line> = segment_lines
+        let lines: Vec<Line<'a>> = segment_lines
             .into_iter()
             .map(|seg_line| Line::from_spans(seg_line.into_iter().map(Span::from)))
             .collect();
@@ -521,7 +539,7 @@ impl Text {
     /// Get the lines.
     #[inline]
     #[must_use]
-    pub fn lines(&self) -> &[Line] {
+    pub fn lines(&self) -> &[Line<'a>] {
         &self.lines
     }
 
@@ -539,20 +557,20 @@ impl Text {
 
     /// Add a line.
     #[inline]
-    pub fn push_line(&mut self, line: Line) {
+    pub fn push_line(&mut self, line: Line<'a>) {
         self.lines.push(line);
     }
 
     /// Append a line (builder pattern).
     #[inline]
     #[must_use]
-    pub fn with_line(mut self, line: Line) -> Self {
+    pub fn with_line(mut self, line: Line<'a>) -> Self {
         self.push_line(line);
         self
     }
 
     /// Add a span to the last line (or create new line if empty).
-    pub fn push_span<'a>(&mut self, span: Span<'a>) {
+    pub fn push_span(&mut self, span: Span<'a>) {
         if self.lines.is_empty() {
             self.lines.push(Line::new());
         }
@@ -563,7 +581,7 @@ impl Text {
 
     /// Append a span to the last line (builder pattern).
     #[must_use]
-    pub fn with_span<'a>(mut self, span: Span<'a>) -> Self {
+    pub fn with_span(mut self, span: Span<'a>) -> Self {
         self.push_span(span);
         self
     }
@@ -597,7 +615,7 @@ impl Text {
 
     /// Convert to SegmentLines.
     #[must_use]
-    pub fn into_segment_lines(self) -> SegmentLines<'static> {
+    pub fn into_segment_lines(self) -> SegmentLines<'a> {
         SegmentLines::from_lines(
             self.lines
                 .into_iter()
@@ -607,7 +625,7 @@ impl Text {
     }
 
     /// Iterate over lines.
-    pub fn iter(&self) -> impl Iterator<Item = &Line> {
+    pub fn iter(&self) -> impl Iterator<Item = &Line<'a>> {
         self.lines.iter()
     }
 
@@ -706,13 +724,13 @@ fn find_cell_boundary(text: &str, target_cells: usize) -> (usize, usize) {
     (byte_pos, current_cells)
 }
 
-fn span_is_whitespace(span: &Span<'static>) -> bool {
+fn span_is_whitespace(span: &Span<'_>) -> bool {
     span.as_str()
         .graphemes(true)
         .all(|g| g.chars().all(|c| c.is_whitespace()))
 }
 
-fn trim_span_start(span: Span<'static>) -> Span<'static> {
+fn trim_span_start<'a>(span: Span<'a>) -> Span<'a> {
     let text = span.as_str();
     let mut start = 0;
     let mut found = false;
@@ -737,7 +755,7 @@ fn trim_span_start(span: Span<'static>) -> Span<'static> {
     }
 }
 
-fn trim_span_end(span: Span<'static>) -> Span<'static> {
+fn trim_span_end<'a>(span: Span<'a>) -> Span<'a> {
     let text = span.as_str();
     let mut end = text.len();
     let mut found = false;
@@ -762,7 +780,7 @@ fn trim_span_end(span: Span<'static>) -> Span<'static> {
     }
 }
 
-fn trim_line_trailing(mut line: Line) -> Line {
+fn trim_line_trailing<'a>(mut line: Line<'a>) -> Line<'a> {
     while let Some(last) = line.spans.last().cloned() {
         let trimmed = trim_span_end(last);
         if trimmed.is_empty() {
@@ -778,7 +796,7 @@ fn trim_line_trailing(mut line: Line) -> Line {
     line
 }
 
-fn push_span_merged(line: &mut Line, span: Span<'static>) {
+fn push_span_merged<'a>(line: &mut Line<'a>, span: Span<'a>) {
     if span.is_empty() {
         return;
     }
@@ -797,29 +815,48 @@ fn push_span_merged(line: &mut Line, span: Span<'static>) {
     line.spans.push(span);
 }
 
-fn split_span_words(span: &Span<'static>) -> Vec<Span<'static>> {
-    let mut segments = Vec::new();
-    let mut current = String::new();
+fn split_span_words<'a>(span: &Span<'a>) -> Vec<Span<'a>> {
+    let (text, borrowed_base): (&str, Option<&'a str>) = match &span.content {
+        Cow::Borrowed(s) => (*s, Some(*s)),
+        Cow::Owned(s) => (s.as_str(), None),
+    };
+    let mut start = 0;
     let mut in_whitespace = false;
+    let mut segments = Vec::new();
 
-    for grapheme in span.as_str().graphemes(true) {
+    // Iterate graphemes to find boundaries
+    for (idx, grapheme) in text.grapheme_indices(true) {
         let is_ws = grapheme.chars().all(crate::wrap::is_breaking_whitespace);
+        if idx == 0 {
+            in_whitespace = is_ws;
+        }
 
-        if is_ws != in_whitespace && !current.is_empty() {
+        if is_ws != in_whitespace {
+            // Boundary at `idx`
+            let sub = &text[start..idx];
+            let content = match borrowed_base {
+                Some(base) => Cow::Borrowed(&base[start..idx]),
+                None => Cow::Owned(sub.to_string()),
+            };
             segments.push(Span {
-                content: Cow::Owned(std::mem::take(&mut current)),
+                content,
                 style: span.style,
                 link: span.link.clone(),
             });
+            start = idx;
+            in_whitespace = is_ws;
         }
-
-        current.push_str(grapheme);
-        in_whitespace = is_ws;
     }
 
-    if !current.is_empty() {
+    // Last segment
+    if start < text.len() {
+        let sub = &text[start..];
+        let content = match borrowed_base {
+            Some(base) => Cow::Borrowed(&base[start..]),
+            None => Cow::Owned(sub.to_string()),
+        };
         segments.push(Span {
-            content: Cow::Owned(current),
+            content,
             style: span.style,
             link: span.link.clone(),
         });
@@ -828,7 +865,7 @@ fn split_span_words(span: &Span<'static>) -> Vec<Span<'static>> {
     segments
 }
 
-fn wrap_line_chars(line: &Line, width: usize) -> Vec<Line> {
+fn wrap_line_chars<'a>(line: &Line<'a>, width: usize) -> Vec<Line<'a>> {
     let mut lines = Vec::new();
     let mut current = Line::new();
     let mut current_width = 0;
@@ -884,8 +921,8 @@ fn wrap_line_chars(line: &Line, width: usize) -> Vec<Line> {
     lines
 }
 
-fn wrap_line_words(line: &Line, width: usize, char_fallback: bool) -> Vec<Line> {
-    let mut pieces = Vec::new();
+fn wrap_line_words<'a>(line: &Line<'a>, width: usize, char_fallback: bool) -> Vec<Line<'a>> {
+    let mut pieces: Vec<Span<'a>> = Vec::new();
     for span in &line.spans {
         pieces.extend(split_span_words(span));
     }
@@ -997,48 +1034,48 @@ fn wrap_line_words(line: &Line, width: usize, char_fallback: bool) -> Vec<Line> 
     lines
 }
 
-impl From<&str> for Text {
-    fn from(s: &str) -> Self {
+impl<'a> From<&'a str> for Text<'a> {
+    fn from(s: &'a str) -> Self {
         Self::raw(s)
     }
 }
 
-impl From<String> for Text {
+impl From<String> for Text<'static> {
     fn from(s: String) -> Self {
         Self::raw(s)
     }
 }
 
-impl From<Line> for Text {
-    fn from(line: Line) -> Self {
+impl<'a> From<Line<'a>> for Text<'a> {
+    fn from(line: Line<'a>) -> Self {
         Self::from_line(line)
     }
 }
 
-impl<'a> FromIterator<Span<'a>> for Text {
+impl<'a> FromIterator<Span<'a>> for Text<'a> {
     fn from_iter<I: IntoIterator<Item = Span<'a>>>(iter: I) -> Self {
         Self::from_spans(iter)
     }
 }
 
-impl FromIterator<Line> for Text {
-    fn from_iter<I: IntoIterator<Item = Line>>(iter: I) -> Self {
+impl<'a> FromIterator<Line<'a>> for Text<'a> {
+    fn from_iter<I: IntoIterator<Item = Line<'a>>>(iter: I) -> Self {
         Self::from_lines(iter)
     }
 }
 
-impl IntoIterator for Text {
-    type Item = Line;
-    type IntoIter = std::vec::IntoIter<Line>;
+impl<'a> IntoIterator for Text<'a> {
+    type Item = Line<'a>;
+    type IntoIter = std::vec::IntoIter<Line<'a>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.lines.into_iter()
     }
 }
 
-impl<'a> IntoIterator for &'a Text {
-    type Item = &'a Line;
-    type IntoIter = std::slice::Iter<'a, Line>;
+impl<'a> IntoIterator for &'a Text<'a> {
+    type Item = &'a Line<'a>;
+    type IntoIter = std::slice::Iter<'a, Line<'a>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.lines.iter()
@@ -1432,7 +1469,7 @@ mod tests {
     fn line_with_span_ownership() {
         // Verify that spans are properly owned
         let s = String::from("hello");
-        let line = Line::raw(&s);
+        let line = Line::raw(s.clone());
         drop(s); // Original string dropped
         assert_eq!(line.to_plain_text(), "hello"); // Still works
     }

@@ -87,7 +87,7 @@ edition = "2024"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["full"] }
+asupersync = { version = "0.2", features = ["proc-macros"] }
 "#;
 
 const SAMPLE_JSON: &str = r#"{

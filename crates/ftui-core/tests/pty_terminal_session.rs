@@ -276,6 +276,7 @@ fn pty_cleanup_child() {
         bracketed_paste: true,
         focus_events: false,
         kitty_keyboard: false,
+        intercept_signals: true,
     };
     let _session = TerminalSession::new(options).expect("TerminalSession::new");
     println!("READY");
@@ -294,6 +295,7 @@ fn pty_cleanup_panic_child() {
         bracketed_paste: true,
         focus_events: false,
         kitty_keyboard: false,
+        intercept_signals: true,
     };
     let _session = TerminalSession::new(options).expect("TerminalSession::new");
     println!("PANIC_READY");
@@ -312,6 +314,7 @@ fn pty_event_parse_child() {
         bracketed_paste: true,
         focus_events: false,
         kitty_keyboard: false,
+        intercept_signals: true,
     };
     let session = TerminalSession::new(options).expect("TerminalSession::new");
     println!("READY");

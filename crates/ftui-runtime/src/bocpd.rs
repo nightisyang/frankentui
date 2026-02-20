@@ -174,7 +174,7 @@
 //! - Hazard function choice is geometric (constant hazard)
 
 use std::fmt;
-use web_time::Instant;
+use web_time::{Duration, Instant};
 
 // =============================================================================
 // Configuration
@@ -660,7 +660,12 @@ impl BocpdDetector {
         // Compute inter-arrival time
         let observation_ms = self
             .last_event_time
-            .map(|last| now.duration_since(last).as_secs_f64() * 1000.0)
+            .map(|last| {
+                now.checked_duration_since(last)
+                    .unwrap_or(Duration::ZERO)
+                    .as_secs_f64()
+                    * 1000.0
+            })
             .unwrap_or(self.config.mu_steady_ms); // Default to steady-like on first event
 
         // Clamp observation
@@ -681,37 +686,57 @@ impl BocpdDetector {
     fn update_posterior(&mut self, x: f64, now: Instant) {
         self.observation_count += 1;
 
-        // Compute likelihoods
-        let ll_steady = self.exponential_pdf(x, self.lambda_steady);
-        let ll_burst = self.exponential_pdf(x, self.lambda_burst);
+        // Compute predictive likelihoods for each regime
+        let pred_steady = self.exponential_pdf(x, self.lambda_steady);
+        let pred_burst = self.exponential_pdf(x, self.lambda_burst);
 
-        // Compute Bayes factor
-        let log_bf = if ll_steady > 0.0 && ll_burst > 0.0 {
-            (ll_burst / ll_steady).log10()
+        // Compute Bayes factor for the observation (instantaneous)
+        let log_bf = if pred_steady > 0.0 && pred_burst > 0.0 {
+            (pred_burst / pred_steady).log10()
         } else {
             0.0
         };
 
-        // ==== BOCPD Run-Length Update ====
+        // ==== Update Run-Length Posteriors ====
+        // We maintain a single run-length distribution that marginalizes over regimes.
+        // P(r_t | x) ∝ Σ_regime P(x | regime) * P(r_t | regime) * P(regime)
+        //
+        // However, standard BOCPD assumes parameters are associated with run-length.
+        // Here, "regime" is a global latent variable, not per-run-segment.
+        // So we update the regime probability first, then weight the RL update.
+
+        // Update regime probability: P(burst | x) ∝ P(x | burst) * P(burst)
+        let prior_odds = self.p_burst / (1.0 - self.p_burst).max(1e-10);
+        let likelihood_ratio = pred_burst / pred_steady.max(1e-10);
+        let posterior_odds = prior_odds * likelihood_ratio;
+        self.p_burst = (posterior_odds / (1.0 + posterior_odds)).clamp(0.001, 0.999);
+
+        // Update run-length distribution
+        // The predictive likelihood for RL update is the mixture of regimes:
+        // P(x | r) = P(burst) * P(x|burst) + P(steady) * P(x|steady)
+        // This makes the RL distribution track "time since change in event rate".
+        let mixture_likelihood = self.p_burst * pred_burst + (1.0 - self.p_burst) * pred_steady;
+
         let k = self.config.max_run_length;
         let mut new_posterior = vec![0.0; k + 1];
 
-        // Growth probability: P(r_t = r+1) ∝ P(r_{t-1} = r) × (1 - H(r)) × likelihood
+        // Growth: P(r_t = r+1) ∝ P(r_{t-1} = r) * (1 - H(r)) * P(x | r)
         for r in 0..k {
             let growth_prob = self.run_length_posterior[r] * (1.0 - self.hazard);
-            new_posterior[r + 1] += growth_prob * self.predictive_likelihood(r, x);
+            new_posterior[r + 1] += growth_prob * mixture_likelihood;
         }
 
-        // Merge probability at r=K (truncation)
+        // Merge at K (truncation)
         new_posterior[k] +=
-            self.run_length_posterior[k] * (1.0 - self.hazard) * self.predictive_likelihood(k, x);
+            self.run_length_posterior[k] * (1.0 - self.hazard) * mixture_likelihood;
 
-        // Changepoint probability: P(r_t = 0) ∝ Σ P(r_{t-1}) × H × likelihood
+        // Changepoint: P(r_t = 0) ∝ Σ P(r_{t-1}) * H * P(x | 0)
+        // Note: P(x | 0) is same mixture likelihood since we assume regime continuity across CP for now
         let cp_prob: f64 = self
             .run_length_posterior
             .iter()
             .enumerate()
-            .map(|(r, &p)| p * self.hazard * self.predictive_likelihood(r, x))
+            .map(|(r, &p)| p * self.hazard * mixture_likelihood)
             .sum();
         new_posterior[0] = cp_prob;
 
@@ -722,19 +747,11 @@ impl BocpdDetector {
                 *p /= total;
             }
         } else {
-            // Reset to uniform if numerical issues
             let uniform = 1.0 / (k + 1) as f64;
             new_posterior.fill(uniform);
         }
 
         self.run_length_posterior = new_posterior;
-
-        // ==== Update Burst Probability ====
-        // Use a Bayesian update with the likelihood ratio
-        let prior_odds = self.p_burst / (1.0 - self.p_burst).max(1e-10);
-        let likelihood_ratio = ll_burst / ll_steady.max(1e-10);
-        let posterior_odds = prior_odds * likelihood_ratio;
-        self.p_burst = (posterior_odds / (1.0 + posterior_odds)).clamp(0.001, 0.999);
 
         // Store evidence
         let summary = self.run_length_summary();
@@ -743,8 +760,8 @@ impl BocpdDetector {
             log_bayes_factor: log_bf,
             observation_ms: x,
             regime: self.regime(),
-            likelihood_steady: ll_steady,
-            likelihood_burst: ll_burst,
+            likelihood_steady: pred_steady,
+            likelihood_burst: pred_burst,
             expected_run_length: summary.mean,
             run_length_variance: summary.variance,
             run_length_mode: summary.mode,
@@ -761,19 +778,6 @@ impl BocpdDetector {
     #[inline]
     fn exponential_pdf(&self, x: f64, lambda: f64) -> f64 {
         lambda * (-lambda * x).exp()
-    }
-
-    /// Predictive likelihood for observation given run-length.
-    ///
-    /// We use a mixture model weighted by regime probability:
-    /// P(x | r) = p_burst × P(x | burst) + (1 - p_burst) × P(x | steady)
-    #[inline]
-    fn predictive_likelihood(&self, _r: usize, x: f64) -> f64 {
-        // Note: A more sophisticated model would condition on r,
-        // but for simplicity we use the current regime estimate.
-        let ll_steady = self.exponential_pdf(x, self.lambda_steady);
-        let ll_burst = self.exponential_pdf(x, self.lambda_burst);
-        self.p_burst * ll_burst + (1.0 - self.p_burst) * ll_steady
     }
 
     /// Reset the detector to initial state.

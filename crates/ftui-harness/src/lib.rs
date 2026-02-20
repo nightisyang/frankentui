@@ -730,7 +730,7 @@ mod tests {
     #[test]
     fn buffer_to_text_grapheme_width_correct_placeholder() {
         // Simulate a width-2 grapheme (e.g., emoji like "⚙️") stored in pool
-        let gid = GraphemeId::new(1, 2); // slot 1, width 2
+        let gid = GraphemeId::new(1, 0, 2); // slot 1, generation 0, width 2
         let content = CellContent::from_grapheme(gid);
         let mut buf = Buffer::new(6, 1);
         // Buffer::set automatically writes CONTINUATION at x=1 for width-2 content
@@ -758,7 +758,7 @@ mod tests {
 
     #[test]
     fn buffer_to_text_with_pool_none_falls_back() {
-        let gid = GraphemeId::new(1, 2);
+        let gid = GraphemeId::new(1, 0, 2);
         let content = CellContent::from_grapheme(gid);
         let mut buf = Buffer::new(4, 1);
         // Buffer::set automatically writes CONTINUATION at x=1 for width-2 content
@@ -771,7 +771,7 @@ mod tests {
 
     #[test]
     fn buffer_to_ansi_grapheme_width_correct_placeholder() {
-        let gid = GraphemeId::new(1, 2);
+        let gid = GraphemeId::new(1, 0, 2);
         let content = CellContent::from_grapheme(gid);
         let mut buf = Buffer::new(4, 1);
         // Buffer::set automatically writes CONTINUATION at x=1 for width-2 content

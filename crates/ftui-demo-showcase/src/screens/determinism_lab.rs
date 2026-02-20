@@ -636,7 +636,7 @@ impl DeterminismLab {
         self.last_export = Some(ExportStatus { path, ok, message });
     }
 
-    fn build_details_lines(&self) -> Vec<Line> {
+    fn build_details_lines(&self) -> Vec<Line<'_>> {
         let muted = theme::muted();
         let accent = Style::new().fg(theme::screen_accent::PERFORMANCE).bold();
         let ok_style = Style::new().fg(theme::accent::SUCCESS);

@@ -608,6 +608,28 @@ impl<W: Write> Presenter<W> {
         pool: Option<&GraphemePool>,
         links: Option<&LinkRegistry>,
     ) -> io::Result<()> {
+        // Drift protection: Ensure cursor is synchronized before emitting content.
+        // This catches cases where the previous emission (e.g. a wide char) advanced
+        // the cursor further than the buffer index advanced (e.g. because the
+        // continuation cell was missing/overwritten in an invalid buffer state).
+        //
+        // If we detect drift, we force a re-synchronization.
+        if let Some(cx) = self.cursor_x
+            && cx != x
+        {
+            // If we are ahead (cx > x), it means the previous char was wider than expected
+            // by the buffer iteration (or we skipped something).
+            // If we are behind (cx < x), we missed something.
+            // In either case, if the cell is NOT a continuation, we must be at `x`.
+            // (If it IS a continuation, we handle it below).
+            if !cell.is_continuation() {
+                // Re-sync. We assume cursor_y is set because we are in a run.
+                if let Some(y) = self.cursor_y {
+                    self.move_cursor_optimal(x, y)?;
+                }
+            }
+        }
+
         // Continuation cells are the tail cells of wide glyphs. Emitting the
         // head glyph already advanced the terminal cursor by the full width, so
         // we normally skip emitting these cells.
@@ -1535,49 +1557,42 @@ mod tests {
 
         // Bug scenario: User sets wide char but forgets continuation
         buffer.set_raw(0, 0, Cell::from_char('中'));
-        // (1,0) remains empty (space)
+        // (1,0) remains empty (space), instead of CONTINUATION
 
         let old = Buffer::new(10, 1);
         let diff = BufferDiff::compute(&old, &buffer);
 
         presenter.present(&buffer, &diff).unwrap();
         let output = get_output(presenter);
-        let _output_str = String::from_utf8_lossy(&output);
 
-        // Expected if broken: '中' (width 2) followed by ' ' (width 1)
-        // '中' takes x=0,1 on screen. Cursor moves to 2.
-        // Loop visits x=1 (empty). Emits ' '. Cursor moves to 3.
-        // So we emitted 3 columns worth of stuff for 2 cells of buffer.
+        // Expected behavior with fix:
+        // 1. Emit '中' at 0. Cursor -> 2.
+        // 2. Loop visits 1. Cell is ' '.
+        // 3. Drift check sees x=1, cx=2. Mismatch!
+        // 4. Force move to 1. Emits CUP or CHA (CHA is cheaper: \x1b[2G).
+        // 5. Emit ' '. Cursor -> 2.
 
-        // This is hard to assert on the raw string without parsing ANSI,
-        // but we know '中' is bytes e4 b8 ad.
+        // Without fix, it would just emit ' ' at 2.
 
-        // If correct (with continuation):
-        // x=0: emits '中'. cursor -> 2.
-        // x=1: skipped (continuation).
-        // x=2: next char...
+        let output_str = String::from_utf8_lossy(&output);
 
-        // If incorrect (current behavior):
-        // x=0: emits '中'. cursor -> 2.
-        // x=1: emits ' '. cursor -> 3.
+        // Assert we see the wide char
+        assert!(output_str.contains('中'));
 
-        // We can check if a space is emitted immediately after the wide char.
-        // Note: Presenter might optimize cursor movement, but here we are writing sequentially.
+        // Assert we see a back-step or positioning sequence.
+        // CHA 2 is "\x1b[2G". CUB 1 is "\x1b[D".
+        // The cost model might choose CUB 1 (3 bytes) vs CHA 2 (4 bytes).
+        // So check for either.
 
-        // The output should contain '中' then ' '.
-        // In a correct world, x=1 is CONTINUATION, so ' ' is NOT emitted for x=1.
+        let has_correction = output_str.contains("\x1b[D")
+            || output_str.contains("\x1b[2G")
+            || output_str.contains("\x1b[1;2H");
 
-        // So if we see '中' followed immediately by ' ' (or escape sequence then ' '), it implies drift IF x=1 was supposed to be covered by '中'.
-
-        // To verify this failure, we assert that the output DOES contain the space.
-        // If we fix the bug in Buffer::set, this test setup would need to use set() instead of set_raw()
-        // to prove the fix.
-
-        // But for now, let's just assert the current broken behavior exists?
-        // No, I want to assert the *bug* is that the buffer allows this state.
-        // The Presenter is doing its job (GIGO).
-
-        // Let's rely on the fix verification instead.
+        assert!(
+            has_correction,
+            "Presenter should correct cursor drift when wide char tail is missing. Output: {:?}",
+            output_str
+        );
     }
 
     #[test]

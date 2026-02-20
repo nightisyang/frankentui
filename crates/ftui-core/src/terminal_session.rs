@@ -184,6 +184,7 @@ const KITTY_KEYBOARD_ENABLE: &[u8] = b"\x1b[>15u";
 const KITTY_KEYBOARD_DISABLE: &[u8] = b"\x1b[<u";
 const RESET_SCROLL_REGION: &[u8] = b"\x1b[r";
 const RESET_STYLE: &[u8] = b"\x1b[0m";
+const SYNC_END: &[u8] = b"\x1b[?2026l";
 // Mouse mode hygiene:
 // 1) Reset legacy and alternate encodings.
 // 2) Enable canonical SGR mouse modes (1000 + 1002 + 1006).
@@ -257,7 +258,7 @@ use signal_hook::iterator::Signals;
 /// // Minimal inline mode
 /// let inline_opts = SessionOptions::default();
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SessionOptions {
     /// Enable alternate screen buffer (`CSI ? 1049 h`).
     ///
@@ -300,6 +301,26 @@ pub struct SessionOptions {
     /// Uses the kitty protocol to report repeat/release events and disambiguate
     /// keys. This is optional and only supported by select terminals.
     pub kitty_keyboard: bool,
+
+    /// Install a signal handler to restore terminal state on SIGINT/SIGTERM/SIGHUP.
+    ///
+    /// Defaults to `true` to ensure the terminal is not left in a broken state
+    /// when the application is terminated. Disable this if you are managing
+    /// signals yourself or running in a context where signal handling is undesirable.
+    pub intercept_signals: bool,
+}
+
+impl Default for SessionOptions {
+    fn default() -> Self {
+        Self {
+            alternate_screen: false,
+            mouse_capture: false,
+            bracketed_paste: false,
+            focus_events: false,
+            kitty_keyboard: false,
+            intercept_signals: true,
+        }
+    }
 }
 
 #[inline]
@@ -415,7 +436,11 @@ impl TerminalSession {
         // does not leave the terminal in raw mode (the struct would never
         // be fully constructed, so Drop would not run).
         #[cfg(unix)]
-        let signal_guard = Some(SignalGuard::new()?);
+        let signal_guard = if options.intercept_signals {
+            Some(SignalGuard::new()?)
+        } else {
+            None
+        };
 
         // Enter raw mode
         crossterm::terminal::enable_raw_mode()?;
@@ -891,6 +916,8 @@ impl TerminalSession {
         let _ = stdout.write_all(RESET_SCROLL_REGION);
         // Reset style so shell prompt does not inherit UI SGR state.
         let _ = stdout.write_all(RESET_STYLE);
+        // Ensure synchronized output is disabled (prevent frozen terminal on panic)
+        let _ = stdout.write_all(SYNC_END);
 
         // Disable features in reverse order of enabling
         if self.kitty_keyboard_enabled {
@@ -997,6 +1024,8 @@ fn best_effort_cleanup() {
 
     let _ = stdout.write_all(RESET_SCROLL_REGION);
     let _ = stdout.write_all(RESET_STYLE);
+    // Ensure synchronized output is disabled (prevent frozen terminal on panic)
+    let _ = stdout.write_all(SYNC_END);
 
     // Keep panic/signal cleanup conservative: only emit mux-sensitive mode
     // disables when policy says they could have been enabled.
@@ -1132,6 +1161,7 @@ mod tests {
             bracketed_paste: false,
             focus_events: true,
             kitty_keyboard: false,
+            intercept_signals: true,
         };
         let cloned = opts.clone();
         assert_eq!(cloned.alternate_screen, opts.alternate_screen);
@@ -1291,6 +1321,7 @@ mod tests {
             bracketed_paste: true,
             focus_events: true,
             kitty_keyboard: true,
+            intercept_signals: true,
         };
         let caps = TerminalCapabilities::basic();
         let sanitized = sanitize_session_options(requested, &caps);
@@ -1310,6 +1341,7 @@ mod tests {
             bracketed_paste: true,
             focus_events: true,
             kitty_keyboard: true,
+            intercept_signals: true,
         };
         let caps = TerminalCapabilities::builder()
             .mouse_sgr(true)
@@ -1335,6 +1367,7 @@ mod tests {
             bracketed_paste: true,
             focus_events: true,
             kitty_keyboard: true,
+            intercept_signals: true,
         };
         let caps = TerminalCapabilities::builder()
             .mouse_sgr(true)
@@ -1434,6 +1467,7 @@ mod tests {
             bracketed_paste: true,
             focus_events: true,
             kitty_keyboard: true,
+            intercept_signals: true,
         };
         assert!(opts.alternate_screen);
         assert!(opts.mouse_capture);
@@ -1450,6 +1484,7 @@ mod tests {
             bracketed_paste: true,
             focus_events: false,
             kitty_keyboard: true,
+            intercept_signals: true,
         };
         let debug = format!("{opts:?}");
         assert!(debug.contains("alternate_screen: true"), "{debug}");
@@ -1457,6 +1492,7 @@ mod tests {
         assert!(debug.contains("bracketed_paste: true"), "{debug}");
         assert!(debug.contains("focus_events: false"), "{debug}");
         assert!(debug.contains("kitty_keyboard: true"), "{debug}");
+        assert!(debug.contains("intercept_signals: true"), "{debug}");
     }
 
     #[test]
@@ -1497,6 +1533,7 @@ mod tests {
             bracketed_paste: true,
             focus_events: true,
             kitty_keyboard: true,
+            intercept_signals: true,
         };
         let session = TerminalSession::new_for_tests(opts).unwrap();
         let stored = session.options();
@@ -1517,6 +1554,7 @@ mod tests {
             bracketed_paste: true,
             focus_events: true,
             kitty_keyboard: true,
+            intercept_signals: true,
         };
         let session = TerminalSession::new_for_tests(opts).unwrap();
         // Flags track *actual* enabled state, not *requested* state
@@ -1614,6 +1652,7 @@ mod tests {
             bracketed_paste: true,
             focus_events: true,
             kitty_keyboard: true,
+            intercept_signals: true,
         })
         .unwrap();
         // Manually set flags to simulate features being enabled
@@ -1735,6 +1774,7 @@ mod tests {
                     bracketed_paste: true,
                     focus_events: true,
                     kitty_keyboard: true,
+                    intercept_signals: true,
                 })
                 .expect("TerminalSession::new should succeed in PTY");
                 panic!("intentional panic to exercise cleanup");

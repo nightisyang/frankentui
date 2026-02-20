@@ -647,7 +647,7 @@ pub mod themes {
         Theme {
             primary: AdaptiveColor::fixed(Color::rgb(178, 34, 34)), // Firebrick
             secondary: AdaptiveColor::fixed(Color::rgb(50, 205, 50)), // LimeGreen
-            accent: AdaptiveColor::fixed(Color::rgb(255, 255, 0)), // Yellow (Ammo)
+            accent: AdaptiveColor::fixed(Color::rgb(255, 255, 0)),  // Yellow (Ammo)
 
             background: AdaptiveColor::fixed(Color::rgb(26, 26, 26)), // Dark Grey
             surface: AdaptiveColor::fixed(Color::rgb(47, 47, 47)),    // Gunmetal
@@ -679,7 +679,7 @@ pub mod themes {
         Theme {
             primary: AdaptiveColor::fixed(Color::rgb(139, 69, 19)), // SaddleBrown
             secondary: AdaptiveColor::fixed(Color::rgb(85, 107, 47)), // DarkOliveGreen
-            accent: AdaptiveColor::fixed(Color::rgb(205, 133, 63)),   // Peru
+            accent: AdaptiveColor::fixed(Color::rgb(205, 133, 63)), // Peru
 
             background: AdaptiveColor::fixed(Color::rgb(28, 28, 28)), // Very Dark Grey
             surface: AdaptiveColor::fixed(Color::rgb(46, 39, 34)),    // Deep Brown/Grey

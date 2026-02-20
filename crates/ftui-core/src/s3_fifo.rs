@@ -280,31 +280,32 @@ where
     fn evict_small_if_full(&mut self) {
         while self.small.len() >= self.small_cap {
             if let Some(idx) = self.small.pop_front() {
-                // Extract state we need while holding the entry borrow, then drop it
-                // before calling methods that borrow `self` mutably again.
-                let (promote_to_main, key) = {
-                    let entry = self.entries[idx].as_mut().unwrap();
-                    let key = entry.key.clone();
-                    if entry.freq > 0 {
-                        entry.freq = 0; // Reset freq on promotion.
-                        (true, key)
-                    } else {
-                        (false, key)
-                    }
-                };
+                // Check freq - minimize borrow scope
+                let freq = self.entries[idx].as_ref().unwrap().freq;
 
-                if promote_to_main {
+                if freq > 0 {
+                    // Promote to main.
+                    self.entries[idx].as_mut().unwrap().freq = 0;
+
+                    // Clone key for index update (must do before evict_main which borrows self)
+                    let key = self.entries[idx].as_ref().unwrap().key.clone();
+
                     self.evict_main_if_full();
+
                     self.index.insert(key, Location::Main(idx));
                     self.main.push_back(idx);
                 } else {
-                    self.index.remove(&key);
-                    self.free_entry(idx); // Value is dropped here.
+                    // Evict to ghost.
+                    // Extract entry to reuse key and avoid clone
+                    let entry = self.entries[idx].take().unwrap();
+                    self.free_indices.push(idx);
+
+                    self.index.remove(&entry.key);
 
                     if self.ghost.len() >= self.ghost_cap {
                         self.ghost.pop_front();
                     }
-                    self.ghost.push_back(key);
+                    self.ghost.push_back(entry.key);
                 }
             }
         }
@@ -314,17 +315,17 @@ where
     fn evict_main_if_full(&mut self) {
         while self.main.len() >= self.main_cap {
             if let Some(idx) = self.main.pop_front() {
-                let entry = self.entries[idx].as_mut().unwrap();
+                let freq = self.entries[idx].as_ref().unwrap().freq;
 
-                if entry.freq > 0 {
-                    // Give it another chance: decrement and re-insert.
-                    entry.freq -= 1;
+                if freq > 0 {
+                    // Give second chance
+                    self.entries[idx].as_mut().unwrap().freq -= 1;
                     self.main.push_back(idx);
                 } else {
-                    // Actually evict.
-                    let key = entry.key.clone();
-                    self.index.remove(&key);
-                    self.free_entry(idx);
+                    // Evict
+                    let entry = self.entries[idx].take().unwrap();
+                    self.free_indices.push(idx);
+                    self.index.remove(&entry.key);
                 }
             }
         }

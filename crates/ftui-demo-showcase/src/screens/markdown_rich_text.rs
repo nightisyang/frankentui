@@ -300,7 +300,7 @@ struct MarkdownPanel<'a> {
     syntax_highlighter: Arc<SyntaxHighlighter>,
 }
 
-fn wrap_markdown_for_panel(text: &Text, width: u16) -> Text {
+fn wrap_markdown_for_panel<'a>(text: &Text<'a>, width: u16) -> Text<'a> {
     let width = usize::from(width);
     if width == 0 {
         return text.clone();
@@ -360,7 +360,7 @@ fn is_table_like_line(plain: &str) -> bool {
     trimmed.chars().filter(|&c| c == '|').count() >= 2
 }
 
-fn wrap_line_to_width(line: &Line, width: usize) -> Vec<Line> {
+fn wrap_line_to_width<'a>(line: &Line<'a>, width: usize) -> Vec<Line<'a>> {
     let mut wrapped_lines = Vec::new();
     for wrapped in line.wrap(width, WrapMode::Word) {
         if wrapped.width() <= width {
@@ -372,7 +372,7 @@ fn wrap_line_to_width(line: &Line, width: usize) -> Vec<Line> {
     wrapped_lines
 }
 
-fn truncate_line_to_width(line: &Line, width: usize) -> Vec<Line> {
+fn truncate_line_to_width<'a>(line: &Line<'a>, width: usize) -> Vec<Line<'a>> {
     let mut text = Text::from_lines([line.clone()]);
     text.truncate(width, None);
     text.lines().to_vec()
@@ -397,7 +397,7 @@ fn blockquote_prefix_width(plain: &str) -> Option<usize> {
     Some(ftui_text::display_width(&plain[..prefix_bytes]))
 }
 
-fn wrap_blockquote_line(line: &Line, width: usize, prefix_width: usize) -> Vec<Line> {
+fn wrap_blockquote_line<'a>(line: &Line<'a>, width: usize, prefix_width: usize) -> Vec<Line<'a>> {
     if prefix_width == 0 || prefix_width >= width {
         return truncate_line_to_width(line, width);
     }
@@ -418,7 +418,7 @@ fn wrap_blockquote_line(line: &Line, width: usize, prefix_width: usize) -> Vec<L
         .collect()
 }
 
-fn split_line_at_cell(line: &Line, cell_pos: usize) -> (Line, Line) {
+fn split_line_at_cell<'a>(line: &Line<'a>, cell_pos: usize) -> (Line<'a>, Line<'a>) {
     if cell_pos == 0 {
         return (Line::new(), line.clone());
     }
@@ -676,7 +676,7 @@ impl MarkdownRichText {
     /// Render the streaming fragment using streaming-aware rendering.
     ///
     /// Adds a visible blinking cursor at the end when still streaming.
-    fn render_stream_fragment(&self, width: u16) -> Text {
+    fn render_stream_fragment(&self, width: u16) -> Text<'_> {
         let fragment = self.current_stream_fragment();
         let renderer = MarkdownRenderer::new(self.md_theme.clone())
             .rule_width(RULE_WIDTH.min(width))
@@ -1220,7 +1220,7 @@ impl Screen for MarkdownRichText {
 mod tests {
     use super::*;
 
-    fn rendered_sample() -> Text {
+    fn rendered_sample() -> Text<'static> {
         MarkdownRenderer::new(MarkdownTheme::default())
             .rule_width(RULE_WIDTH)
             .render(SAMPLE_MARKDOWN)
@@ -1248,7 +1248,7 @@ mod tests {
         let plain: String = rendered
             .lines()
             .iter()
-            .map(|l| l.to_plain_text())
+            .map(|l: &Line<'_>| l.to_plain_text())
             .collect::<Vec<_>>()
             .join("\n");
         assert!(plain.contains("GitHub-Flavored Markdown (Rich Demo)"));
@@ -1262,7 +1262,7 @@ mod tests {
         let plain: String = rendered
             .lines()
             .iter()
-            .map(|l| l.to_plain_text())
+            .map(|l: &Line<'_>| l.to_plain_text())
             .collect::<Vec<_>>()
             .join("\n");
         assert!(plain.contains("pub enum Strategy"));
@@ -1275,7 +1275,7 @@ mod tests {
         let plain: String = rendered
             .lines()
             .iter()
-            .map(|l| l.to_plain_text())
+            .map(|l: &Line<'_>| l.to_plain_text())
             .collect::<Vec<_>>()
             .join("\n");
         // Task list items should have checkbox markers

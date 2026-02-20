@@ -39,10 +39,21 @@ use ftui_core::geometry::Rect;
 use ftui_render::frame::Frame;
 use ftui_style::Style;
 use ftui_text::search::{search_ascii_case_insensitive, search_exact};
-use ftui_text::{Text, WrapMode, WrapOptions, display_width, wrap_with_options};
+use ftui_text::{
+    Line, Span, Text as FtuiText, WrapMode, WrapOptions, display_width, wrap_with_options,
+};
 
 use crate::virtualized::Virtualized;
 use crate::{StatefulWidget, draw_text_span, draw_text_span_with_link};
+
+type Text = FtuiText<'static>;
+
+fn text_into_owned(text: FtuiText<'_>) -> FtuiText<'static> {
+    FtuiText::from_lines(
+        text.into_iter()
+            .map(|line| Line::from_spans(line.into_iter().map(Span::into_owned))),
+    )
+}
 
 /// Line wrapping mode for log lines.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -269,11 +280,11 @@ impl LogViewer {
     ///
     /// # Auto-scroll Behavior
     /// If follow mode is enabled, view stays at bottom after push.
-    pub fn push(&mut self, line: impl Into<Text>) {
+    pub fn push<'a>(&mut self, line: impl Into<FtuiText<'a>>) {
         let follow_filtered = self.filtered_indices.as_ref().is_some_and(|indices| {
             self.is_filtered_at_bottom(indices.len(), self.virt.visible_count())
         });
-        let text: Text = line.into();
+        let text: Text = text_into_owned(line.into());
 
         // Split multi-line text into individual items for smooth scrolling
         for line in text.into_iter() {
@@ -390,7 +401,7 @@ impl LogViewer {
     }
 
     /// Append multiple lines efficiently.
-    pub fn push_many(&mut self, lines: impl IntoIterator<Item = impl Into<Text>>) {
+    pub fn push_many<'a>(&mut self, lines: impl IntoIterator<Item = impl Into<FtuiText<'a>>>) {
         for line in lines {
             self.push(line);
         }
@@ -441,11 +452,8 @@ impl LogViewer {
         if let Some(filtered_total) = self.filtered_indices.as_ref().map(Vec::len) {
             if filtered_total == 0 {
                 self.filtered_scroll_offset = 0;
-            } else if self.virt.visible_count() > 0 {
-                self.filtered_scroll_offset =
-                    filtered_total.saturating_sub(self.virt.visible_count());
             } else {
-                self.filtered_scroll_offset = filtered_total.saturating_sub(1);
+                self.filtered_scroll_offset = usize::MAX;
             }
         } else {
             self.virt.scroll_to_end();

@@ -38,7 +38,7 @@ use crate::{debug, debug_span, trace};
 const MAX_CSI_LEN: usize = 256;
 
 /// DoS protection: maximum OSC sequence length.
-const MAX_OSC_LEN: usize = 4096;
+const MAX_OSC_LEN: usize = 102_400;
 
 /// DoS protection: maximum paste content length.
 const MAX_PASTE_LEN: usize = 1024 * 1024; // 1MB
@@ -480,7 +480,7 @@ impl InputParser {
             _ => {
                 self.state = ParserState::Ground;
                 self.buffer.clear();
-                None
+                self.process_ground(byte)
             }
         }
     }
@@ -496,11 +496,15 @@ impl InputParser {
         // Final byte (0x40-0x7E) - return to ground
         if (0x40..=0x7E).contains(&byte) {
             self.state = ParserState::Ground;
-        } else if !(0x20..=0x7E).contains(&byte) {
-            // Invalid character (e.g. newline) - abort sequence
+            None
+        } else if (0x20..=0x3F).contains(&byte) {
+            // Parameter/Intermediate bytes - continue ignoring
+            None
+        } else {
+            // Invalid character (e.g. newline) - abort sequence and reprocess
             self.state = ParserState::Ground;
+            self.process_ground(byte)
         }
-        None
     }
 
     /// Parse a complete CSI sequence from the buffer.
@@ -955,7 +959,7 @@ impl InputParser {
         if byte < 0x20 && byte != 0x07 {
             self.state = ParserState::Ground;
             self.buffer.clear();
-            return None;
+            return self.process_ground(byte);
         }
 
         // DoS protection
@@ -1018,7 +1022,7 @@ impl InputParser {
             // Abort on control characters to prevent swallowing logs (except DEL 0x7F)
             _ if byte < 0x20 => {
                 self.state = ParserState::Ground;
-                None
+                self.process_ground(byte)
             }
             // Continue ignoring
             _ => None,

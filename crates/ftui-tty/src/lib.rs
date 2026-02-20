@@ -356,12 +356,24 @@ impl Drop for RawModeGuard {
 // ── Session Options ──────────────────────────────────────────────────────
 
 /// Configuration for opening a terminal session.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TtySessionOptions {
     /// Enter the alternate screen buffer on open.
     pub alternate_screen: bool,
     /// Initial feature toggles to enable.
     pub features: BackendFeatures,
+    /// Install a signal handler to restore terminal state on SIGINT/SIGTERM/SIGHUP.
+    pub intercept_signals: bool,
+}
+
+impl Default for TtySessionOptions {
+    fn default() -> Self {
+        Self {
+            alternate_screen: false,
+            features: BackendFeatures::default(),
+            intercept_signals: true,
+        }
+    }
 }
 
 // ── Clock ────────────────────────────────────────────────────────────────
@@ -1234,7 +1246,9 @@ impl TtyBackend {
         // Enter raw mode first — if this fails, nothing to clean up.
         let raw_mode = RawModeGuard::enter()?;
         install_abort_panic_hook();
-        install_termination_signal_hook();
+        if options.intercept_signals {
+            install_termination_signal_hook();
+        }
         let capabilities = TerminalCapabilities::with_overrides();
         let requested_features = options.features;
         let effective_features = sanitize_feature_request(requested_features, capabilities);

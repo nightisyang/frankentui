@@ -138,7 +138,7 @@ impl LayoutInspector {
         style
     }
 
-    fn step_hint_line(&self) -> Line {
+    fn step_hint_line(&self) -> Line<'_> {
         let step = self.current_step();
         Line::from_spans([
             Span::styled("Step:", Style::new().fg(theme::fg::SECONDARY)),
@@ -149,7 +149,7 @@ impl LayoutInspector {
         ])
     }
 
-    fn info_lines(&self, _record: &LayoutRecord) -> Vec<Line> {
+    fn info_lines(&self, _record: &LayoutRecord) -> Vec<Line<'_>> {
         let scenario = SCENARIOS[self.scenario_idx];
         let mut lines = Vec::new();
         lines.push(Line::from_spans([
@@ -201,7 +201,7 @@ impl LayoutInspector {
         lines
     }
 
-    fn record_table(&self, record: &LayoutRecord) -> Vec<Line> {
+    fn record_table(&self, record: &LayoutRecord) -> Vec<Line<'_>> {
         let mut lines = Vec::new();
         self.push_record_lines(record, 0, &mut lines);
         lines
@@ -232,7 +232,7 @@ impl LayoutInspector {
         let line = Line::from_spans([
             Span::raw(indent),
             Span::styled(
-                record.widget_name.as_str(),
+                record.widget_name.clone(),
                 Style::new().fg(theme::fg::PRIMARY),
             ),
             Span::raw("  req "),
@@ -525,6 +525,8 @@ impl Screen for LayoutInspector {
 
     fn view(&self, frame: &mut Frame, area: Rect) {
         if area.is_empty() {
+            self.pane_workspace_visible.set(false);
+            self.pane_workspace.clear_embedded_pane_workspace_bounds();
             return;
         }
 
@@ -932,6 +934,31 @@ mod tests {
         let mut pool = GraphemePool::new();
         let mut frame = Frame::new(1, 1, &mut pool);
         screen.view(&mut frame, Rect::new(0, 0, 0, 0));
+    }
+
+    #[test]
+    fn empty_area_clears_pane_workspace_bounds() {
+        let screen = LayoutInspector::new();
+        render_wide_screen(&screen);
+        assert!(
+            !screen
+                .pane_workspace
+                .embedded_pane_workspace_bounds()
+                .is_empty(),
+            "wide layout should populate pane workspace bounds"
+        );
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(1, 1, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 0, 0));
+
+        assert!(
+            screen
+                .pane_workspace
+                .embedded_pane_workspace_bounds()
+                .is_empty(),
+            "empty view area should clear pane workspace bounds"
+        );
     }
 
     #[test]

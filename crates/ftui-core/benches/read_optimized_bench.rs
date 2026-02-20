@@ -6,10 +6,11 @@
 //! under concurrent write pressure, matching the read-99%/write-1% pattern
 //! of theme and capability data in FrankenTUI.
 
+use std::hint::black_box;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use ftui_core::read_optimized::{ArcSwapStore, MutexStore, ReadOptimized, RwLockStore};
 
 /// Simulates TerminalCapabilities (small Copy struct, ~20 bytes).

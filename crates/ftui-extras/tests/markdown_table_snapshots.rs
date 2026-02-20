@@ -30,7 +30,7 @@ use std::fmt::Write as FmtWrite;
 use std::path::Path;
 
 #[cfg(feature = "markdown")]
-fn render_markdown(markdown: &str, table_max_width: Option<u16>) -> Text {
+fn render_markdown(markdown: &str, table_max_width: Option<u16>) -> Text<'_> {
     let renderer = MarkdownRenderer::new(MarkdownTheme::default());
     let renderer = match table_max_width {
         Some(width) => renderer.table_max_width(width),

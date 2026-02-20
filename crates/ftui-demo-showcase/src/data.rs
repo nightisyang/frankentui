@@ -221,7 +221,7 @@ impl SimulatedData {
             "rg",
             "fd",
             "bat",
-            "tokio-rt",
+            "asupersync-rt",
             "journald",
             "dbus-daemon",
         ];

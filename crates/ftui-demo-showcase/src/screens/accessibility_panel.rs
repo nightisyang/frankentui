@@ -224,7 +224,7 @@ impl AccessibilityPanel {
             let value_style = if enabled { on_style } else { off_style };
             Line::from_spans([
                 Span::styled(format!(" [{key}] "), key_style),
-                Span::styled(label, label_style),
+                Span::styled(label.to_string(), label_style),
                 Span::styled(": ", label_style),
                 Span::styled(value, value_style),
             ])

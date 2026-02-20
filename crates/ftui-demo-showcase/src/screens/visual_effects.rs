@@ -30,7 +30,8 @@ use ftui_extras::text_effects::{
     StyledText, TextEffect, TransitionState,
 };
 use ftui_extras::visual_fx::{
-    FxQuality, MetaballsCanvasAdapter, PlasmaCanvasAdapter, PlasmaPalette, ThemeInputs, Backdrop, DoomMeltFx, QuakeConsoleFx,
+    DoomMeltFx, FxQuality, MetaballsCanvasAdapter, PlasmaCanvasAdapter, PlasmaPalette,
+    QuakeConsoleFx, ThemeInputs,
 };
 use ftui_layout::{Constraint, Flex};
 use ftui_render::cell::PackedRgba;
@@ -69,7 +70,7 @@ struct MarkdownPanelWrapped {
     paragraph: Paragraph<'static>,
 }
 
-fn wrap_text_cached(base: &Text, width: u16, mode: WrapMode) -> Text {
+fn wrap_text_cached<'a>(base: &Text<'a>, width: u16, mode: WrapMode) -> Text<'a> {
     let wrap_width = usize::from(width.max(1));
     let mut out = Vec::new();
     for line in base.lines() {
@@ -161,7 +162,7 @@ pub struct VisualEffectsScreen {
     /// Text effects demo state (initialized on first TextEffects use).
     text_effects: OnceCell<TextEffectsDemo>,
     /// Markdown overlay base text (parsed once on first overlay render).
-    markdown_text: OnceCell<Text>,
+    markdown_text: OnceCell<Text<'static>>,
     /// Cached wrapped markdown paragraph for the last seen overlay width.
     markdown_panel_cache: RefCell<Option<MarkdownPanelWrapped>>,
     /// Reused header string buffer to avoid per-frame allocations.
@@ -3585,7 +3586,9 @@ impl VisualEffectsScreen {
         if guard.is_none() {
             *guard = Some(DoomMeltFx::new());
         }
-        f(guard.as_mut().expect("doom melt state should be initialized"))
+        f(guard
+            .as_mut()
+            .expect("doom melt state should be initialized"))
     }
 
     fn with_quake_console_mut<F, R>(&self, f: F) -> R
@@ -3596,7 +3599,9 @@ impl VisualEffectsScreen {
         if guard.is_none() {
             *guard = Some(QuakeConsoleFx::new());
         }
-        f(guard.as_mut().expect("quake console state should be initialized"))
+        f(guard
+            .as_mut()
+            .expect("quake console state should be initialized"))
     }
 
     fn is_fps_effect(&self) -> bool {
@@ -4510,7 +4515,7 @@ impl Screen for VisualEffectsScreen {
             if buf.len() < len {
                 buf.resize(len, PackedRgba::TRANSPARENT);
             }
-            
+
             let theme_inputs = current_fx_theme();
             let ctx = ftui_extras::visual_fx::FxContext {
                 width,
@@ -4520,7 +4525,7 @@ impl Screen for VisualEffectsScreen {
                 quality: FxQuality::Full,
                 theme: &theme_inputs,
             };
-            
+
             match self.effect {
                 EffectType::DoomE1M1 => {
                     self.with_doom_melt_mut(|fx| {
@@ -4533,14 +4538,14 @@ impl Screen for VisualEffectsScreen {
                     self.with_quake_console_mut(|fx| {
                         use ftui_extras::visual_fx::BackdropFx;
                         // Animate drop or keep static? Full console is best for background.
-                        fx.set_progress(1.0); 
+                        fx.set_progress(1.0);
                         fx.resize(width, height);
                         fx.render(ctx, &mut buf[..len]);
                     });
                 }
                 _ => unreachable!(),
             }
-            
+
             // Blit directly to frame buffers (Backdrop behavior)
             for y in 0..height {
                 for x in 0..width {

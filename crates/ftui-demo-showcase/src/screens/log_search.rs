@@ -1338,7 +1338,7 @@ impl Screen for LogSearch {
     }
 }
 
-fn generate_log_line(seq: u64) -> Text {
+fn generate_log_line(seq: u64) -> Text<'static> {
     let (severity_label, severity_color) = match seq % 13 {
         0..=5 => ("INFO", theme::accent::INFO),
         6..=8 => ("DEBUG", theme::fg::MUTED),

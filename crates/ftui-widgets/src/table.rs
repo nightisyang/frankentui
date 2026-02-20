@@ -13,13 +13,20 @@ use ftui_render::frame::{Frame, HitId, HitRegion};
 use ftui_style::{
     Style, TableEffectResolver, TableEffectScope, TableEffectTarget, TableSection, TableTheme,
 };
-use ftui_text::Text;
+use ftui_text::{Line, Span, Text};
 use std::any::Any;
+
+fn text_into_owned(text: Text<'_>) -> Text<'static> {
+    Text::from_lines(
+        text.into_iter()
+            .map(|line| Line::from_spans(line.into_iter().map(Span::into_owned))),
+    )
+}
 
 /// A row in a table.
 #[derive(Debug, Clone, Default)]
 pub struct Row {
-    cells: Vec<Text>,
+    cells: Vec<Text<'static>>,
     height: u16,
     style: Style,
     bottom_margin: u16,
@@ -28,9 +35,12 @@ pub struct Row {
 impl Row {
     /// Create a new row from an iterator of cell contents.
     #[must_use]
-    pub fn new(cells: impl IntoIterator<Item = impl Into<Text>>) -> Self {
+    pub fn new<'a>(cells: impl IntoIterator<Item = impl Into<Text<'a>>>) -> Self {
         Self {
-            cells: cells.into_iter().map(|c| c.into()).collect(),
+            cells: cells
+                .into_iter()
+                .map(|c| text_into_owned(c.into()))
+                .collect(),
             height: 1,
             style: Style::default(),
             bottom_margin: 0,
@@ -179,31 +189,53 @@ impl<'a> Table<'a> {
             let query = state.filter.trim().to_lowercase();
             indices.retain(|&i| {
                 let row = &self.rows[i];
-                row.cells
-                    .iter()
-                    .any(|cell| cell.to_plain_text().to_lowercase().contains(&query))
+                row.cells.iter().any(|cell| {
+                    // Optimization: check single-span content directly to avoid allocation
+                    // from to_plain_text().
+                    if let Some(line) = cell.lines().first()
+                        && cell.lines().len() == 1
+                        && line.spans().len() == 1
+                    {
+                        return crate::contains_ignore_case(&line.spans()[0].content, &query);
+                    }
+                    crate::contains_ignore_case(&cell.to_plain_text(), &query)
+                })
             });
         }
 
         // 2. Sort
         if let Some(col_idx) = state.sort_column {
-            indices.sort_by(|&a, &b| {
-                let cell_a = self.rows[a]
-                    .cells
-                    .get(col_idx)
-                    .map(|c| c.to_plain_text())
-                    .unwrap_or_default();
-                let cell_b = self.rows[b]
-                    .cells
-                    .get(col_idx)
-                    .map(|c| c.to_plain_text())
-                    .unwrap_or_default();
-                if state.sort_ascending {
-                    cell_a.cmp(&cell_b)
-                } else {
-                    cell_b.cmp(&cell_a)
-                }
-            });
+            use std::borrow::Cow;
+            let mut sort_keys: Vec<(usize, Cow<str>)> = indices
+                .iter()
+                .map(|&i| {
+                    let cell_text = self.rows[i].cells.get(col_idx);
+                    let key = match cell_text {
+                        Some(text) => {
+                            // Optimization: Borrow content directly if simple (1 line, 1 span)
+                            if let Some(line) = text.lines().first() {
+                                if text.lines().len() == 1 && line.spans().len() == 1 {
+                                    Cow::Borrowed(line.spans()[0].content.as_ref())
+                                } else {
+                                    Cow::Owned(text.to_plain_text())
+                                }
+                            } else {
+                                Cow::Borrowed("")
+                            }
+                        }
+                        None => Cow::Borrowed(""),
+                    };
+                    (i, key)
+                })
+                .collect();
+
+            if state.sort_ascending {
+                sort_keys.sort_by(|a, b| a.1.cmp(&b.1));
+            } else {
+                sort_keys.sort_by(|a, b| b.1.cmp(&a.1));
+            }
+
+            indices = sort_keys.into_iter().map(|(i, _)| i).collect();
         }
 
         indices
@@ -293,12 +325,9 @@ pub struct TableState {
 }
 
 impl TableState {
-    /// Set the selected row index, resetting offset on deselect.
+    /// Set the selected row index.
     pub fn select(&mut self, index: Option<usize>) {
         self.selected = index;
-        if index.is_none() {
-            self.offset = 0;
-        }
     }
 
     /// Create a new TableState with a persistence ID for state saving.
@@ -829,15 +858,15 @@ impl<'a> StatefulWidget for Table<'a> {
             );
 
             // Draw sort indicator
-            if let Some(col) = state.sort_column {
-                if col < column_rects.len() {
-                    let rect = column_rects[col];
-                    let symbol = if state.sort_ascending { "▲" } else { "▼" };
-                    // Draw at end of cell
-                    let x = rect.right().saturating_sub(1);
-                    if x >= rect.x {
-                        crate::draw_text_span(frame, x, y, symbol, header_style, rect.right());
-                    }
+            if let Some(col) = state.sort_column
+                && col < column_rects.len()
+            {
+                let rect = column_rects[col];
+                let symbol = if state.sort_ascending { "▲" } else { "▼" };
+                // Draw at end of cell
+                let x = rect.right().saturating_sub(1);
+                if x >= rect.x {
+                    crate::draw_text_span(frame, x, y, symbol, header_style, rect.right());
                 }
             }
 
@@ -1104,9 +1133,9 @@ fn draw_vertical_dividers(
         if x >= row_area.right() {
             continue;
         }
+        let mut cell = Cell::from_char(divider_char);
+        apply_style(&mut cell, style);
         for y in row_area.y..row_area.bottom() {
-            let mut cell = Cell::from_char(divider_char);
-            apply_style(&mut cell, style);
             buf.set_fast(x, y, cell);
         }
     }
@@ -1372,7 +1401,7 @@ mod tests {
     }
 
     #[test]
-    fn table_state_deselect_resets_offset() {
+    fn table_state_deselect_preserves_offset() {
         let mut state = TableState {
             offset: 10,
             ..Default::default()
@@ -1381,7 +1410,7 @@ mod tests {
         assert_eq!(state.selected, Some(3));
         state.select(None);
         assert_eq!(state.selected, None);
-        assert_eq!(state.offset, 0);
+        assert_eq!(state.offset, 10);
     }
 
     #[test]

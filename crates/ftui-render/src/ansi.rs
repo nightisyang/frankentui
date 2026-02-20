@@ -344,19 +344,14 @@ pub fn sgr_bg_packed<W: Write>(w: &mut W, color: PackedRgba) -> io::Result<()> {
 /// Moves cursor to absolute position. Row and col are 0-indexed input,
 /// converted to 1-indexed for ANSI.
 pub fn cup<W: Write>(w: &mut W, row: u16, col: u16) -> io::Result<()> {
-    write!(
-        w,
-        "\x1b[{};{}H",
-        row.saturating_add(1),
-        col.saturating_add(1)
-    )
+    write!(w, "\x1b[{};{}H", (row as u32) + 1, (col as u32) + 1)
 }
 
 /// CUP to column only: `CSI col G` (1-indexed)
 ///
 /// Moves cursor to column on current row.
 pub fn cha<W: Write>(w: &mut W, col: u16) -> io::Result<()> {
-    write!(w, "\x1b[{}G", col.saturating_add(1))
+    write!(w, "\x1b[{}G", (col as u32) + 1)
 }
 
 /// Move cursor up: `CSI n A`
@@ -512,12 +507,7 @@ pub fn erase_display<W: Write>(w: &mut W, mode: EraseDisplayMode) -> io::Result<
 ///
 /// Sets the scroll region. Top and bottom are 0-indexed, converted to 1-indexed.
 pub fn set_scroll_region<W: Write>(w: &mut W, top: u16, bottom: u16) -> io::Result<()> {
-    write!(
-        w,
-        "\x1b[{};{}r",
-        top.saturating_add(1),
-        bottom.saturating_add(1)
-    )
+    write!(w, "\x1b[{};{}r", (top as u32) + 1, (bottom as u32) + 1)
 }
 
 /// Reset scroll region to full screen: `CSI r`

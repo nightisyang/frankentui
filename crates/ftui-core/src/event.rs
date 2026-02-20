@@ -584,25 +584,12 @@ fn map_mouse_button(button: cte::MouseButton) -> MouseButton {
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "crossterm"))]
-const CROSSTERM_PIXEL_COORD_X_THRESHOLD: u16 = 512;
-#[cfg(all(not(target_arch = "wasm32"), feature = "crossterm"))]
-const CROSSTERM_PIXEL_COORD_Y_THRESHOLD: u16 = 256;
-#[cfg(all(not(target_arch = "wasm32"), feature = "crossterm"))]
-const CROSSTERM_DEFAULT_CELL_PIXEL_WIDTH: u16 = 8;
-#[cfg(all(not(target_arch = "wasm32"), feature = "crossterm"))]
-const CROSSTERM_DEFAULT_CELL_PIXEL_HEIGHT: u16 = 16;
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "crossterm"))]
 fn sanitize_crossterm_mouse_coords(x: u16, y: u16) -> (u16, u16) {
-    // Some terminals leak 1016-style pixel coordinates through crossterm.
-    // Use conservative cell-size fallback so pointer input remains usable.
-    if x < CROSSTERM_PIXEL_COORD_X_THRESHOLD && y < CROSSTERM_PIXEL_COORD_Y_THRESHOLD {
-        return (x, y);
-    }
-    (
-        x / CROSSTERM_DEFAULT_CELL_PIXEL_WIDTH,
-        y / CROSSTERM_DEFAULT_CELL_PIXEL_HEIGHT,
-    )
+    // We strictly disable 1016 mode (pixel reporting) in TerminalSession.
+    // The previous heuristic (x >= 512 => divide by 8) was dangerous for
+    // large terminals (e.g. 4K/8K screens where columns > 512 are valid).
+    // We trust the terminal to send cell coordinates as requested by SGR 1006.
+    (x, y)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32"), feature = "crossterm"))]
@@ -902,7 +889,7 @@ mod tests {
     }
 
     #[test]
-    fn map_mouse_event_sanitizes_likely_pixel_coordinates() {
+    fn map_mouse_event_respects_large_coordinates() {
         let ct_event = ct_event::MouseEvent {
             kind: ct_event::MouseEventKind::Moved,
             column: 1600,
@@ -910,8 +897,8 @@ mod tests {
             modifiers: ct_event::KeyModifiers::NONE,
         };
         let mapped = map_mouse_event(ct_event);
-        assert_eq!(mapped.x, 200);
-        assert_eq!(mapped.y, 40);
+        assert_eq!(mapped.x, 1600);
+        assert_eq!(mapped.y, 640);
     }
 
     #[test]

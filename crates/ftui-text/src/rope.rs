@@ -220,9 +220,7 @@ impl Rope {
     /// Count grapheme clusters.
     #[must_use]
     pub fn grapheme_count(&self) -> usize {
-        self.lines()
-            .map(|line| line.graphemes(true).count())
-            .sum()
+        self.lines().map(|line| line.graphemes(true).count()).sum()
     }
 
     fn grapheme_to_char_idx(&self, grapheme_idx: usize) -> usize {

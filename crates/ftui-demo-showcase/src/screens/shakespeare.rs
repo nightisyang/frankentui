@@ -71,7 +71,9 @@ pub struct Shakespeare {
     layout_search: Cell<Rect>,
     layout_text: Cell<Rect>,
     layout_nav: Cell<Rect>,
+    layout_nav_list: Cell<Rect>,
     layout_toc: Cell<Rect>,
+    layout_toc_list: Cell<Rect>,
     layout_insights: Cell<Rect>,
     layout_status: Cell<Rect>,
 }
@@ -114,7 +116,9 @@ impl Shakespeare {
             layout_search: Cell::new(Rect::default()),
             layout_text: Cell::new(Rect::default()),
             layout_nav: Cell::new(Rect::default()),
+            layout_nav_list: Cell::new(Rect::default()),
             layout_toc: Cell::new(Rect::default()),
+            layout_toc_list: Cell::new(Rect::default()),
             layout_insights: Cell::new(Rect::default()),
             layout_status: Cell::new(Rect::default()),
         };
@@ -340,6 +344,34 @@ impl Shakespeare {
         self.scroll_to(line.saturating_sub(3));
     }
 
+    fn navigator_match_window_start(&self, visible_rows: usize) -> usize {
+        if self.search_matches.is_empty() {
+            return 0;
+        }
+        let visible = visible_rows.max(1);
+        let mut start = self.current_match.saturating_sub(visible / 2);
+        if start + visible > self.search_matches.len() {
+            start = self.search_matches.len().saturating_sub(visible);
+        }
+        start
+    }
+
+    fn toc_window_start(&self, visible_rows: usize) -> usize {
+        let toc_entries = self.toc_entries();
+        if toc_entries.is_empty() {
+            return 0;
+        }
+        let visible = visible_rows.max(1);
+        let max_scroll = toc_entries.len().saturating_sub(visible);
+        let mut start = self.toc_scroll.get().min(max_scroll);
+        if self.toc_selected < start {
+            start = self.toc_selected;
+        } else if self.toc_selected >= start + visible {
+            start = self.toc_selected.saturating_sub(visible.saturating_sub(1));
+        }
+        start
+    }
+
     fn focus_from_point(&mut self, x: u16, y: u16) {
         let search = self.layout_search.get();
         let text = self.layout_text.get();
@@ -450,14 +482,20 @@ impl Screen for Shakespeare {
                 MouseEventKind::Down(MouseButton::Left) => {
                     self.focus_from_point(mouse.x, mouse.y);
                     if self.focus == FocusPanel::Navigator {
-                        let nav = self.layout_nav.get();
-                        let rel_y = mouse.y.saturating_sub(nav.y);
-                        let index = self.current_match.saturating_sub(2) + rel_y as usize;
+                        let nav = self.layout_nav_list.get();
+                        if nav.is_empty() || !nav.contains(mouse.x, mouse.y) {
+                            return Cmd::None;
+                        }
+                        let rel_y = mouse.y.saturating_sub(nav.y) as usize;
+                        let index = self.navigator_match_window_start(nav.height as usize) + rel_y;
                         self.set_current_match(index);
                     } else if self.focus == FocusPanel::Toc {
-                        let toc = self.layout_toc.get();
-                        let rel_y = mouse.y.saturating_sub(toc.y);
-                        let idx = self.toc_scroll.get() + rel_y as usize;
+                        let toc = self.layout_toc_list.get();
+                        if toc.is_empty() || !toc.contains(mouse.x, mouse.y) {
+                            return Cmd::None;
+                        }
+                        let rel_y = mouse.y.saturating_sub(toc.y) as usize;
+                        let idx = self.toc_window_start(toc.height as usize) + rel_y;
                         let line = {
                             let toc_entries = self.toc_entries();
                             if idx < toc_entries.len() {
@@ -677,6 +715,8 @@ impl Screen for Shakespeare {
 
         self.layout_text.set(h_chunks[0]);
         self.layout_status.set(status_area);
+        self.layout_nav_list.set(Rect::default());
+        self.layout_toc_list.set(Rect::default());
         if self.search_active {
             self.layout_search.set(v_chunks[0]);
         } else {
@@ -1135,6 +1175,7 @@ impl Shakespeare {
     }
 
     fn render_toc_panel(&self, frame: &mut Frame, area: Rect) {
+        self.layout_toc_list.set(Rect::default());
         let block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -1150,6 +1191,7 @@ impl Shakespeare {
         if inner.height == 0 || inner.width < 5 {
             return;
         }
+        self.layout_toc_list.set(inner);
 
         let visible = inner.height as usize;
         let toc_entries = self.toc_entries();
@@ -1157,13 +1199,7 @@ impl Shakespeare {
             return;
         }
 
-        let max_scroll = toc_entries.len().saturating_sub(visible).max(0);
-        let mut start = self.toc_scroll.get().min(max_scroll);
-        if self.toc_selected < start {
-            start = self.toc_selected;
-        } else if self.toc_selected >= start + visible {
-            start = self.toc_selected.saturating_sub(visible.saturating_sub(1));
-        }
+        let start = self.toc_window_start(visible);
         self.toc_scroll.set(start);
 
         let end = (start + visible).min(toc_entries.len());
@@ -1201,6 +1237,7 @@ impl Shakespeare {
     }
 
     fn render_match_panel(&self, frame: &mut Frame, area: Rect) {
+        self.layout_nav_list.set(Rect::default());
         let block = Block::new()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
@@ -1249,8 +1286,9 @@ impl Shakespeare {
             .render(rows[0], frame);
 
         if !rows[1].is_empty() {
+            self.layout_nav_list.set(rows[1]);
             let list_height = rows[1].height as usize;
-            let start = self.current_match.saturating_sub(list_height / 2);
+            let start = self.navigator_match_window_start(list_height);
             let end = (start + list_height).min(self.search_matches.len());
             let is_focused = self.focus == FocusPanel::Navigator;
             for (i, match_idx) in self.search_matches[start..end].iter().enumerate() {
@@ -1714,6 +1752,24 @@ fn search_ascii_case_insensitive_ranges(haystack: &str, needle_lower: &str) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ftui_core::event::MouseEvent;
+    use ftui_render::frame::Frame;
+    use ftui_render::grapheme_pool::GraphemePool;
+
+    fn render_screen(screen: &Shakespeare) {
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(120, 40, &mut pool);
+        screen.view(&mut frame, Rect::new(0, 0, 120, 40));
+    }
+
+    fn mouse_click(x: u16, y: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            x,
+            y,
+            modifiers: Modifiers::NONE,
+        })
+    }
 
     #[test]
     fn shakespeare_initial_state() {
@@ -1776,6 +1832,55 @@ mod tests {
             titles.iter().any(|t| t.contains("HAMLET")),
             "TOC should contain Hamlet, found: {:?}",
             &titles[..titles.len().min(20)]
+        );
+    }
+
+    #[test]
+    fn navigator_click_maps_to_visible_window_index() {
+        let mut s = Shakespeare::new();
+        s.search_input.set_value("the");
+        s.perform_search();
+        assert!(
+            !s.search_matches.is_empty(),
+            "search should populate navigator matches"
+        );
+        s.current_match = s.search_matches.len().saturating_sub(2);
+        render_screen(&s);
+
+        let list = s.layout_nav_list.get();
+        assert!(
+            !list.is_empty(),
+            "navigator list hitbox should be populated"
+        );
+        let expected = s.navigator_match_window_start(list.height as usize);
+
+        s.update(&mouse_click(list.x, list.y));
+        assert_eq!(
+            s.current_match, expected,
+            "clicking first visible navigator row should select first visible match entry"
+        );
+    }
+
+    #[test]
+    fn toc_click_maps_to_visible_window_index() {
+        let mut s = Shakespeare::new();
+        s.toc_selected = s.toc_entries().len().saturating_sub(2);
+        render_screen(&s);
+
+        let list = s.layout_toc_list.get();
+        assert!(!list.is_empty(), "toc list hitbox should be populated");
+        let expected = s.toc_window_start(list.height as usize);
+        let expected_line = s.toc_entries()[expected].line;
+
+        s.update(&mouse_click(list.x, list.y));
+        assert_eq!(
+            s.toc_selected, expected,
+            "clicking first visible toc row should select first visible toc entry"
+        );
+        assert_eq!(
+            s.scroll_offset,
+            expected_line.saturating_sub(2),
+            "toc click should scroll to selected entry line"
         );
     }
 }
