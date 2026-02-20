@@ -916,12 +916,10 @@ where
         }
 
         let mut total_weight = 0u128;
-        let mut last_weighted_pos = None;
-        for (grow_pos, &i) in grow_indices.iter().enumerate() {
+        for &i in &grow_indices {
             let weight = grow_weight(constraints[i]);
             if weight > 0 {
                 total_weight = total_weight.saturating_add(u128::from(weight));
-                last_weighted_pos = Some(grow_pos);
             }
         }
 
@@ -1001,7 +999,7 @@ where
         }
     }
 
-    if let Some((cache, id)) = coherence {
+    if let Some((_cache, _id)) = coherence {
         // Store only the flexible shares part? No, store the final sizes.
         // But wait, round_layout_stable only sees the *flexible* part.
         // We need to store the *flexible shares* so next time we can pass them as `prev`.

@@ -201,7 +201,7 @@ impl TextArea {
                 true
             }
             KeyCode::PageUp => {
-                let page = self.last_viewport_height.get().max(1) as usize;
+                let page = self.last_viewport_height.get().max(1);
                 if self.soft_wrap {
                     self.move_cursor_visual_up(page);
                 } else {
@@ -213,7 +213,7 @@ impl TextArea {
                 true
             }
             KeyCode::PageDown => {
-                let page = self.last_viewport_height.get().max(1) as usize;
+                let page = self.last_viewport_height.get().max(1);
                 if self.soft_wrap {
                     self.move_cursor_visual_down(page);
                 } else {
