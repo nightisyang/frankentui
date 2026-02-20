@@ -1370,7 +1370,7 @@ mod tests {
 
     #[test]
     fn cell_width_hint_for_grapheme() {
-        let id = GraphemeId::new(100, 3);
+        let id = GraphemeId::new(100, 0, 3);
         let cell = Cell::new(CellContent::from_grapheme(id));
         assert_eq!(cell.width_hint(), 3);
     }
@@ -1381,26 +1381,28 @@ mod tests {
     fn grapheme_id_default() {
         let id = GraphemeId::default();
         assert_eq!(id.slot(), 0);
+        assert_eq!(id.generation(), 0);
         assert_eq!(id.width(), 0);
     }
 
     #[test]
     fn grapheme_id_debug_format() {
-        let id = GraphemeId::new(42, 2);
+        let id = GraphemeId::new(42, 5, 2);
         let s = format!("{:?}", id);
         assert!(s.contains("GraphemeId"), "got: {s}");
         assert!(s.contains("42"), "got: {s}");
+        assert!(s.contains("5"), "got: {s}");
         assert!(s.contains("2"), "got: {s}");
     }
 
     #[test]
     fn grapheme_id_width_isolated_from_slot() {
         // Verify slot bits don't leak into width field
-        let id = GraphemeId::new(0x00FF_FFFF, 0);
+        let id = GraphemeId::new(GraphemeId::MAX_SLOT, 0, 0);
         assert_eq!(id.width(), 0);
-        assert_eq!(id.slot(), 0x00FF_FFFF);
+        assert_eq!(id.slot(), 0xFFFF);
 
-        let id2 = GraphemeId::new(0, 127);
+        let id2 = GraphemeId::new(0, 0, 127);
         assert_eq!(id2.slot(), 0);
         assert_eq!(id2.width(), 127);
     }
@@ -1755,7 +1757,7 @@ mod tests {
 
     #[test]
     fn cell_from_grapheme_content() {
-        let id = GraphemeId::new(42, 2);
+        let id = GraphemeId::new(42, 0, 2);
         let cell = Cell::new(CellContent::from_grapheme(id));
         assert!(cell.content.is_grapheme());
         assert_eq!(cell.width_hint(), 2);
@@ -1914,8 +1916,12 @@ mod cell_proptests {
     }
 
     fn arb_grapheme_id() -> impl Strategy<Value = GraphemeId> {
-        (0u32..=GraphemeId::MAX_SLOT, 0u8..=GraphemeId::MAX_WIDTH)
-            .prop_map(|(slot, width)| GraphemeId::new(slot, width))
+        (
+            0u32..=GraphemeId::MAX_SLOT,
+            0u8..=GraphemeId::MAX_GENERATION,
+            0u8..=GraphemeId::MAX_WIDTH,
+        )
+            .prop_map(|(slot, gen, width)| GraphemeId::new(slot, gen, width))
     }
 
     fn arb_style_flags() -> impl Strategy<Value = StyleFlags> {
@@ -1960,10 +1966,17 @@ mod cell_proptests {
         }
 
         #[test]
-        fn grapheme_id_slot_width_roundtrip(tuple in (0u32..=GraphemeId::MAX_SLOT, 0u8..=GraphemeId::MAX_WIDTH)) {
-            let (slot, width) = tuple;
-            let id = GraphemeId::new(slot, width);
+        fn grapheme_id_components_roundtrip(
+            tuple in (
+                0u32..=GraphemeId::MAX_SLOT,
+                0u8..=GraphemeId::MAX_GENERATION,
+                0u8..=GraphemeId::MAX_WIDTH,
+            )
+        ) {
+            let (slot, gen, width) = tuple;
+            let id = GraphemeId::new(slot, gen, width);
             prop_assert_eq!(id.slot(), slot as usize);
+            prop_assert_eq!(id.generation(), gen);
             prop_assert_eq!(id.width(), width as usize);
         }
 
