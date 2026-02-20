@@ -422,6 +422,7 @@ pub struct GenericTokenizerConfig {
     pub line_comment: &'static str,
     pub block_comment_start: &'static str,
     pub block_comment_end: &'static str,
+    pub nested_comments: bool,
 }
 
 /// A configurable tokenizer for C-family languages.
@@ -845,6 +846,7 @@ pub fn rust_tokenizer() -> GenericTokenizer {
         line_comment: "//",
         block_comment_start: "/*",
         block_comment_end: "*/",
+        nested_comments: true,
     })
 }
 
@@ -867,6 +869,7 @@ pub fn python_tokenizer() -> GenericTokenizer {
         line_comment: "#",
         block_comment_start: "",
         block_comment_end: "",
+        nested_comments: false,
     })
 }
 
@@ -919,6 +922,7 @@ pub fn javascript_tokenizer() -> GenericTokenizer {
         line_comment: "//",
         block_comment_start: "/*",
         block_comment_end: "*/",
+        nested_comments: false,
     })
 }
 
@@ -999,6 +1003,7 @@ pub fn cpp_tokenizer() -> GenericTokenizer {
         line_comment: "//",
         block_comment_start: "/*",
         block_comment_end: "*/",
+        nested_comments: false,
     })
 }
 
