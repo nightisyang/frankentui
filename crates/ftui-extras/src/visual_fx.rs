@@ -35,6 +35,10 @@ pub mod effects;
 pub mod gpu;
 
 // Re-export from effects for convenience
+#[cfg(feature = "doom")]
+pub use effects::DoomMeltFx;
+#[cfg(feature = "quake")]
+pub use effects::QuakeConsoleFx;
 pub use effects::{
     metaballs::{Metaball, MetaballsFx, MetaballsPalette, MetaballsParams},
     plasma::{PlasmaFx, PlasmaPalette, plasma_wave, plasma_wave_low},
@@ -43,10 +47,6 @@ pub use effects::{
         cell_to_normalized, fill_normalized_coords,
     },
 };
-#[cfg(feature = "doom")]
-pub use effects::DoomMeltFx;
-#[cfg(feature = "quake")]
-pub use effects::QuakeConsoleFx;
 
 // Canvas adapters for sub-pixel (Braille) FX rendering
 #[cfg(feature = "canvas")]
@@ -432,6 +432,46 @@ pub fn contrast_ratio(fg: PackedRgba, bg: PackedRgba) -> f32 {
     (hi + 0.05) / (lo + 0.05)
 }
 
+// ---------------------------------------------------------------------------
+// Buffer Pooling (Thread-Local)
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// Thread-local pool of reusable render buffers to avoid allocation churn.
+    ///
+    /// Widgets like `Backdrop` are often recreated every frame in immediate-mode
+    /// GUIs. Without pooling, this causes a full screen-sized allocation per frame.
+    static BUFFER_POOL: RefCell<Vec<Vec<PackedRgba>>> = const { RefCell::new(Vec::new()) };
+}
+
+fn acquire_buffer(min_capacity: usize) -> Vec<PackedRgba> {
+    BUFFER_POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        // Try to find a buffer with enough capacity to avoid realloc
+        if let Some(idx) = pool.iter().position(|b| b.capacity() >= min_capacity) {
+            return pool.remove(idx);
+        }
+        // Fallback: take any buffer (will be resized) or create new
+        pool.pop().unwrap_or_default()
+    })
+}
+
+fn release_buffer(mut buf: Vec<PackedRgba>) {
+    // Don't pool tiny buffers or keep too many
+    if buf.capacity() == 0 {
+        return;
+    }
+    // Clear content but keep capacity
+    buf.clear();
+    BUFFER_POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        // Limit pool size to prevent unbounded memory growth if many widgets exist
+        if pool.len() < 16 {
+            pool.push(buf);
+        }
+    });
+}
+
 /// Background-only effect that renders into a caller-owned pixel buffer.
 ///
 /// Invariants:
@@ -659,6 +699,16 @@ pub struct StackedFx {
     last_size: (u16, u16),
 }
 
+impl Drop for StackedFx {
+    fn drop(&mut self) {
+        for buf in self.layer_bufs.drain(..) {
+            if buf.capacity() > 0 {
+                release_buffer(buf);
+            }
+        }
+    }
+}
+
 impl StackedFx {
     /// Create an empty stacked compositor.
     #[inline]
@@ -696,7 +746,12 @@ impl StackedFx {
     /// Remove and return the top layer, if any.
     #[inline]
     pub fn pop(&mut self) -> Option<FxLayer> {
-        self.layer_bufs.pop();
+        let buf = self.layer_bufs.pop();
+        if let Some(buf) = buf {
+            if buf.capacity() > 0 {
+                release_buffer(buf);
+            }
+        }
         self.layers.pop()
     }
 
@@ -704,7 +759,11 @@ impl StackedFx {
     #[inline]
     pub fn clear(&mut self) {
         self.layers.clear();
-        self.layer_bufs.clear();
+        for buf in self.layer_bufs.drain(..) {
+            if buf.capacity() > 0 {
+                release_buffer(buf);
+            }
+        }
         self.last_size = (0, 0);
     }
 
@@ -742,7 +801,7 @@ impl StackedFx {
     fn ensure_buffers(&mut self, len: usize) {
         // Ensure we have enough buffer slots
         while self.layer_bufs.len() < self.layers.len() {
-            self.layer_bufs.push(Vec::new());
+            self.layer_bufs.push(acquire_buffer(len));
         }
 
         // Grow each buffer if needed (never shrink)
@@ -1041,6 +1100,16 @@ pub struct Backdrop {
     time_seconds: f64,
 }
 
+impl Drop for Backdrop {
+    fn drop(&mut self) {
+        // Return buffer to pool if it has capacity
+        let buf = std::mem::take(&mut *self.fx_buf.borrow_mut());
+        if buf.capacity() > 0 {
+            release_buffer(buf);
+        }
+    }
+}
+
 impl Backdrop {
     pub fn new(fx: Box<dyn BackdropFx>, theme: ThemeInputs) -> Self {
         let base_fill = theme.bg_surface;
@@ -1215,6 +1284,10 @@ impl Widget for Backdrop {
         // Grow-only buffer; never shrink.
         {
             let mut buf = self.fx_buf.borrow_mut();
+            // Acquire buffer from pool if empty (initial render or after pool release)
+            if buf.capacity() == 0 {
+                *buf = acquire_buffer(len);
+            }
             if buf.len() < len {
                 buf.resize(len, PackedRgba::TRANSPARENT);
             }
