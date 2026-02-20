@@ -192,8 +192,8 @@ impl GraphemePool {
     pub fn get(&self, id: GraphemeId) -> Option<&str> {
         let slot_idx = id.slot();
         // Check bounds and generation
-        if let Some(&gen) = self.generations.get(slot_idx) {
-            if gen != id.generation() {
+        if let Some(&slot_gen) = self.generations.get(slot_idx) {
+            if slot_gen != id.generation() {
                 return None;
             }
         } else {
@@ -212,8 +212,8 @@ impl GraphemePool {
     pub fn retain(&mut self, id: GraphemeId) {
         let slot_idx = id.slot();
         // Check generation to avoid modifying wrong slot
-        if let Some(&gen) = self.generations.get(slot_idx) {
-            if gen != id.generation() {
+        if let Some(&slot_gen) = self.generations.get(slot_idx) {
+            if slot_gen != id.generation() {
                 return;
             }
         } else {
@@ -232,8 +232,8 @@ impl GraphemePool {
     pub fn release(&mut self, id: GraphemeId) {
         let slot_idx = id.slot();
         // Check generation
-        if let Some(&gen) = self.generations.get(slot_idx) {
-            if gen != id.generation() {
+        if let Some(&slot_gen) = self.generations.get(slot_idx) {
+            if slot_gen != id.generation() {
                 return;
             }
         } else {
@@ -258,8 +258,8 @@ impl GraphemePool {
     /// Returns 0 if the ID is invalid or freed.
     pub fn refcount(&self, id: GraphemeId) -> u32 {
         let slot_idx = id.slot();
-        if let Some(&gen) = self.generations.get(slot_idx) {
-            if gen != id.generation() {
+        if let Some(&slot_gen) = self.generations.get(slot_idx) {
+            if slot_gen != id.generation() {
                 return 0;
             }
         } else {

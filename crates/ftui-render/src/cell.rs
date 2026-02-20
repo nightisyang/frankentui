@@ -1921,7 +1921,7 @@ mod cell_proptests {
             0u8..=GraphemeId::MAX_GENERATION,
             0u8..=GraphemeId::MAX_WIDTH,
         )
-            .prop_map(|(slot, gen, width)| GraphemeId::new(slot, gen, width))
+            .prop_map(|(slot, generation, width)| GraphemeId::new(slot, generation, width))
     }
 
     fn arb_style_flags() -> impl Strategy<Value = StyleFlags> {
