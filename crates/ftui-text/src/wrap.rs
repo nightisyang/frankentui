@@ -209,12 +209,10 @@ fn wrap_paragraph(
             current_line.clear();
             *current_width = 0;
 
-            // If the word causing the wrap is just whitespace, discard it.
-            // It was effectively "trailing whitespace" of the previous line.
-            // Exception: if preserve_indent is true, we might want to keep it?
-            // Usually, inter-word spaces that wrap should be discarded regardless of indentation policy.
-            // Indentation policy applies to *explicit* leading whitespace of the paragraph.
-            if word.trim().is_empty() {
+            // If the word causing the wrap is just whitespace:
+            // - If preserve_indent is false, discard it (standard behavior).
+            // - If preserve_indent is true, keep it (it becomes indentation for the next line).
+            if word.trim().is_empty() && !options.preserve_indent {
                 continue;
             }
         }
