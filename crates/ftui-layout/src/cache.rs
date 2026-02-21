@@ -116,7 +116,7 @@ impl LayoutCacheKey {
 
     /// Hash a slice of constraints.
     fn hash_constraints(constraints: &[Constraint]) -> u64 {
-        let mut hasher = FxHasher::default();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
         for c in constraints {
             // Hash each constraint's discriminant and value
             std::mem::discriminant(c).hash(&mut hasher);
@@ -159,7 +159,7 @@ impl LayoutCacheKey {
 
     /// Hash a slice of intrinsic size hints.
     fn hash_intrinsics(intrinsics: &[LayoutSizeHint]) -> u64 {
-        let mut hasher = FxHasher::default();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
         for hint in intrinsics {
             hint.min.hash(&mut hasher);
             hint.preferred.hash(&mut hasher);

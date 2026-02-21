@@ -326,7 +326,10 @@ impl Breakpoints {
         let md = if md < sm { sm } else { md };
         let lg = if lg < md { md } else { lg };
         // Default xl to lg + 40 if not specified via new_with_xl.
-        let xl = if lg + 40 > lg { lg + 40 } else { u16::MAX };
+        let xl = match lg.checked_add(40) {
+            Some(v) => v,
+            None => u16::MAX,
+        };
         Self { sm, md, lg, xl }
     }
 
@@ -615,19 +618,10 @@ impl Flex {
                         (leftover as u64 * i as u64 / slots as u64) as u16
                     }
                 } else {
-                    // Around: center-balanced integer rounding.
-                    // Left half floors, right half ceils, and the middle item (odd counts)
-                    // uses nearest-integer rounding to avoid persistent left drift.
+                    // Around: nearest-integer rounding.
                     let numerator = leftover as u64 * (2 * i as u64 + 1);
                     let denominator = slots as u64;
-                    let midpoint = sizes.len() / 2;
-                    let raw = if sizes.len() % 2 == 1 && i == midpoint {
-                        (numerator + (denominator / 2)) / denominator
-                    } else if i < midpoint {
-                        numerator / denominator
-                    } else {
-                        numerator.div_ceil(denominator)
-                    };
+                    let raw = (numerator + (denominator / 2)) / denominator;
                     raw.min(u64::from(u16::MAX)) as u16
                 }
             } else {
@@ -851,6 +845,12 @@ where
                 sizes[i] = size;
                 remaining = remaining.saturating_sub(size);
             }
+            Constraint::FitContent => {
+                let hint = measurer(i, remaining);
+                let size = min(hint.min, remaining);
+                sizes[i] = size;
+                remaining = remaining.saturating_sub(size);
+            }
             Constraint::FitContentBounded { min: min_bound, .. } => {
                 // Reserve the minimum bound immediately
                 let size = min(min_bound, remaining);
@@ -890,7 +890,7 @@ where
                 let hint = measurer(i, remaining);
                 let preferred = hint
                     .preferred
-                    .max(hint.min)
+                    .max(sizes[i])
                     .min(hint.max.unwrap_or(u16::MAX));
                 let needed = preferred.saturating_sub(sizes[i]);
                 let alloc = min(needed, remaining);
@@ -1146,9 +1146,13 @@ pub fn round_layout_stable(targets: &[f64], total: u16, prev: PreviousAllocation
 
     // Step 4: Distribute deficit
     let mut result = floors;
-    let distribute = (deficit as usize).min(n);
-    for &(i, _, _) in priority.iter().take(distribute) {
-        result[i] = result[i].saturating_add(1);
+    let mut remaining_deficit = deficit;
+    while remaining_deficit > 0 {
+        let distribute = (remaining_deficit as usize).min(n);
+        for &(i, _, _) in priority.iter().take(distribute) {
+            result[i] = result[i].saturating_add(1);
+        }
+        remaining_deficit -= distribute as u16;
     }
 
     result
@@ -1160,21 +1164,37 @@ pub fn round_layout_stable(targets: &[f64], total: u16, prev: PreviousAllocation
 /// reduce the largest items by 1 until the sum matches.
 fn redistribute_overflow(floors: &[u16], total: u16) -> Vec<u16> {
     let mut result = floors.to_vec();
-    let mut current_sum: u64 = result.iter().map(|&x| u64::from(x)).sum();
+    let current_sum: u64 = result.iter().map(|&x| u64::from(x)).sum();
     let total_u64 = u64::from(total);
+    let n = result.len();
 
-    // Build a max-heap of (value, index) to reduce largest first
-    while current_sum > total_u64 {
-        // Find the largest element
-        if let Some((idx, _)) = result
-            .iter()
-            .enumerate()
-            .filter(|item| *item.1 > 0)
-            .max_by_key(|item| *item.1)
-        {
-            result[idx] = result[idx].saturating_sub(1);
-            current_sum = current_sum.saturating_sub(1);
-        } else {
+    if current_sum <= total_u64 || n == 0 {
+        return result;
+    }
+
+    let mut overflow = current_sum - total_u64;
+
+    // Sort indices by value descending
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.sort_by(|&a, &b| result[b].cmp(&result[a]));
+
+    while overflow > 0 {
+        let mut reduced_any = false;
+        let reduce_amount = (overflow as usize / n).max(1) as u16;
+        
+        for &idx in &indices {
+            if overflow == 0 {
+                break;
+            }
+            if result[idx] > 0 {
+                let amount = result[idx].min(reduce_amount).min(overflow as u16);
+                result[idx] -= amount;
+                overflow -= amount as u64;
+                reduced_any = true;
+            }
+        }
+        
+        if !reduced_any {
             break;
         }
     }

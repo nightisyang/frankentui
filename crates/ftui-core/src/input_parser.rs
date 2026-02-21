@@ -1845,7 +1845,7 @@ mod tests {
         parser.parse(&content);
 
         // Send end sequence
-        // Current bug: This will be dropped because buffer is full, trapping parser
+        // This will be processed by the DoS protection fallback logic
         let events = parser.parse(b"\x1b[201~");
 
         assert!(

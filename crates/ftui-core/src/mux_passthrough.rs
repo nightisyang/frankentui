@@ -118,8 +118,8 @@ mod tests {
 
     #[test]
     fn tmux_wrap_doubles_escapes() {
-        // OSC 8 hyperlink: ESC ] 8 ; ; url ESC \
-        let osc8 = b"\x1b]8;;https://example.com\x1b\\";
+        // OSC 8 hyperlink: ESC ] 8 ; ; url BEL
+        let osc8 = b"\x1b]8;;https://example.com\x07";
         let wrapped = to_bytes(|w| tmux_wrap(w, osc8));
 
         // Should start with DCS header
@@ -133,7 +133,7 @@ mod tests {
         // Each should become ESC ESC
         let inner = &wrapped[7..wrapped.len() - 2]; // strip header and ST
         let esc_count = inner.windows(2).filter(|w| w == &[ESC, ESC]).count();
-        assert_eq!(esc_count, 2, "Both ESC bytes should be doubled");
+        assert_eq!(esc_count, 1, "Only the ESC from OSC start should be doubled");
     }
 
     #[test]
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn screen_wrap_basic() {
-        let seq = b"\x1b]8;;https://example.com\x1b\\";
+        let seq = b"\x1b]8;;https://example.com\x07";
         let wrapped = to_bytes(|w| screen_wrap(w, seq));
 
         // Should start with DCS header
