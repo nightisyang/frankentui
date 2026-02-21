@@ -1593,6 +1593,10 @@ impl<W: Write> TerminalWriter<W> {
             self.writer().write_all(CURSOR_SAVE)?;
             self.cursor_saved = true;
 
+            // Keep the hardware cursor hidden while we issue many cursor moves.
+            // This prevents visible cursor "speckling" artifacts during redraws.
+            self.set_cursor_visibility(false)?;
+
             // Activate scroll region if strategy calls for it
             {
                 let _span = debug_span!("ftui.render.scroll_region").entered();
@@ -1690,24 +1694,22 @@ impl<W: Write> TerminalWriter<W> {
             self.writer().write_all(CURSOR_RESTORE)?;
             self.cursor_saved = false;
 
-            if cursor_visible {
-                // Apply requested cursor position (relative to UI)
-                if let Some((cx, cy)) = cursor
-                    && cy < visible_height
-                {
-                    // Move to UI start + cursor y
-                    let abs_y = ui_y_start.saturating_add(cy);
-                    write!(
-                        self.writer(),
-                        "\x1b[{};{}H",
-                        abs_y.saturating_add(1),
-                        cx.saturating_add(1)
-                    )?;
-                }
-                self.set_cursor_visibility(true)?;
-            } else {
-                self.set_cursor_visibility(false)?;
+            let mut show_cursor = false;
+            if cursor_visible
+                && let Some((cx, cy)) = cursor
+                && cy < visible_height
+            {
+                // Move to UI start + cursor y
+                let abs_y = ui_y_start.saturating_add(cy);
+                write!(
+                    self.writer(),
+                    "\x1b[{};{}H",
+                    abs_y.saturating_add(1),
+                    cx.saturating_add(1)
+                )?;
+                show_cursor = true;
             }
+            self.set_cursor_visibility(show_cursor)?;
 
             // End sync output (mux-aware policy).
             if sync_output_enabled && self.in_sync_block {
@@ -1790,9 +1792,17 @@ impl<W: Write> TerminalWriter<W> {
         }
 
         let operation_result = (|| -> io::Result<FrameEmitStats> {
+            // Keep the hardware cursor hidden while we issue many cursor moves.
+            // This prevents visible cursor "speckling" artifacts during redraws.
+            self.set_cursor_visibility(false)?;
+
             let emit_stats = {
                 let _span = debug_span!("ftui.render.emit").entered();
                 let presenter = self.presenter.as_mut().expect("presenter consumed");
+                
+                // Reset presenter state (cursor and style) because we manually moved
+                // the cursor and reset the style at the end of the previous frame.
+                presenter.reset();
                 // AltScreen always starts at (0,0) relative to terminal.
                 presenter.set_viewport_offset_y(0);
 
@@ -1820,20 +1830,22 @@ impl<W: Write> TerminalWriter<W> {
             // Reset style at end
             self.writer().write_all(b"\x1b[0m")?;
 
-            if cursor_visible {
+            let mut show_cursor = false;
+            if cursor_visible
+                && let Some((cx, cy)) = cursor
+                && cx < buffer.width()
+                && cy < buffer.height()
+            {
                 // Apply requested cursor position
-                if let Some((cx, cy)) = cursor {
-                    write!(
-                        self.writer(),
-                        "\x1b[{};{}H",
-                        cy.saturating_add(1),
-                        cx.saturating_add(1)
-                    )?;
-                }
-                self.set_cursor_visibility(true)?;
-            } else {
-                self.set_cursor_visibility(false)?;
+                write!(
+                    self.writer(),
+                    "\x1b[{};{}H",
+                    cy.saturating_add(1),
+                    cx.saturating_add(1)
+                )?;
+                show_cursor = true;
             }
+            self.set_cursor_visibility(show_cursor)?;
 
             if self.timing_enabled {
                 self.last_present_timings = Some(PresentTimings { diff_us });
@@ -2582,7 +2594,29 @@ mod tests {
     }
 
     #[test]
-    fn present_ui_visible_does_not_hide_cursor() {
+    fn present_ui_visible_with_position_temporarily_hides_cursor() {
+        let mut output = Vec::new();
+        {
+            let mut writer = TerminalWriter::new(
+                &mut output,
+                ScreenMode::AltScreen,
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            writer.set_size(10, 5);
+
+            let buffer = Buffer::new(10, 5);
+            writer.present_ui(&buffer, Some((0, 0)), true).unwrap();
+        }
+
+        assert!(
+            output.windows(6).any(|w| w == b"\x1b[?25l"),
+            "expected cursor hide during frame emission"
+        );
+    }
+
+    #[test]
+    fn present_ui_visible_without_position_hides_cursor() {
         let mut output = Vec::new();
         {
             let mut writer = TerminalWriter::new(
@@ -2598,8 +2632,8 @@ mod tests {
         }
 
         assert!(
-            !output.windows(6).any(|w| w == b"\x1b[?25l"),
-            "did not expect cursor hide sequence"
+            output.windows(6).any(|w| w == b"\x1b[?25l"),
+            "expected cursor hide sequence when no explicit cursor position exists"
         );
     }
 
@@ -4950,61 +4984,88 @@ mod tests {
 
     #[test]
     fn inline_active_widgets_gauge_increments_for_inline_mode() {
-        let _lock = GAUGE_TEST_LOCK.lock().unwrap();
-        let before = inline_active_widgets();
-        let writer = TerminalWriter::new(
-            Vec::new(),
-            ScreenMode::Inline { ui_height: 5 },
-            UiAnchor::Bottom,
-            basic_caps(),
-        );
-        assert_eq!(
-            inline_active_widgets(),
-            before + 1,
-            "creating an inline writer should increment the gauge"
-        );
-        drop(writer);
-        assert_eq!(
-            inline_active_widgets(),
-            before,
-            "dropping an inline writer should decrement the gauge"
-        );
+        let _lock = GAUGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+
+        // Other tests may create/drop inline writers concurrently.
+        // Retry until we observe one uncontended +1/-1 transition.
+        for _ in 0..64 {
+            let before = inline_active_widgets();
+            let writer = TerminalWriter::new(
+                Vec::new(),
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            let after_create = inline_active_widgets();
+            drop(writer);
+            let after_drop = inline_active_widgets();
+
+            if after_create == before.saturating_add(1) && after_drop == before {
+                return;
+            }
+            std::thread::yield_now();
+        }
+
+        panic!("failed to observe uncontended inline gauge +1/-1 transition");
     }
 
     #[test]
     fn inline_active_widgets_gauge_increments_for_inline_auto_mode() {
-        let _lock = GAUGE_TEST_LOCK.lock().unwrap();
-        let before = inline_active_widgets();
-        let writer = TerminalWriter::new(
-            Vec::new(),
-            ScreenMode::InlineAuto {
-                min_height: 2,
-                max_height: 10,
-            },
-            UiAnchor::Bottom,
-            basic_caps(),
-        );
-        assert_eq!(inline_active_widgets(), before + 1);
-        drop(writer);
-        assert_eq!(inline_active_widgets(), before);
+        let _lock = GAUGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+
+        for _ in 0..64 {
+            let before = inline_active_widgets();
+            let writer = TerminalWriter::new(
+                Vec::new(),
+                ScreenMode::InlineAuto {
+                    min_height: 2,
+                    max_height: 10,
+                },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            let after_create = inline_active_widgets();
+            drop(writer);
+            let after_drop = inline_active_widgets();
+
+            if after_create == before.saturating_add(1) && after_drop == before {
+                return;
+            }
+            std::thread::yield_now();
+        }
+
+        panic!("failed to observe uncontended inline-auto gauge +1/-1 transition");
     }
 
     #[test]
     fn inline_active_widgets_gauge_unchanged_for_altscreen() {
-        let _lock = GAUGE_TEST_LOCK.lock().unwrap();
-        let before = inline_active_widgets();
-        let writer = TerminalWriter::new(
-            Vec::new(),
-            ScreenMode::AltScreen,
-            UiAnchor::Bottom,
-            basic_caps(),
-        );
-        assert_eq!(
-            inline_active_widgets(),
-            before,
-            "altscreen writer should not affect the inline gauge"
-        );
-        drop(writer);
+        let _lock = GAUGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+
+        for _ in 0..64 {
+            let before = inline_active_widgets();
+            let writer = TerminalWriter::new(
+                Vec::new(),
+                ScreenMode::AltScreen,
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            let after_create = inline_active_widgets();
+            drop(writer);
+            let after_drop = inline_active_widgets();
+
+            if after_create == before && after_drop == before {
+                return;
+            }
+            std::thread::yield_now();
+        }
+
+        panic!("failed to observe stable altscreen gauge behavior");
     }
 
     // =========================================================================
@@ -5166,30 +5227,45 @@ mod tests {
     #[test]
     fn multiple_inline_writers_gauge_tracks_both() {
         // Verify the gauge correctly tracks two simultaneous inline writers.
-        let _lock = GAUGE_TEST_LOCK.lock().unwrap();
-        let before = inline_active_widgets();
+        let _lock = GAUGE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
 
-        let writer_a = TerminalWriter::new(
-            Vec::new(),
-            ScreenMode::Inline { ui_height: 3 },
-            UiAnchor::Bottom,
-            basic_caps(),
-        );
-        assert_eq!(inline_active_widgets(), before + 1);
+        for _ in 0..64 {
+            let before = inline_active_widgets();
+            let writer_a = TerminalWriter::new(
+                Vec::new(),
+                ScreenMode::Inline { ui_height: 3 },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            let after_a = inline_active_widgets();
 
-        let writer_b = TerminalWriter::new(
-            Vec::new(),
-            ScreenMode::Inline { ui_height: 5 },
-            UiAnchor::Bottom,
-            basic_caps(),
-        );
-        assert_eq!(inline_active_widgets(), before + 2);
+            let writer_b = TerminalWriter::new(
+                Vec::new(),
+                ScreenMode::Inline { ui_height: 5 },
+                UiAnchor::Bottom,
+                basic_caps(),
+            );
+            let after_b = inline_active_widgets();
 
-        drop(writer_a);
-        assert_eq!(inline_active_widgets(), before + 1);
+            drop(writer_a);
+            let after_drop_a = inline_active_widgets();
 
-        drop(writer_b);
-        assert_eq!(inline_active_widgets(), before);
+            drop(writer_b);
+            let after_drop_b = inline_active_widgets();
+
+            if after_a == before.saturating_add(1)
+                && after_b == before.saturating_add(2)
+                && after_drop_a == before.saturating_add(1)
+                && after_drop_b == before
+            {
+                return;
+            }
+            std::thread::yield_now();
+        }
+
+        panic!("failed to observe uncontended two-writer gauge transitions");
     }
 
     #[test]

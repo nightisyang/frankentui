@@ -734,8 +734,7 @@ impl BocpdDetector {
         let cp_prob: f64 = self
             .run_length_posterior
             .iter()
-            .enumerate()
-            .map(|(r, &p)| p * self.hazard * mixture_likelihood)
+            .map(|&p| p * self.hazard * mixture_likelihood)
             .sum();
         new_posterior[0] = cp_prob;
 

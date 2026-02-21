@@ -861,7 +861,16 @@ impl ResizeCoalescer {
     pub fn handle_resize_at(&mut self, width: u16, height: u16, now: Instant) -> CoalesceAction {
         self.event_count += 1;
 
+        // Calculate dt
+        let dt = self.last_event.map(|t| duration_since_or_zero(now, t));
+        let dt_ms = dt.map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0);
+
         // Track event time for rate calculation
+        // Clear stale events that artificially inflate the window duration
+        if dt_ms > 1000.0 {
+            self.event_times.clear();
+        }
+
         self.event_times.push_back(now);
         while self.event_times.len() > self.config.rate_window_size {
             self.event_times.pop_front();
@@ -870,9 +879,6 @@ impl ResizeCoalescer {
         // Update regime based on event rate
         self.update_regime(now);
 
-        // Calculate dt
-        let dt = self.last_event.map(|t| duration_since_or_zero(now, t));
-        let dt_ms = dt.map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0);
         self.last_event = Some(now);
 
         // If no pending, and this matches current size, no action needed
@@ -928,6 +934,24 @@ impl ResizeCoalescer {
 
     /// Tick at a specific time (for testing).
     pub fn tick_at(&mut self, now: Instant) -> CoalesceAction {
+        // Update cooldown
+        if self.cooldown_remaining > 0 {
+            self.cooldown_remaining -= 1;
+            if self.cooldown_remaining == 0 && self.regime == Regime::Burst {
+                let rate = self.calculate_event_rate(now);
+                if rate < self.config.burst_exit_rate {
+                    self.record_regime_transition(
+                        now,
+                        Regime::Steady,
+                        TransitionReasonCode::HeuristicExitBurstCooldown,
+                        (1.0 - (rate / self.config.burst_exit_rate)).clamp(0.0, 1.0),
+                        rate,
+                        None,
+                    );
+                }
+            }
+        }
+
         if self.pending_size.is_none() {
             return CoalesceAction::None;
         }
@@ -949,24 +973,6 @@ impl ResizeCoalescer {
             let since_last_event = duration_since_or_zero(now, last_event);
             if since_last_event >= Duration::from_millis(delay_ms) {
                 return self.apply_pending_at(now, false);
-            }
-        }
-
-        // Update cooldown
-        if self.cooldown_remaining > 0 {
-            self.cooldown_remaining -= 1;
-            if self.cooldown_remaining == 0 && self.regime == Regime::Burst {
-                let rate = self.calculate_event_rate(now);
-                if rate < self.config.burst_exit_rate {
-                    self.record_regime_transition(
-                        now,
-                        Regime::Steady,
-                        TransitionReasonCode::HeuristicExitBurstCooldown,
-                        (1.0 - (rate / self.config.burst_exit_rate)).clamp(0.0, 1.0),
-                        rate,
-                        None,
-                    );
-                }
             }
         }
 

@@ -363,11 +363,10 @@ impl ConformalAlert {
     ///
     /// Call this during the baseline/training phase to build the null distribution.
     pub fn calibrate(&mut self, value: f64) {
-        // Compute residual BEFORE updating stats to maintain exchangeability
-        // and avoid shrinking the residual by including the point itself in the mean.
-        let residual = (value - self.stats.mean).abs();
-
         self.stats.update(value);
+        // Measure calibration residuals against the same running reference
+        // distribution used at detection time.
+        let residual = (value - self.stats.mean).abs();
 
         // Store residual for quantile computation
         self.calibration.push_back(residual);
@@ -712,10 +711,9 @@ mod tests {
         config.min_calibration = 3;
         let mut alerter = ConformalAlert::new(config);
 
-        // Note: residuals are computed as |value - current_mean| at calibration time.
-        // With evolving mean, residuals don't directly correspond to absolute deviations
-        // from the final mean. The key property is that threshold is computed correctly
-        // from whatever residuals are stored.
+        // Residuals are computed against the running calibration mean at insertion time.
+        // With an evolving mean, this is not identical to residuals from the final mean.
+        // The key property is that thresholding is computed from the stored residuals.
         for v in [50.0, 60.0, 70.0, 40.0, 30.0] {
             alerter.calibrate(v);
         }

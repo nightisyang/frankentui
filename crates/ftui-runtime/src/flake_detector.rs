@@ -384,16 +384,16 @@ impl FlakeDetector {
     /// Get the current sigma estimate.
     #[must_use]
     pub fn current_sigma(&self) -> f64 {
-        if self.config.variance_window == 0 || self.observation_count < 2 {
+        if self.config.variance_window == 0 || self.variance_window.len() < 2 {
             return self.config.sigma.max(SIGMA_MIN);
         }
 
-        // Use Welford's variance estimate
-        let variance = if self.observation_count > 1 {
-            self.online_m2 / (self.observation_count - 1) as f64
-        } else {
-            self.config.sigma * self.config.sigma
-        };
+        let n = self.variance_window.len() as f64;
+        let mean = self.variance_window.iter().sum::<f64>() / n;
+        let variance = self.variance_window.iter().map(|&x| {
+            let diff = x - mean;
+            diff * diff
+        }).sum::<f64>() / (n - 1.0);
 
         variance.sqrt().max(SIGMA_MIN)
     }
@@ -404,14 +404,7 @@ impl FlakeDetector {
             return;
         }
 
-        // Welford's online algorithm
-        let n = self.observation_count as f64;
-        let delta = residual - self.online_mean;
-        self.online_mean += delta / n;
-        let delta2 = residual - self.online_mean;
-        self.online_m2 += delta * delta2;
-
-        // Also maintain rolling window for optional use
+        // Maintain rolling window
         if self.variance_window.len() >= self.config.variance_window {
             self.variance_window.pop_front();
         }

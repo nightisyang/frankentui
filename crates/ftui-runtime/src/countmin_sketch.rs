@@ -320,6 +320,9 @@ impl CountMinSketch {
             return (None, None, None, None);
         }
 
+        let n = self.calibration.len() as f64;
+        let kl_term = (n.ln().max(1.0)) / (2.0 * n);
+
         // Check cache
         if let Some(bound) = self.calibrated_bound {
             let errors: Vec<u64> = self
@@ -328,8 +331,8 @@ impl CountMinSketch {
                 .map(|s| s.estimated_count.saturating_sub(s.true_count))
                 .collect();
             let max_error = errors.iter().copied().max();
-            let mean_error = errors.iter().sum::<u64>() as f64 / errors.len() as f64;
-            return (Some(bound), max_error, Some(mean_error), None);
+            let mean_error = errors.iter().sum::<u64>() as f64 / n;
+            return (Some(bound), max_error, Some(mean_error), Some(kl_term));
         }
 
         // Compute errors
@@ -339,14 +342,12 @@ impl CountMinSketch {
             .map(|s| s.estimated_count.saturating_sub(s.true_count))
             .collect();
 
-        let n = errors.len() as f64;
         let max_error = errors.iter().copied().max();
         let mean_error = errors.iter().sum::<u64>() as f64 / n;
 
         // PAC-Bayes bound:
         // E[error] <= empirical_mean + sqrt(KL(post||prior) / (2n))
         // With uniform prior and empirical posterior, KL ~ log(n)
-        let kl_term = (n.ln().max(1.0)) / (2.0 * n);
         let pac_bayes_bound = mean_error + kl_term.sqrt() * (self.total_count as f64);
 
         // Use the tighter of theoretical and PAC-Bayes bounds

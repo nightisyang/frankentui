@@ -339,8 +339,9 @@ impl EProcessThrottle {
         let min_obs_met = self.observations_since_recompute >= self.config.min_observations_between;
         let wealth_exceeded = self.wealth >= self.threshold;
 
-        let should_recompute = hard_deadline_exceeded || (wealth_exceeded && min_obs_met);
-        let forced_by_deadline = hard_deadline_exceeded && !wealth_exceeded;
+        let eprocess_triggered = wealth_exceeded && min_obs_met;
+        let should_recompute = hard_deadline_exceeded || eprocess_triggered;
+        let forced_by_deadline = hard_deadline_exceeded && !eprocess_triggered;
 
         let action = if should_recompute {
             if forced_by_deadline {

@@ -386,7 +386,7 @@ impl AllocationBudget {
 
         // Alert if e-process alone triggers (formal guarantee)
         // or both CUSUM and e-process agree.
-        let alert = e_process_triggered;
+        let alert = e_process_triggered || (cusum_triggered && self.e_value > 1.0);
 
         // Record evidence.
         let entry = BudgetEvidence {

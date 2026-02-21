@@ -3896,13 +3896,18 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             }
             Cmd::Log(text) => {
                 let sanitized = sanitize(&text);
-                if sanitized.ends_with('\n') {
-                    self.writer.write_log(&sanitized)?;
+                let mut text_crlf = if !sanitized.contains("\r\n") && sanitized.contains('\n') {
+                    sanitized.replace('\n', "\r\n")
                 } else {
-                    let mut owned = sanitized.into_owned();
-                    owned.push('\n');
-                    self.writer.write_log(&owned)?;
+                    sanitized.into_owned()
+                };
+                if !text_crlf.ends_with("\r\n") {
+                    if text_crlf.ends_with('\n') {
+                        text_crlf.pop();
+                    }
+                    text_crlf.push_str("\r\n");
                 }
+                self.writer.write_log(&text_crlf)?;
             }
             Cmd::Task(spec, f) => {
                 if let Some(ref queue) = self.effect_queue {
@@ -4055,6 +4060,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
                 degradation = self.budget.degradation().as_str(),
                 "frame skipped: budget exhausted before render"
             );
+            self.dirty = false;
             return Ok(());
         }
 

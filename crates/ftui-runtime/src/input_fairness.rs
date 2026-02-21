@@ -320,9 +320,9 @@ impl InputFairnessGuard {
 
         // Check pending input latency (including recent input seen this cycle).
         let pending_latency = self
-            .recent_input_arrival
-            .or(self.pending_input_arrival)
-            .map(|t| now.duration_since(t));
+            .pending_input_arrival
+            .or(self.recent_input_arrival)
+            .map(|t| now.checked_duration_since(t).unwrap_or(Duration::ZERO));
         if let Some(latency) = pending_latency
             && latency > self.stats.max_input_latency
         {
