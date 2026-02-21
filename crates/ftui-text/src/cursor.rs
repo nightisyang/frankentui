@@ -245,7 +245,8 @@ fn line_text<'a>(rope: &'a Rope, line: usize) -> Cow<'a, str> {
 }
 
 fn strip_trailing_newline(text: &str) -> &str {
-    text.strip_suffix('\n').unwrap_or(text)
+    let stripped = text.strip_suffix('\n').unwrap_or(text);
+    stripped.strip_suffix('\r').unwrap_or(stripped)
 }
 
 fn grapheme_count(text: &str) -> usize {
