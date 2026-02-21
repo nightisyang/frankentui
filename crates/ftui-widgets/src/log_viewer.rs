@@ -362,9 +362,10 @@ impl LogViewer {
                 if let Some(ref mut search) = self.search {
                     let mut keep = Vec::with_capacity(search.matches.len());
                     let mut new_highlights = Vec::with_capacity(search.highlight_ranges.len());
+                    let mut evicted_matches = 0;
                     for (i, idx) in search.matches.iter_mut().enumerate() {
                         if *idx < removed {
-                            // evicted
+                            evicted_matches += 1;
                         } else {
                             *idx -= removed;
                             keep.push(*idx);
@@ -376,9 +377,12 @@ impl LogViewer {
                     }
                     search.matches = keep;
                     search.highlight_ranges = new_highlights;
+                    search.current = search.current.saturating_sub(evicted_matches);
                     // Clamp current to valid range
                     if !search.matches.is_empty() {
                         search.current = search.current.min(search.matches.len() - 1);
+                    } else {
+                        search.current = 0;
                     }
                     // Recompute context expansion if needed
                     if search.config.context_lines > 0 {

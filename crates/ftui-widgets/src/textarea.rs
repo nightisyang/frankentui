@@ -522,7 +522,7 @@ impl TextArea {
         let line_text = rope
             .line(cursor.line)
             .unwrap_or(std::borrow::Cow::Borrowed(""));
-        let line_text = line_text.strip_suffix('\n').unwrap_or(&line_text).strip_suffix('\r').unwrap_or(line_text.strip_suffix('\n').unwrap_or(&line_text));
+        let line_text = line_text.trim_end_matches(['\n', '\r']);
         let (mut current_v_row, _) =
             Self::cursor_wrap_position(line_text, width, cursor.visual_col);
 
@@ -538,7 +538,7 @@ impl TextArea {
             let line_text = rope
                 .line(cursor.line)
                 .unwrap_or(std::borrow::Cow::Borrowed(""));
-            let line_text = line_text.strip_suffix('\n').unwrap_or(&line_text).strip_suffix('\r').unwrap_or(line_text.strip_suffix('\n').unwrap_or(&line_text));
+            let line_text = line_text.trim_end_matches(['\n', '\r']);
             let wrap_count = Self::measure_wrap_count(line_text, width);
 
             let available_in_line = wrap_count - 1 - current_v_row;
@@ -607,7 +607,7 @@ impl TextArea {
         let line_text = rope
             .line(cursor.line)
             .unwrap_or(std::borrow::Cow::Borrowed(""));
-        let line_text = line_text.strip_suffix('\n').unwrap_or(&line_text).strip_suffix('\r').unwrap_or(line_text.strip_suffix('\n').unwrap_or(&line_text));
+        let line_text = line_text.trim_end_matches(['\n', '\r']);
         let (mut current_v_row, _) =
             Self::cursor_wrap_position(line_text, width, cursor.visual_col);
 
@@ -627,7 +627,7 @@ impl TextArea {
                 let line_text = rope
                     .line(cursor.line)
                     .unwrap_or(std::borrow::Cow::Borrowed(""));
-                let line_text = line_text.strip_suffix('\n').unwrap_or(&line_text).strip_suffix('\r').unwrap_or(line_text.strip_suffix('\n').unwrap_or(&line_text));
+                let line_text = line_text.trim_end_matches(['\n', '\r']);
                 let slices = Self::wrap_line_slices(line_text, width);
 
                 if let Some(slice) = slices.get(current_v_row) {
@@ -662,7 +662,7 @@ impl TextArea {
                     let line_text = rope
                         .line(cursor.line)
                         .unwrap_or(std::borrow::Cow::Borrowed(""));
-                    let line_text = line_text.strip_suffix('\n').unwrap_or(&line_text).strip_suffix('\r').unwrap_or(line_text.strip_suffix('\n').unwrap_or(&line_text));
+                    let line_text = line_text.trim_end_matches(['\n', '\r']);
                     let wrap_count = Self::measure_wrap_count(line_text, width);
                     current_v_row = wrap_count.saturating_sub(1);
 
@@ -1032,7 +1032,7 @@ impl TextArea {
             let line_text = rope
                 .line(cursor.line)
                 .unwrap_or(std::borrow::Cow::Borrowed(""));
-            let line_text = line_text.strip_suffix('\n').unwrap_or(&line_text).strip_suffix('\r').unwrap_or(line_text.strip_suffix('\n').unwrap_or(&line_text));
+            let line_text = line_text.trim_end_matches(['\n', '\r']);
             let (v_row, _) = Self::cursor_wrap_position(line_text, vp_width, cursor.visual_col);
             self.scroll_anchor.set((cursor.line, v_row));
             return;
@@ -1042,7 +1042,7 @@ impl TextArea {
             let line_text = rope
                 .line(cursor.line)
                 .unwrap_or(std::borrow::Cow::Borrowed(""));
-            let line_text = line_text.strip_suffix('\n').unwrap_or(&line_text).strip_suffix('\r').unwrap_or(line_text.strip_suffix('\n').unwrap_or(&line_text));
+            let line_text = line_text.trim_end_matches(['\n', '\r']);
             let (v_row, _) = Self::cursor_wrap_position(line_text, vp_width, cursor.visual_col);
             if v_row < anchor_vrow {
                 self.scroll_anchor.set((cursor.line, v_row));
@@ -1064,7 +1064,7 @@ impl TextArea {
             let line_text = rope
                 .line(current_line)
                 .unwrap_or(std::borrow::Cow::Borrowed(""));
-            let line_text = line_text.strip_suffix('\n').unwrap_or(&line_text).strip_suffix('\r').unwrap_or(line_text.strip_suffix('\n').unwrap_or(&line_text));
+            let line_text = line_text.trim_end_matches(['\n', '\r']);
             let wrap_count = Self::measure_wrap_count(line_text, vp_width);
 
             if current_line == cursor.line {
@@ -1107,7 +1107,7 @@ impl TextArea {
         let line_text = rope
             .line(scan_line)
             .unwrap_or(std::borrow::Cow::Borrowed(""));
-        let line_text = line_text.strip_suffix('\n').unwrap_or(&line_text).strip_suffix('\r').unwrap_or(line_text.strip_suffix('\n').unwrap_or(&line_text));
+        let line_text = line_text.trim_end_matches(['\n', '\r']);
         let (cursor_v, _) = Self::cursor_wrap_position(line_text, vp_width, cursor.visual_col);
 
         let rows_above = cursor_v + 1;
@@ -1125,7 +1125,7 @@ impl TextArea {
             let line_text = rope
                 .line(scan_line)
                 .unwrap_or(std::borrow::Cow::Borrowed(""));
-            let line_text = line_text.strip_suffix('\n').unwrap_or(&line_text).strip_suffix('\r').unwrap_or(line_text.strip_suffix('\n').unwrap_or(&line_text));
+            let line_text = line_text.trim_end_matches(['\n', '\r']);
             let wrap_count = Self::measure_wrap_count(line_text, vp_width);
 
             if wrap_count >= needed {
@@ -1241,9 +1241,7 @@ impl Widget for TextArea {
             let cursor_line_text = rope
                 .line(cursor.line)
                 .unwrap_or(std::borrow::Cow::Borrowed(""));
-            let cursor_line_text = cursor_line_text
-                .strip_suffix('\n')
-                .unwrap_or(&cursor_line_text).strip_suffix('\r').unwrap_or(cursor_line_text.strip_suffix('\n').unwrap_or(&cursor_line_text));
+            let cursor_line_text = cursor_line_text.trim_end_matches(['\n', '\r']);
             let (cursor_wrap_idx, cursor_col_in_wrap) =
                 Self::cursor_wrap_position(cursor_line_text, text_area_w, cursor.visual_col);
 
@@ -1260,7 +1258,7 @@ impl Widget for TextArea {
                 let line_text = rope
                     .line(line_idx)
                     .unwrap_or(std::borrow::Cow::Borrowed(""));
-                let line_text = line_text.strip_suffix('\n').unwrap_or(&line_text).strip_suffix('\r').unwrap_or(line_text.strip_suffix('\n').unwrap_or(&line_text));
+                let line_text = line_text.trim_end_matches(['\n', '\r']);
 
                 let line_start_byte = nav.to_byte_index(nav.from_line_grapheme(line_idx, 0));
                 let slices = Self::wrap_line_slices(line_text, text_area_w);
@@ -1385,7 +1383,7 @@ impl Widget for TextArea {
             let line_text = rope
                 .line(line_idx)
                 .unwrap_or(std::borrow::Cow::Borrowed(""));
-            let line_text = line_text.strip_suffix('\n').unwrap_or(&line_text).strip_suffix('\r').unwrap_or(line_text.strip_suffix('\n').unwrap_or(&line_text));
+            let line_text = line_text.trim_end_matches(['\n', '\r']);
 
             // Calculate line byte offset for selection mapping
             let line_start_byte = nav.to_byte_index(nav.from_line_grapheme(line_idx, 0));

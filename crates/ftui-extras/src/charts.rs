@@ -505,25 +505,35 @@ impl BarChart<'_> {
 
             // Group label (truncated to bar group width).
             let group_width = x_cursor.saturating_sub(group_start_x);
-            let label_x = group_start_x.saturating_add(group_width.saturating_sub(1) / 2);
-            if let Some(grapheme) = group.label.graphemes(true).next()
-                && label_x < area.right()
-                && label_y < area.bottom()
-            {
-                let width = grapheme_width(grapheme);
-                let content = if width > 1 || grapheme.chars().count() > 1 {
-                    let id = frame.intern_with_width(grapheme, width as u8);
-                    CellContent::from_grapheme(id)
-                } else if let Some(c) = grapheme.chars().next() {
-                    CellContent::from_char(c)
-                } else {
-                    CellContent::EMPTY
-                };
+            let label_width = display_width(group.label) as u16;
+            let render_width = label_width.min(group_width);
+            let start_x = group_start_x.saturating_add(group_width.saturating_sub(render_width) / 2);
+            if label_y < area.bottom() {
+                let mut x_off = 0_u16;
+                for grapheme in group.label.graphemes(true) {
+                    let gw = grapheme_width(grapheme) as u16;
+                    if x_off + gw > render_width {
+                        break;
+                    }
+                    let label_x = start_x.saturating_add(x_off);
+                    if label_x >= area.right() {
+                        break;
+                    }
+                    let content = if gw > 1 || grapheme.chars().count() > 1 {
+                        let id = frame.intern_with_width(grapheme, gw as u8);
+                        CellContent::from_grapheme(id)
+                    } else if let Some(c) = grapheme.chars().next() {
+                        CellContent::from_char(c)
+                    } else {
+                        CellContent::EMPTY
+                    };
 
-                if !content.is_empty() {
-                    let mut cell = Cell::new(content);
-                    style_cell(&mut cell, self.style);
-                    frame.buffer.set_fast(label_x, label_y, cell);
+                    if !content.is_empty() {
+                        let mut cell = Cell::new(content);
+                        style_cell(&mut cell, self.style);
+                        frame.buffer.set_fast(label_x, label_y, cell);
+                    }
+                    x_off += gw;
                 }
             }
         }

@@ -598,6 +598,49 @@ fn filter_node(node: &TreeNode, query_lower: &str) -> Option<TreeNode> {
     Some(filtered)
 }
 
+struct FilteredPathNode {
+    expanded: bool,
+    children: Vec<(usize, FilteredPathNode)>,
+}
+
+fn filter_node_paths(node: &TreeNode, query_lower: &str) -> Option<(bool, Vec<(usize, FilteredPathNode)>)> {
+    let label_matches = node.label.to_lowercase().contains(query_lower)
+        || node
+            .icon
+            .as_deref()
+            .is_some_and(|icon| icon.to_lowercase().contains(query_lower));
+
+    let mut filtered_children = Vec::new();
+    for (idx, child) in node.children.iter().enumerate() {
+        if let Some(filtered) = filter_node_paths(child, query_lower) {
+            filtered_children.push((idx, FilteredPathNode { expanded: filtered.0, children: filtered.1 }));
+        }
+    }
+
+    let mut filtered_lazy = Vec::new();
+    let lazy_offset = node.children.len();
+    if let Some(lazy) = &node.lazy_children {
+        for (idx, child) in lazy.iter().enumerate() {
+            if let Some(filtered) = filter_node_paths(child, query_lower) {
+                filtered_lazy.push((lazy_offset + idx, FilteredPathNode { expanded: filtered.0, children: filtered.1 }));
+            }
+        }
+    }
+
+    if !label_matches && filtered_children.is_empty() && filtered_lazy.is_empty() {
+        return None;
+    }
+
+    let expanded = if !label_matches {
+        true
+    } else {
+        node.expanded
+    };
+
+    filtered_children.extend(filtered_lazy);
+    Some((expanded, filtered_children))
+}
+
 impl Widget for Tree {
     fn render(&self, area: Rect, frame: &mut Frame) {
         if area.width == 0 || area.height == 0 {
@@ -889,33 +932,67 @@ impl Tree {
     }
 
     fn find_path_indices_at_visible_index(&self, target: usize) -> Option<Vec<usize>> {
-        let filtered_root = self.search_query.as_deref().and_then(|query| {
-            let query = query.trim();
-            if query.is_empty() {
-                return None;
-            }
-            let query_lower = query.to_lowercase();
-            filter_node(&self.root, &query_lower)
-        });
-        let root = filtered_root.as_ref().unwrap_or(&self.root);
-
+        let query = self.search_query.as_deref().map(str::trim).filter(|q| !q.is_empty());
         let mut counter = 0usize;
         let mut path = Vec::new();
-        
-        if self.show_root {
-            Self::walk_visible_index_path(root, target, &mut counter, &mut path)
-        } else if root.expanded {
-            for (idx, child) in root.children.iter().enumerate() {
-                path.push(idx);
-                if let Some(p) = Self::walk_visible_index_path(child, target, &mut counter, &mut path) {
-                    return Some(p);
+
+        if let Some(q) = query {
+            let query_lower = q.to_lowercase();
+            let (expanded, children) = filter_node_paths(&self.root, &query_lower)?;
+            let root_node = FilteredPathNode { expanded, children };
+
+            if self.show_root {
+                Self::walk_filtered_path(&root_node, target, &mut counter, &mut path)
+            } else if root_node.expanded {
+                for &(idx, ref child) in &root_node.children {
+                    path.push(idx);
+                    if let Some(p) = Self::walk_filtered_path(child, target, &mut counter, &mut path) {
+                        return Some(p);
+                    }
+                    path.pop();
                 }
-                path.pop();
+                None
+            } else {
+                None
             }
-            None
         } else {
-            None
+            if self.show_root {
+                Self::walk_visible_index_path(&self.root, target, &mut counter, &mut path)
+            } else if self.root.expanded {
+                for (idx, child) in self.root.children.iter().enumerate() {
+                    path.push(idx);
+                    if let Some(p) = Self::walk_visible_index_path(child, target, &mut counter, &mut path) {
+                        return Some(p);
+                    }
+                    path.pop();
+                }
+                None
+            } else {
+                None
+            }
         }
+    }
+
+    fn walk_filtered_path(
+        node: &FilteredPathNode,
+        target: usize,
+        counter: &mut usize,
+        current_path: &mut Vec<usize>,
+    ) -> Option<Vec<usize>> {
+        if *counter == target {
+            return Some(current_path.clone());
+        }
+        *counter += 1;
+        if node.expanded {
+            for &(idx, ref child) in &node.children {
+                current_path.push(idx);
+                if let Some(found) = Self::walk_filtered_path(child, target, counter, current_path) {
+                    return Some(found);
+                }
+                current_path.pop();
+            }
+        }
+        None
     }
 
     fn walk_visible_index_path(

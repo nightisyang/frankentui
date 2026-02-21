@@ -326,16 +326,10 @@ impl HistoryPanel {
 
 impl Widget for HistoryPanel {
     fn render(&self, area: Rect, frame: &mut Frame) {
-        // Fill background if style is set
-        if let Some(bg) = self.bg_style.bg {
-            for y in area.y..area.bottom() {
-                for x in area.x..area.right() {
-                    if let Some(cell) = frame.buffer.get_mut(x, y) {
-                        cell.bg = bg;
-                    }
-                }
-            }
-        }
+        // Fill background area
+        let mut bg_cell = ftui_render::cell::Cell::from_char(' ');
+        crate::apply_style(&mut bg_cell, self.bg_style);
+        frame.buffer.fill(area, bg_cell);
 
         self.render_content(area, frame);
     }
