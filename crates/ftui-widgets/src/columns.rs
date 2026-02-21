@@ -83,12 +83,11 @@ impl<'a> Columns<'a> {
         self
     }
 
-    /// Add a column with equal ratio sizing.
+    /// Add a column with equal fill sizing.
     #[must_use]
     #[allow(clippy::should_implement_trait)] // Builder pattern, not std::ops::Add
     pub fn add(mut self, widget: impl Widget + 'a) -> Self {
-        self.columns
-            .push(Column::new(widget, Constraint::Ratio(1, 1)));
+        self.columns.push(Column::new(widget, Constraint::Fill));
         self
     }
 }

@@ -878,13 +878,55 @@ impl Tree {
     /// root is row 0; otherwise children of the root are the top-level rows.
     /// Only expanded nodes' children are visited.
     pub fn node_at_visible_index_mut(&mut self, target: usize) -> Option<&mut TreeNode> {
-        let mut counter = 0usize;
+        let path = self.find_string_path_at_visible_index(target)?;
+        
+        let mut current = &mut self.root;
+        let mut path_slice = path.as_slice();
+
         if self.show_root {
-            Self::walk_visible_mut(&mut self.root, target, &mut counter)
-        } else if self.root.expanded {
-            for child in &mut self.root.children {
-                if let Some(node) = Self::walk_visible_mut(child, target, &mut counter) {
-                    return Some(node);
+            if path_slice.is_empty() || current.label != path_slice[0] {
+                return None;
+            }
+            path_slice = &path_slice[1..];
+        }
+
+        for segment in path_slice {
+            let mut found = false;
+            current.materialize_lazy_children();
+            for child in &mut current.children {
+                if child.label == *segment {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return None;
+            }
+            current = current.children.iter_mut().find(|c| c.label == *segment).unwrap();
+        }
+        Some(current)
+    }
+
+    fn find_string_path_at_visible_index(&self, target: usize) -> Option<Vec<String>> {
+        let filtered_root = self.search_query.as_deref().and_then(|query| {
+            let query = query.trim();
+            if query.is_empty() {
+                return None;
+            }
+            let query_lower = query.to_lowercase();
+            filter_node(&self.root, &query_lower)
+        });
+        let root = filtered_root.as_ref().unwrap_or(&self.root);
+
+        let mut counter = 0usize;
+        let mut path = Vec::new();
+        
+        if self.show_root {
+            Self::walk_visible_string_path(root, target, &mut counter, &mut path)
+        } else if root.expanded {
+            for child in &root.children {
+                if let Some(p) = Self::walk_visible_string_path(child, target, &mut counter, &mut path) {
+                    return Some(p);
                 }
             }
             None
@@ -893,25 +935,25 @@ impl Tree {
         }
     }
 
-    /// Recursive helper that walks the visible tree to find the node at the
-    /// given flattened index. Returns `Some` if found, `None` otherwise.
-    fn walk_visible_mut<'a>(
-        node: &'a mut TreeNode,
+    fn walk_visible_string_path(
+        node: &TreeNode,
         target: usize,
         counter: &mut usize,
-    ) -> Option<&'a mut TreeNode> {
+        current_path: &mut Vec<String>,
+    ) -> Option<Vec<String>> {
+        current_path.push(node.label.clone());
         if *counter == target {
-            return Some(node);
+            return Some(current_path.clone());
         }
         *counter += 1;
         if node.expanded {
-            node.materialize_lazy_children();
-            for child in &mut node.children {
-                if let Some(found) = Self::walk_visible_mut(child, target, counter) {
+            for child in &node.children {
+                if let Some(found) = Self::walk_visible_string_path(child, target, counter, current_path) {
                     return Some(found);
                 }
             }
         }
+        current_path.pop();
         None
     }
 }

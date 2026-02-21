@@ -453,7 +453,13 @@ impl LogViewer {
             if filtered_total == 0 {
                 self.filtered_scroll_offset = 0;
             } else {
-                self.filtered_scroll_offset = usize::MAX;
+                let visible_count = self.virt.visible_count();
+                if visible_count == 0 {
+                    // Viewport unknown; keep sentinel and clamp during render.
+                    self.filtered_scroll_offset = usize::MAX;
+                } else {
+                    self.filtered_scroll_offset = filtered_total.saturating_sub(visible_count);
+                }
             }
         } else {
             self.virt.scroll_to_end();

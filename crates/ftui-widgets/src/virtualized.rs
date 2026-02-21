@@ -230,7 +230,7 @@ impl<T> Virtualized<T> {
                 // Sum heights until we fill or exceed viewport
                 let mut count = 0;
                 let mut total_height = 0u16;
-                let start = self.scroll_offset;
+                let start = self.scroll_offset.min(self.len().saturating_sub(1));
                 while start + count < self.len() {
                     let next = cache.get(start + count);
                     let proposed = total_height.saturating_add(next);
@@ -252,8 +252,9 @@ impl<T> Virtualized<T> {
             }
         };
 
-        let start = self.scroll_offset;
-        let end = (start + items_visible).min(self.len());
+        let max_offset = self.len().saturating_sub(items_visible);
+        let start = self.scroll_offset.min(max_offset);
+        let end = start.saturating_add(items_visible).min(self.len());
         self.visible_count.set(items_visible);
         start..end
     }
@@ -299,8 +300,16 @@ impl<T> Virtualized<T> {
 
     /// Scroll to bottom.
     pub fn scroll_to_bottom(&mut self) {
+        if self.is_empty() {
+            self.scroll_offset = 0;
+            return;
+        }
+
         let visible_count = self.visible_count.get();
-        if self.len() > visible_count && visible_count > 0 {
+        if visible_count == 0 {
+            // Viewport unknown; keep a sentinel and let `visible_range` clamp lazily.
+            self.scroll_offset = usize::MAX;
+        } else if self.len() > visible_count {
             self.scroll_offset = self.len().saturating_sub(visible_count);
         } else {
             self.scroll_offset = 0;
@@ -932,10 +941,14 @@ impl VirtualizedListState {
     }
 
     /// Scroll to bottom.
-    pub fn scroll_to_bottom(&mut self, _total_items: usize) {
-        // Set to MAX; render() will clamp to (total - viewport)
-        // once viewport height is known.
-        self.scroll_offset = usize::MAX;
+    pub fn scroll_to_bottom(&mut self, total_items: usize) {
+        if total_items == 0 {
+            self.scroll_offset = 0;
+        } else {
+            // Set to MAX; render() will clamp to (total - viewport)
+            // once viewport height is known.
+            self.scroll_offset = usize::MAX;
+        }
     }
 
     /// Page up (scroll by visible count - 1).
@@ -2636,9 +2649,9 @@ mod tests {
         for i in 0..20 {
             virt.push(i);
         }
-        // visible_count=0 (default), scroll_to_bottom goes to offset=0
+        // visible_count=0 (default), scroll_to_bottom stores a sentinel.
         virt.scroll_to_bottom();
-        assert_eq!(virt.scroll_offset(), 0);
+        assert_eq!(virt.scroll_offset(), usize::MAX);
     }
 
     // ── Virtualized: page navigation edge cases ─────────────────────────

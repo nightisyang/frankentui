@@ -443,7 +443,7 @@ impl<'a> StatefulWidget for Scrollbar<'a> {
             // Determine part type and relative position
             let (symbol, part, rel_pos) = if i < start_offset {
                 (begin_char, SCROLLBAR_PART_BEGIN, 0)
-            } else if i >= length - end_offset {
+            } else if i >= length.saturating_sub(end_offset) {
                 (end_char, SCROLLBAR_PART_END, 0)
             } else {
                 let track_idx = i - start_offset;

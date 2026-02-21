@@ -190,6 +190,9 @@ impl TextInput {
 
     /// Start an IME composition session.
     pub fn ime_start_composition(&mut self) {
+        if self.ime_composition.is_none() {
+            self.delete_selection();
+        }
         self.ime_composition = Some(String::new());
         #[cfg(feature = "tracing")]
         self.trace_edit("ime_start");
@@ -199,6 +202,9 @@ impl TextInput {
     ///
     /// Starts composition automatically if none is active.
     pub fn ime_update_composition(&mut self, preedit: impl Into<String>) {
+        if self.ime_composition.is_none() {
+            self.delete_selection();
+        }
         self.ime_composition = Some(preedit.into());
         #[cfg(feature = "tracing")]
         self.trace_edit("ime_update");
@@ -213,7 +219,6 @@ impl TextInput {
         };
 
         if !preedit.is_empty() {
-            self.delete_selection();
             self.insert_text(&preedit);
         }
 
@@ -255,6 +260,24 @@ impl TextInput {
             }
             Event::Ime(ime) => self.handle_ime_event(ime),
             Event::Paste(paste) => {
+                let had_selection = self.selection_anchor.is_some();
+
+                // For replacement pastes under a max-length constraint, reject
+                // oversized payloads before deleting the selection.
+                if had_selection {
+                    let clean_text = Self::sanitize_input_text(&paste.text);
+                    if let Some(max) = self.max_length {
+                        let selection_len = {
+                            let (start, end) = self.selection_range(self.selection_anchor.unwrap());
+                            end.saturating_sub(start)
+                        };
+                        let available = max.saturating_sub(self.grapheme_count().saturating_sub(selection_len));
+                        if clean_text.graphemes(true).count() > available {
+                            return true;
+                        }
+                    }
+                }
+
                 self.delete_selection();
                 self.insert_text(&paste.text);
                 true
@@ -441,17 +464,9 @@ impl TextInput {
 
     // --- Editing operations ---
 
-    /// Insert text at the current cursor position.
-    ///
-    /// This method:
-    /// - Replaces newlines and tabs with spaces.
-    /// - Filters out other control characters.
-    /// - Respects `max_length` (truncating if necessary).
-    /// - Efficiently inserts the result in one operation.
-    pub fn insert_text(&mut self, text: &str) {
+    fn sanitize_input_text(text: &str) -> String {
         // Map line breaks/tabs to spaces, filter other control chars
-        let clean_text: String = text
-            .chars()
+        text.chars()
             .map(|c| {
                 if c == '\n' || c == '\r' || c == '\t' {
                     ' '
@@ -460,7 +475,18 @@ impl TextInput {
                 }
             })
             .filter(|c| !c.is_control())
-            .collect();
+            .collect()
+    }
+
+    /// Insert text at the current cursor position.
+    ///
+    /// This method:
+    /// - Replaces newlines and tabs with spaces.
+    /// - Filters out other control characters.
+    /// - Respects `max_length` (truncating if necessary).
+    /// - Efficiently inserts the result in one operation.
+    pub fn insert_text(&mut self, text: &str) {
+        let clean_text = Self::sanitize_input_text(text);
 
         if clean_text.is_empty() {
             return;
@@ -709,21 +735,13 @@ impl TextInput {
         let graphemes: Vec<&str> = self.value.graphemes(true).collect();
         let mut pos = self.cursor;
 
-        // 1. Skip trailing whitespace
-        while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) == 0 {
+        // 1. Skip separators (whitespace + punctuation)
+        while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) != 1 {
             pos -= 1;
         }
 
-        if pos == 0 {
-            self.cursor = 0;
-            return;
-        }
-
-        // 2. Determine class of the token (Word or Punctuation)
-        let target_class = Self::get_grapheme_class(graphemes[pos - 1]);
-
-        // 3. Skip the token
-        while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) == target_class {
+        // 2. Skip the previous word
+        while pos > 0 && Self::get_grapheme_class(graphemes[pos - 1]) == 1 {
             pos -= 1;
         }
 
@@ -746,16 +764,15 @@ impl TextInput {
 
         let mut pos = self.cursor;
 
-        // 1. Determine class of current token
-        let target_class = Self::get_grapheme_class(graphemes[pos]);
-
-        // 2. Skip the token
-        while pos < max && Self::get_grapheme_class(graphemes[pos]) == target_class {
-            pos += 1;
+        // 1. Skip the current word if we're inside one.
+        if Self::get_grapheme_class(graphemes[pos]) == 1 {
+            while pos < max && Self::get_grapheme_class(graphemes[pos]) == 1 {
+                pos += 1;
+            }
         }
 
-        // 3. Skip trailing whitespace
-        while pos < max && Self::get_grapheme_class(graphemes[pos]) == 0 {
+        // 2. Skip separators (whitespace + punctuation) to land at next word.
+        while pos < max && Self::get_grapheme_class(graphemes[pos]) != 1 {
             pos += 1;
         }
 
@@ -800,14 +817,18 @@ impl TextInput {
     fn cursor_visual_pos(&self) -> usize {
         let mut pos = 0;
         if !self.value.is_empty() {
-            pos += self.value
+            pos += self
+                .value
                 .graphemes(true)
                 .take(self.cursor)
                 .map(|g| self.grapheme_width(g))
                 .sum::<usize>();
         }
         if let Some(ime) = &self.ime_composition {
-            pos += ime.graphemes(true).map(|g| self.grapheme_width(g)).sum::<usize>();
+            pos += ime
+                .graphemes(true)
+                .map(|g| self.grapheme_width(g))
+                .sum::<usize>();
         }
         pos
     }
@@ -854,7 +875,7 @@ impl TextInput {
                 // Try snapping to the start of the character to keep it visible.
                 // Only allowed if the cursor remains visible on the right.
                 // Cursor visibility condition: cursor_visual < new_scroll + viewport_width
-                if cursor_visual < pos + viewport_width {
+                if cursor_visual <= pos + viewport_width {
                     return pos;
                 } else {
                     // Cannot snap left without hiding cursor. Snap right (hide the character).
@@ -899,7 +920,8 @@ impl Widget for TextInput {
         }
 
         let graphemes: Vec<&str> = self.value.graphemes(true).collect();
-        let show_placeholder = self.value.is_empty() && self.ime_composition.is_none() && !self.placeholder.is_empty();
+        let show_placeholder =
+            self.value.is_empty() && self.ime_composition.is_none() && !self.placeholder.is_empty();
 
         let viewport_width = area.width as usize;
         let cursor_visual_pos = self.cursor_visual_pos();
@@ -964,14 +986,14 @@ impl Widget for TextInput {
         } else {
             let mut display_spans: Vec<(&str, Style, bool)> = Vec::new();
             for (gi, g) in graphemes.iter().enumerate() {
-                if gi == self.cursor {
-                    if let Some(ime) = &self.ime_composition {
-                        for ig in ime.graphemes(true) {
-                            display_spans.push((ig, self.style, true));
-                        }
+                if gi == self.cursor
+                    && let Some(ime) = &self.ime_composition
+                {
+                    for ig in ime.graphemes(true) {
+                        display_spans.push((ig, self.style, true));
                     }
                 }
-                
+
                 let cell_style = if !deg.apply_styling() {
                     Style::default()
                 } else if self.is_in_selection(gi) {
@@ -981,11 +1003,11 @@ impl Widget for TextInput {
                 };
                 display_spans.push((g, cell_style, false));
             }
-            if self.cursor == graphemes.len() {
-                if let Some(ime) = &self.ime_composition {
-                    for ig in ime.graphemes(true) {
-                        display_spans.push((ig, self.style, true));
-                    }
+            if self.cursor == graphemes.len()
+                && let Some(ime) = &self.ime_composition
+            {
+                for ig in ime.graphemes(true) {
+                    display_spans.push((ig, self.style, true));
                 }
             }
 
@@ -1032,7 +1054,7 @@ impl Widget for TextInput {
                 if is_ime && deg.apply_styling() {
                     use ftui_render::cell::StyleFlags;
                     let current_flags = cell.attrs.flags();
-                    cell.attrs = cell.attrs.with_flags(current_flags | StyleFlags::UNDERLINED);
+                    cell.attrs = cell.attrs.with_flags(current_flags | StyleFlags::UNDERLINE);
                 }
 
                 frame

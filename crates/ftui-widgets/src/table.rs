@@ -2527,7 +2527,7 @@ mod tests {
     }
 
     #[test]
-    fn select_deselect_resets_offset_then_reselect() {
+    fn select_deselect_preserves_offset_then_reselect() {
         let mut state = TableState {
             offset: 15,
             ..Default::default()
@@ -2537,11 +2537,11 @@ mod tests {
         assert_eq!(state.offset, 15); // offset not reset on select
 
         state.select(None);
-        assert_eq!(state.offset, 0); // reset on deselect
+        assert_eq!(state.offset, 15); // preserve viewport on deselect
 
         state.select(Some(3));
         assert_eq!(state.selected, Some(3));
-        assert_eq!(state.offset, 0); // still 0 after reselect
+        assert_eq!(state.offset, 15); // still preserved after reselect
     }
 
     #[test]
