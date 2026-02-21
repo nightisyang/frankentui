@@ -596,7 +596,7 @@ const PENALTY_FORCE_BREAK: u64 = 5000;
 /// Maximum lookahead (words per line) for DP pruning.
 /// Limits worst-case to O(n × MAX_LOOKAHEAD) instead of O(n²).
 /// Any line with more than this many words will use the greedy breakpoint.
-const KP_MAX_LOOKAHEAD: usize = 64;
+const KP_MAX_LOOKAHEAD: usize = 1024;
 
 /// Compute the badness of a line with the given slack.
 ///

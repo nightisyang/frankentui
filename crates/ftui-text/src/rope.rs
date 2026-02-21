@@ -124,11 +124,24 @@ impl Rope {
     where
         R: RangeBounds<usize>,
     {
-        let (start, end) = normalize_range(range, self.grapheme_count());
+        let start = match range.start_bound() {
+            Bound::Included(&s) => s,
+            Bound::Excluded(&s) => s.saturating_add(1),
+            Bound::Unbounded => 0,
+        };
+        let end = match range.end_bound() {
+            Bound::Included(&e) => e.saturating_add(1),
+            Bound::Excluded(&e) => e,
+            Bound::Unbounded => usize::MAX,
+        };
+
+        let start = start.min(end);
         if start < end {
             let char_start = self.grapheme_to_char_idx(start);
             let char_end = self.grapheme_to_char_idx(end);
-            self.rope.remove(char_start..char_end);
+            if char_start < char_end {
+                self.rope.remove(char_start..char_end);
+            }
         }
     }
 
@@ -229,18 +242,13 @@ impl Rope {
 
         for line_slice in self.rope.lines() {
             let line = cow_from_slice(line_slice);
-            let line_g_count = line.graphemes(true).count();
-            if g_count + line_g_count > grapheme_idx {
-                let offset = grapheme_idx - g_count;
-                for (current_g, g) in line.graphemes(true).enumerate() {
-                    if current_g == offset {
-                        return char_count;
-                    }
-                    char_count += g.chars().count();
+            for g in line.graphemes(true) {
+                if g_count == grapheme_idx {
+                    return char_count;
                 }
+                g_count += 1;
+                char_count += g.chars().count();
             }
-            g_count += line_g_count;
-            char_count += line_slice.len_chars();
         }
         self.len_chars()
     }

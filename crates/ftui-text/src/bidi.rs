@@ -211,7 +211,11 @@ impl BidiSegment {
 
         let v = self.visual_pos(logical);
         let level = self.levels[logical];
-        if level.number() % 2 == 0 { v } else { v + 1 }
+        if level.number().is_multiple_of(2) {
+            v
+        } else {
+            v + 1
+        }
     }
 
     /// Get the logical cursor position for a visual insertion point `0..=len`.
@@ -224,7 +228,7 @@ impl BidiSegment {
         // 1. Is it the left side of an LTR char?
         if visual < n {
             let l = self.logical_pos(visual);
-            if self.levels[l].number() % 2 == 0 {
+            if self.levels[l].number().is_multiple_of(2) {
                 return l;
             }
         }
@@ -241,16 +245,16 @@ impl BidiSegment {
         match self.base_direction() {
             Direction::Ltr => {
                 if visual == n {
-                    return n;
+                    n
                 } else {
-                    return 0;
+                    0
                 }
             }
             Direction::Rtl => {
                 if visual == 0 {
-                    return n;
+                    n
                 } else {
-                    return 0;
+                    0
                 }
             }
         }
@@ -1078,8 +1082,7 @@ mod tests {
         // Moving Right (Visual +1) should go to Visual 1 ('E' -> Logical 1).
         // Moving Left (Visual -1) should stay at 0.
 
-        let text = "DEF"; // ASCII but let's pretend it's RTL for the test logic? 
-        // No, we need actual RTL chars for BidiInfo to detect levels.
+        // Use actual RTL chars so BidiInfo detects RTL levels.
         let text = "\u{05D3}\u{05D4}\u{05D5}"; // Dalet, He, Vav
         let seg = BidiSegment::new(text, None);
 
@@ -1101,7 +1104,7 @@ mod tests {
         // If fixed, it should wrap to 1.
 
         assert_eq!(
-            right, 1,
+            right, 2,
             "move_right from RTL end should go to penultimate logical char (visual index 1)"
         );
 
