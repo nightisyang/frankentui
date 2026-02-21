@@ -958,7 +958,7 @@ impl ChangeRun {
     /// Number of cells in this run.
     #[inline]
     pub const fn len(&self) -> u16 {
-        self.x1 - self.x0 + 1
+        self.x1.saturating_sub(self.x0) + 1
     }
 
     /// Check if this run is empty (should never happen in practice).

@@ -251,7 +251,7 @@ mod cost_model {
             // We use 32 as a conservative safety bound.
             for i in (0..=j).rev() {
                 let changed_cells = scratch.prefix_cells[j + 1] - scratch.prefix_cells[i];
-                let total_cells = (row_runs[j].x1 - row_runs[i].x0 + 1) as usize;
+                let total_cells = (row_runs[j].x1 as usize).saturating_sub(row_runs[i].x0 as usize) + 1;
                 let gap_cells = total_cells - changed_cells;
 
                 if gap_cells > 32 {

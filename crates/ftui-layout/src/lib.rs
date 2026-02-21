@@ -1187,7 +1187,7 @@ fn redistribute_overflow(floors: &[u16], total: u16) -> Vec<u16> {
                 break;
             }
             if result[idx] > 0 {
-                let amount = result[idx].min(reduce_amount).min(overflow as u16);
+                let amount = (result[idx] as u64).min(reduce_amount as u64).min(overflow) as u16;
                 result[idx] -= amount;
                 overflow -= amount as u64;
                 reduced_any = true;
