@@ -542,9 +542,9 @@ impl<'a> Frame<'a> {
     ///
     /// # Panics
     ///
-    /// Panics if width > 127.
+    /// Panics if width exceeds `GraphemeId::MAX_WIDTH`.
     pub fn intern(&mut self, text: &str) -> GraphemeId {
-        let width = display_width(text).min(127) as u8;
+        let width = display_width(text).min(GraphemeId::MAX_WIDTH as usize) as u8;
         self.pool.intern(text, width)
     }
 

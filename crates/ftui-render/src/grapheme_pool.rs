@@ -508,7 +508,7 @@ mod tests {
     #[should_panic(expected = "width overflow")]
     fn width_overflow_panics() {
         let mut pool = GraphemePool::new();
-        pool.intern("X", 128); // Max is 127
+        pool.intern("X", GraphemeId::MAX_WIDTH + 1);
     }
 
     #[test]
@@ -682,7 +682,7 @@ mod tests {
                 .prop_filter("non-empty", |s| !s.is_empty())
         }
 
-        /// Generate a valid width (0..=127).
+        /// Generate a valid width (0..=GraphemeId::MAX_WIDTH).
         fn arb_width() -> impl Strategy<Value = u8> {
             0u8..=GraphemeId::MAX_WIDTH
         }
@@ -964,8 +964,8 @@ mod tests {
     #[test]
     fn intern_width_max() {
         let mut pool = GraphemePool::new();
-        let id = pool.intern("max-width", 127);
-        assert_eq!(id.width(), 127);
+        let id = pool.intern("max-width", GraphemeId::MAX_WIDTH);
+        assert_eq!(id.width(), GraphemeId::MAX_WIDTH as usize);
         assert_eq!(pool.get(id), Some("max-width"));
     }
 

@@ -55,7 +55,7 @@
 use smallvec::SmallVec;
 
 use crate::budget::DegradationLevel;
-use crate::cell::Cell;
+use crate::cell::{Cell, GraphemeId};
 use ftui_core::geometry::Rect;
 
 /// Maximum number of dirty spans per row before falling back to full-row scan.
@@ -700,8 +700,8 @@ impl Buffer {
         else if current.is_continuation() && !new_cell.is_continuation() {
             let mut back_x = x;
             // Limit scan to max possible grapheme width to avoid O(N) scan on rows
-            // filled with orphaned continuations. 127 is GraphemeId::MAX_WIDTH.
-            let limit = x.saturating_sub(127);
+            // filled with orphaned continuations.
+            let limit = x.saturating_sub(GraphemeId::MAX_WIDTH as u16);
 
             while back_x > limit {
                 back_x -= 1;
@@ -2332,33 +2332,16 @@ mod tests {
     fn wide_char_fill_region() {
         let mut buf = Buffer::new(10, 3);
 
-        // Fill a 4x2 region with a wide character
-        // Due to atomicity, only even x positions will have heads
+        // Fill a 4x2 region with a wide character.
+        // Wide fills advance by width to prevent overlap churn.
         let wide_cell = Cell::from_char('中');
         buf.fill(Rect::new(0, 0, 4, 2), wide_cell);
 
-        // Check row 0: positions 0,1 should have wide char, 2,3 should have another
-        // Actually, fill calls set for each position, so:
-        // - set(0,0) writes '中' at 0, CONT at 1
-        // - set(1,0) overwrites CONT, clears head at 0, writes '中' at 1, CONT at 2
-        // - set(2,0) overwrites CONT, clears head at 1, writes '中' at 2, CONT at 3
-        // - set(3,0) overwrites CONT, clears head at 2, writes '中' at 3... but 4 is out of fill region
-        // Wait, fill only goes to right() which is x + width = 0 + 4 = 4, so x in 0..4
-
-        // Actually the behavior depends on whether the wide char fits.
-        // Let me trace through: fill iterates x in 0..4, y in 0..2
-        // For y=0: set(0,0), set(1,0), set(2,0), set(3,0) with wide char
-        // Each set with wide char checks if x+1 is in bounds and scissor.
-        // set(3,0) with '中' needs positions 3,4 - position 4 is in bounds (buf width 10)
-        // So it should write.
-
-        // The pattern should be: each write of a wide char disrupts previous
-        // Final state after fill: position 3 has head, position 4 has continuation
-        // (because set(3,0) is last and overwrites previous wide chars)
-
-        // This is a complex interaction - let's just verify no panics and some structure
-        // The final state at row 0, x=3 should have '中'
-        assert_eq!(buf.get(3, 0).unwrap().content.as_char(), Some('中'));
+        // Row 0 should contain two wide graphemes at x={0,2}.
+        assert_eq!(buf.get(0, 0).unwrap().content.as_char(), Some('中'));
+        assert!(buf.get(1, 0).unwrap().is_continuation());
+        assert_eq!(buf.get(2, 0).unwrap().content.as_char(), Some('中'));
+        assert!(buf.get(3, 0).unwrap().is_continuation());
     }
 
     #[test]

@@ -357,8 +357,9 @@ impl QueueGuardrails {
                     QueueAction::DropOldest(excess)
                 }
                 QueueDropPolicy::DropNewest => {
-                    self.total_drops = self.total_drops.saturating_add(1);
-                    QueueAction::DropNewest(1)
+                    let excess = current_depth - 1; // keep only oldest
+                    self.total_drops = self.total_drops.saturating_add(excess as u64);
+                    QueueAction::DropNewest(excess)
                 }
                 QueueDropPolicy::Backpressure => {
                     self.total_backpressure_events =
@@ -382,8 +383,9 @@ impl QueueGuardrails {
                     QueueAction::DropOldest(excess)
                 }
                 QueueDropPolicy::DropNewest => {
-                    self.total_drops = self.total_drops.saturating_add(1);
-                    QueueAction::DropNewest(1)
+                    let excess = current_depth.saturating_sub(self.config.warn_depth);
+                    self.total_drops = self.total_drops.saturating_add(excess as u64);
+                    QueueAction::DropNewest(excess)
                 }
                 QueueDropPolicy::Backpressure => {
                     self.total_backpressure_events =

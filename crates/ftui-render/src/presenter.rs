@@ -587,25 +587,31 @@ impl<W: Write> Presenter<W> {
                     let cell = &row[idx];
                     self.emit_cell(idx as u16, cell, pool, links)?;
 
-                    // Repair invalid wide-glyph tails. If a wide head is present but
-                    // one or more tail cells are not marked CONTINUATION, emit those
-                    // underlying cells explicitly so terminal state stays aligned to
-                    // the logical buffer content.
-                    let width = cell.content.width();
+                    // Repair invalid wide-char tails for direct wide chars.
+                    //
+                    // We intentionally restrict this to direct chars (not grapheme-pool refs)
+                    // so multi-column grapheme payloads cannot trigger broad row rewrites.
+                    // This preserves correctness for broken width-2 char tails (e.g. missing
+                    // CONTINUATION) without reintroducing long-width drift in unrelated content.
                     let mut advance = 1usize;
-                    if width > 1 {
+                    let width = cell.content.width();
+                    if width > 1 && cell.content.as_char().is_some() {
                         for off in 1..width {
                             let tx = idx + off;
                             if tx >= row.len() {
                                 break;
                             }
                             if row[tx].is_continuation() {
-                                advance = advance.max(off + 1);
+                                if tx <= end {
+                                    advance = advance.max(off + 1);
+                                }
                                 continue;
                             }
                             self.move_cursor_optimal(tx as u16, span.y)?;
                             self.emit_cell(tx as u16, &row[tx], pool, links)?;
-                            advance = advance.max(off + 1);
+                            if tx <= end {
+                                advance = advance.max(off + 1);
+                            }
                         }
                     }
 
@@ -655,30 +661,31 @@ impl<W: Write> Presenter<W> {
 
         // Continuation cells are the tail cells of wide glyphs. Emitting the
         // head glyph already advanced the terminal cursor by the full width, so
-        // we normally skip these cells.
+        // we normally skip emitting these cells.
         //
-        // If a run starts on a continuation cell, advance one terminal column
-        // without writing content. Writing a space here can clobber valid
-        // trailing glyph state under racey/invalid buffers, so prefer cursor
-        // movement only.
+        // If we ever start emitting at a continuation cell (e.g. a run begins
+        // mid-wide-character), we must still advance the terminal cursor by one
+        // cell to keep subsequent emissions aligned. We write a space to clear
+        // any potential garbage (orphan cleanup) rather than just skipping with CUF.
         if cell.is_continuation() {
             match self.cursor_x {
                 // Cursor already advanced past this cell by a previously-emitted wide head.
                 Some(cx) if cx > x => return Ok(()),
                 Some(cx) => {
-                    // Cursor behind the continuation cell (rare): resync first.
+                    // Cursor is positioned at (or before) this continuation cell:
+                    // Treat as orphan and overwrite with space to ensure clean state.
                     if cx < x
                         && let Some(y) = self.cursor_y
                     {
                         self.move_cursor_optimal(x, y)?;
                     }
-                    ansi::cuf(&mut self.writer, 1)?;
+                    self.writer.write_all(b" ")?;
                     self.cursor_x = Some(x.saturating_add(1));
                     return Ok(());
                 }
                 // Defensive: move_cursor_optimal should always set cursor_x before emit_cell is called.
                 None => {
-                    ansi::cuf(&mut self.writer, 1)?;
+                    self.writer.write_all(b" ")?;
                     self.cursor_x = Some(x.saturating_add(1));
                     return Ok(());
                 }
@@ -995,7 +1002,11 @@ impl<W: Write> Presenter<W> {
         }
 
         // Use CUP (cursor position) for absolute positioning
-        ansi::cup(&mut self.writer, y, x)?;
+        ansi::cup(
+            &mut self.writer,
+            y.saturating_add(self.viewport_offset_y),
+            x,
+        )?;
         self.cursor_x = Some(x);
         self.cursor_y = Some(y);
         Ok(())
@@ -1028,7 +1039,11 @@ impl<W: Write> Presenter<W> {
                     } else if cha <= cup {
                         ansi::cha(&mut self.writer, x)?;
                     } else {
-                        ansi::cup(&mut self.writer, y, x)?;
+                        ansi::cup(
+                            &mut self.writer,
+                            y.saturating_add(self.viewport_offset_y),
+                            x,
+                        )?;
                     }
                 } else if x < cx {
                     // Backward
@@ -1037,14 +1052,16 @@ impl<W: Write> Presenter<W> {
                     let cha = cost_model::cha_cost(x);
                     let cup = cost_model::cup_cost(y, x);
 
-                    // Prefer CHA on ties to keep deterministic absolute-column
-                    // movement behavior across terminals.
                     if cha <= cub && cha <= cup {
                         ansi::cha(&mut self.writer, x)?;
                     } else if cub <= cup {
                         ansi::cub(&mut self.writer, dx)?;
                     } else {
-                        ansi::cup(&mut self.writer, y, x)?;
+                        ansi::cup(
+                            &mut self.writer,
+                            y.saturating_add(self.viewport_offset_y),
+                            x,
+                        )?;
                     }
                 } else {
                     // Same column (should have been caught by early check, but for safety)
@@ -1052,11 +1069,19 @@ impl<W: Write> Presenter<W> {
             } else {
                 // Unknown x, same row (unlikely but possible if we only tracked y?)
                 // Fallback to absolute
-                ansi::cup(&mut self.writer, y, x)?;
+                ansi::cup(
+                    &mut self.writer,
+                    y.saturating_add(self.viewport_offset_y),
+                    x,
+                )?;
             }
         } else {
             // Different row: CUP is the only option
-            ansi::cup(&mut self.writer, y, x)?;
+            ansi::cup(
+                &mut self.writer,
+                y.saturating_add(self.viewport_offset_y),
+                x,
+            )?;
         }
 
         self.cursor_x = Some(x);
@@ -1324,8 +1349,8 @@ mod tests {
             .unwrap();
         let output = get_output(presenter);
 
-        let start = b"\x1b]8;;https://example.com\x1b\\";
-        let end = b"\x1b]8;;\x1b\\";
+        let start = b"\x1b]8;;https://example.com\x07";
+        let end = b"\x1b]8;;\x07";
 
         let start_pos = output
             .windows(start.len())
@@ -1550,7 +1575,7 @@ mod tests {
     }
 
     #[test]
-    fn continuation_at_run_start_advances_cursor_without_overwriting() {
+    fn continuation_at_run_start_clears_orphan_tail() {
         let mut presenter = test_presenter();
         let mut old = Buffer::new(3, 1);
         let mut new = Buffer::new(3, 1);
@@ -1558,8 +1583,8 @@ mod tests {
         // Construct an inconsistent old/new pair that forces a diff which begins at a
         // continuation cell. This simulates starting emission mid-wide-character.
         //
-        // In this case, the presenter must advance the cursor by one cell, but must
-        // not overwrite the cell with a space (which can clobber a valid wide glyph tail).
+        // In this case, the presenter should clear the orphan continuation cell so
+        // stale terminal content cannot leak through.
         old.set_raw(0, 0, Cell::from_char('中'));
         new.set_raw(0, 0, Cell::from_char('中'));
         old.set_raw(1, 0, Cell::from_char('X'));
@@ -1571,11 +1596,9 @@ mod tests {
         presenter.present(&new, &diff).unwrap();
         let output = get_output(presenter);
 
-        // Advance should be done via CUF (\x1b[C), not by emitting a space.
-        assert!(output.windows(3).any(|w| w == b"\x1b[C"));
         assert!(
-            !output.contains(&b' '),
-            "should not write a space when advancing over a continuation cell"
+            output.contains(&b' '),
+            "orphan continuation should be cleared with a space"
         );
     }
 
@@ -1645,13 +1668,13 @@ mod tests {
 
         // OSC 8 open with URL
         assert!(
-            output_str.contains("\x1b]8;;https://example.com\x1b\\"),
+            output_str.contains("\x1b]8;;https://example.com\x07"),
             "Expected OSC 8 open, got: {:?}",
             output_str
         );
         // OSC 8 close (empty URL)
         assert!(
-            output_str.contains("\x1b]8;;\x1b\\"),
+            output_str.contains("\x1b]8;;\x07"),
             "Expected OSC 8 close, got: {:?}",
             output_str
         );
@@ -1733,7 +1756,7 @@ mod tests {
         let output = get_output(presenter);
 
         // The close sequence should appear (frame end cleanup)
-        let close_seq = b"\x1b]8;;\x1b\\";
+        let close_seq = b"\x1b]8;;\x07";
         assert!(
             output.windows(close_seq.len()).any(|w| w == close_seq),
             "Link must be closed at frame end"
@@ -1775,7 +1798,7 @@ mod tests {
         assert!(output_str.contains("https://b.com"));
 
         // Close sequence must appear at least once (transition or frame end)
-        let close_count = output_str.matches("\x1b]8;;\x1b\\").count();
+        let close_count = output_str.matches("\x1b]8;;\x07").count();
         assert!(
             close_count >= 2,
             "Expected at least 2 link close sequences (transition + frame end), got {}",
@@ -3960,7 +3983,7 @@ mod tests {
     #[test]
     fn continuation_cell_cursor_x_none() {
         let mut presenter = test_presenter();
-        // cursor_x = None → defensive path, emits CUF(1) and sets cursor_x
+        // cursor_x = None -> defensive path, clears orphan continuation.
         presenter.cursor_x = None;
         presenter.cursor_y = Some(0);
 
@@ -3968,10 +3991,10 @@ mod tests {
         presenter.emit_cell(5, &cell, None, None).unwrap();
         let output = presenter.into_inner().unwrap();
 
-        // Should emit CUF(1) = "\x1b[C"
+        // Should emit a clearing space.
         assert!(
-            output.windows(3).any(|w| w == b"\x1b[C"),
-            "Should emit CUF(1) for continuation with unknown cursor_x"
+            output.contains(&b' '),
+            "Should emit a space for continuation with unknown cursor_x"
         );
     }
 

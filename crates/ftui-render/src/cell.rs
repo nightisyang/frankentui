@@ -840,8 +840,8 @@ mod tests {
             GraphemeId::MAX_WIDTH,
         );
         assert_eq!(id.slot(), 0xFFFF);
-        assert_eq!(id.generation(), 255);
-        assert_eq!(id.width(), 127);
+        assert_eq!(id.generation(), GraphemeId::MAX_GENERATION);
+        assert_eq!(id.width(), GraphemeId::MAX_WIDTH as usize);
     }
 
     #[test]
@@ -1415,9 +1415,9 @@ mod tests {
         assert_eq!(id.width(), 0);
         assert_eq!(id.slot(), 0xFFFF);
 
-        let id2 = GraphemeId::new(0, 0, 127);
+        let id2 = GraphemeId::new(0, 0, GraphemeId::MAX_WIDTH);
         assert_eq!(id2.slot(), 0);
-        assert_eq!(id2.width(), 127);
+        assert_eq!(id2.width(), GraphemeId::MAX_WIDTH as usize);
     }
 
     // ====== StyleFlags coverage ======
@@ -1604,6 +1604,15 @@ mod tests {
     }
 
     #[test]
+    fn cell_content_soh_char_is_not_continuation() {
+        let soh = CellContent::from_char('\x01');
+        assert_eq!(soh.raw(), 1);
+        assert!(!soh.is_empty());
+        assert!(!soh.is_continuation());
+        assert_eq!(soh.as_char(), Some('\x01'));
+    }
+
+    #[test]
     fn cell_content_max_unicode_codepoint() {
         let max = CellContent::from_char('\u{10FFFF}');
         assert_eq!(max.as_char(), Some('\u{10FFFF}'));
@@ -1641,8 +1650,8 @@ mod tests {
     fn cell_content_grapheme_with_max_width() {
         let id = GraphemeId::new(1, 0, GraphemeId::MAX_WIDTH);
         let c = CellContent::from_grapheme(id);
-        assert_eq!(c.width_hint(), 127);
-        assert_eq!(c.width(), 127);
+        assert_eq!(c.width_hint(), GraphemeId::MAX_WIDTH as usize);
+        assert_eq!(c.width(), GraphemeId::MAX_WIDTH as usize);
     }
 
     #[test]
@@ -1664,7 +1673,11 @@ mod tests {
 
     #[test]
     fn cell_content_grapheme_id_strips_high_bit() {
-        let id = GraphemeId::new(0xFFFF, 255, 127);
+        let id = GraphemeId::new(
+            GraphemeId::MAX_SLOT,
+            GraphemeId::MAX_GENERATION,
+            GraphemeId::MAX_WIDTH,
+        );
         let c = CellContent::from_grapheme(id);
         let extracted = c.grapheme_id().unwrap();
         assert_eq!(extracted.slot(), id.slot());

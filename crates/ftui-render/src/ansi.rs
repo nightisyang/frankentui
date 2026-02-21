@@ -553,25 +553,25 @@ pub fn hyperlink_start<W: Write>(w: &mut W, url: &str) -> io::Result<()> {
     if !osc8_field_is_safe(url) {
         return Ok(());
     }
-    write!(w, "\x1b]8;;{url}\x1b\\")
+    write!(w, "\x1b]8;;{url}\x07")
 }
 
 /// Close an OSC 8 hyperlink.
 ///
-/// Format: `OSC 8 ; ; ST`
+/// Format: `OSC 8 ; ; ST` (or BEL)
 pub fn hyperlink_end<W: Write>(w: &mut W) -> io::Result<()> {
-    w.write_all(b"\x1b]8;;\x1b\\")
+    w.write_all(b"\x1b]8;;\x07")
 }
 
 /// Open an OSC 8 hyperlink with an ID parameter.
 ///
 /// The ID allows grouping multiple link spans.
-/// Format: `OSC 8 ; id=ID ; uri ST`
+/// Format: `OSC 8 ; id=ID ; uri ST` (or BEL)
 pub fn hyperlink_start_with_id<W: Write>(w: &mut W, id: &str, url: &str) -> io::Result<()> {
     if !osc8_field_is_safe(url) || !osc8_field_is_safe(id) || id.contains(';') {
         return Ok(());
     }
-    write!(w, "\x1b]8;id={id};{url}\x1b\\")
+    write!(w, "\x1b]8;id={id};{url}\x07")
 }
 
 // =============================================================================
@@ -877,16 +877,16 @@ mod tests {
     fn hyperlink_basic() {
         assert_eq!(
             to_bytes(|w| hyperlink_start(w, "https://example.com")),
-            b"\x1b]8;;https://example.com\x1b\\"
+            b"\x1b]8;;https://example.com\x07"
         );
-        assert_eq!(to_bytes(hyperlink_end), b"\x1b]8;;\x1b\\");
+        assert_eq!(to_bytes(hyperlink_end), b"\x1b]8;;\x07");
     }
 
     #[test]
     fn hyperlink_with_id() {
         assert_eq!(
             to_bytes(|w| hyperlink_start_with_id(w, "link1", "https://example.com")),
-            b"\x1b]8;id=link1;https://example.com\x1b\\"
+            b"\x1b]8;id=link1;https://example.com\x07"
         );
     }
 
@@ -1003,23 +1003,23 @@ mod tests {
 
     #[test]
     fn osc_sequences_are_terminated() {
-        // All OSC 8 sequences must end with ST (ESC \)
+        // All OSC 8 sequences must end with BEL
         let link_start = to_bytes(|w| hyperlink_start(w, "test"));
         assert!(
-            link_start.ends_with(b"\x1b\\"),
-            "hyperlink_start not terminated with ST"
+            link_start.ends_with(b"\x07"),
+            "hyperlink_start not terminated with BEL"
         );
 
         let link_end = to_bytes(hyperlink_end);
         assert!(
-            link_end.ends_with(b"\x1b\\"),
-            "hyperlink_end not terminated with ST"
+            link_end.ends_with(b"\x07"),
+            "hyperlink_end not terminated with BEL"
         );
 
         let link_id = to_bytes(|w| hyperlink_start_with_id(w, "id", "url"));
         assert!(
-            link_id.ends_with(b"\x1b\\"),
-            "hyperlink_start_with_id not terminated with ST"
+            link_id.ends_with(b"\x07"),
+            "hyperlink_start_with_id not terminated with BEL"
         );
     }
 
@@ -1442,14 +1442,14 @@ mod tests {
 
     #[test]
     fn hyperlink_empty_url() {
-        assert_eq!(to_bytes(|w| hyperlink_start(w, "")), b"\x1b]8;;\x1b\\");
+        assert_eq!(to_bytes(|w| hyperlink_start(w, "")), b"\x1b]8;;\x07");
     }
 
     #[test]
     fn hyperlink_with_empty_id() {
         assert_eq!(
             to_bytes(|w| hyperlink_start_with_id(w, "", "https://x.com")),
-            b"\x1b]8;id=;https://x.com\x1b\\"
+            b"\x1b]8;id=;https://x.com\x07"
         );
     }
 

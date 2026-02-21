@@ -432,6 +432,20 @@ mod tests {
         let mut registry = LinkRegistry::new();
         let url = format!("https://example.com/{}", "a".repeat(10_000));
         let id = registry.register(&url);
+        assert_eq!(id, 0);
+        assert_eq!(registry.get(id), None);
+    }
+
+    #[test]
+    fn register_max_length_url() {
+        let mut registry = LinkRegistry::new();
+        let prefix = "https://example.com/";
+        let suffix_len = MAX_URL_BYTES.saturating_sub(prefix.len());
+        let url = format!("{prefix}{}", "a".repeat(suffix_len));
+        assert_eq!(url.len(), MAX_URL_BYTES);
+
+        let id = registry.register(&url);
+        assert_ne!(id, 0);
         assert_eq!(registry.get(id), Some(url.as_str()));
     }
 
