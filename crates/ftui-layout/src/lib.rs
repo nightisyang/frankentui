@@ -1181,7 +1181,7 @@ fn redistribute_overflow(floors: &[u16], total: u16) -> Vec<u16> {
     while overflow > 0 {
         let mut reduced_any = false;
         let reduce_amount = (overflow as usize / n).max(1) as u16;
-        
+
         for &idx in &indices {
             if overflow == 0 {
                 break;
@@ -1193,7 +1193,7 @@ fn redistribute_overflow(floors: &[u16], total: u16) -> Vec<u16> {
                 reduced_any = true;
             }
         }
-        
+
         if !reduced_any {
             break;
         }

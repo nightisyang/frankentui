@@ -507,7 +507,8 @@ impl BarChart<'_> {
             let group_width = x_cursor.saturating_sub(group_start_x);
             let label_width = display_width(group.label) as u16;
             let render_width = label_width.min(group_width);
-            let start_x = group_start_x.saturating_add(group_width.saturating_sub(render_width) / 2);
+            let start_x =
+                group_start_x.saturating_add(group_width.saturating_sub(render_width) / 2);
             if label_y < area.bottom() {
                 let mut x_off = 0_u16;
                 for grapheme in group.label.graphemes(true) {

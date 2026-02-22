@@ -502,7 +502,10 @@ impl GenericTokenizer {
     fn scan_number(&self, bytes: &[u8], pos: usize) -> usize {
         let mut end = pos;
         // Hex, binary, or octal prefix
-        if end + 1 < bytes.len() && bytes[end] == b'0' && matches!(bytes[end + 1] | 0x20, b'x' | b'b' | b'o') {
+        if end + 1 < bytes.len()
+            && bytes[end] == b'0'
+            && matches!(bytes[end + 1] | 0x20, b'x' | b'b' | b'o')
+        {
             end += 2;
             while end < bytes.len() && (bytes[end].is_ascii_hexdigit() || bytes[end] == b'_') {
                 end += 1;

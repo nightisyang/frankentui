@@ -133,7 +133,10 @@ mod tests {
         // Each should become ESC ESC
         let inner = &wrapped[7..wrapped.len() - 2]; // strip header and ST
         let esc_count = inner.windows(2).filter(|w| w == &[ESC, ESC]).count();
-        assert_eq!(esc_count, 1, "Only the ESC from OSC start should be doubled");
+        assert_eq!(
+            esc_count, 1,
+            "Only the ESC from OSC start should be doubled"
+        );
     }
 
     #[test]

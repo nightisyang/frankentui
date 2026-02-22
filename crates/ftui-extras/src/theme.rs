@@ -6,8 +6,8 @@
 //! color tokens that resolve against the current theme at runtime.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 // Thread-local flag to track if current thread holds THEME_TEST_LOCK.
@@ -2936,7 +2936,7 @@ pub mod accent {
 
 /// Status colors (open / in-progress / blocked / closed).
 pub mod status {
-    use super::{semantic_text, semantic_tint, ColorToken, PackedRgba};
+    use super::{ColorToken, PackedRgba, semantic_text, semantic_tint};
 
     pub const OPEN: ColorToken = ColorToken::StatusOpen;
     pub const IN_PROGRESS: ColorToken = ColorToken::StatusInProgress;
@@ -2978,7 +2978,7 @@ pub mod status {
 
 /// Priority colors (P0-P4).
 pub mod priority {
-    use super::{semantic_text, semantic_tint, ColorToken, PackedRgba};
+    use super::{ColorToken, PackedRgba, semantic_text, semantic_tint};
 
     pub const P0: ColorToken = ColorToken::PriorityP0;
     pub const P1: ColorToken = ColorToken::PriorityP1;
@@ -3029,7 +3029,7 @@ pub mod priority {
 
 /// Issue type colors (bug / feature / task / epic).
 pub mod issue_type {
-    use super::{semantic_text, semantic_tint, ColorToken, PackedRgba};
+    use super::{ColorToken, PackedRgba, semantic_text, semantic_tint};
 
     pub const BUG: ColorToken = ColorToken::IssueBug;
     pub const FEATURE: ColorToken = ColorToken::IssueFeature;
@@ -3071,7 +3071,7 @@ pub mod issue_type {
 
 /// Intent colors (success / warning / info / error).
 pub mod intent {
-    use super::{accent, semantic_text, semantic_tint, ColorToken, PackedRgba};
+    use super::{ColorToken, PackedRgba, accent, semantic_text, semantic_tint};
 
     pub const SUCCESS: ColorToken = accent::SUCCESS;
     pub const WARNING: ColorToken = accent::WARNING;
@@ -3113,7 +3113,7 @@ pub mod intent {
 
 /// Alpha-aware overlay colors.
 pub mod alpha {
-    use super::{accent, bg, AlphaColor};
+    use super::{AlphaColor, accent, bg};
 
     pub const SURFACE: AlphaColor = AlphaColor::new(bg::SURFACE, 220);
     pub const OVERLAY: AlphaColor = AlphaColor::new(bg::OVERLAY, 210);

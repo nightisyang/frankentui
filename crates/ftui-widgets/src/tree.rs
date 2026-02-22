@@ -603,7 +603,10 @@ struct FilteredPathNode {
     children: Vec<(usize, FilteredPathNode)>,
 }
 
-fn filter_node_paths(node: &TreeNode, query_lower: &str) -> Option<(bool, Vec<(usize, FilteredPathNode)>)> {
+fn filter_node_paths(
+    node: &TreeNode,
+    query_lower: &str,
+) -> Option<(bool, Vec<(usize, FilteredPathNode)>)> {
     let label_matches = node.label.to_lowercase().contains(query_lower)
         || node
             .icon
@@ -613,7 +616,13 @@ fn filter_node_paths(node: &TreeNode, query_lower: &str) -> Option<(bool, Vec<(u
     let mut filtered_children = Vec::new();
     for (idx, child) in node.children.iter().enumerate() {
         if let Some(filtered) = filter_node_paths(child, query_lower) {
-            filtered_children.push((idx, FilteredPathNode { expanded: filtered.0, children: filtered.1 }));
+            filtered_children.push((
+                idx,
+                FilteredPathNode {
+                    expanded: filtered.0,
+                    children: filtered.1,
+                },
+            ));
         }
     }
 
@@ -622,7 +631,13 @@ fn filter_node_paths(node: &TreeNode, query_lower: &str) -> Option<(bool, Vec<(u
     if let Some(lazy) = &node.lazy_children {
         for (idx, child) in lazy.iter().enumerate() {
             if let Some(filtered) = filter_node_paths(child, query_lower) {
-                filtered_lazy.push((lazy_offset + idx, FilteredPathNode { expanded: filtered.0, children: filtered.1 }));
+                filtered_lazy.push((
+                    lazy_offset + idx,
+                    FilteredPathNode {
+                        expanded: filtered.0,
+                        children: filtered.1,
+                    },
+                ));
             }
         }
     }
@@ -631,11 +646,7 @@ fn filter_node_paths(node: &TreeNode, query_lower: &str) -> Option<(bool, Vec<(u
         return None;
     }
 
-    let expanded = if !label_matches {
-        true
-    } else {
-        node.expanded
-    };
+    let expanded = if !label_matches { true } else { node.expanded };
 
     filtered_children.extend(filtered_lazy);
     Some((expanded, filtered_children))
@@ -922,7 +933,7 @@ impl Tree {
     /// Only expanded nodes' children are visited.
     pub fn node_at_visible_index_mut(&mut self, target: usize) -> Option<&mut TreeNode> {
         let path = self.find_path_indices_at_visible_index(target)?;
-        
+
         let mut current = &mut self.root;
         for &idx in &path {
             current.materialize_lazy_children();
@@ -932,7 +943,11 @@ impl Tree {
     }
 
     fn find_path_indices_at_visible_index(&self, target: usize) -> Option<Vec<usize>> {
-        let query = self.search_query.as_deref().map(str::trim).filter(|q| !q.is_empty());
+        let query = self
+            .search_query
+            .as_deref()
+            .map(str::trim)
+            .filter(|q| !q.is_empty());
         let mut counter = 0usize;
         let mut path = Vec::new();
 
@@ -946,7 +961,9 @@ impl Tree {
             } else if root_node.expanded {
                 for &(idx, ref child) in &root_node.children {
                     path.push(idx);
-                    if let Some(p) = Self::walk_filtered_path(child, target, &mut counter, &mut path) {
+                    if let Some(p) =
+                        Self::walk_filtered_path(child, target, &mut counter, &mut path)
+                    {
                         return Some(p);
                     }
                     path.pop();
@@ -961,7 +978,9 @@ impl Tree {
             } else if self.root.expanded {
                 for (idx, child) in self.root.children.iter().enumerate() {
                     path.push(idx);
-                    if let Some(p) = Self::walk_visible_index_path(child, target, &mut counter, &mut path) {
+                    if let Some(p) =
+                        Self::walk_visible_index_path(child, target, &mut counter, &mut path)
+                    {
                         return Some(p);
                     }
                     path.pop();
@@ -986,7 +1005,8 @@ impl Tree {
         if node.expanded {
             for &(idx, ref child) in &node.children {
                 current_path.push(idx);
-                if let Some(found) = Self::walk_filtered_path(child, target, counter, current_path) {
+                if let Some(found) = Self::walk_filtered_path(child, target, counter, current_path)
+                {
                     return Some(found);
                 }
                 current_path.pop();
@@ -1008,7 +1028,9 @@ impl Tree {
         if node.expanded {
             for (idx, child) in node.children.iter().enumerate() {
                 current_path.push(idx);
-                if let Some(found) = Self::walk_visible_index_path(child, target, counter, current_path) {
+                if let Some(found) =
+                    Self::walk_visible_index_path(child, target, counter, current_path)
+                {
                     return Some(found);
                 }
                 current_path.pop();

@@ -390,10 +390,15 @@ impl FlakeDetector {
 
         let n = self.variance_window.len() as f64;
         let mean = self.variance_window.iter().sum::<f64>() / n;
-        let variance = self.variance_window.iter().map(|&x| {
-            let diff = x - mean;
-            diff * diff
-        }).sum::<f64>() / (n - 1.0);
+        let variance = self
+            .variance_window
+            .iter()
+            .map(|&x| {
+                let diff = x - mean;
+                diff * diff
+            })
+            .sum::<f64>()
+            / (n - 1.0);
 
         variance.sqrt().max(SIGMA_MIN)
     }

@@ -271,7 +271,8 @@ impl TextInput {
                             let (start, end) = self.selection_range(self.selection_anchor.unwrap());
                             end.saturating_sub(start)
                         };
-                        let available = max.saturating_sub(self.grapheme_count().saturating_sub(selection_len));
+                        let available =
+                            max.saturating_sub(self.grapheme_count().saturating_sub(selection_len));
                         if clean_text.graphemes(true).count() > available {
                             return true;
                         }
@@ -536,7 +537,11 @@ impl TextInput {
             return;
         }
 
-        self.cursor = self.value.grapheme_indices(true).take_while(|(i, _)| *i < byte_offset + to_insert.len()).count();
+        self.cursor = self
+            .value
+            .grapheme_indices(true)
+            .take_while(|(i, _)| *i < byte_offset + to_insert.len())
+            .count();
     }
 
     fn insert_char(&mut self, c: char) {
@@ -562,7 +567,11 @@ impl TextInput {
         }
 
         let char_len = c.len_utf8();
-        self.cursor = self.value.grapheme_indices(true).take_while(|(i, _)| *i < byte_offset + char_len).count();
+        self.cursor = self
+            .value
+            .grapheme_indices(true)
+            .take_while(|(i, _)| *i < byte_offset + char_len)
+            .count();
     }
 
     fn delete_char_back(&mut self) {

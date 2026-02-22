@@ -376,13 +376,13 @@ impl NotificationQueue {
         let mut i = 0;
         while i < self.visible.len() {
             let toast = &mut self.visible[i];
-            
+
             // Trigger auto-dismiss on expiry
             if !toast.state.dismissed && toast.is_expired() {
                 toast.dismiss();
                 self.stats.auto_expired += 1;
             }
-            
+
             // Advance animation state
             toast.tick_animation();
 
@@ -534,7 +534,9 @@ mod tests {
     use ftui_render::grapheme_pool::GraphemePool;
 
     fn make_toast(msg: &str) -> Toast {
-        Toast::with_id(ToastId::new(0), msg).persistent().no_animation() // Use persistent and no_animation for testing
+        Toast::with_id(ToastId::new(0), msg)
+            .persistent()
+            .no_animation() // Use persistent and no_animation for testing
     }
 
     #[test]

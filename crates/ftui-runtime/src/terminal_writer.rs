@@ -1799,7 +1799,7 @@ impl<W: Write> TerminalWriter<W> {
             let emit_stats = {
                 let _span = debug_span!("ftui.render.emit").entered();
                 let presenter = self.presenter.as_mut().expect("presenter consumed");
-                
+
                 // Reset presenter state (cursor and style) because we manually moved
                 // the cursor and reset the style at the end of the previous frame.
                 presenter.reset();
