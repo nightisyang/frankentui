@@ -2333,6 +2333,176 @@ fn color_distance(a: PackedRgba, b: PackedRgba) -> u16 {
     dr.unsigned_abs() + dg.unsigned_abs() + db.unsigned_abs()
 }
 
+fn clamp_u8(value: f32) -> u8 {
+    value.clamp(0.0, 255.0).round() as u8
+}
+
+fn mix_rgb(a: PackedRgba, b: PackedRgba, t: f32) -> PackedRgba {
+    let t = t.clamp(0.0, 1.0);
+    let inv = 1.0 - t;
+    PackedRgba::rgb(
+        clamp_u8(a.r() as f32 * inv + b.r() as f32 * t),
+        clamp_u8(a.g() as f32 * inv + b.g() as f32 * t),
+        clamp_u8(a.b() as f32 * inv + b.b() as f32 * t),
+    )
+}
+
+fn boost_vibrance(color: PackedRgba, amount: f32) -> PackedRgba {
+    let amount = amount.clamp(0.0, 1.25);
+    if amount <= 0.0 {
+        return color;
+    }
+    let r = color.r() as f32;
+    let g = color.g() as f32;
+    let b = color.b() as f32;
+    let mean = (r + g + b) / 3.0;
+    let scale = 1.0 + amount;
+    PackedRgba::rgb(
+        clamp_u8(mean + (r - mean) * scale),
+        clamp_u8(mean + (g - mean) * scale),
+        clamp_u8(mean + (b - mean) * scale),
+    )
+}
+
+fn apply_temperature(color: PackedRgba, temperature: f32) -> PackedRgba {
+    let temperature = temperature.clamp(-1.0, 1.0);
+    if temperature.abs() < f32::EPSILON {
+        return color;
+    }
+    let warm_anchor = PackedRgba::rgb(255, 170, 108);
+    let cool_anchor = PackedRgba::rgb(108, 188, 255);
+    let strength = temperature.abs() * 0.28;
+    if temperature > 0.0 {
+        mix_rgb(color, warm_anchor, strength)
+    } else {
+        mix_rgb(color, cool_anchor, strength)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ThemeSignature {
+    bg_deep_mix: f32,
+    bg_surface_mix: f32,
+    bg_overlay_mix: f32,
+    bg_highlight_mix: f32,
+    primary_contrast: f64,
+    secondary_contrast: f64,
+    muted_contrast: f64,
+    disabled_contrast: f64,
+    accent_contrast: f64,
+    vibrance_boost: f32,
+    ambient_glow: f32,
+    temperature: f32,
+}
+
+const fn default_signature(is_light: bool) -> ThemeSignature {
+    if is_light {
+        ThemeSignature {
+            bg_deep_mix: 0.20,
+            bg_surface_mix: 0.05,
+            bg_overlay_mix: 0.11,
+            bg_highlight_mix: 0.19,
+            primary_contrast: 5.6,
+            secondary_contrast: 4.5,
+            muted_contrast: 3.1,
+            disabled_contrast: 2.2,
+            accent_contrast: 3.2,
+            vibrance_boost: 0.12,
+            ambient_glow: 0.04,
+            temperature: 0.0,
+        }
+    } else {
+        ThemeSignature {
+            bg_deep_mix: 0.24,
+            bg_surface_mix: 0.08,
+            bg_overlay_mix: 0.16,
+            bg_highlight_mix: 0.28,
+            primary_contrast: 5.8,
+            secondary_contrast: 4.7,
+            muted_contrast: 3.2,
+            disabled_contrast: 2.2,
+            accent_contrast: 3.2,
+            vibrance_boost: 0.18,
+            ambient_glow: 0.06,
+            temperature: -0.04,
+        }
+    }
+}
+
+fn signature_for_theme(theme: ThemeId, is_light: bool) -> ThemeSignature {
+    let mut sig = default_signature(is_light);
+    match theme {
+        ThemeId::CyberpunkAurora | ThemeId::Synthwave84 | ThemeId::Cobalt2 => {
+            sig.vibrance_boost = 0.44;
+            sig.ambient_glow = 0.16;
+            sig.temperature = -0.24;
+            sig.accent_contrast = 3.4;
+            sig.bg_overlay_mix = 0.20;
+            sig.bg_highlight_mix = 0.33;
+        }
+        ThemeId::MaterialOcean | ThemeId::TokyoNight | ThemeId::NightOwl | ThemeId::OneDark => {
+            sig.vibrance_boost = 0.30;
+            sig.ambient_glow = 0.10;
+            sig.temperature = -0.18;
+        }
+        ThemeId::Doom | ThemeId::Quake | ThemeId::Monokai => {
+            sig.vibrance_boost = 0.30;
+            sig.ambient_glow = 0.10;
+            sig.temperature = 0.34;
+            sig.accent_contrast = 3.35;
+        }
+        ThemeId::SolarizedDark | ThemeId::SolarizedLight => {
+            sig.vibrance_boost = 0.22;
+            sig.ambient_glow = 0.07;
+            sig.temperature = 0.10;
+        }
+        ThemeId::RosePine
+        | ThemeId::EverforestDark
+        | ThemeId::EverforestLight
+        | ThemeId::KanagawaWave
+        | ThemeId::KanagawaLotus => {
+            sig.vibrance_boost = 0.24;
+            sig.ambient_glow = 0.08;
+            sig.temperature = 0.14;
+        }
+        ThemeId::CatppuccinMocha
+        | ThemeId::CatppuccinLatte
+        | ThemeId::CatppuccinFrappe
+        | ThemeId::CatppuccinMacchiato
+        | ThemeId::Dracula
+        | ThemeId::Palenight => {
+            sig.vibrance_boost = 0.26;
+            sig.ambient_glow = 0.09;
+            sig.temperature = -0.06;
+        }
+        ThemeId::NordicFrost | ThemeId::Nord | ThemeId::Nightfox | ThemeId::Dayfox => {
+            sig.vibrance_boost = 0.20;
+            sig.ambient_glow = 0.07;
+            sig.temperature = -0.20;
+        }
+        ThemeId::OceanicNext | ThemeId::AyuDark | ThemeId::AyuLight | ThemeId::HorizonDark => {
+            sig.vibrance_boost = 0.28;
+            sig.ambient_glow = 0.09;
+            sig.temperature = -0.08;
+        }
+        ThemeId::GitHubDark
+        | ThemeId::GitHubLight
+        | ThemeId::PaperColorDark
+        | ThemeId::PaperColorLight
+        | ThemeId::GruvboxDark
+        | ThemeId::GruvboxLight
+        | ThemeId::OneLight
+        | ThemeId::LumenLight
+        | ThemeId::Darcula => {
+            sig.vibrance_boost = 0.14;
+            sig.ambient_glow = 0.03;
+            sig.temperature = if is_light { 0.01 } else { -0.02 };
+        }
+        ThemeId::HighContrast => {}
+    }
+    sig
+}
+
 fn ensure_min_contrast(
     fg: PackedRgba,
     bg: PackedRgba,
@@ -2368,6 +2538,24 @@ fn ensure_min_contrast(
     best
 }
 
+fn stylize_accent(
+    color: PackedRgba,
+    bg: PackedRgba,
+    signature: ThemeSignature,
+    light_fallback: PackedRgba,
+    dark_fallback: PackedRgba,
+) -> PackedRgba {
+    let vibed = boost_vibrance(color, signature.vibrance_boost);
+    let tempered = apply_temperature(vibed, signature.temperature);
+    ensure_min_contrast(
+        tempered,
+        bg,
+        light_fallback,
+        dark_fallback,
+        signature.accent_contrast,
+    )
+}
+
 fn harmonize_theme_palette(theme: ThemeId, base: ThemePalette) -> ThemePalette {
     if theme == ThemeId::HighContrast {
         return base;
@@ -2375,123 +2563,229 @@ fn harmonize_theme_palette(theme: ThemeId, base: ThemePalette) -> ThemePalette {
 
     let mut p = base;
     let is_light = contrast::relative_luminance(p.bg_base) >= 0.45;
+    let signature = signature_for_theme(theme, is_light);
     let dark_fallback = PackedRgba::rgb(10, 12, 18);
     let light_fallback = PackedRgba::rgb(244, 247, 252);
 
     // Keep a coherent 5-step background ladder around bg_base.
     p.bg_deep = if is_light {
-        blend_colors(PackedRgba::WHITE, p.bg_base, 0.22)
+        mix_rgb(p.bg_base, PackedRgba::WHITE, signature.bg_deep_mix)
     } else {
-        blend_colors(PackedRgba::BLACK, p.bg_base, 0.24)
+        mix_rgb(p.bg_base, PackedRgba::BLACK, signature.bg_deep_mix)
     };
     p.bg_surface = if is_light {
-        blend_colors(PackedRgba::BLACK, p.bg_base, 0.06)
+        mix_rgb(p.bg_base, PackedRgba::BLACK, signature.bg_surface_mix)
     } else {
-        blend_colors(PackedRgba::WHITE, p.bg_base, 0.08)
+        mix_rgb(p.bg_base, PackedRgba::WHITE, signature.bg_surface_mix)
     };
     p.bg_overlay = if is_light {
-        blend_colors(PackedRgba::BLACK, p.bg_base, 0.12)
+        mix_rgb(p.bg_base, PackedRgba::BLACK, signature.bg_overlay_mix)
     } else {
-        blend_colors(PackedRgba::WHITE, p.bg_base, 0.16)
+        mix_rgb(p.bg_base, PackedRgba::WHITE, signature.bg_overlay_mix)
     };
     p.bg_highlight = if is_light {
-        blend_colors(PackedRgba::BLACK, p.bg_base, 0.22)
+        mix_rgb(p.bg_base, PackedRgba::BLACK, signature.bg_highlight_mix)
     } else {
-        blend_colors(PackedRgba::WHITE, p.bg_base, 0.28)
+        mix_rgb(p.bg_base, PackedRgba::WHITE, signature.bg_highlight_mix)
     };
+    if signature.ambient_glow > 0.0 {
+        p.bg_surface = mix_rgb(
+            p.bg_surface,
+            p.accent_primary,
+            signature.ambient_glow * if is_light { 0.12 } else { 0.20 },
+        );
+        p.bg_overlay = mix_rgb(
+            p.bg_overlay,
+            p.accent_secondary,
+            signature.ambient_glow * if is_light { 0.16 } else { 0.28 },
+        );
+        p.bg_highlight = mix_rgb(
+            p.bg_highlight,
+            p.accent_primary,
+            signature.ambient_glow * if is_light { 0.20 } else { 0.34 },
+        );
+    }
 
     // Harmonized text hierarchy.
-    p.fg_primary = ensure_min_contrast(p.fg_primary, p.bg_base, light_fallback, dark_fallback, 5.6);
-    p.fg_secondary = ensure_min_contrast(
-        blend_colors(p.bg_base, p.fg_primary, 0.22),
+    p.fg_primary = ensure_min_contrast(
+        p.fg_primary,
         p.bg_base,
         light_fallback,
         dark_fallback,
-        4.6,
+        signature.primary_contrast,
+    );
+    p.fg_secondary = ensure_min_contrast(
+        mix_rgb(p.fg_primary, p.bg_base, 0.22),
+        p.bg_base,
+        light_fallback,
+        dark_fallback,
+        signature.secondary_contrast,
     );
     p.fg_muted = ensure_min_contrast(
-        blend_colors(p.bg_base, p.fg_primary, 0.42),
+        mix_rgb(p.fg_primary, p.bg_base, 0.42),
         p.bg_base,
         light_fallback,
         dark_fallback,
-        3.1,
+        signature.muted_contrast,
     );
     p.fg_disabled = ensure_min_contrast(
-        blend_colors(p.bg_base, p.fg_primary, 0.58),
+        mix_rgb(p.fg_primary, p.bg_base, 0.58),
         p.bg_base,
         light_fallback,
         dark_fallback,
-        2.2,
+        signature.disabled_contrast,
     );
 
     // Harmonize semantic accents while preserving each theme's identity.
-    p.accent_primary = ensure_min_contrast(
+    p.accent_primary = stylize_accent(
         p.accent_primary,
         p.bg_base,
+        signature,
         light_fallback,
         dark_fallback,
-        3.2,
     );
-    p.accent_secondary = ensure_min_contrast(
+    p.accent_secondary = stylize_accent(
         p.accent_secondary,
         p.bg_base,
+        signature,
         light_fallback,
         dark_fallback,
-        3.2,
     );
-    p.accent_success = ensure_min_contrast(
+    p.accent_success = stylize_accent(
         p.accent_success,
         p.bg_base,
+        signature,
         light_fallback,
         dark_fallback,
-        3.2,
     );
-    p.accent_warning = ensure_min_contrast(
+    p.accent_warning = stylize_accent(
         p.accent_warning,
         p.bg_base,
+        signature,
         light_fallback,
         dark_fallback,
-        3.2,
     );
-    p.accent_error = ensure_min_contrast(
+    p.accent_error = stylize_accent(
         p.accent_error,
         p.bg_base,
+        signature,
         light_fallback,
         dark_fallback,
-        3.2,
     );
-    p.accent_info =
-        ensure_min_contrast(p.accent_info, p.bg_base, light_fallback, dark_fallback, 3.2);
-    p.accent_link =
-        ensure_min_contrast(p.accent_link, p.bg_base, light_fallback, dark_fallback, 3.2);
+    p.accent_info = stylize_accent(
+        p.accent_info,
+        p.bg_base,
+        signature,
+        light_fallback,
+        dark_fallback,
+    );
+    p.accent_link = stylize_accent(
+        p.accent_link,
+        p.bg_base,
+        signature,
+        light_fallback,
+        dark_fallback,
+    );
 
-    if color_distance(p.accent_primary, p.accent_secondary) < 30 {
+    let primary_secondary_min = if signature.vibrance_boost >= 0.30 {
+        40
+    } else {
+        30
+    };
+    if color_distance(p.accent_primary, p.accent_secondary) < primary_secondary_min {
         p.accent_secondary = ensure_min_contrast(
-            blend_colors(p.accent_error, p.accent_secondary, 0.35),
+            mix_rgb(p.accent_secondary, p.accent_error, 0.38),
             p.bg_base,
             light_fallback,
             dark_fallback,
-            3.2,
+            signature.accent_contrast,
         );
     }
     if color_distance(p.accent_success, p.accent_warning) < 30 {
         p.accent_warning = ensure_min_contrast(
-            blend_colors(p.accent_error, p.accent_warning, 0.40),
+            mix_rgb(p.accent_warning, p.accent_error, 0.42),
             p.bg_base,
             light_fallback,
             dark_fallback,
-            3.2,
+            signature.accent_contrast,
         );
     }
     if color_distance(p.accent_link, p.accent_primary) < 24 {
         p.accent_link = ensure_min_contrast(
-            blend_colors(p.accent_info, p.accent_primary, 0.55),
+            mix_rgb(p.accent_primary, p.accent_info, 0.62),
             p.bg_base,
             light_fallback,
             dark_fallback,
-            3.2,
+            signature.accent_contrast,
         );
     }
+    if color_distance(p.accent_info, p.accent_primary) < 24 {
+        p.accent_info = ensure_min_contrast(
+            mix_rgb(p.accent_info, p.accent_secondary, 0.46),
+            p.bg_base,
+            light_fallback,
+            dark_fallback,
+            signature.accent_contrast,
+        );
+    }
+
+    let lift_anchor = if is_light {
+        PackedRgba::BLACK
+    } else {
+        PackedRgba::WHITE
+    };
+    let shade_anchor = if is_light {
+        PackedRgba::WHITE
+    } else {
+        PackedRgba::BLACK
+    };
+    let vibrant_primary = ensure_min_contrast(
+        mix_rgb(
+            p.accent_primary,
+            lift_anchor,
+            0.24 + signature.vibrance_boost * 0.15,
+        ),
+        p.bg_base,
+        light_fallback,
+        dark_fallback,
+        3.0,
+    );
+    let soft_secondary = ensure_min_contrast(
+        mix_rgb(p.accent_secondary, shade_anchor, 0.25),
+        p.bg_base,
+        light_fallback,
+        dark_fallback,
+        3.0,
+    );
+    let vivid_info = ensure_min_contrast(
+        mix_rgb(
+            p.accent_info,
+            lift_anchor,
+            0.20 + signature.vibrance_boost * 0.12,
+        ),
+        p.bg_base,
+        light_fallback,
+        dark_fallback,
+        3.0,
+    );
+    let rich_warning = ensure_min_contrast(
+        mix_rgb(p.accent_warning, lift_anchor, 0.16),
+        p.bg_base,
+        light_fallback,
+        dark_fallback,
+        3.0,
+    );
+    let crystal_mix = ensure_min_contrast(
+        mix_rgb(
+            mix_rgb(p.accent_primary, p.accent_info, 0.50),
+            lift_anchor,
+            0.12,
+        ),
+        p.bg_base,
+        light_fallback,
+        dark_fallback,
+        3.0,
+    );
 
     // Shared, semantically ordered accent slots across all themes.
     p.accent_slots = [
@@ -2502,41 +2796,11 @@ fn harmonize_theme_palette(theme: ThemeId, base: ThemePalette) -> ThemePalette {
         p.accent_error,
         p.accent_info,
         p.accent_link,
-        ensure_min_contrast(
-            blend_colors(p.accent_secondary, p.accent_primary, 0.50),
-            p.bg_base,
-            light_fallback,
-            dark_fallback,
-            3.0,
-        ),
-        ensure_min_contrast(
-            blend_colors(p.accent_success, p.accent_info, 0.50),
-            p.bg_base,
-            light_fallback,
-            dark_fallback,
-            3.0,
-        ),
-        ensure_min_contrast(
-            blend_colors(p.accent_warning, p.accent_error, 0.45),
-            p.bg_base,
-            light_fallback,
-            dark_fallback,
-            3.0,
-        ),
-        ensure_min_contrast(
-            blend_colors(p.accent_primary, p.accent_warning, 0.45),
-            p.bg_base,
-            light_fallback,
-            dark_fallback,
-            3.0,
-        ),
-        ensure_min_contrast(
-            blend_colors(p.accent_secondary, p.accent_success, 0.45),
-            p.bg_base,
-            light_fallback,
-            dark_fallback,
-            3.0,
-        ),
+        vibrant_primary,
+        soft_secondary,
+        vivid_info,
+        rich_warning,
+        crystal_mix,
     ];
 
     // Unified syntax semantics for consistency across themes.
