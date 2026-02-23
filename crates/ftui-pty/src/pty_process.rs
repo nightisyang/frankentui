@@ -26,7 +26,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use portable_pty::{CommandBuilder, ExitStatus, PtySize};
+use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySize};
 
 /// Configuration for spawning a shell process.
 #[derive(Debug, Clone)]
@@ -216,6 +216,7 @@ impl ProcessState {
 /// ```
 pub struct PtyProcess {
     child: Box<dyn portable_pty::Child + Send + Sync>,
+    master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     rx: mpsc::Receiver<ReaderMsg>,
     reader_thread: Option<thread::JoinHandle<()>>,
@@ -331,6 +332,7 @@ impl PtyProcess {
 
         Ok(Self {
             child,
+            master: pair.master,
             writer,
             rx,
             reader_thread: Some(reader_thread),
@@ -533,15 +535,21 @@ impl PtyProcess {
 
     /// Resize the PTY.
     ///
-    /// This sends SIGWINCH to the child process.
+    /// This issues TIOCSWINSZ on the master file descriptor, which
+    /// delivers SIGWINCH to the child process so it picks up the new
+    /// dimensions.
     pub fn resize(&mut self, cols: u16, rows: u16) -> io::Result<()> {
-        // Note: portable-pty doesn't expose resize directly on the master,
-        // but we can track the intended size for future operations.
-        // The actual resize would need to be implemented via the master pair.
         if self.config.log_events {
             log_event("PTY_PROCESS_RESIZE", format!("cols={} rows={}", cols, rows));
         }
-        Ok(())
+        self.master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| io::Error::other(e.to_string()))
     }
 
     // ── Internal Methods ──────────────────────────────────────────────
