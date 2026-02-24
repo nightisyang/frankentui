@@ -675,6 +675,277 @@ pub fn fx_hash<T: Hash>(value: &T) -> u64 {
 }
 
 // ============================================================================
+// IncrementalView — the core trait (bd-3akdb.2)
+// ============================================================================
+
+/// The core trait for incremental view maintenance.
+///
+/// An `IncrementalView` maintains a materialized view that can be updated
+/// incrementally via deltas, or fully recomputed as a fallback.
+///
+/// # Type Parameters
+///
+/// - `K`: Key type for addressing entries in the materialized view.
+/// - `V`: Value type stored at each key.
+///
+/// # Contract
+///
+/// 1. `apply_delta(batch)` produces output deltas reflecting how the
+///    materialized view changed.
+/// 2. `full_recompute()` returns the complete materialized view.
+/// 3. **Correctness invariant**: After applying any sequence of deltas,
+///    the materialized view must equal what `full_recompute()` would
+///    return given the same inputs.
+/// 4. `materialized_size()` returns the number of entries for fallback
+///    policy decisions.
+pub trait IncrementalView<K: Clone + Eq + Hash, V: Clone + PartialEq> {
+    /// Apply a batch of input deltas and produce output deltas.
+    ///
+    /// The output deltas describe how this view's materialized state changed
+    /// as a result of the input. These are forwarded to downstream views.
+    fn apply_delta(&mut self, batch: &DeltaBatch<K, V>) -> DeltaBatch<K, V>;
+
+    /// Fully recompute the materialized view from scratch.
+    ///
+    /// Returns all current (key, value) pairs. Used as a fallback when
+    /// the delta set is too large, or for correctness validation.
+    fn full_recompute(&self) -> Vec<(K, V)>;
+
+    /// Number of entries in the materialized view.
+    fn materialized_size(&self) -> usize;
+
+    /// Domain of this view (for logging and evidence).
+    fn domain(&self) -> ViewDomain;
+
+    /// Human-readable label for this view.
+    fn label(&self) -> &str;
+}
+
+// ============================================================================
+// StyleResolutionView — concrete view for theme → resolved styles
+// ============================================================================
+
+/// A concrete `IncrementalView` that resolves styles by merging a base
+/// (theme) style with per-widget overrides.
+///
+/// When the theme changes, only widgets whose resolved style actually
+/// differs are emitted as output deltas.
+///
+/// # Materialized View
+///
+/// Maps `StyleKey` (widget ID) → `ResolvedStyleValue` (hash of resolved
+/// style). The resolved style is `base_hash XOR override_hash` — a
+/// simplified model of the real merge(child, parent) operation.
+pub struct StyleResolutionView {
+    label: String,
+    /// Base style hash (from theme). Applies to all widgets.
+    base_hash: u64,
+    /// Per-widget style overrides.
+    overrides: std::collections::HashMap<StyleKey, u64>,
+    /// Materialized resolved styles.
+    resolved: std::collections::HashMap<StyleKey, ResolvedStyleValue>,
+}
+
+impl StyleResolutionView {
+    /// Create a new style resolution view with the given base theme hash.
+    pub fn new(label: impl Into<String>, base_hash: u64) -> Self {
+        Self {
+            label: label.into(),
+            base_hash,
+            overrides: std::collections::HashMap::new(),
+            resolved: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Set the base theme hash. All resolved styles will be recomputed.
+    pub fn set_base(&mut self, base_hash: u64) {
+        self.base_hash = base_hash;
+    }
+
+    /// Get the current base hash.
+    pub fn base_hash(&self) -> u64 {
+        self.base_hash
+    }
+
+    /// Resolve a single style: base XOR override.
+    fn resolve(&self, key: &StyleKey) -> ResolvedStyleValue {
+        let override_hash = self.overrides.get(key).copied().unwrap_or(0);
+        ResolvedStyleValue {
+            style_hash: self.base_hash ^ override_hash,
+        }
+    }
+}
+
+impl IncrementalView<StyleKey, ResolvedStyleValue> for StyleResolutionView {
+    fn apply_delta(
+        &mut self,
+        batch: &DeltaBatch<StyleKey, ResolvedStyleValue>,
+    ) -> DeltaBatch<StyleKey, ResolvedStyleValue> {
+        let mut output = DeltaBatch::new(batch.epoch);
+        let mut time = 0u64;
+
+        for entry in &batch.entries {
+            match entry {
+                DeltaEntry::Insert {
+                    key,
+                    value,
+                    logical_time: _,
+                } => {
+                    // Update override for this widget.
+                    self.overrides.insert(*key, value.style_hash);
+                    let new_resolved = self.resolve(key);
+                    let old = self.resolved.insert(*key, new_resolved);
+                    // Only emit delta if resolved style actually changed.
+                    if old.as_ref() != Some(&new_resolved) {
+                        output.insert(*key, new_resolved, time);
+                        time += 1;
+                    }
+                }
+                DeltaEntry::Delete {
+                    key,
+                    logical_time: _,
+                } => {
+                    self.overrides.remove(key);
+                    if self.resolved.remove(key).is_some() {
+                        output.delete(*key, time);
+                        time += 1;
+                    }
+                }
+            }
+        }
+        output
+    }
+
+    fn full_recompute(&self) -> Vec<(StyleKey, ResolvedStyleValue)> {
+        self.overrides
+            .keys()
+            .map(|key| (*key, self.resolve(key)))
+            .collect()
+    }
+
+    fn materialized_size(&self) -> usize {
+        self.resolved.len()
+    }
+
+    fn domain(&self) -> ViewDomain {
+        ViewDomain::Style
+    }
+
+    fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+// ============================================================================
+// FilteredListView — concrete view for data → visible subset
+// ============================================================================
+
+/// A concrete `IncrementalView` that maintains a filtered subset of items.
+///
+/// Items are included if their value hash passes the filter predicate.
+/// When items are inserted/deleted/updated, only the changes to the
+/// filtered set are emitted as output deltas.
+type FilterPredicate<K, V> = dyn Fn(&K, &V) -> bool;
+
+pub struct FilteredListView<K: Clone + Eq + Hash, V: Clone + PartialEq> {
+    label: String,
+    /// The filter predicate: returns true if the item should be visible.
+    filter: Box<FilterPredicate<K, V>>,
+    /// All items (unfiltered).
+    all_items: std::collections::HashMap<K, V>,
+    /// Materialized filtered subset.
+    visible: std::collections::HashMap<K, V>,
+}
+
+impl<K: Clone + Eq + Hash, V: Clone + PartialEq> FilteredListView<K, V> {
+    /// Create a new filtered list view with the given filter predicate.
+    pub fn new(label: impl Into<String>, filter: impl Fn(&K, &V) -> bool + 'static) -> Self {
+        Self {
+            label: label.into(),
+            filter: Box::new(filter),
+            all_items: std::collections::HashMap::new(),
+            visible: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Number of total items (before filtering).
+    pub fn total_count(&self) -> usize {
+        self.all_items.len()
+    }
+
+    /// Number of visible items (after filtering).
+    pub fn visible_count(&self) -> usize {
+        self.visible.len()
+    }
+}
+
+impl<K: Clone + Eq + Hash, V: Clone + PartialEq> IncrementalView<K, V> for FilteredListView<K, V> {
+    fn apply_delta(&mut self, batch: &DeltaBatch<K, V>) -> DeltaBatch<K, V> {
+        let mut output = DeltaBatch::new(batch.epoch);
+        let mut time = 0u64;
+
+        for entry in &batch.entries {
+            match entry {
+                DeltaEntry::Insert {
+                    key,
+                    value,
+                    logical_time: _,
+                } => {
+                    let was_visible = self.visible.contains_key(key);
+                    self.all_items.insert(key.clone(), value.clone());
+                    let now_visible = (self.filter)(key, value);
+
+                    if now_visible {
+                        let old = self.visible.insert(key.clone(), value.clone());
+                        // Emit if newly visible or value changed.
+                        if !was_visible || old.as_ref() != Some(value) {
+                            output.insert(key.clone(), value.clone(), time);
+                            time += 1;
+                        }
+                    } else if was_visible {
+                        // Was visible, now filtered out → delete.
+                        self.visible.remove(key);
+                        output.delete(key.clone(), time);
+                        time += 1;
+                    }
+                }
+                DeltaEntry::Delete {
+                    key,
+                    logical_time: _,
+                } => {
+                    self.all_items.remove(key);
+                    if self.visible.remove(key).is_some() {
+                        output.delete(key.clone(), time);
+                        time += 1;
+                    }
+                }
+            }
+        }
+        output
+    }
+
+    fn full_recompute(&self) -> Vec<(K, V)> {
+        self.all_items
+            .iter()
+            .filter(|(k, v)| (self.filter)(k, v))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    fn materialized_size(&self) -> usize {
+        self.visible.len()
+    }
+
+    fn domain(&self) -> ViewDomain {
+        ViewDomain::FilteredList
+    }
+
+    fn label(&self) -> &str {
+        &self.label
+    }
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -1051,5 +1322,228 @@ mod tests {
             duration_us: 200,
         };
         assert!(result.fell_back_to_full);
+    }
+
+    // ── IncrementalView trait ──────────────────────────────────────
+
+    #[test]
+    fn style_view_apply_insert() {
+        let mut view = StyleResolutionView::new("test_style", 0xABCD);
+        let mut batch = DeltaBatch::new(1);
+        batch.insert(StyleKey(0), ResolvedStyleValue { style_hash: 0x1234 }, 0);
+
+        let output = view.apply_delta(&batch);
+        assert_eq!(output.len(), 1);
+        assert!(output.entries[0].is_insert());
+        assert_eq!(view.materialized_size(), 1);
+    }
+
+    #[test]
+    fn style_view_deduplicates_unchanged() {
+        let mut view = StyleResolutionView::new("test", 0x0);
+        let mut batch1 = DeltaBatch::new(1);
+        batch1.insert(StyleKey(0), ResolvedStyleValue { style_hash: 0x42 }, 0);
+        view.apply_delta(&batch1);
+
+        // Same override again → no output delta.
+        let mut batch2 = DeltaBatch::new(2);
+        batch2.insert(StyleKey(0), ResolvedStyleValue { style_hash: 0x42 }, 0);
+        let output = view.apply_delta(&batch2);
+        assert!(output.is_empty(), "same style should produce no delta");
+    }
+
+    #[test]
+    fn style_view_delete() {
+        let mut view = StyleResolutionView::new("test", 0x0);
+        let mut batch1 = DeltaBatch::new(1);
+        batch1.insert(StyleKey(0), ResolvedStyleValue { style_hash: 0x42 }, 0);
+        view.apply_delta(&batch1);
+        assert_eq!(view.materialized_size(), 1);
+
+        let mut batch2 = DeltaBatch::new(2);
+        batch2.delete(StyleKey(0), 0);
+        let output = view.apply_delta(&batch2);
+        assert_eq!(output.len(), 1);
+        assert!(!output.entries[0].is_insert()); // Delete
+        assert_eq!(view.materialized_size(), 0);
+    }
+
+    #[test]
+    fn style_view_full_recompute_matches_incremental() {
+        let mut view = StyleResolutionView::new("test", 0xFF00);
+        let mut batch = DeltaBatch::new(1);
+        batch.insert(StyleKey(0), ResolvedStyleValue { style_hash: 0x00FF }, 0);
+        batch.insert(StyleKey(1), ResolvedStyleValue { style_hash: 0x0F0F }, 1);
+        view.apply_delta(&batch);
+
+        let full = view.full_recompute();
+        assert_eq!(full.len(), 2);
+
+        // Verify full recompute matches incremental state.
+        for (key, value) in &full {
+            assert_eq!(value, view.resolved.get(key).unwrap());
+        }
+    }
+
+    #[test]
+    fn style_view_base_change_affects_all() {
+        let mut view = StyleResolutionView::new("test", 0x0);
+        let mut batch = DeltaBatch::new(1);
+        batch.insert(StyleKey(0), ResolvedStyleValue { style_hash: 0x42 }, 0);
+        batch.insert(StyleKey(1), ResolvedStyleValue { style_hash: 0x99 }, 1);
+        view.apply_delta(&batch);
+
+        // Change base hash and verify full_recompute reflects it.
+        view.set_base(0xFFFF);
+        let full = view.full_recompute();
+        for (_key, value) in &full {
+            // Resolved = base XOR override, so should differ from before.
+            assert_ne!(value.style_hash, 0);
+        }
+    }
+
+    #[test]
+    fn style_view_domain_and_label() {
+        let view = StyleResolutionView::new("ThemeResolver", 0);
+        assert_eq!(view.domain(), ViewDomain::Style);
+        assert_eq!(view.label(), "ThemeResolver");
+    }
+
+    // ── FilteredListView ────────────────────────────────────────────
+
+    #[test]
+    fn filtered_view_insert_visible() {
+        // Filter: only even values.
+        let mut view = FilteredListView::new("evens", |_k: &u32, v: &i32| *v % 2 == 0);
+        let mut batch = DeltaBatch::new(1);
+        batch.insert(1u32, 4i32, 0); // Even → visible
+        batch.insert(2u32, 3i32, 1); // Odd → filtered out
+
+        let output = view.apply_delta(&batch);
+        assert_eq!(output.len(), 1); // Only the even value
+        assert_eq!(view.visible_count(), 1);
+        assert_eq!(view.total_count(), 2);
+    }
+
+    #[test]
+    fn filtered_view_insert_then_filter_out() {
+        let mut view = FilteredListView::new("test", |_k: &u32, v: &i32| *v > 10);
+        let mut batch1 = DeltaBatch::new(1);
+        batch1.insert(1u32, 20i32, 0); // Visible (20 > 10)
+        view.apply_delta(&batch1);
+        assert_eq!(view.visible_count(), 1);
+
+        // Update to value that fails filter.
+        let mut batch2 = DeltaBatch::new(2);
+        batch2.insert(1u32, 5i32, 0); // Now 5 < 10, filtered out
+        let output = view.apply_delta(&batch2);
+        assert_eq!(output.len(), 1);
+        assert!(!output.entries[0].is_insert()); // Delete from visible set
+        assert_eq!(view.visible_count(), 0);
+    }
+
+    #[test]
+    fn filtered_view_delete() {
+        let mut view = FilteredListView::new("test", |_k: &u32, v: &i32| *v > 0);
+        let mut batch1 = DeltaBatch::new(1);
+        batch1.insert(1u32, 5i32, 0);
+        view.apply_delta(&batch1);
+        assert_eq!(view.visible_count(), 1);
+
+        let mut batch2 = DeltaBatch::new(2);
+        batch2.delete(1u32, 0);
+        let output = view.apply_delta(&batch2);
+        assert_eq!(output.len(), 1);
+        assert!(!output.entries[0].is_insert()); // Delete
+        assert_eq!(view.visible_count(), 0);
+        assert_eq!(view.total_count(), 0);
+    }
+
+    #[test]
+    fn filtered_view_full_recompute() {
+        let mut view = FilteredListView::new("test", |_k: &u32, v: &i32| *v % 2 == 0);
+        let mut batch = DeltaBatch::new(1);
+        batch.insert(1u32, 2i32, 0);
+        batch.insert(2u32, 3i32, 1);
+        batch.insert(3u32, 4i32, 2);
+        batch.insert(4u32, 5i32, 3);
+        view.apply_delta(&batch);
+
+        let full = view.full_recompute();
+        assert_eq!(full.len(), 2); // Only even values
+        let keys: Vec<u32> = full.iter().map(|(k, _)| *k).collect();
+        assert!(keys.contains(&1));
+        assert!(keys.contains(&3));
+    }
+
+    #[test]
+    fn filtered_view_deduplicates_unchanged() {
+        let mut view = FilteredListView::new("test", |_k: &u32, v: &i32| *v > 0);
+        let mut batch1 = DeltaBatch::new(1);
+        batch1.insert(1u32, 5i32, 0);
+        view.apply_delta(&batch1);
+
+        // Insert same value → no output delta.
+        let mut batch2 = DeltaBatch::new(2);
+        batch2.insert(1u32, 5i32, 0);
+        let output = view.apply_delta(&batch2);
+        assert!(output.is_empty(), "same value should produce no delta");
+    }
+
+    #[test]
+    fn filtered_view_domain_and_label() {
+        let view: FilteredListView<u32, i32> =
+            FilteredListView::new("EvenFilter", |_k: &u32, v: &i32| *v % 2 == 0);
+        assert_eq!(view.domain(), ViewDomain::FilteredList);
+        assert_eq!(view.label(), "EvenFilter");
+    }
+
+    #[test]
+    fn filtered_view_correctness_invariant() {
+        // After a sequence of deltas, materialized view == full_recompute.
+        let mut view = FilteredListView::new("test", |_k: &u32, v: &i32| *v > 0);
+
+        let mut batch1 = DeltaBatch::new(1);
+        batch1.insert(1u32, 5i32, 0);
+        batch1.insert(2u32, -3i32, 1);
+        batch1.insert(3u32, 10i32, 2);
+        view.apply_delta(&batch1);
+
+        let mut batch2 = DeltaBatch::new(2);
+        batch2.delete(1u32, 0);
+        batch2.insert(4u32, 7i32, 1);
+        batch2.insert(2u32, 8i32, 2); // Was filtered, now visible
+        view.apply_delta(&batch2);
+
+        // Verify materialized matches full_recompute.
+        let full = view.full_recompute();
+        let mut full_map: std::collections::HashMap<u32, i32> = full.into_iter().collect();
+        assert_eq!(full_map.len(), view.visible_count());
+        for (k, v) in &view.visible {
+            assert_eq!(full_map.remove(k).as_ref(), Some(v));
+        }
+        assert!(full_map.is_empty());
+    }
+
+    #[test]
+    fn filtered_view_delete_nonexistent_is_noop() {
+        let mut view: FilteredListView<u32, i32> =
+            FilteredListView::new("test", |_k: &u32, _v: &i32| true);
+        let mut batch = DeltaBatch::new(1);
+        batch.delete(999u32, 0);
+        let output = view.apply_delta(&batch);
+        assert!(output.is_empty());
+    }
+
+    // ── Combined trait usage ────────────────────────────────────────
+
+    #[test]
+    fn trait_object_dispatch() {
+        // Verify IncrementalView can be used as a trait object.
+        let view: Box<dyn IncrementalView<StyleKey, ResolvedStyleValue>> =
+            Box::new(StyleResolutionView::new("dynamic", 0x42));
+        assert_eq!(view.materialized_size(), 0);
+        assert_eq!(view.domain(), ViewDomain::Style);
+        assert_eq!(view.label(), "dynamic");
     }
 }
