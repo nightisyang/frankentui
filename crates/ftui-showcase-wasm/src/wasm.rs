@@ -10,7 +10,9 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
 use super::runner_core::{PaneDispatchOutcome, PaneDispatchSummary, RunnerCore};
-use ftui_demo_showcase::pane_interaction::{PanePreviewState, PaneTimelineStatus};
+use ftui_demo_showcase::pane_interaction::{
+    PanePreviewState, PaneSplitterPrimitive, PaneSplitterVisualState, PaneTimelineStatus,
+};
 use ftui_layout::{
     PaneId, PaneLayoutIntelligenceMode, PaneModifierSnapshot, PanePointerButton, PaneResizeTarget,
     SplitAxis,
@@ -134,6 +136,40 @@ fn pane_push_dock_candidate(
     candidates.push(&candidate.into());
 }
 
+fn pane_splitter_state_label(state: PaneSplitterVisualState) -> &'static str {
+    match state {
+        PaneSplitterVisualState::Idle => "idle",
+        PaneSplitterVisualState::Hover => "hover",
+        PaneSplitterVisualState::Active => "active",
+    }
+}
+
+fn pane_splitters_to_js(splitters: &[PaneSplitterPrimitive]) -> JsValue {
+    let entries = Array::new();
+    for splitter in splitters {
+        let entry = Object::new();
+        set_js(
+            &entry,
+            "split_id",
+            JsValue::from_f64(splitter.split_id.get() as f64),
+        );
+        let axis = match splitter.axis {
+            SplitAxis::Horizontal => "horizontal",
+            SplitAxis::Vertical => "vertical",
+        };
+        set_js(&entry, "axis", JsValue::from_str(axis));
+        set_js(
+            &entry,
+            "state",
+            JsValue::from_str(pane_splitter_state_label(splitter.state)),
+        );
+        set_js(&entry, "rail_rect", pane_rect_to_js(splitter.rail_rect));
+        set_js(&entry, "handle_rect", pane_rect_to_js(splitter.handle_rect));
+        entries.push(&entry.into());
+    }
+    entries.into()
+}
+
 fn ignored_reason_label(reason: PanePointerIgnoredReason) -> &'static str {
     match reason {
         PanePointerIgnoredReason::InvalidPointerId => "invalid_pointer_id",
@@ -157,6 +193,7 @@ fn pane_dispatch_to_js(
     layout_hash: u64,
     selected_ids: &[u64],
     primary_id: Option<u64>,
+    splitters: &[PaneSplitterPrimitive],
     error: Option<&str>,
 ) -> JsValue {
     let obj = Object::new();
@@ -349,6 +386,7 @@ fn pane_dispatch_to_js(
     } else {
         set_js(&obj, "primary_id", JsValue::NULL);
     }
+    set_js(&obj, "splitters", pane_splitters_to_js(splitters));
 
     obj.into()
 }
@@ -450,6 +488,11 @@ fn pane_state_to_js(runner: &RunnerCore) -> JsValue {
     } else {
         set_js(&obj, "primary_id", JsValue::NULL);
     }
+    set_js(
+        &obj,
+        "splitters",
+        pane_splitters_to_js(&runner.pane_splitter_primitives()),
+    );
 
     obj.into()
 }
@@ -476,6 +519,7 @@ impl ShowcaseRunner {
         error: Option<&str>,
     ) -> JsValue {
         let selected = self.inner.pane_selected_ids();
+        let splitters = self.inner.pane_splitter_primitives();
         pane_dispatch_to_js(
             dispatch,
             self.inner.pane_active_pointer_id(),
@@ -484,6 +528,7 @@ impl ShowcaseRunner {
             self.inner.pane_layout_hash(),
             &selected,
             self.inner.pane_primary_id(),
+            &splitters,
             error,
         )
     }
@@ -792,6 +837,12 @@ impl ShowcaseRunner {
     #[wasm_bindgen(js_name = paneLayoutState)]
     pub fn pane_layout_state(&self) -> JsValue {
         pane_state_to_js(&self.inner)
+    }
+
+    /// Shared splitter/handle primitives for host-specific renderers.
+    #[wasm_bindgen(js_name = paneSplitterPrimitives)]
+    pub fn pane_splitter_primitives(&self) -> JsValue {
+        pane_splitters_to_js(&self.inner.pane_splitter_primitives())
     }
 
     /// Undo one pane structural change.
