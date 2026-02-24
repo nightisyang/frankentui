@@ -2927,8 +2927,8 @@ impl Tokenizer for TomlTokenizer {
                 }
                 b'[' => {
                     let mut is_heading = true;
-                    for i in 0..pos {
-                        if bytes[i] != b' ' && bytes[i] != b'\t' {
+                    for byte in bytes.iter().take(pos) {
+                        if *byte != b' ' && *byte != b'\t' {
                             is_heading = false;
                             break;
                         }

@@ -17,8 +17,8 @@ pub mod widget;
 
 pub use parser::{AnsiHandler, AnsiParser};
 pub use state::{
-    Cell, CellAttrs, ClearRegion, Cursor, CursorShape, DirtyRegion, Grid, Pen, Scrollback,
-    TerminalModes, TerminalState,
+    Cell, CellAttrs, ClearRegion, Cursor, CursorShape, DirtyRegion, Grid, LineFlag, Pen,
+    Scrollback, TerminalModes, TerminalState, WIDE_CONTINUATION,
 };
 
 #[cfg(feature = "terminal-widget")]
