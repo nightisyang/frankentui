@@ -981,4 +981,843 @@ mod tests {
             "predict() must record gate_triggered=true when risk"
         );
     }
+
+    // ========================================================================
+    // bd-1q5.12: Additional unit tests for conformal prediction frame-time gating
+    // ========================================================================
+
+    // --- Calibration with known distributions ---
+
+    #[test]
+    fn calibration_uniform_distribution_quantile() {
+        // Uniform residuals from 0 to 99. The (1-alpha) quantile should be near
+        // the top of the distribution.
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.05,
+            min_samples: 1,
+            window_size: 256,
+            q_default: 0.0,
+        });
+        let key = test_key(80, 24);
+        for i in 0..100 {
+            predictor.observe(key, 0.0, i as f64);
+        }
+        let p = predictor.predict(key, 0.0, 1_000.0);
+        // (100+1)*0.95 = 95.95, ceil = 96, idx = 95 -> sorted[95] = 95.0
+        assert_eq!(p.fallback_level, 0);
+        assert_eq!(p.sample_count, 100);
+        assert!((p.quantile - 95.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn calibration_gaussian_like_distribution() {
+        // Simulate a roughly gaussian-shaped distribution of residuals.
+        // Use a simple deterministic approximation: residuals centered around 0
+        // with known spread.
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 256,
+            q_default: 0.0,
+        });
+        let key = test_key(120, 40);
+
+        // Generate 50 residuals that approximate a symmetric distribution
+        // around 0: [-24.5, -23.5, ..., -0.5, 0.5, ..., 24.5]
+        for i in 0..50 {
+            let residual = (i as f64) - 24.5;
+            predictor.observe(key, 100.0, 100.0 + residual);
+        }
+
+        let p = predictor.predict(key, 100.0, 1_000.0);
+        // (50+1)*0.9 = 45.9, ceil = 46, idx = 45 -> sorted residual at index 45
+        // sorted: [-24.5, -23.5, ..., 24.5], index 45 = 20.5
+        assert_eq!(p.fallback_level, 0);
+        assert_eq!(p.sample_count, 50);
+        assert!((p.quantile - 20.5).abs() < 1e-10);
+        // upper_us = 100 + max(20.5, 0) = 120.5
+        assert!((p.upper_us - 120.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn calibration_constant_residuals() {
+        // All residuals identical -> quantile should be that constant.
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.05,
+            min_samples: 1,
+            window_size: 256,
+            q_default: 0.0,
+        });
+        let key = test_key(80, 24);
+        for _ in 0..30 {
+            predictor.observe(key, 100.0, 105.0); // residual = 5.0
+        }
+        let p = predictor.predict(key, 100.0, 1_000.0);
+        assert!((p.quantile - 5.0).abs() < 1e-10);
+        assert!((p.upper_us - 105.0).abs() < 1e-10);
+    }
+
+    // --- Prediction interval correctness (coverage property) ---
+
+    #[test]
+    fn coverage_property_uniform_residuals() {
+        // Calibrate with uniform [0..N), then test with new samples.
+        // Empirical coverage should be >= 1 - alpha for a hold-out set.
+        let alpha = 0.1;
+        let n_calibrate = 100;
+        let n_test = 200;
+
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha,
+            min_samples: 1,
+            window_size: 256,
+            q_default: 0.0,
+        });
+        let key = test_key(80, 24);
+
+        // Calibrate: residuals are 0, 1, 2, ..., 99
+        for i in 0..n_calibrate {
+            predictor.observe(key, 0.0, i as f64);
+        }
+
+        // Test coverage: for each "new" sample, check if it falls within the
+        // prediction interval [0, y_hat + q].
+        let prediction = predictor.predict(key, 0.0, f64::MAX);
+        let upper_bound = prediction.upper_us;
+
+        let mut covered = 0;
+        // Test samples: same distribution range [0..200)
+        for i in 0..n_test {
+            let new_obs = (i as f64) * (n_calibrate as f64) / (n_test as f64);
+            if new_obs <= upper_bound {
+                covered += 1;
+            }
+        }
+
+        let empirical_coverage = covered as f64 / n_test as f64;
+        // Coverage should be >= 1 - alpha - epsilon (epsilon accounts for
+        // finite-sample effects)
+        let target_coverage = 1.0 - alpha - 0.05; // generous epsilon
+        assert!(
+            empirical_coverage >= target_coverage,
+            "Empirical coverage {empirical_coverage:.3} should be >= {target_coverage:.3}"
+        );
+    }
+
+    #[test]
+    fn coverage_property_with_shifted_test_distribution() {
+        // Calibrate, then test with samples from the same range.
+        // Conformal prediction guarantees coverage for exchangeable data.
+        let alpha = 0.05;
+        let n = 200;
+
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha,
+            min_samples: 1,
+            window_size: 512,
+            q_default: 0.0,
+        });
+        let key = test_key(80, 24);
+
+        // Calibrate with known residuals: 1.0, 2.0, ..., 200.0
+        for i in 1..=n {
+            predictor.observe(key, 0.0, i as f64);
+        }
+
+        let p = predictor.predict(key, 0.0, f64::MAX);
+        // (200+1)*0.95 = 190.95, ceil = 191, idx = 190 -> sorted[190] = 191.0
+        assert!((p.quantile - 191.0).abs() < 1e-10);
+        // At least 95% of calibration samples should be <= upper bound
+        let covered = (1..=n).filter(|&i| (i as f64) <= p.upper_us).count();
+        let coverage = covered as f64 / n as f64;
+        assert!(
+            coverage >= 1.0 - alpha,
+            "Coverage {coverage:.3} should be >= {:.3}",
+            1.0 - alpha
+        );
+    }
+
+    // --- Gate trigger behavior at boundary conditions ---
+
+    #[test]
+    fn gate_trigger_exact_boundary() {
+        // When upper_us == budget_us, risk should be false (not strictly greater)
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 8,
+            q_default: 0.0,
+        });
+        let key = test_key(80, 24);
+        predictor.observe(key, 0.0, 50.0);
+        // quantile = 50.0, y_hat = 0.0, upper_us = 50.0
+        let p = predictor.predict(key, 0.0, 50.0);
+        assert!(
+            !p.risk,
+            "upper_us ({}) == budget_us ({}) should NOT trigger risk",
+            p.upper_us, p.budget_us
+        );
+    }
+
+    #[test]
+    fn gate_trigger_just_above_boundary() {
+        // When upper_us is epsilon above budget, risk should be true
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 8,
+            q_default: 0.0,
+        });
+        let key = test_key(80, 24);
+        predictor.observe(key, 0.0, 50.0);
+        // upper_us = 50.0, budget = 49.999
+        let p = predictor.predict(key, 0.0, 49.999);
+        assert!(p.risk, "upper_us > budget should trigger risk");
+    }
+
+    #[test]
+    fn gate_trigger_just_below_boundary() {
+        // When upper_us is epsilon below budget, risk should be false
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 8,
+            q_default: 0.0,
+        });
+        let key = test_key(80, 24);
+        predictor.observe(key, 0.0, 50.0);
+        // upper_us = 50.0, budget = 50.001
+        let p = predictor.predict(key, 0.0, 50.001);
+        assert!(!p.risk, "upper_us < budget should NOT trigger risk");
+    }
+
+    #[test]
+    fn gate_trigger_zero_budget() {
+        // Zero budget: any positive prediction should trigger risk
+        let predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 8,
+            q_default: 1.0,
+        });
+        let key = test_key(80, 24);
+        let p = predictor.predict(key, 0.0, 0.0);
+        assert!(p.risk, "positive upper_us with zero budget should be risky");
+    }
+
+    #[test]
+    fn gate_trigger_very_large_budget() {
+        // Extremely large budget: should never trigger risk
+        let predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 8,
+            q_default: 100_000.0,
+        });
+        let key = test_key(80, 24);
+        let p = predictor.predict(key, 1_000.0, f64::MAX);
+        assert!(!p.risk, "huge budget should never trigger risk");
+    }
+
+    // --- Alpha parameter sensitivity ---
+
+    #[test]
+    fn alpha_sensitivity_wider_interval_with_lower_alpha() {
+        let key = test_key(80, 24);
+
+        // Calibrate two predictors with different alpha on same data
+        let mut predictor_tight = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.5, // 50% coverage -> narrower interval
+            min_samples: 1,
+            window_size: 256,
+            q_default: 0.0,
+        });
+
+        let mut predictor_wide = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.01, // 99% coverage -> wider interval
+            min_samples: 1,
+            window_size: 256,
+            q_default: 0.0,
+        });
+
+        for i in 0..100 {
+            let obs = i as f64;
+            predictor_tight.observe(key, 0.0, obs);
+            predictor_wide.observe(key, 0.0, obs);
+        }
+
+        let p_tight = predictor_tight.predict(key, 0.0, 10_000.0);
+        let p_wide = predictor_wide.predict(key, 0.0, 10_000.0);
+
+        assert!(
+            p_wide.quantile > p_tight.quantile,
+            "Lower alpha ({}) should produce wider interval: quantile {} vs {}",
+            0.01,
+            p_wide.quantile,
+            p_tight.quantile
+        );
+        assert!(
+            p_wide.upper_us > p_tight.upper_us,
+            "Lower alpha should produce higher upper bound"
+        );
+    }
+
+    #[test]
+    fn alpha_sensitivity_confidence_reflects_alpha() {
+        for &alpha in &[0.01, 0.05, 0.1, 0.2, 0.5] {
+            let predictor = ConformalPredictor::new(ConformalConfig {
+                alpha,
+                min_samples: 1,
+                window_size: 8,
+                q_default: 0.0,
+            });
+            let key = test_key(80, 24);
+            let p = predictor.predict(key, 0.0, 1_000.0);
+            let expected_confidence = 1.0 - alpha;
+            assert!(
+                (p.confidence - expected_confidence).abs() < 1e-10,
+                "confidence should be 1-alpha for alpha={alpha}"
+            );
+        }
+    }
+
+    #[test]
+    fn alpha_sensitivity_extreme_alpha_zero() {
+        // alpha near 0 -> coverage near 100% -> picks the max residual
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.001,
+            min_samples: 1,
+            window_size: 256,
+            q_default: 0.0,
+        });
+        let key = test_key(80, 24);
+        for i in 0..100 {
+            predictor.observe(key, 0.0, i as f64);
+        }
+        let p = predictor.predict(key, 0.0, 10_000.0);
+        // (100+1)*0.999 = 100.899, ceil=101, idx=min(100,99)=99 -> sorted[99]=99
+        assert!((p.quantile - 99.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn alpha_sensitivity_extreme_alpha_one() {
+        // alpha near 1 -> coverage near 0% -> picks the smallest residual
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.99,
+            min_samples: 1,
+            window_size: 256,
+            q_default: 0.0,
+        });
+        let key = test_key(80, 24);
+        for i in 0..100 {
+            predictor.observe(key, 0.0, i as f64);
+        }
+        let p = predictor.predict(key, 0.0, 10_000.0);
+        // (100+1)*0.01 = 1.01, ceil=2, idx=1 -> sorted[1]=1
+        assert!((p.quantile - 1.0).abs() < 1e-10);
+    }
+
+    // --- Empty/small calibration set handling ---
+
+    #[test]
+    fn empty_calibration_uses_default() {
+        let predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.05,
+            min_samples: 20,
+            window_size: 256,
+            q_default: 10_000.0,
+        });
+        let key = test_key(80, 24);
+        let p = predictor.predict(key, 100.0, 16_666.0);
+        assert_eq!(p.sample_count, 0);
+        assert_eq!(p.fallback_level, 3);
+        assert!((p.quantile - 10_000.0).abs() < 1e-10);
+        assert!((p.upper_us - 10_100.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn one_sample_below_min_samples_uses_fallback() {
+        // With min_samples=20, 1 sample should fall through to global (level 3)
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.05,
+            min_samples: 20,
+            window_size: 256,
+            q_default: 999.0,
+        });
+        let key = test_key(80, 24);
+        predictor.observe(key, 0.0, 5.0);
+        let p = predictor.predict(key, 0.0, 1_000.0);
+        // Only 1 sample in exact bucket, 1 in mode+diff, 1 in mode, 1 in global
+        // Global has data, so uses global fallback (level 3)
+        assert_eq!(p.fallback_level, 3);
+        assert_eq!(p.sample_count, 1);
+    }
+
+    #[test]
+    fn exactly_min_samples_minus_one_uses_fallback() {
+        let min_samples = 5;
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples,
+            window_size: 256,
+            q_default: 999.0,
+        });
+        let key = test_key(80, 24);
+        for i in 0..(min_samples - 1) {
+            predictor.observe(key, 0.0, (i as f64) * 10.0);
+        }
+        let p = predictor.predict(key, 0.0, 1_000.0);
+        // 4 samples < min_samples=5, so exact bucket not used
+        // Falls through to mode+diff (4 samples < 5), mode (4 < 5), global (4 > 0)
+        assert_eq!(p.fallback_level, 3);
+        assert_eq!(p.sample_count, min_samples - 1);
+    }
+
+    #[test]
+    fn exactly_min_samples_uses_exact_bucket() {
+        let min_samples = 5;
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples,
+            window_size: 256,
+            q_default: 999.0,
+        });
+        let key = test_key(80, 24);
+        for i in 0..min_samples {
+            predictor.observe(key, 0.0, (i as f64) * 10.0);
+        }
+        let p = predictor.predict(key, 0.0, 1_000.0);
+        // 5 samples == min_samples=5, exact bucket should be used
+        assert_eq!(p.fallback_level, 0);
+        assert_eq!(p.sample_count, min_samples);
+    }
+
+    #[test]
+    fn min_samples_plus_one_uses_exact_bucket() {
+        let min_samples = 5;
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples,
+            window_size: 256,
+            q_default: 999.0,
+        });
+        let key = test_key(80, 24);
+        for i in 0..=min_samples {
+            predictor.observe(key, 0.0, (i as f64) * 10.0);
+        }
+        let p = predictor.predict(key, 0.0, 1_000.0);
+        assert_eq!(p.fallback_level, 0);
+        assert_eq!(p.sample_count, min_samples + 1);
+    }
+
+    #[test]
+    fn min_samples_one_allows_single_observation() {
+        // Edge case: min_samples = 1
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 256,
+            q_default: 999.0,
+        });
+        let key = test_key(80, 24);
+        predictor.observe(key, 0.0, 42.0);
+        let p = predictor.predict(key, 0.0, 1_000.0);
+        assert_eq!(p.fallback_level, 0);
+        assert_eq!(p.sample_count, 1);
+        assert!((p.quantile - 42.0).abs() < 1e-10);
+    }
+
+    // --- Tracing span field assertions ---
+
+    #[test]
+    fn predict_span_records_calibration_set_size() {
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        struct FieldRecorder {
+            calibration_size: Arc<Mutex<Option<u64>>>,
+        }
+
+        struct SizeVisitor(Arc<Mutex<Option<u64>>>);
+
+        impl tracing::field::Visit for SizeVisitor {
+            fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+                if field.name() == "calibration_set_size" {
+                    *self.0.lock().unwrap() = Some(value);
+                }
+            }
+            fn record_debug(&mut self, _field: &tracing::field::Field, _value: &dyn fmt::Debug) {}
+        }
+
+        impl tracing::Subscriber for FieldRecorder {
+            fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _span: &tracing::span::Id, values: &tracing::span::Record<'_>) {
+                let mut v = SizeVisitor(Arc::clone(&self.calibration_size));
+                values.record(&mut v);
+            }
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, _: &tracing::Event<'_>) {}
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+
+        let size = Arc::new(Mutex::new(None));
+        let subscriber = FieldRecorder {
+            calibration_size: Arc::clone(&size),
+        };
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 8,
+            q_default: 0.0,
+        });
+        let key = test_key(80, 24);
+        for i in 0..5 {
+            predictor.observe(key, 0.0, i as f64);
+        }
+        let _ = predictor.predict(key, 0.0, 1_000.0);
+
+        let recorded = size.lock().unwrap();
+        assert_eq!(*recorded, Some(5), "calibration_set_size should be 5");
+    }
+
+    #[test]
+    fn predict_span_records_predicted_upper_bound() {
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        struct UpperBoundRecorder {
+            upper_bound: Arc<Mutex<Option<f64>>>,
+        }
+
+        struct UpperVisitor(Arc<Mutex<Option<f64>>>);
+
+        impl tracing::field::Visit for UpperVisitor {
+            fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
+                if field.name() == "predicted_upper_bound_us" {
+                    *self.0.lock().unwrap() = Some(value);
+                }
+            }
+            fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn fmt::Debug) {}
+        }
+
+        impl tracing::Subscriber for UpperBoundRecorder {
+            fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, values: &tracing::span::Record<'_>) {
+                let mut v = UpperVisitor(Arc::clone(&self.upper_bound));
+                values.record(&mut v);
+            }
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, _: &tracing::Event<'_>) {}
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+
+        let upper = Arc::new(Mutex::new(None));
+        let subscriber = UpperBoundRecorder {
+            upper_bound: Arc::clone(&upper),
+        };
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 8,
+            q_default: 42.0,
+        });
+        let key = test_key(80, 24);
+        let p = predictor.predict(key, 10.0, 1_000.0);
+
+        let recorded = upper.lock().unwrap();
+        assert!(
+            recorded.is_some(),
+            "predicted_upper_bound_us should be recorded"
+        );
+        assert!(
+            (recorded.unwrap() - p.upper_us).abs() < 1e-10,
+            "recorded upper bound should match prediction"
+        );
+    }
+
+    #[test]
+    fn predict_span_records_gate_triggered_false() {
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        struct GateFalseChecker {
+            gate_value: Arc<Mutex<Option<bool>>>,
+        }
+
+        struct GateFalseVisitor(Arc<Mutex<Option<bool>>>);
+
+        impl tracing::field::Visit for GateFalseVisitor {
+            fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+                if field.name() == "gate_triggered" {
+                    *self.0.lock().unwrap() = Some(value);
+                }
+            }
+            fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn fmt::Debug) {}
+        }
+
+        impl tracing::Subscriber for GateFalseChecker {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, values: &tracing::span::Record<'_>) {
+                let mut v = GateFalseVisitor(Arc::clone(&self.gate_value));
+                values.record(&mut v);
+            }
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, _: &tracing::Event<'_>) {}
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+
+        let gate = Arc::new(Mutex::new(None));
+        let subscriber = GateFalseChecker {
+            gate_value: Arc::clone(&gate),
+        };
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 8,
+            q_default: 1.0,
+        });
+        let key = test_key(80, 24);
+        let p = predictor.predict(key, 0.0, 1_000_000.0);
+        assert!(!p.risk);
+
+        let recorded = gate.lock().unwrap();
+        assert_eq!(
+            *recorded,
+            Some(false),
+            "gate_triggered should be recorded as false"
+        );
+    }
+
+    // --- JSONL output ---
+
+    #[test]
+    fn jsonl_output_contains_required_fields() {
+        let prediction = ConformalPrediction {
+            upper_us: 150.5,
+            risk: true,
+            confidence: 0.95,
+            bucket: BucketKey {
+                mode: ModeBucket::Inline,
+                diff: DiffBucket::Full,
+                size_bucket: 10,
+            },
+            sample_count: 42,
+            quantile: 50.5,
+            fallback_level: 0,
+            window_size: 256,
+            reset_count: 1,
+            y_hat: 100.0,
+            budget_us: 140.0,
+        };
+        let jsonl = prediction.to_jsonl();
+        assert!(jsonl.contains("\"schema\":\"conformal-v1\""));
+        assert!(jsonl.contains("\"upper_us\":150.5"));
+        assert!(jsonl.contains("\"risk\":true"));
+        assert!(jsonl.contains("\"confidence\":0.9500"));
+        assert!(jsonl.contains("\"bucket\":\"inline:full:10\""));
+        assert!(jsonl.contains("\"samples\":42"));
+        assert!(jsonl.contains("\"quantile\":50.50"));
+        assert!(jsonl.contains("\"fallback_level\":0"));
+        assert!(jsonl.contains("\"window\":256"));
+        assert!(jsonl.contains("\"resets\":1"));
+        assert!(jsonl.contains("\"y_hat\":100.0"));
+        assert!(jsonl.contains("\"budget_us\":140.0"));
+    }
+
+    // --- Property-based: coverage verification ---
+
+    #[test]
+    fn property_empirical_coverage_deterministic_sequences() {
+        // For multiple deterministic sequences, verify that the conformal
+        // prediction interval achieves its stated coverage guarantee.
+        for alpha in [0.05, 0.1, 0.2] {
+            let n_calibrate = 100;
+            let n_test = 100;
+
+            let mut predictor = ConformalPredictor::new(ConformalConfig {
+                alpha,
+                min_samples: 1,
+                window_size: 256,
+                q_default: 0.0,
+            });
+            let key = test_key(80, 24);
+
+            // Calibrate with residuals 1.0, 2.0, ..., 100.0
+            for i in 1..=n_calibrate {
+                predictor.observe(key, 0.0, i as f64);
+            }
+
+            let p = predictor.predict(key, 0.0, f64::MAX);
+
+            // Count how many calibration-like points are covered
+            let covered = (1..=n_test).filter(|&i| (i as f64) <= p.upper_us).count();
+            let coverage = covered as f64 / n_test as f64;
+
+            assert!(
+                coverage >= 1.0 - alpha - 0.02,
+                "alpha={alpha}: coverage {coverage:.3} should be >= {:.3}",
+                1.0 - alpha - 0.02
+            );
+        }
+    }
+
+    #[test]
+    fn property_monotone_quantile_with_more_extreme_data() {
+        // Adding more extreme residuals should increase the quantile
+        let key = test_key(80, 24);
+
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size: 256,
+            q_default: 0.0,
+        });
+
+        // First: moderate residuals
+        for i in 0..50 {
+            predictor.observe(key, 0.0, i as f64);
+        }
+        let q_moderate = predictor.predict(key, 0.0, f64::MAX).quantile;
+
+        // Add extreme residuals
+        for _ in 0..50 {
+            predictor.observe(key, 0.0, 1000.0);
+        }
+        let q_extreme = predictor.predict(key, 0.0, f64::MAX).quantile;
+
+        assert!(
+            q_extreme >= q_moderate,
+            "Adding extreme data should not decrease quantile: {q_extreme} vs {q_moderate}"
+        );
+    }
+
+    #[test]
+    fn property_quantile_bounded_by_max_residual() {
+        // The conformal quantile should never exceed the maximum residual
+        let key = test_key(80, 24);
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.001, // very high coverage
+            min_samples: 1,
+            window_size: 256,
+            q_default: 0.0,
+        });
+
+        let max_residual = 100.0;
+        for i in 0..50 {
+            predictor.observe(key, 0.0, (i as f64) * 2.0); // 0, 2, 4, ..., 98
+        }
+
+        let p = predictor.predict(key, 0.0, f64::MAX);
+        assert!(
+            p.quantile <= max_residual,
+            "quantile {} should be <= max residual {max_residual}",
+            p.quantile
+        );
+    }
+
+    #[test]
+    fn property_window_eviction_changes_quantile() {
+        // After filling and evicting the window, old extreme values should
+        // no longer affect the quantile
+        let key = test_key(80, 24);
+        let window_size = 10;
+
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 1,
+            window_size,
+            q_default: 0.0,
+        });
+
+        // Fill window with large residuals
+        for _ in 0..window_size {
+            predictor.observe(key, 0.0, 1000.0);
+        }
+        let q_large = predictor.predict(key, 0.0, f64::MAX).quantile;
+
+        // Evict all large residuals with small ones
+        for _ in 0..window_size {
+            predictor.observe(key, 0.0, 1.0);
+        }
+        let q_small = predictor.predict(key, 0.0, f64::MAX).quantile;
+
+        assert!(
+            q_small < q_large,
+            "After eviction, quantile should decrease: {q_small} vs {q_large}"
+        );
+    }
+
+    // --- Multiple bucket interaction ---
+
+    #[test]
+    fn cross_mode_fallback_does_not_mix_modes() {
+        // mode_diff fallback only aggregates same mode+diff, not across modes
+        let mut predictor = ConformalPredictor::new(ConformalConfig {
+            alpha: 0.1,
+            min_samples: 5,
+            window_size: 256,
+            q_default: 999.0,
+        });
+
+        // Add data to AltScreen mode
+        let alt_key = BucketKey::from_context(ScreenMode::AltScreen, DiffStrategy::Full, 80, 24);
+        for i in 0..10 {
+            predictor.observe(alt_key, 0.0, (i as f64) * 100.0);
+        }
+
+        // Query Inline mode with different size bucket (no exact match)
+        let inline_key = BucketKey::from_context(
+            ScreenMode::Inline { ui_height: 4 },
+            DiffStrategy::Full,
+            120,
+            40,
+        );
+        let p = predictor.predict(inline_key, 0.0, 1_000_000.0);
+
+        // Mode fallback should NOT find inline data, so falls to global
+        assert_eq!(
+            p.fallback_level, 3,
+            "Cross-mode query should fall to global"
+        );
+    }
+
+    #[test]
+    fn reset_count_accumulates_across_resets() {
+        let mut predictor = ConformalPredictor::new(ConformalConfig::default());
+        let key = test_key(80, 24);
+
+        predictor.observe(key, 0.0, 1.0);
+        predictor.reset_bucket(key);
+        predictor.observe(key, 0.0, 2.0);
+        predictor.reset_all();
+        predictor.observe(key, 0.0, 3.0);
+        predictor.reset_bucket(key);
+
+        let p = predictor.predict(key, 0.0, 1_000.0);
+        assert_eq!(p.reset_count, 3, "reset_count should accumulate");
+    }
 }
