@@ -41,6 +41,7 @@ pub mod evidence_telemetry;
 pub mod flake_detector;
 pub mod input_fairness;
 pub mod input_macro;
+pub mod ivm;
 pub mod locale;
 pub mod log_sink;
 pub mod program;
