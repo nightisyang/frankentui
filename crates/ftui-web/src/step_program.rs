@@ -494,6 +494,9 @@ impl<M: Model> StepProgram<M> {
             Cmd::SaveState | Cmd::RestoreState => {
                 // No persistence in WASM (yet).
             }
+            Cmd::SetTickStrategy(_) => {
+                // Runtime tick strategy selection is handled by host configuration.
+            }
         }
     }
 }

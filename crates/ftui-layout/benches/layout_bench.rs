@@ -2,11 +2,16 @@
 //!
 //! Run with: cargo bench -p ftui-layout
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use ftui_core::geometry::Rect;
 use ftui_layout::dep_graph::{DepGraph, InputKind, NodeId};
 use ftui_layout::incremental::IncrementalLayout;
-use ftui_layout::{Alignment, Constraint, Flex, Grid};
+use ftui_layout::{
+    Alignment, Constraint, Flex, Grid, PANE_MAGNETIC_FIELD_CELLS, PaneId, PaneInteractionTimeline,
+    PaneLeaf, PaneNodeKind, PaneOperation, PanePlacement, PanePointerPosition,
+    PanePressureSnapProfile, PaneResizeGrip, PaneSplitRatio, PaneTree, SplitAxis,
+};
+use std::collections::VecDeque;
 use std::hint::black_box;
 
 /// Build a flex layout with `n` constraints of mixed types.
@@ -471,6 +476,245 @@ fn bench_incremental_layout(c: &mut Criterion) {
     group.finish();
 }
 
+fn pane_leaf_ids(tree: &PaneTree) -> Vec<PaneId> {
+    tree.nodes()
+        .filter_map(|node| matches!(node.kind, PaneNodeKind::Leaf(_)).then_some(node.id))
+        .collect()
+}
+
+fn pane_split_ids(tree: &PaneTree) -> Vec<PaneId> {
+    tree.nodes()
+        .filter_map(|node| matches!(node.kind, PaneNodeKind::Split(_)).then_some(node.id))
+        .collect()
+}
+
+fn build_pane_tree(leaf_count: usize) -> PaneTree {
+    assert!(
+        leaf_count >= 1,
+        "pane benchmark tree requires at least one leaf"
+    );
+    let mut tree = PaneTree::singleton("leaf-0");
+    if leaf_count == 1 {
+        return tree;
+    }
+
+    let ratio = PaneSplitRatio::new(1, 1).expect("ratio 1:1 should be valid");
+    let mut split_queue = VecDeque::from([tree.root()]);
+    for idx in 1..leaf_count {
+        let target = split_queue
+            .pop_front()
+            .expect("split queue should always provide a leaf target");
+        let axis = if idx % 2 == 0 {
+            SplitAxis::Horizontal
+        } else {
+            SplitAxis::Vertical
+        };
+        let outcome = tree
+            .apply_operation(
+                idx as u64,
+                PaneOperation::SplitLeaf {
+                    target,
+                    axis,
+                    ratio,
+                    placement: PanePlacement::ExistingFirst,
+                    new_leaf: PaneLeaf::new(format!("leaf-{idx}")),
+                },
+            )
+            .expect("deterministic bench split should succeed");
+        let new_leaf_id = outcome
+            .touched_nodes
+            .into_iter()
+            .find(|node_id| {
+                *node_id != target
+                    && matches!(tree.node(*node_id), Some(node) if matches!(node.kind, PaneNodeKind::Leaf(_)))
+            })
+            .expect("split operation should create a new leaf id");
+        split_queue.push_back(target);
+        split_queue.push_back(new_leaf_id);
+    }
+    tree
+}
+
+fn bench_pane_core_solve_layout(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pane/core/solve_layout");
+    let area = Rect::from_size(240, 80);
+
+    for leaf_count in [8usize, 32, 64] {
+        let tree = build_pane_tree(leaf_count);
+        let case = format!("leaf_count_{leaf_count}");
+        group.bench_with_input(BenchmarkId::from_parameter(case), &tree, |b, tree| {
+            b.iter(|| {
+                let layout = tree
+                    .solve_layout(black_box(area))
+                    .expect("pane solve layout should succeed");
+                black_box(layout.rect(tree.root()));
+            });
+        });
+    }
+
+    group.finish();
+}
+
+fn bench_pane_core_apply_operation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pane/core/apply_operation");
+    let base = build_pane_tree(32);
+    let leaves = pane_leaf_ids(&base);
+    let split_target = *leaves.last().expect("bench tree has leaves");
+    let move_source = leaves[0];
+    let move_target = leaves[leaves.len() - 1];
+    let split_ratio = PaneSplitRatio::new(1, 1).expect("ratio 1:1 should be valid");
+    let move_ratio = PaneSplitRatio::new(2, 3).expect("ratio 2:3 should be valid");
+
+    group.bench_function("split_leaf", |b| {
+        b.iter_batched(
+            || base.clone(),
+            |mut tree| {
+                let outcome = tree
+                    .apply_operation(
+                        10_000,
+                        PaneOperation::SplitLeaf {
+                            target: split_target,
+                            axis: SplitAxis::Horizontal,
+                            ratio: split_ratio,
+                            placement: PanePlacement::ExistingFirst,
+                            new_leaf: PaneLeaf::new("bench-split-leaf"),
+                        },
+                    )
+                    .expect("split_leaf operation should succeed");
+                black_box(outcome.after_hash);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("move_subtree", |b| {
+        b.iter_batched(
+            || base.clone(),
+            |mut tree| {
+                let outcome = tree
+                    .apply_operation(
+                        10_001,
+                        PaneOperation::MoveSubtree {
+                            source: move_source,
+                            target: move_target,
+                            axis: SplitAxis::Vertical,
+                            ratio: move_ratio,
+                            placement: PanePlacement::ExistingFirst,
+                        },
+                    )
+                    .expect("move_subtree operation should succeed");
+                black_box(outcome.after_hash);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
+fn bench_pane_core_planning(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pane/core/planning");
+    let area = Rect::from_size(240, 80);
+    let tree = build_pane_tree(32);
+    let layout = tree
+        .solve_layout(area)
+        .expect("pane solve layout should succeed");
+    let leaves = pane_leaf_ids(&tree);
+    let source = leaves[0];
+    let target = leaves[leaves.len() - 1];
+    let target_rect = layout
+        .rect(target)
+        .expect("target layout rectangle should be present");
+    let reflow_pointer = PanePointerPosition::new(
+        i32::from(target_rect.x) + 1,
+        i32::from(target_rect.y) + i32::from(target_rect.height / 2),
+    );
+    let leaf = leaves[1];
+    let leaf_rect = layout
+        .rect(leaf)
+        .expect("leaf layout rectangle should be present");
+    let resize_pointer = PanePointerPosition::new(
+        i32::from(
+            leaf_rect
+                .x
+                .saturating_add(leaf_rect.width.saturating_sub(1)),
+        ),
+        i32::from(leaf_rect.y) + i32::from(leaf_rect.height / 2),
+    );
+
+    group.bench_function("plan_reflow_move", |b| {
+        b.iter(|| {
+            let plan = tree
+                .plan_reflow_move_with_preview(
+                    source,
+                    &layout,
+                    black_box(reflow_pointer),
+                    black_box(ftui_layout::PaneMotionVector::from_delta(24, 2, 32, 0)),
+                    None,
+                    PANE_MAGNETIC_FIELD_CELLS,
+                )
+                .expect("reflow planning should succeed");
+            black_box(plan.operations.len());
+        });
+    });
+
+    group.bench_function("plan_edge_resize", |b| {
+        b.iter(|| {
+            let plan = tree
+                .plan_edge_resize(
+                    leaf,
+                    &layout,
+                    PaneResizeGrip::Right,
+                    black_box(resize_pointer),
+                    black_box(PanePressureSnapProfile::from_motion(
+                        ftui_layout::PaneMotionVector::from_delta(18, 1, 24, 0),
+                    )),
+                )
+                .expect("edge resize planning should succeed");
+            black_box(plan.operations.len());
+        });
+    });
+
+    group.finish();
+}
+
+fn bench_pane_core_timeline(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pane/core/timeline");
+    let base = build_pane_tree(32);
+    let split_ids = pane_split_ids(&base);
+    let ratios = [
+        PaneSplitRatio::new(3, 2).expect("ratio 3:2 should be valid"),
+        PaneSplitRatio::new(2, 3).expect("ratio 2:3 should be valid"),
+        PaneSplitRatio::new(5, 4).expect("ratio 5:4 should be valid"),
+        PaneSplitRatio::new(4, 5).expect("ratio 4:5 should be valid"),
+    ];
+
+    group.bench_function("apply_and_replay_32_ops", |b| {
+        b.iter_batched(
+            || (base.clone(), PaneInteractionTimeline::with_baseline(&base)),
+            |(mut tree, mut timeline)| {
+                for idx in 0..32usize {
+                    let split = split_ids[idx % split_ids.len()];
+                    let ratio = ratios[idx % ratios.len()];
+                    timeline
+                        .apply_and_record(
+                            &mut tree,
+                            idx as u64,
+                            80_000 + idx as u64,
+                            PaneOperation::SetSplitRatio { split, ratio },
+                        )
+                        .expect("timeline set_split_ratio should succeed");
+                }
+                let replayed = timeline.replay().expect("timeline replay should succeed");
+                black_box(replayed.state_hash());
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_flex_split,
@@ -481,6 +725,10 @@ criterion_group!(
     bench_grid_split,
     bench_dep_graph,
     bench_incremental_layout,
+    bench_pane_core_solve_layout,
+    bench_pane_core_apply_operation,
+    bench_pane_core_planning,
+    bench_pane_core_timeline,
 );
 
 criterion_main!(benches);
