@@ -494,7 +494,6 @@ impl TextInput {
         }
 
         let current_count = self.grapheme_count();
-        let old_cursor = self.cursor;
         let avail = if let Some(max) = self.max_length {
             if current_count >= max {
                 // Allow trying to insert 1 grapheme to see if it merges (combining char)
@@ -550,7 +549,6 @@ impl TextInput {
             return;
         }
 
-        let old_count = self.grapheme_count();
         let byte_offset = self.grapheme_byte_offset(self.cursor);
         self.value.insert(byte_offset, c);
 
