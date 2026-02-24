@@ -290,6 +290,9 @@ impl<M: Model> ProgramSimulator<M> {
                     let _ = registry.load();
                 }
             }
+            Cmd::SetTickStrategy(_) => {
+                // No-op in simulator mode for now.
+            }
         }
     }
 }

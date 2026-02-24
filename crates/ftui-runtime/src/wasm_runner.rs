@@ -407,6 +407,9 @@ impl<M: Model> WasmRunner<M> {
                 // No-op: state persistence is managed by the JS host
                 // (localStorage / IndexedDB).
             }
+            Cmd::SetTickStrategy(_) => {
+                // No-op: tick strategy is managed by the host runtime.
+            }
         }
     }
 }

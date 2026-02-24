@@ -57,6 +57,7 @@ pub mod stdio_capture;
 pub mod string_model;
 pub mod subscription;
 pub mod terminal_writer;
+pub mod tick_strategy;
 pub mod undo;
 pub mod unified_evidence;
 pub mod validation_pipeline;
@@ -109,6 +110,13 @@ pub use simulator::ProgramSimulator;
 pub use string_model::{StringModel, StringModelAdapter};
 pub use subscription::{Every, StopSignal, SubId, Subscription};
 pub use terminal_writer::{ScreenMode, TerminalWriter, UiAnchor, inline_active_widgets};
+pub use tick_strategy::{
+    ActiveOnly, ActivePlusAdjacent, AllocationCurve, MarkovPredictor, Predictive, PredictiveConfig,
+    PredictiveStrategyConfig, ScreenPrediction, ScreenTickDispatch, TickAllocation, TickDecision,
+    TickStrategy, TickStrategyKind, TransitionCounter, Uniform,
+};
+#[cfg(feature = "state-persistence")]
+pub use tick_strategy::{load_transitions, save_transitions};
 pub use voi_telemetry::{
     clear_inline_auto_voi_snapshot, inline_auto_voi_snapshot, set_inline_auto_voi_snapshot,
 };

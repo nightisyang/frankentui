@@ -141,6 +141,20 @@ pub trait Model: Sized {
     fn subscriptions(&self) -> Vec<Box<dyn crate::subscription::Subscription<Self::Message>>> {
         vec![]
     }
+
+    /// Downcast to [`ScreenTickDispatch`](crate::tick_strategy::ScreenTickDispatch)
+    /// for per-screen tick control.
+    ///
+    /// Override this to return `Some(self)` in multi-screen Models. The runtime
+    /// will then consult the active [`TickStrategy`](crate::tick_strategy::TickStrategy)
+    /// for each inactive screen instead of ticking monolithically.
+    ///
+    /// Default: `None` (all screens tick every frame, backwards-compatible).
+    fn as_screen_tick_dispatch(
+        &mut self,
+    ) -> Option<&mut dyn crate::tick_strategy::ScreenTickDispatch> {
+        None
+    }
 }
 
 /// Default weight assigned to background tasks.
@@ -273,6 +287,12 @@ pub enum Cmd<M> {
     /// Instructs the terminal session to enable or disable mouse event capture.
     /// No-op in test simulators.
     SetMouseCapture(bool),
+    /// Replace the tick strategy at runtime.
+    ///
+    /// Takes ownership of a boxed strategy. Use when switching from one
+    /// strategy to another (e.g., `Uniform` → `Predictive` after loading
+    /// persisted transition data).
+    SetTickStrategy(Box<dyn crate::tick_strategy::TickStrategy>),
 }
 
 impl<M: std::fmt::Debug> std::fmt::Debug for Cmd<M> {
@@ -289,6 +309,7 @@ impl<M: std::fmt::Debug> std::fmt::Debug for Cmd<M> {
             Self::SaveState => write!(f, "SaveState"),
             Self::RestoreState => write!(f, "RestoreState"),
             Self::SetMouseCapture(b) => write!(f, "SetMouseCapture({b})"),
+            Self::SetTickStrategy(s) => write!(f, "SetTickStrategy({})", s.name()),
         }
     }
 }
@@ -358,6 +379,7 @@ impl<M> Cmd<M> {
             Self::SaveState => "SaveState",
             Self::RestoreState => "RestoreState",
             Self::SetMouseCapture(_) => "SetMouseCapture",
+            Self::SetTickStrategy(_) => "SetTickStrategy",
         }
     }
 
@@ -401,6 +423,14 @@ impl<M> Cmd<M> {
         F: FnOnce() -> M + Send + 'static,
     {
         Self::Task(TaskSpec::default().with_name(name), Box::new(f))
+    }
+
+    /// Replace the active tick strategy at runtime.
+    ///
+    /// Use when switching strategies (e.g., `Uniform` → `Predictive` after
+    /// loading persisted transition data).
+    pub fn set_tick_strategy(strategy: impl crate::tick_strategy::TickStrategy + 'static) -> Self {
+        Self::SetTickStrategy(Box::new(strategy))
     }
 
     /// Create a save state command.
@@ -2020,6 +2050,11 @@ pub struct ProgramConfig {
     /// Defaults to `true` for application safety. Set to `false` in tests or
     /// when the embedding application manages signals.
     pub intercept_signals: bool,
+    /// Optional tick strategy for selective background screen ticking.
+    ///
+    /// When `None` (default), all screens tick every frame (current behavior).
+    /// When set, the runtime consults the strategy for each inactive screen.
+    pub tick_strategy: Option<crate::tick_strategy::TickStrategyKind>,
 }
 
 impl Default for ProgramConfig {
@@ -2048,6 +2083,7 @@ impl Default for ProgramConfig {
             effect_queue: EffectQueueConfig::default(),
             guardrails: GuardrailsConfig::default(),
             intercept_signals: true,
+            tick_strategy: None,
         }
     }
 }
@@ -2267,6 +2303,22 @@ impl ProgramConfig {
     #[must_use]
     pub fn with_guardrails(mut self, config: GuardrailsConfig) -> Self {
         self.guardrails = config;
+        self
+    }
+
+    /// Set the tick strategy for selective background screen ticking.
+    ///
+    /// When set, the runtime consults the strategy to decide which inactive
+    /// screens should tick on each frame. Without a strategy, all screens
+    /// tick every frame (backwards-compatible default).
+    ///
+    /// ```ignore
+    /// ProgramConfig::default()
+    ///     .with_tick_strategy(TickStrategyKind::Uniform { divisor: 5 })
+    /// ```
+    #[must_use]
+    pub fn with_tick_strategy(mut self, strategy: crate::tick_strategy::TickStrategyKind) -> Self {
+        self.tick_strategy = Some(strategy);
         self
     }
 }
@@ -3083,6 +3135,8 @@ pub struct Program<M: Model, E: BackendEventSource<Error = io::Error>, W: Write 
     dirty: bool,
     /// Monotonic frame index for evidence logging.
     frame_idx: u64,
+    /// Monotonic tick index for tick-strategy scheduling.
+    tick_count: u64,
     /// Widget scheduling signals captured during the last render.
     widget_signals: Vec<WidgetSignal>,
     /// Widget refresh selection configuration.
@@ -3145,6 +3199,10 @@ pub struct Program<M: Model, E: BackendEventSource<Error = io::Error>, W: Write 
     frame_arena: FrameArena,
     /// Unified frame guardrails (memory/queue limits).
     guardrails: FrameGuardrails,
+    /// Optional tick strategy for selective background screen ticking.
+    tick_strategy: Option<Box<dyn crate::tick_strategy::TickStrategy>>,
+    /// Last active screen observed by the tick strategy dispatch path.
+    last_active_screen_for_strategy: Option<String>,
 }
 
 #[cfg(feature = "crossterm-compat")]
@@ -3256,6 +3314,7 @@ impl<M: Model> Program<M, CrosstermEventSource, Stdout> {
             last_tick: Instant::now(),
             dirty: true,
             frame_idx: 0,
+            tick_count: 0,
             widget_signals: Vec::new(),
             widget_refresh_config: config.widget_refresh,
             widget_refresh_plan: WidgetRefreshPlan::new(),
@@ -3287,6 +3346,10 @@ impl<M: Model> Program<M, CrosstermEventSource, Stdout> {
             inline_auto_remeasure,
             frame_arena: FrameArena::default(),
             guardrails,
+            tick_strategy: config
+                .tick_strategy
+                .map(|strategy| Box::new(strategy) as Box<dyn crate::tick_strategy::TickStrategy>),
+            last_active_screen_for_strategy: None,
         })
     }
 }
@@ -3376,6 +3439,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             last_tick: Instant::now(),
             dirty: true,
             frame_idx: 0,
+            tick_count: 0,
             widget_signals: Vec::new(),
             widget_refresh_config: config.widget_refresh,
             widget_refresh_plan: WidgetRefreshPlan::new(),
@@ -3407,6 +3471,10 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             inline_auto_remeasure,
             frame_arena: FrameArena::default(),
             guardrails,
+            tick_strategy: config
+                .tick_strategy
+                .map(|strategy| Box::new(strategy) as Box<dyn crate::tick_strategy::TickStrategy>),
+            last_active_screen_for_strategy: None,
         })
     }
 }
@@ -3547,26 +3615,88 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
 
             // Check for tick - deliver to model so periodic logic can run
             if self.should_tick() {
-                let msg = M::Message::from(Event::Tick);
-                let cmd = {
-                    let _span = debug_span!(
-                        "ftui.program.update",
-                        msg_type = "Tick",
-                        duration_us = tracing::field::Empty,
-                        cmd_type = tracing::field::Empty
-                    )
-                    .entered();
-                    let start = Instant::now();
-                    let cmd = self.model.update(msg);
-                    tracing::Span::current()
-                        .record("duration_us", start.elapsed().as_micros() as u64);
-                    tracing::Span::current()
-                        .record("cmd_type", format!("{:?}", std::mem::discriminant(&cmd)));
-                    cmd
-                };
-                self.mark_dirty();
-                self.execute_cmd(cmd)?;
-                self.reconcile_subscriptions();
+                self.tick_count = self.tick_count.wrapping_add(1);
+                let tick_count = self.tick_count;
+
+                let mut used_screen_dispatch = false;
+
+                // Per-screen tick dispatch: if the model supports multi-screen
+                // dispatch and a tick strategy is configured, tick individual
+                // screens selectively instead of calling monolithic
+                // `update(Tick)`.
+                if let Some(strategy) = self.tick_strategy.as_mut() {
+                    // Snapshot screen topology first so the mutable borrow of the
+                    // dispatch adapter does not overlap strategy decisions.
+                    let dispatch_snapshot = self.model.as_screen_tick_dispatch().map(|dispatch| {
+                        let active = dispatch.active_screen_id();
+                        let all_screens = dispatch.screen_ids();
+                        (active, all_screens)
+                    });
+
+                    if let Some((active, all_screens)) = dispatch_snapshot {
+                        used_screen_dispatch = true;
+
+                        // Feed active-screen transitions into the strategy so
+                        // predictive strategies can learn from real navigation.
+                        if let Some(previous_active) =
+                            self.last_active_screen_for_strategy.as_deref()
+                            && previous_active != active
+                        {
+                            strategy.on_screen_transition(previous_active, &active);
+                        }
+                        self.last_active_screen_for_strategy = Some(active.clone());
+
+                        let mut tick_targets = Vec::with_capacity(all_screens.len().max(1));
+                        // Active screen is always ticked.
+                        tick_targets.push(active.clone());
+
+                        // Tick inactive screens according to the strategy.
+                        for screen_id in all_screens {
+                            if screen_id != active
+                                && strategy.should_tick(&screen_id, tick_count, &active)
+                                    == crate::tick_strategy::TickDecision::Tick
+                            {
+                                tick_targets.push(screen_id);
+                            }
+                        }
+
+                        if let Some(dispatch) = self.model.as_screen_tick_dispatch() {
+                            for screen_id in &tick_targets {
+                                dispatch.tick_screen(screen_id, tick_count);
+                            }
+                        }
+
+                        // Maintenance tick for the strategy.
+                        strategy.maintenance_tick(tick_count);
+                        self.mark_dirty();
+                    }
+                }
+
+                if !used_screen_dispatch {
+                    // Monolithic model path does not expose active-screen
+                    // transitions, so clear dispatch-local transition state.
+                    self.last_active_screen_for_strategy = None;
+                    let msg = M::Message::from(Event::Tick);
+                    let cmd = {
+                        let _span = debug_span!(
+                            "ftui.program.update",
+                            msg_type = "Tick",
+                            duration_us = tracing::field::Empty,
+                            cmd_type = tracing::field::Empty
+                        )
+                        .entered();
+                        let start = Instant::now();
+                        let cmd = self.model.update(msg);
+                        tracing::Span::current()
+                            .record("duration_us", start.elapsed().as_micros() as u64);
+                        tracing::Span::current()
+                            .record("cmd_type", format!("{:?}", std::mem::discriminant(&cmd)));
+                        cmd
+                    };
+                    self.mark_dirty();
+                    self.execute_cmd(cmd)?;
+                    self.reconcile_subscriptions();
+                }
             }
 
             // Check for periodic checkpoint save
@@ -3589,6 +3719,11 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
         // Auto-save state on exit
         if self.persistence_config.auto_save {
             self.save_state();
+        }
+
+        // Shut down tick strategy (gives strategies a chance to persist state)
+        if let Some(ref mut strategy) = self.tick_strategy {
+            strategy.shutdown();
         }
 
         // Stop all subscriptions on exit
@@ -3930,6 +4065,17 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             Cmd::SetMouseCapture(enabled) => {
                 self.backend_features.mouse_capture = enabled;
                 self.events.set_features(self.backend_features)?;
+            }
+            Cmd::SetTickStrategy(strategy) => {
+                let new_name = strategy.name().to_owned();
+                if let Some(mut previous) = self.tick_strategy.replace(strategy) {
+                    let old_name = previous.name().to_owned();
+                    previous.shutdown();
+                    info!(old = %old_name, new = %new_name, "tick strategy changed at runtime");
+                } else {
+                    info!(new = %new_name, "tick strategy changed at runtime");
+                }
+                self.last_active_screen_for_strategy = None;
             }
         }
         Ok(())
@@ -4789,6 +4935,12 @@ impl<M: Model> AppBuilder<M> {
         if enabled {
             self.config.resize_behavior = ResizeBehavior::Immediate;
         }
+        self
+    }
+
+    /// Set the tick strategy for selective background screen ticking.
+    pub fn tick_strategy(mut self, strategy: crate::tick_strategy::TickStrategyKind) -> Self {
+        self.config.tick_strategy = Some(strategy);
         self
     }
 
@@ -7473,6 +7625,7 @@ mod tests {
             last_tick: Instant::now(),
             dirty: true,
             frame_idx: 0,
+            tick_count: 0,
             widget_signals: Vec::new(),
             widget_refresh_config: config.widget_refresh,
             widget_refresh_plan: WidgetRefreshPlan::new(),
@@ -7504,6 +7657,10 @@ mod tests {
             inline_auto_remeasure,
             frame_arena: FrameArena::default(),
             guardrails,
+            tick_strategy: config
+                .tick_strategy
+                .map(|strategy| Box::new(strategy) as Box<dyn crate::tick_strategy::TickStrategy>),
+            last_active_screen_for_strategy: None,
         }
     }
 
