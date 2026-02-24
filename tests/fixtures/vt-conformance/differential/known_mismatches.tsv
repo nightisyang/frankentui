@@ -3,3 +3,23 @@ irm_plus_lnm|10|3|1b5b34681b5b32306841424344451b5b48580a59|IRM+LNM newline colum
 lnm_newline_does_cr|10|3|1b5b3230684142430a44|LINEFEED_NEWLINE mode semantics diverge from VirtualTerminal reference
 lnm_newline_mode|10|5|1b5b32306841424344450a464748|LINEFEED_NEWLINE mode semantics diverge from VirtualTerminal reference
 newline_with_lnm|10|3|4142431b5b3230680a44|LINEFEED_NEWLINE mode semantics diverge from VirtualTerminal reference
+cuf_clamps_at_right_margin|6|3|411b5b3130304358|Cursor clamp semantics diverge by one cell when moving far beyond right margin
+cup_large_clamp|5|3|1b5b3939393b393939485a|Cursor pending-wrap semantics diverge after large CUP clamp write
+save_restore_preserves_colors|10|3|1b5b33313b34346d1b371b5b306d581b3859|DECSC/DECRC style preservation diverges for color attributes
+save_restore_sgr_attrs|10|3|1b5b313b33316d411b371b5b306d421b3843|DECSC/DECRC style preservation diverges for SGR attributes
+save_restore_with_attrs|10|5|1b5b316d41 1b37 1b5b306d 1b5b333b31484243 1b38 44|DECSC/DECRC style restoration diverges on mixed cursor/style state
+scosc_scorc_roundtrip|10|3|41421b5b731b5b333b3648581b5b7559|ANSI SCP/RCP cursor save/restore semantics diverge
+ed3_erase_scrollback|10|3|414243441b5b334a|ED 3 scrollback erase semantics are not fully implemented in VirtualTerminal
+save_restore_roundtrip|5|3|1b5b333b35481b371b5b4858595a1b3851|DECSC/DECRC cursor restore diverges around pending-wrap boundary
+decawm_reenable_wraps_pending|5|3|1b5b3f376c41424344451b5b3f376858|DECAWM re-enable behavior for pending-wrap state diverges
+soft_reset_clears_pending_wrap|5|3|41424344451b5b217058|DECSTR pending-wrap clearing semantics diverge
+soft_reset_preserves_screen|5|3|41424344451b5b323b3148464748494a1b5b2170|DECSTR cursor/column post-reset semantics diverge
+newline_scroll_bg_color|5|3|41414141414242424242 1b5b333b3148 4343434343 1b5b34376d 0a|Newline-induced scroll preserves cursor/background with off-by-one divergence
+sgr_underline_color|10|3|1b5b35383b353b3136306d1b5b346d471b5b35383b323b303b3235353b306d481b5b35396d49|SGR 58/59 underline color support is not yet implemented in VirtualTerminal
+tab_with_all_cleared|10|3|411b5b33670942|TBC-all + HT fallback tab stop behavior diverges at right edge
+wide_at_margin_nowrap|6|3|41424344451b5b3f376c1b5b313b3648e4b896|No-wrap handling for wide glyph at right margin diverges
+decawm_off_wide_char_at_margin|5|3|1b5b3f376c 41424344 e4b8ad|DECAWM-off wide glyph overwrite semantics diverge at margin
+overwrite_at_right_margin|10|5|4142434445464748494a1b5b3130475a|Overwrite at right margin diverges because cursor enters pending-wrap column
+pending_wrap_cleared_by_cursor_move|10|5|4142434445464748494a1b5b4458|Pending-wrap clearing on cursor move diverges
+pending_wrap_cleared_by_el|5|3|41424344451b5b304b58|EL interaction with pending-wrap state diverges
+pending_wrap_cleared_by_move|5|3|41424344451b5b4146|Cursor-up clearing of pending-wrap state diverges

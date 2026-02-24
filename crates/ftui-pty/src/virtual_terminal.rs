@@ -139,6 +139,7 @@ pub struct CellStyle {
     pub reverse: bool,
     pub strikethrough: bool,
     pub hidden: bool,
+    pub overline: bool,
 }
 
 impl CellStyle {
@@ -1250,6 +1251,8 @@ impl VirtualTerminal {
                 27 => self.current_style.reverse = false,
                 28 => self.current_style.hidden = false,
                 29 => self.current_style.strikethrough = false,
+                53 => self.current_style.overline = true,
+                55 => self.current_style.overline = false,
                 // Standard foreground colors
                 30..=37 => {
                     self.current_style.fg = Some(ansi_color(params[i] - 30));
