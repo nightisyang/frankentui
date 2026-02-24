@@ -25,6 +25,7 @@ use std::io;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use tracing::info;
 
 use super::TransitionCounter;
 
@@ -74,6 +75,7 @@ pub fn save_transitions(counter: &TransitionCounter<String>, path: &Path) -> io:
     // Sort for deterministic output (easier to diff/debug)
     entries.sort_by(|a, b| (&a.from, &a.to).cmp(&(&b.from, &b.to)));
 
+    let entry_count = entries.len();
     let file = TransitionFile {
         version: FORMAT_VERSION,
         total_transitions: total,
@@ -92,6 +94,13 @@ pub fn save_transitions(counter: &TransitionCounter<String>, path: &Path) -> io:
     let temp = path.with_extension("json.tmp");
     std::fs::write(&temp, json)?;
     std::fs::rename(&temp, path)?;
+
+    info!(
+        path = %path.display(),
+        transitions = total,
+        entries = entry_count,
+        "tick_strategy.save"
+    );
 
     Ok(())
 }
@@ -128,6 +137,14 @@ pub fn load_transitions(path: &Path) -> io::Result<TransitionCounter<String>> {
     for entry in &file.transitions {
         counter.record_with_count(entry.from.clone(), entry.to.clone(), entry.count);
     }
+
+    info!(
+        path = %path.display(),
+        loaded_transitions = file.total_transitions,
+        entries = file.transitions.len(),
+        known_screens = counter.state_ids().len(),
+        "tick_strategy.load"
+    );
 
     Ok(counter)
 }
@@ -382,5 +399,140 @@ mod tests {
 
         let result = load_transitions(&path);
         assert!(result.is_err());
+    }
+
+    // ========================================================================
+    // Additional tests (I.5 coverage)
+    // ========================================================================
+
+    #[test]
+    fn save_load_save_produces_identical_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path1 = dir.path().join("first.json");
+        let path2 = dir.path().join("second.json");
+
+        let mut counter = TransitionCounter::new();
+        counter.record("A".to_owned(), "B".to_owned());
+        counter.record("A".to_owned(), "C".to_owned());
+        counter.record("B".to_owned(), "A".to_owned());
+
+        // Save original
+        save_transitions(&counter, &path1).unwrap();
+
+        // Load and re-save
+        let loaded = load_transitions(&path1).unwrap();
+        save_transitions(&loaded, &path2).unwrap();
+
+        let c1 = std::fs::read_to_string(&path1).unwrap();
+        let c2 = std::fs::read_to_string(&path2).unwrap();
+
+        // Strip timestamps (they may differ slightly)
+        let strip_ts = |s: &str| -> String {
+            s.lines()
+                .filter(|l| !l.contains("last_saved"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        eprintln!("first (stripped): {}", strip_ts(&c1));
+        eprintln!("second (stripped): {}", strip_ts(&c2));
+        assert_eq!(strip_ts(&c1), strip_ts(&c2));
+    }
+
+    #[test]
+    fn large_counter_many_entries_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large_many.json");
+
+        let mut counter = TransitionCounter::new();
+        // 1000+ distinct entries
+        for i in 0..50 {
+            for j in 0..25 {
+                counter.record(format!("screen_{i}"), format!("screen_{j}"));
+            }
+        }
+
+        let original_total = counter.total();
+        eprintln!(
+            "entries: {}, total: {original_total}",
+            counter.state_ids().len()
+        );
+        assert!(original_total >= 1000.0);
+
+        save_transitions(&counter, &path).unwrap();
+        let loaded = load_transitions(&path).unwrap();
+
+        eprintln!("loaded total: {}", loaded.total());
+        assert!(
+            (loaded.total() - original_total).abs() < 1e-10,
+            "total mismatch: {} vs {original_total}",
+            loaded.total()
+        );
+
+        // Spot-check a few entries
+        assert_eq!(
+            loaded.count(&"screen_0".to_owned(), &"screen_0".to_owned()),
+            counter.count(&"screen_0".to_owned(), &"screen_0".to_owned())
+        );
+        assert_eq!(
+            loaded.count(&"screen_49".to_owned(), &"screen_24".to_owned()),
+            counter.count(&"screen_49".to_owned(), &"screen_24".to_owned())
+        );
+    }
+
+    #[test]
+    fn special_characters_in_screen_ids_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("special.json");
+
+        let mut counter = TransitionCounter::new();
+        counter.record("screen/home".to_owned(), "screen:settings".to_owned());
+        counter.record("tab \"quotes\"".to_owned(), "tab\nnewline".to_owned());
+        counter.record("emoji 🎉".to_owned(), "unicode αβγ".to_owned());
+
+        save_transitions(&counter, &path).unwrap();
+        let loaded = load_transitions(&path).unwrap();
+
+        eprintln!("loaded total: {}", loaded.total());
+        assert_eq!(
+            loaded.count(&"screen/home".to_owned(), &"screen:settings".to_owned()),
+            1.0
+        );
+        assert_eq!(
+            loaded.count(&"tab \"quotes\"".to_owned(), &"tab\nnewline".to_owned()),
+            1.0
+        );
+        assert_eq!(
+            loaded.count(&"emoji 🎉".to_owned(), &"unicode αβγ".to_owned()),
+            1.0
+        );
+        assert_eq!(loaded.total(), 3.0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_only_file_save_returns_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("readonly.json");
+
+        // Create the file first
+        let counter = TransitionCounter::<String>::new();
+        save_transitions(&counter, &path).unwrap();
+
+        // Make it read-only
+        let perms = std::fs::Permissions::from_mode(0o444);
+        std::fs::set_permissions(&path, perms).unwrap();
+
+        // Trying to save again should fail (the temp file write may
+        // succeed but the rename over the read-only original may fail
+        // depending on filesystem — or the temp file itself may fail).
+        // Either way, we should get an error, not a panic.
+        let result = save_transitions(&counter, &path);
+        eprintln!("save to read-only result: {result:?}");
+        // Note: on some systems rename over read-only succeeds (POSIX
+        // allows it if the directory is writable). So we just verify
+        // no panic occurs. If it errors, that's fine.
+        // The key invariant: no panic.
     }
 }

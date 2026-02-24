@@ -12,23 +12,27 @@
 
 mod active_only;
 mod active_plus_adjacent;
+mod custom;
 mod markov_predictor;
 #[cfg(any(feature = "state-persistence", test))]
 pub mod persistence;
 mod predictive;
 mod tick_allocation;
 mod transition_counter;
+mod transition_history;
 mod uniform;
 
 pub use active_only::ActiveOnly;
 pub use active_plus_adjacent::ActivePlusAdjacent;
-pub use markov_predictor::{MarkovPredictor, ScreenPrediction};
+pub use custom::Custom;
+pub use markov_predictor::{DecayConfig, MarkovPredictor, ScreenPrediction};
 #[cfg(feature = "state-persistence")]
 pub use persistence::{load_transitions, save_transitions};
 // Note: persistence module also compiles under #[cfg(test)] since serde is in dev-deps.
 pub use predictive::{Predictive, PredictiveStrategyConfig};
 pub use tick_allocation::{AllocationCurve, TickAllocation};
 pub use transition_counter::TransitionCounter;
+pub use transition_history::{TransitionEntry, TransitionHistory};
 pub use uniform::Uniform;
 
 /// Decision returned by a [`TickStrategy`] for an inactive screen.
@@ -415,5 +419,67 @@ mod tests {
         // Implementation records it; the trait contract says "silently ignore"
         // which the concrete impl decides. Our mock doesn't filter.
         assert_eq!(mock.ticked.len(), 1);
+    }
+
+    // ========================================================================
+    // Cross-strategy invariant tests (I.4 coverage)
+    // ========================================================================
+
+    use super::{
+        ActiveOnly, ActivePlusAdjacent, Custom, Predictive, PredictiveStrategyConfig, Uniform,
+    };
+
+    /// Compile-time assertion: all strategies implement Send (required by the
+    /// `TickStrategy: Send` supertrait bound).
+    #[test]
+    fn all_strategies_implement_send() {
+        fn assert_send<T: Send>() {}
+
+        assert_send::<ActiveOnly>();
+        assert_send::<Uniform>();
+        assert_send::<ActivePlusAdjacent>();
+        assert_send::<Predictive>();
+        assert_send::<Custom>();
+        assert_send::<TickStrategyKind>();
+    }
+
+    /// All strategies can be boxed as `dyn TickStrategy`.
+    #[test]
+    fn all_strategies_boxable_as_dyn_tick_strategy() {
+        let strategies: Vec<Box<dyn TickStrategy>> = vec![
+            Box::new(ActiveOnly),
+            Box::new(Uniform::new(5)),
+            Box::new(ActivePlusAdjacent::new(5)),
+            Box::new(Predictive::new(PredictiveStrategyConfig::default())),
+            Box::new(Custom::new("test", |_, _, _| TickDecision::Skip)),
+            Box::new(TickStrategyKind::ActiveOnly),
+        ];
+
+        for mut s in strategies {
+            // should_tick is callable through the trait object
+            let _ = s.should_tick("screen", 0, "active");
+            // name() is callable
+            assert!(!s.name().is_empty());
+        }
+    }
+
+    /// Default lifecycle hooks (on_screen_transition, maintenance_tick,
+    /// shutdown) are no-ops for strategies that don't override them.
+    #[test]
+    fn lifecycle_hooks_are_safe_for_all_strategies() {
+        let mut strategies: Vec<Box<dyn TickStrategy>> = vec![
+            Box::new(ActiveOnly),
+            Box::new(Uniform::new(5)),
+            Box::new(ActivePlusAdjacent::new(5)),
+            Box::new(Custom::new("test", |_, _, _| TickDecision::Skip)),
+            Box::new(TickStrategyKind::Uniform { divisor: 5 }),
+        ];
+
+        for s in &mut strategies {
+            s.on_screen_transition("A", "B");
+            s.maintenance_tick(100);
+            s.shutdown();
+            // No panics = success
+        }
     }
 }

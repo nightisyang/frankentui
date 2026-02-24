@@ -89,3 +89,7 @@ tracing-subscriber = { version = "0.3.20", features = ["registry", "env-filter"]
 name = "telemetry_bench"
 harness = false
 required-features = ["telemetry"]
+
+[[bench]]
+name = "tick_strategy_bench"
+harness = false

@@ -111,9 +111,10 @@ pub use string_model::{StringModel, StringModelAdapter};
 pub use subscription::{Every, StopSignal, SubId, Subscription};
 pub use terminal_writer::{ScreenMode, TerminalWriter, UiAnchor, inline_active_widgets};
 pub use tick_strategy::{
-    ActiveOnly, ActivePlusAdjacent, AllocationCurve, MarkovPredictor, Predictive, PredictiveConfig,
-    PredictiveStrategyConfig, ScreenPrediction, ScreenTickDispatch, TickAllocation, TickDecision,
-    TickStrategy, TickStrategyKind, TransitionCounter, Uniform,
+    ActiveOnly, ActivePlusAdjacent, AllocationCurve, Custom, DecayConfig, MarkovPredictor,
+    Predictive, PredictiveConfig, PredictiveStrategyConfig, ScreenPrediction, ScreenTickDispatch,
+    TickAllocation, TickDecision, TickStrategy, TickStrategyKind, TransitionCounter,
+    TransitionEntry, TransitionHistory, Uniform,
 };
 #[cfg(feature = "state-persistence")]
 pub use tick_strategy::{load_transitions, save_transitions};

@@ -96,7 +96,7 @@ use std::io::{self, Stdout, Write};
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
-use tracing::{debug, debug_span, info, info_span};
+use tracing::{debug, debug_span, info, info_span, trace};
 use web_time::{Duration, Instant};
 
 /// The Model trait defines application state and behavior.
@@ -3613,6 +3613,11 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
 
             self.process_resize_coalescer()?;
 
+            // Detect screen transitions from any update() calls above.
+            // A.2: notifies the tick strategy so predictive strategies learn.
+            // D.3: force-ticks the newly active screen for immediate refresh.
+            self.check_screen_transition();
+
             // Check for tick - deliver to model so periodic logic can run
             if self.should_tick() {
                 self.tick_count = self.tick_count.wrapping_add(1);
@@ -3646,7 +3651,8 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
                         }
                         self.last_active_screen_for_strategy = Some(active.clone());
 
-                        let mut tick_targets = Vec::with_capacity(all_screens.len().max(1));
+                        let all_screens_count = all_screens.len();
+                        let mut tick_targets = Vec::with_capacity(all_screens_count.max(1));
                         // Active screen is always ticked.
                         tick_targets.push(active.clone());
 
@@ -3660,11 +3666,23 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
                             }
                         }
 
+                        // Compute skipped screens for tracing.
+                        let skipped_count = all_screens_count
+                            .saturating_sub(tick_targets.len());
+
                         if let Some(dispatch) = self.model.as_screen_tick_dispatch() {
                             for screen_id in &tick_targets {
                                 dispatch.tick_screen(screen_id, tick_count);
                             }
                         }
+
+                        trace!(
+                            tick = tick_count,
+                            active = %active,
+                            ticked = tick_targets.len(),
+                            skipped = skipped_count,
+                            "tick_strategy.frame"
+                        );
 
                         // Maintenance tick for the strategy.
                         strategy.maintenance_tick(tick_count);
@@ -4079,6 +4097,54 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             }
         }
         Ok(())
+    }
+
+    /// Detect active-screen transitions after any `update()` call and react:
+    ///
+    /// - **A.2** — notify the tick strategy via `on_screen_transition()` so
+    ///   predictive strategies can learn navigation patterns.
+    /// - **D.3** — force-tick the newly active screen so it renders fresh
+    ///   content immediately, without waiting for the next tick interval.
+    ///
+    /// This is a no-op when no tick strategy is configured or when the model
+    /// does not implement [`ScreenTickDispatch`].
+    fn check_screen_transition(&mut self) {
+        if self.tick_strategy.is_none() {
+            return;
+        }
+
+        // Snapshot the current active screen (releases &mut self.model).
+        let current_active = match self.model.as_screen_tick_dispatch() {
+            Some(dispatch) => dispatch.active_screen_id(),
+            None => return,
+        };
+
+        // First observation: just record, no transition event.
+        let previous = match self.last_active_screen_for_strategy.take() {
+            Some(prev) => prev,
+            None => {
+                self.last_active_screen_for_strategy = Some(current_active);
+                return;
+            }
+        };
+
+        if previous == current_active {
+            self.last_active_screen_for_strategy = Some(current_active);
+            return;
+        }
+
+        // A.2: Notify strategy of the transition.
+        if let Some(strategy) = self.tick_strategy.as_mut() {
+            strategy.on_screen_transition(&previous, &current_active);
+        }
+
+        // D.3: Force-tick the newly active screen immediately.
+        if let Some(dispatch) = self.model.as_screen_tick_dispatch() {
+            dispatch.tick_screen(&current_active, self.tick_count);
+        }
+
+        self.last_active_screen_for_strategy = Some(current_active);
+        self.mark_dirty();
     }
 
     fn reap_finished_tasks(&mut self) {
@@ -4691,6 +4757,19 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
     /// Check if state persistence is enabled.
     pub fn has_persistence(&self) -> bool {
         self.state_registry.is_some()
+    }
+
+    /// Query the current tick strategy's debug statistics.
+    ///
+    /// Returns key-value pairs describing the strategy's internal state
+    /// (e.g. strategy name, divisors, confidence, transition counts).
+    /// Returns an empty vec if no tick strategy is configured.
+    #[must_use]
+    pub fn tick_strategy_stats(&self) -> Vec<(String, String)> {
+        self.tick_strategy
+            .as_ref()
+            .map(|s| s.debug_stats())
+            .unwrap_or_default()
     }
 
     /// Trigger a manual save of widget state.
@@ -9880,5 +9959,291 @@ mod tests {
             assert!(!lim.description.is_empty());
             assert!(!lim.fallback.is_empty());
         }
+    }
+
+    // ========================================================================
+    // Screen transition detection tests (A.2 + D.3)
+    // ========================================================================
+
+    /// A multi-screen model that implements ScreenTickDispatch, for testing
+    /// the `check_screen_transition` logic.
+    struct MultiScreenModel {
+        active: String,
+        screens: Vec<String>,
+        ticked_screens: Vec<(String, u64)>,
+    }
+
+    #[derive(Debug)]
+    enum MultiScreenMsg {
+        Event(Event),
+    }
+
+    impl From<Event> for MultiScreenMsg {
+        fn from(event: Event) -> Self {
+            MultiScreenMsg::Event(event)
+        }
+    }
+
+    impl Model for MultiScreenModel {
+        type Message = MultiScreenMsg;
+
+        fn update(&mut self, msg: Self::Message) -> Cmd<Self::Message> {
+            match msg {
+                MultiScreenMsg::Event(_) => Cmd::none(),
+            }
+        }
+
+        fn view(&self, _frame: &mut Frame) {}
+
+        fn as_screen_tick_dispatch(
+            &mut self,
+        ) -> Option<&mut dyn crate::tick_strategy::ScreenTickDispatch> {
+            Some(self)
+        }
+    }
+
+    impl crate::tick_strategy::ScreenTickDispatch for MultiScreenModel {
+        fn screen_ids(&self) -> Vec<String> {
+            self.screens.clone()
+        }
+
+        fn active_screen_id(&self) -> String {
+            self.active.clone()
+        }
+
+        fn tick_screen(&mut self, screen_id: &str, tick_count: u64) {
+            self.ticked_screens.push((screen_id.to_owned(), tick_count));
+        }
+    }
+
+    /// Shared log for recording strategy transitions (inspectable after test).
+    type TransitionLog = Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+    /// A recording tick strategy that logs `on_screen_transition` calls
+    /// to a shared log that can be inspected from test assertions.
+    struct RecordingStrategy {
+        log: TransitionLog,
+    }
+
+    impl RecordingStrategy {
+        fn new(log: TransitionLog) -> Self {
+            Self { log }
+        }
+    }
+
+    impl crate::tick_strategy::TickStrategy for RecordingStrategy {
+        fn should_tick(
+            &mut self,
+            _screen_id: &str,
+            _tick_count: u64,
+            _active_screen: &str,
+        ) -> crate::tick_strategy::TickDecision {
+            crate::tick_strategy::TickDecision::Skip
+        }
+
+        fn on_screen_transition(&mut self, from: &str, to: &str) {
+            self.log
+                .lock()
+                .unwrap()
+                .push((from.to_owned(), to.to_owned()));
+        }
+
+        fn name(&self) -> &str {
+            "Recording"
+        }
+
+        fn debug_stats(&self) -> Vec<(String, String)> {
+            vec![("strategy".into(), "Recording".into())]
+        }
+    }
+
+    /// Helper to create a headless Program with a multi-screen model and
+    /// a recording tick strategy. Returns the program and a shared log of
+    /// `on_screen_transition` calls for assertions.
+    fn headless_multi_screen_program(
+        active: &str,
+        screens: &[&str],
+    ) -> (
+        Program<MultiScreenModel, HeadlessEventSource, Vec<u8>>,
+        TransitionLog,
+    ) {
+        let model = MultiScreenModel {
+            active: active.to_owned(),
+            screens: screens.iter().map(|s| (*s).to_owned()).collect(),
+            ticked_screens: Vec::new(),
+        };
+        let events = HeadlessEventSource::new(80, 24, BackendFeatures::default());
+        let writer = TerminalWriter::new(
+            Vec::<u8>::new(),
+            ScreenMode::AltScreen,
+            UiAnchor::Bottom,
+            TerminalCapabilities::dumb(),
+        );
+        let config = ProgramConfig {
+            forced_size: Some((80, 24)),
+            tick_strategy: Some(crate::tick_strategy::TickStrategyKind::ActiveOnly),
+            ..ProgramConfig::default()
+        };
+        let mut prog =
+            Program::with_event_source(model, events, BackendFeatures::default(), writer, config)
+                .expect("headless program creation failed");
+
+        // Replace the default strategy with our recording strategy.
+        let log: TransitionLog = Arc::new(std::sync::Mutex::new(Vec::new()));
+        prog.tick_strategy = Some(Box::new(RecordingStrategy::new(log.clone())));
+
+        (prog, log)
+    }
+
+    #[test]
+    fn check_screen_transition_first_call_records_active() {
+        let (mut prog, log) = headless_multi_screen_program("A", &["A", "B", "C"]);
+
+        assert!(prog.last_active_screen_for_strategy.is_none());
+        prog.check_screen_transition();
+        assert_eq!(prog.last_active_screen_for_strategy.as_deref(), Some("A"));
+
+        // First observation: no transition event, no force-tick.
+        assert!(prog.model.ticked_screens.is_empty());
+        assert!(log.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn check_screen_transition_no_change_is_noop() {
+        let (mut prog, log) = headless_multi_screen_program("A", &["A", "B", "C"]);
+
+        // First call: records.
+        prog.check_screen_transition();
+
+        // Second call with same active screen: no-op.
+        prog.check_screen_transition();
+        assert_eq!(prog.last_active_screen_for_strategy.as_deref(), Some("A"));
+
+        // No force-tick, no transition notification.
+        assert!(prog.model.ticked_screens.is_empty());
+        assert!(log.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn check_screen_transition_detects_switch_and_force_ticks() {
+        let (mut prog, log) = headless_multi_screen_program("A", &["A", "B", "C"]);
+
+        prog.check_screen_transition(); // records "A"
+
+        // Simulate model switching to screen "B".
+        prog.model.active = "B".to_owned();
+        prog.check_screen_transition();
+
+        // D.3: force-tick should have been dispatched for "B".
+        assert_eq!(prog.model.ticked_screens.len(), 1);
+        assert_eq!(prog.model.ticked_screens[0].0, "B");
+
+        // A.2: strategy should have been notified of A → B.
+        let transitions = log.lock().unwrap();
+        assert_eq!(transitions.len(), 1);
+        assert_eq!(transitions[0], ("A".to_owned(), "B".to_owned()));
+
+        // last_active should now be "B".
+        assert_eq!(prog.last_active_screen_for_strategy.as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn check_screen_transition_marks_dirty_on_change() {
+        let (mut prog, _log) = headless_multi_screen_program("A", &["A", "B"]);
+
+        prog.check_screen_transition();
+        prog.dirty = false;
+
+        prog.model.active = "B".to_owned();
+        prog.check_screen_transition();
+
+        assert!(prog.dirty);
+    }
+
+    #[test]
+    fn check_screen_transition_not_dirty_when_unchanged() {
+        let (mut prog, _log) = headless_multi_screen_program("A", &["A", "B"]);
+
+        prog.check_screen_transition();
+        prog.dirty = false;
+
+        prog.check_screen_transition();
+
+        assert!(!prog.dirty);
+    }
+
+    #[test]
+    fn check_screen_transition_noop_without_strategy() {
+        let (mut prog, _log) = headless_multi_screen_program("A", &["A", "B"]);
+
+        // Remove the tick strategy.
+        prog.tick_strategy = None;
+
+        prog.check_screen_transition();
+        assert!(prog.last_active_screen_for_strategy.is_none());
+    }
+
+    #[test]
+    fn check_screen_transition_multiple_switches_notifies_strategy() {
+        let (mut prog, log) = headless_multi_screen_program("A", &["A", "B", "C"]);
+
+        prog.check_screen_transition(); // records "A"
+
+        // A → B
+        prog.model.active = "B".to_owned();
+        prog.check_screen_transition();
+        assert_eq!(prog.model.ticked_screens.len(), 1);
+        assert_eq!(prog.model.ticked_screens[0].0, "B");
+
+        // B → C
+        prog.model.active = "C".to_owned();
+        prog.check_screen_transition();
+        assert_eq!(prog.model.ticked_screens.len(), 2);
+        assert_eq!(prog.model.ticked_screens[1].0, "C");
+
+        // C → A
+        prog.model.active = "A".to_owned();
+        prog.check_screen_transition();
+        assert_eq!(prog.model.ticked_screens.len(), 3);
+        assert_eq!(prog.model.ticked_screens[2].0, "A");
+
+        // A.2: strategy should have all three transitions.
+        let transitions = log.lock().unwrap();
+        assert_eq!(transitions.len(), 3);
+        assert_eq!(transitions[0], ("A".to_owned(), "B".to_owned()));
+        assert_eq!(transitions[1], ("B".to_owned(), "C".to_owned()));
+        assert_eq!(transitions[2], ("C".to_owned(), "A".to_owned()));
+    }
+
+    #[test]
+    fn check_screen_transition_uses_current_tick_count() {
+        let (mut prog, _log) = headless_multi_screen_program("A", &["A", "B"]);
+        prog.tick_count = 42;
+
+        prog.check_screen_transition(); // records "A"
+
+        prog.model.active = "B".to_owned();
+        prog.check_screen_transition();
+
+        // Force-tick should use the current tick_count.
+        assert_eq!(prog.model.ticked_screens[0].1, 42);
+    }
+
+    #[test]
+    fn tick_strategy_stats_returns_empty_without_strategy() {
+        let (mut prog, _log) = headless_multi_screen_program("A", &["A", "B"]);
+        prog.tick_strategy = None;
+        assert!(prog.tick_strategy_stats().is_empty());
+    }
+
+    #[test]
+    fn tick_strategy_stats_returns_strategy_fields() {
+        let (prog, _log) = headless_multi_screen_program("A", &["A", "B"]);
+        let stats = prog.tick_strategy_stats();
+        // RecordingStrategy returns [("strategy", "Recording")]
+        assert!(
+            !stats.is_empty(),
+            "stats should not be empty when strategy is configured"
+        );
     }
 }

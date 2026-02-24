@@ -22,6 +22,13 @@ impl TickStrategy for ActiveOnly {
     fn name(&self) -> &str {
         "ActiveOnly"
     }
+
+    fn debug_stats(&self) -> Vec<(String, String)> {
+        vec![
+            ("strategy".into(), "ActiveOnly".into()),
+            ("background_ticks".into(), "0".into()),
+        ]
+    }
 }
 
 #[cfg(test)]
@@ -50,6 +57,8 @@ mod tests {
         s.on_screen_transition("a", "b");
         s.maintenance_tick(42);
         s.shutdown();
-        assert!(s.debug_stats().is_empty());
+        let stats = s.debug_stats();
+        assert!(stats.iter().any(|(k, v)| k == "strategy" && v == "ActiveOnly"));
+        assert!(stats.iter().any(|(k, v)| k == "background_ticks" && v == "0"));
     }
 }

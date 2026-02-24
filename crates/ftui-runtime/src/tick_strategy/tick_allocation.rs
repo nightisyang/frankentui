@@ -329,4 +329,49 @@ mod tests {
         let div = alloc.divisor_for(0.5);
         assert_eq!(div, alloc.max_divisor);
     }
+
+    // ========================================================================
+    // Additional tests (I.3 coverage)
+    // ========================================================================
+
+    #[test]
+    fn max_divisor_one_always_returns_one() {
+        // When max_divisor=1 (no throttling), every screen gets ticked every frame.
+        let linear = TickAllocation::linear(1, 1);
+        let exp = TickAllocation::exponential(1, 1, 2.0);
+
+        for prob in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let d_lin = linear.divisor_for(prob);
+            let d_exp = exp.divisor_for(prob);
+            eprintln!("prob={prob}: linear={d_lin}, exponential={d_exp}");
+            assert_eq!(
+                d_lin, 1,
+                "linear with max=1 should return 1 for prob={prob}"
+            );
+            assert_eq!(
+                d_exp, 1,
+                "exponential with max=1 should return 1 for prob={prob}"
+            );
+        }
+    }
+
+    #[test]
+    fn exponential_high_exponent_concentrates_budget() {
+        // With a high exponent, the curve drops steeply — only very high
+        // probabilities get low divisors.
+        let steep = TickAllocation::exponential(1, 100, 5.0);
+        let shallow = TickAllocation::exponential(1, 100, 1.0);
+
+        let p = 0.5;
+        let d_steep = steep.divisor_for(p);
+        let d_shallow = shallow.divisor_for(p);
+
+        eprintln!("p={p}: steep(exp=5)={d_steep}, shallow(exp=1)={d_shallow}");
+        // Steep exponent: (1-0.5)^5 = 0.03125 → 1 + 99*0.03125 ≈ 4
+        // Shallow exponent: (1-0.5)^1 = 0.5 → 1 + 99*0.5 ≈ 51
+        assert!(
+            d_steep < d_shallow,
+            "steep exponent should give lower divisor (more budget) for p={p}"
+        );
+    }
 }

@@ -438,4 +438,203 @@ mod tests {
         tc.record_with_count("a", "b", -5.0);
         assert_eq!(tc.total(), 0.0);
     }
+
+    // ========================================================================
+    // Additional tests (I.1 coverage)
+    // ========================================================================
+
+    #[test]
+    fn count_unrecorded_pair_returns_zero() {
+        let mut tc = TransitionCounter::new();
+        tc.record("a", "b");
+        let c = tc.count(&"a", &"c");
+        eprintln!("count(a→c) = {c}");
+        assert_eq!(c, 0.0);
+
+        let c2 = tc.count(&"z", &"q");
+        eprintln!("count(z→q) = {c2}");
+        assert_eq!(c2, 0.0);
+    }
+
+    #[test]
+    fn probability_sums_to_one() {
+        let mut tc = TransitionCounter::new();
+        tc.record("a", "b");
+        tc.record("a", "b");
+        tc.record("a", "c");
+        tc.record("a", "d");
+
+        let targets = tc.all_targets_ranked(&"a");
+        let sum: f64 = targets.iter().map(|(_, p)| p).sum();
+        eprintln!("targets: {targets:?}, sum: {sum}");
+        assert!(
+            (sum - 1.0).abs() < 1e-10,
+            "probabilities must sum to 1.0, got {sum}"
+        );
+    }
+
+    #[test]
+    fn decay_factor_one_is_identity() {
+        let mut tc = TransitionCounter::new();
+        tc.record("a", "b");
+        tc.record("a", "b");
+        tc.record("a", "c");
+        let total_before = tc.total();
+        let count_ab_before = tc.count(&"a", &"b");
+        let count_ac_before = tc.count(&"a", &"c");
+
+        tc.decay(1.0);
+
+        eprintln!("before: total={total_before}, ab={count_ab_before}, ac={count_ac_before}");
+        eprintln!(
+            "after:  total={}, ab={}, ac={}",
+            tc.total(),
+            tc.count(&"a", &"b"),
+            tc.count(&"a", &"c")
+        );
+        assert_eq!(tc.total(), total_before);
+        assert_eq!(tc.count(&"a", &"b"), count_ab_before);
+        assert_eq!(tc.count(&"a", &"c"), count_ac_before);
+    }
+
+    #[test]
+    fn decay_factor_zero_removes_all() {
+        let mut tc = TransitionCounter::new();
+        tc.record("a", "b");
+        tc.record("a", "c");
+        tc.record("x", "y");
+        let total_before = tc.total();
+        eprintln!("before decay(0): total={total_before}");
+
+        tc.decay(0.0);
+
+        eprintln!("after decay(0): total={}", tc.total());
+        assert_eq!(tc.total(), 0.0);
+        assert_eq!(tc.count(&"a", &"b"), 0.0);
+        assert!(tc.state_ids().is_empty());
+    }
+
+    #[test]
+    fn merge_disjoint_screens_produces_union() {
+        let mut tc1 = TransitionCounter::new();
+        tc1.record("a", "b");
+
+        let mut tc2 = TransitionCounter::new();
+        tc2.record("x", "y");
+
+        tc1.merge(&tc2);
+
+        let ids = tc1.state_ids();
+        eprintln!("merged state_ids: {ids:?}");
+        assert_eq!(ids.len(), 4);
+        assert!(ids.contains(&"a"));
+        assert!(ids.contains(&"b"));
+        assert!(ids.contains(&"x"));
+        assert!(ids.contains(&"y"));
+        assert_eq!(tc1.count(&"a", &"b"), 1.0);
+        assert_eq!(tc1.count(&"x", &"y"), 1.0);
+        assert_eq!(tc1.total(), 2.0);
+    }
+
+    #[test]
+    fn merge_is_commutative() {
+        let mut tc_a = TransitionCounter::new();
+        tc_a.record("a", "b");
+        tc_a.record("a", "b");
+        tc_a.record("a", "c");
+
+        let mut tc_b = TransitionCounter::new();
+        tc_b.record("a", "b");
+        tc_b.record("a", "c");
+        tc_b.record("a", "c");
+
+        // Merge A+B
+        let mut ab = tc_a.clone();
+        ab.merge(&tc_b);
+
+        // Merge B+A
+        let mut ba = tc_b.clone();
+        ba.merge(&tc_a);
+
+        eprintln!(
+            "A+B: ab={}, ac={}",
+            ab.count(&"a", &"b"),
+            ab.count(&"a", &"c")
+        );
+        eprintln!(
+            "B+A: ab={}, ac={}",
+            ba.count(&"a", &"b"),
+            ba.count(&"a", &"c")
+        );
+        assert_eq!(ab.count(&"a", &"b"), ba.count(&"a", &"b"));
+        assert_eq!(ab.count(&"a", &"c"), ba.count(&"a", &"c"));
+        assert_eq!(ab.total(), ba.total());
+    }
+
+    #[test]
+    fn merge_with_empty_counter_is_identity() {
+        let mut tc = TransitionCounter::new();
+        tc.record("a", "b");
+        tc.record("a", "c");
+        let total_before = tc.total();
+        let count_ab_before = tc.count(&"a", &"b");
+
+        let empty = TransitionCounter::<&str>::new();
+        tc.merge(&empty);
+
+        eprintln!(
+            "after merge(empty): total={}, ab={}",
+            tc.total(),
+            tc.count(&"a", &"b")
+        );
+        assert_eq!(tc.total(), total_before);
+        assert_eq!(tc.count(&"a", &"b"), count_ab_before);
+    }
+
+    #[test]
+    fn self_loop_transition_counted_correctly() {
+        let mut tc = TransitionCounter::new();
+        tc.record("a", "a");
+        tc.record("a", "a");
+        tc.record("a", "b");
+
+        let count_aa = tc.count(&"a", &"a");
+        let count_ab = tc.count(&"a", &"b");
+        eprintln!(
+            "self-loop: a→a={count_aa}, a→b={count_ab}, total_from(a)={}",
+            tc.total_from(&"a")
+        );
+        assert_eq!(count_aa, 2.0);
+        assert_eq!(count_ab, 1.0);
+        assert_eq!(tc.total_from(&"a"), 3.0);
+
+        // Self-loop appears in state_ids
+        assert!(tc.state_ids().contains(&"a"));
+    }
+
+    #[test]
+    fn state_ids_empty_counter() {
+        let tc: TransitionCounter<&str> = TransitionCounter::new();
+        let ids = tc.state_ids();
+        eprintln!("empty counter state_ids: {ids:?}");
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn probability_unseen_target_gets_smoothed_value() {
+        let mut tc = TransitionCounter::new();
+        tc.record("a", "b");
+        tc.record("a", "c");
+
+        // "d" was never a target from "a", but smoothing gives it a non-zero prob
+        // n_targets from "a" = 2 (b, c)
+        // P(d|a) = (0 + 1) / (2 + 1*2) = 1/4 = 0.25
+        let p = tc.probability(&"a", &"d");
+        eprintln!("P(a→d) with smoothing = {p}");
+        assert!(
+            p > 0.0,
+            "unseen target should get non-zero probability via smoothing"
+        );
+        assert!((p - 0.25).abs() < 1e-10, "expected 0.25, got {p}");
+    }
 }
