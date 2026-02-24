@@ -7,9 +7,9 @@
 
 use ftui_layout::{
     PaneDockPreview, PaneDockZone, PaneId, PaneInertialThrow, PaneInteractionTimeline,
-    PaneInteractionTimelineError, PaneLeaf, PaneMotionVector, PaneNodeKind, PaneOperation,
-    PanePlacement, PanePointerPosition, PanePressureSnapProfile, PaneResizeGrip, PaneResizeTarget,
-    PaneSelectionState, PaneSplitRatio, PaneTree, Rect, SplitAxis,
+    PaneInteractionTimelineError, PaneLayout, PaneLeaf, PaneMotionVector, PaneNodeKind,
+    PaneOperation, PanePlacement, PanePointerPosition, PanePressureSnapProfile, PaneResizeGrip,
+    PaneResizeTarget, PaneSelectionState, PaneSplitRatio, PaneTree, Rect, SplitAxis,
 };
 
 pub const PANE_MAGNETIC_FIELD_MIN_CELLS: f64 = 3.5;
@@ -41,6 +41,27 @@ pub struct PanePreviewState {
     pub alt_two_ghost_rect: Option<Rect>,
     pub alt_two_strength_bps: u16,
     pub selection_bounds: Option<Rect>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneSplitterVisualState {
+    Idle,
+    Hover,
+    Active,
+}
+
+/// Host-agnostic splitter/handle primitive derived from solved pane layouts.
+///
+/// Both terminal and web hosts can consume this shape data directly so handle
+/// geometry and visual states stay deterministic across renderers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaneSplitterPrimitive {
+    pub split_id: PaneId,
+    pub target: PaneResizeTarget,
+    pub axis: SplitAxis,
+    pub rail_rect: Rect,
+    pub handle_rect: Rect,
+    pub state: PaneSplitterVisualState,
 }
 
 /// Lightweight timeline status for host HUD updates.
@@ -244,6 +265,122 @@ pub fn adaptive_dock_strength_bps(
     (base * (1.0 + assist - precision_penalty))
         .round()
         .clamp(0.0, 10_000.0) as u16
+}
+
+/// Adaptive splitter rail thickness (cell units) for host-agnostic rendering.
+///
+/// Larger canvases/terminals get a 2-cell rail for better pointer clarity.
+#[must_use]
+pub fn pane_splitter_rail_thickness(viewport: Rect) -> u16 {
+    if viewport.width >= 90 && viewport.height >= 24 {
+        2
+    } else {
+        1
+    }
+}
+
+/// Deterministic handle length along the splitter major axis.
+#[must_use]
+pub fn pane_splitter_handle_span(split_rect: Rect, axis: SplitAxis) -> u16 {
+    let major = match axis {
+        SplitAxis::Horizontal => split_rect.height,
+        SplitAxis::Vertical => split_rect.width,
+    };
+    match major {
+        0..=6 => 1,
+        7..=11 => 2,
+        12..=18 => 3,
+        19..=26 => 4,
+        _ => 5,
+    }
+}
+
+/// Build splitter/handle primitives with Idle/Hover/Active state.
+///
+/// This is intentionally renderer-independent: hosts decide *how* to draw,
+/// while this function decides *what* to draw.
+#[must_use]
+pub fn collect_splitter_primitives(
+    tree: &PaneTree,
+    layout: &PaneLayout,
+    viewport: Rect,
+    hover_pointer: Option<PanePointerPosition>,
+    active_gesture: Option<ActivePaneGesture>,
+) -> Vec<PaneSplitterPrimitive> {
+    let rail_thickness = pane_splitter_rail_thickness(viewport);
+    let active_split = active_resize_split_id(tree, active_gesture);
+    let mut primitives = Vec::new();
+
+    for node in tree.nodes() {
+        let PaneNodeKind::Split(split) = &node.kind else {
+            continue;
+        };
+        let Some(split_rect) = layout.rect(node.id) else {
+            continue;
+        };
+        let Some(first_rect) = layout.rect(split.first) else {
+            continue;
+        };
+        let Some(second_rect) = layout.rect(split.second) else {
+            continue;
+        };
+        if split_rect.is_empty() || first_rect.is_empty() || second_rect.is_empty() {
+            continue;
+        }
+
+        let (mut rail, mut handle) = match split.axis {
+            SplitAxis::Horizontal => {
+                let divider_x = second_rect.x;
+                let x = divider_x.saturating_sub(rail_thickness);
+                let rail = Rect::new(x, split_rect.y, rail_thickness, split_rect.height);
+                let handle_h = pane_splitter_handle_span(split_rect, split.axis)
+                    .min(rail.height)
+                    .max(1);
+                let handle_y = rail.y + rail.height.saturating_sub(handle_h) / 2;
+                let handle = Rect::new(rail.x, handle_y, rail.width.max(1), handle_h);
+                (rail, handle)
+            }
+            SplitAxis::Vertical => {
+                let divider_y = second_rect.y;
+                let y = divider_y.saturating_sub(rail_thickness);
+                let rail = Rect::new(split_rect.x, y, split_rect.width, rail_thickness);
+                let handle_w = pane_splitter_handle_span(split_rect, split.axis)
+                    .min(rail.width)
+                    .max(1);
+                let handle_x = rail.x + rail.width.saturating_sub(handle_w) / 2;
+                let handle = Rect::new(handle_x, rail.y, handle_w, rail.height.max(1));
+                (rail, handle)
+            }
+        };
+
+        rail = rail.intersection(&viewport);
+        handle = handle.intersection(&rail);
+        if rail.is_empty() || handle.is_empty() {
+            continue;
+        }
+
+        let mut state = PaneSplitterVisualState::Idle;
+        if hover_pointer.is_some_and(|pointer| pointer_hits_rect(pointer, rail)) {
+            state = PaneSplitterVisualState::Hover;
+        }
+        if active_split == Some(node.id) {
+            state = PaneSplitterVisualState::Active;
+        }
+
+        primitives.push(PaneSplitterPrimitive {
+            split_id: node.id,
+            target: PaneResizeTarget {
+                split_id: node.id,
+                axis: split.axis,
+            },
+            axis: split.axis,
+            rail_rect: rail,
+            handle_rect: handle,
+            state,
+        });
+    }
+
+    primitives
 }
 
 #[must_use]
@@ -950,6 +1087,41 @@ fn grip_primary_axis(grip: PaneResizeGrip) -> SplitAxis {
     }
 }
 
+#[must_use]
+fn pointer_hits_rect(pointer: PanePointerPosition, rect: Rect) -> bool {
+    let Ok(x) = u16::try_from(pointer.x) else {
+        return false;
+    };
+    let Ok(y) = u16::try_from(pointer.y) else {
+        return false;
+    };
+    rect.contains(x, y)
+}
+
+#[must_use]
+fn active_resize_split_id(
+    tree: &PaneTree,
+    active_gesture: Option<ActivePaneGesture>,
+) -> Option<PaneId> {
+    let active = active_gesture?;
+    let PaneGestureMode::Resize(grip) = active.mode else {
+        return None;
+    };
+    let axis = grip_primary_axis(grip);
+    let mut cursor = active.leaf;
+    loop {
+        let node = tree.node(cursor)?;
+        let parent = node.parent?;
+        let parent_node = tree.node(parent)?;
+        if let PaneNodeKind::Split(split) = &parent_node.kind
+            && split.axis == axis
+        {
+            return Some(parent);
+        }
+        cursor = parent;
+    }
+}
+
 fn set_single_selection(selection: &mut PaneSelectionState, pane_id: PaneId) {
     selection.selected.clear();
     let _ = selection.selected.insert(pane_id);
@@ -1539,5 +1711,88 @@ mod tests {
         assert_eq!(live_signature, None);
         assert_eq!(timeline.cursor, 0);
         assert_eq!(generation, 0);
+    }
+
+    #[test]
+    fn collect_splitter_primitives_defaults_to_idle_and_adaptive_thickness() {
+        let tree = default_pane_layout_tree();
+        let viewport = Rect::new(0, 0, 120, 40);
+        let layout = tree
+            .solve_layout(viewport)
+            .expect("default layout should solve");
+
+        let splitters = collect_splitter_primitives(&tree, &layout, viewport, None, None);
+        assert!(
+            !splitters.is_empty(),
+            "expected at least one splitter primitive"
+        );
+        assert!(
+            splitters
+                .iter()
+                .all(|splitter| splitter.state == PaneSplitterVisualState::Idle)
+        );
+        assert!(
+            splitters.iter().any(|splitter| {
+                (splitter.axis == SplitAxis::Horizontal && splitter.rail_rect.width == 2)
+                    || (splitter.axis == SplitAxis::Vertical && splitter.rail_rect.height == 2)
+            }),
+            "large viewport should promote rail thickness to 2 cells"
+        );
+    }
+
+    #[test]
+    fn collect_splitter_primitives_marks_hover_and_active_states() {
+        let tree = default_pane_layout_tree();
+        let viewport = Rect::new(0, 0, 120, 40);
+        let layout = tree
+            .solve_layout(viewport)
+            .expect("default layout should solve");
+        let splitters = collect_splitter_primitives(&tree, &layout, viewport, None, None);
+        let first = splitters.first().copied().expect("splitter primitive");
+
+        let hover_pointer = PanePointerPosition::new(
+            i32::from(first.rail_rect.x + first.rail_rect.width / 2),
+            i32::from(first.rail_rect.y + first.rail_rect.height / 2),
+        );
+
+        let hovered =
+            collect_splitter_primitives(&tree, &layout, viewport, Some(hover_pointer), None);
+        let hovered_match = hovered
+            .iter()
+            .find(|splitter| splitter.split_id == first.split_id)
+            .expect("hovered splitter");
+        assert_eq!(hovered_match.state, PaneSplitterVisualState::Hover);
+
+        let leaf = tree
+            .nodes()
+            .find_map(|node| {
+                matches!(node.kind, PaneNodeKind::Leaf(_))
+                    .then_some(node.id)
+                    .filter(|leaf_id| {
+                        nearest_axis_split_for_node(&tree, *leaf_id, first.axis)
+                            == Some(first.split_id)
+                    })
+            })
+            .expect("active leaf for split should resolve");
+        let active_gesture = ActivePaneGesture {
+            pointer_id: 9,
+            leaf,
+            mode: match first.axis {
+                SplitAxis::Horizontal => PaneGestureMode::Resize(PaneResizeGrip::Right),
+                SplitAxis::Vertical => PaneGestureMode::Resize(PaneResizeGrip::Bottom),
+            },
+        };
+        let active = collect_splitter_primitives(
+            &tree,
+            &layout,
+            viewport,
+            Some(hover_pointer),
+            Some(active_gesture),
+        );
+        let active_match = active
+            .iter()
+            .find(|splitter| splitter.split_id == first.split_id)
+            .expect("active splitter");
+        assert_eq!(active_match.state, PaneSplitterVisualState::Active);
     }
 }

@@ -13,7 +13,8 @@ use ftui_layout::{
     PaneLayoutIntelligenceMode, PaneMotionVector, PaneNodeKind, PanePointerPosition,
     PanePressureSnapProfile, PaneSelectionState, PaneTree,
 };
-use ftui_render::cell::PackedRgba;
+use ftui_render::cell::{Cell as RenderCell, PackedRgba};
+use ftui_render::drawing::Draw;
 use ftui_render::frame::Frame;
 use ftui_runtime::Cmd;
 use ftui_style::{Style, StyleFlags};
@@ -31,9 +32,10 @@ use ftui_widgets::rule::Rule;
 use super::{HelpEntry, Screen};
 use crate::pane_interaction::{
     ActivePaneGesture, PaneDragSemanticsContext, PaneDragSemanticsInput, PaneGestureArmState,
-    PanePreviewState, PaneTimelineApplyState, PaneTimelineStatus, apply_drag_semantics,
-    apply_operations_with_timeline, arm_active_gesture, default_pane_layout_tree,
-    pointer_down_context_at, rollback_timeline_to_cursor, update_selection_for_pointer_down,
+    PanePreviewState, PaneSplitterPrimitive, PaneSplitterVisualState, PaneTimelineApplyState,
+    PaneTimelineStatus, apply_drag_semantics, apply_operations_with_timeline, arm_active_gesture,
+    collect_splitter_primitives, default_pane_layout_tree, pointer_down_context_at,
+    rollback_timeline_to_cursor, update_selection_for_pointer_down,
 };
 use crate::theme;
 
@@ -107,7 +109,7 @@ pub struct LayoutLab {
     /// Multi-pane selection state (shift-click cluster).
     pane_selection: PaneSelectionState,
     /// Active pointer gesture state.
-    pane_active_gesture: Option<ActivePaneGesture>,
+    pane_active_gesture: Cell<Option<ActivePaneGesture>>,
     /// Timeline cursor at gesture start for rollback on cancel.
     pane_gesture_timeline_cursor_start: Option<usize>,
     /// Last applied live-reflow signature for dedupe.
@@ -130,6 +132,16 @@ pub struct LayoutLab {
     pane_last_delta_sign: Option<(i8, i8)>,
     /// Last number of operations applied from one interaction sample.
     pane_last_applied_ops: usize,
+    /// Last splitter primitive count (render diagnostics).
+    pane_splitter_total: Cell<u16>,
+    /// Last hovered splitter count (render diagnostics).
+    pane_splitter_hovered: Cell<u16>,
+    /// Last active splitter count (render diagnostics).
+    pane_splitter_active: Cell<u16>,
+    /// Deterministic splitter render work units (cell-area proxy).
+    pane_splitter_work_units: Cell<u32>,
+    /// Latest pointer position used for splitter hover affordances.
+    pane_hover_pointer: Cell<Option<PanePointerPosition>>,
     /// Current adaptive intelligence mode.
     pane_intelligence_mode: PaneLayoutIntelligenceMode,
     /// Adjustable magnetic docking attraction radius.
@@ -192,7 +204,7 @@ impl LayoutLab {
             pane_timeline: PaneInteractionTimeline::with_baseline(&pane_tree),
             pane_tree,
             pane_selection,
-            pane_active_gesture: None,
+            pane_active_gesture: Cell::new(None),
             pane_gesture_timeline_cursor_start: None,
             pane_live_reflow_signature: None,
             pane_preview_state: PanePreviewState::default(),
@@ -204,6 +216,11 @@ impl LayoutLab {
             pane_drag_direction_changes: 0,
             pane_last_delta_sign: None,
             pane_last_applied_ops: 0,
+            pane_splitter_total: Cell::new(0),
+            pane_splitter_hovered: Cell::new(0),
+            pane_splitter_active: Cell::new(0),
+            pane_splitter_work_units: Cell::new(0),
+            pane_hover_pointer: Cell::new(None),
             pane_intelligence_mode: PaneLayoutIntelligenceMode::Focus,
             pane_magnetic_field_cells: PANE_MAGNETIC_FIELD_CELLS,
         }
@@ -283,7 +300,9 @@ impl LayoutLab {
     /// This stays true during active drags so capture remains robust even when
     /// the pointer briefly leaves the preview bounds.
     pub fn pane_workspace_wants_mouse(&self, x: u16, y: u16) -> bool {
-        self.pane_preview.get().contains(x, y) || self.pane_active_gesture.is_some()
+        self.pane_preview.get().contains(x, y)
+            || self.pane_active_gesture.get().is_some()
+            || self.pane_hover_pointer.get().is_some()
     }
 
     /// Route a mouse event into the pane workspace interaction model.
@@ -309,6 +328,8 @@ impl LayoutLab {
     /// renders the pane studio panel.
     pub fn clear_embedded_pane_workspace_bounds(&self) {
         self.pane_preview.set(Rect::default());
+        self.pane_active_gesture.set(None);
+        self.pane_hover_pointer.set(None);
     }
 
     /// Current embedded pane workspace bounds used for hit-testing.
@@ -324,18 +345,27 @@ impl LayoutLab {
         let controls = self.layout_controls.get();
         let pane_preview = self.pane_preview.get();
         let pointer = PanePointerPosition::new(i32::from(x), i32::from(y));
+        if pane_preview.contains(x, y) {
+            self.pane_hover_pointer.set(Some(pointer));
+        } else if self.pane_active_gesture.get().is_none() {
+            self.pane_hover_pointer.set(None);
+        }
 
-        if pane_preview.contains(x, y) || self.pane_active_gesture.is_some() {
+        if pane_preview.contains(x, y) || self.pane_active_gesture.get().is_some() {
             match kind {
                 MouseEventKind::Down(MouseButton::Left) if pane_preview.contains(x, y) => {
                     self.handle_pane_pointer_down(pointer, modifiers.contains(Modifiers::SHIFT));
                     return;
                 }
-                MouseEventKind::Drag(MouseButton::Left) if self.pane_active_gesture.is_some() => {
+                MouseEventKind::Drag(MouseButton::Left)
+                    if self.pane_active_gesture.get().is_some() =>
+                {
                     self.apply_pane_drag(pointer, false);
                     return;
                 }
-                MouseEventKind::Up(MouseButton::Left) if self.pane_active_gesture.is_some() => {
+                MouseEventKind::Up(MouseButton::Left)
+                    if self.pane_active_gesture.get().is_some() =>
+                {
                     self.apply_pane_drag(pointer, true);
                     self.finish_pane_gesture();
                     return;
@@ -793,6 +823,7 @@ impl LayoutLab {
         self.pane_preview.set(inner);
 
         if inner.width < 8 || inner.height < 4 {
+            self.record_splitter_diagnostics(&[]);
             Paragraph::new("Pane studio needs a bit more space.")
                 .style(theme::muted())
                 .render(inner, frame);
@@ -800,11 +831,20 @@ impl LayoutLab {
         }
 
         let Ok(layout) = self.pane_tree.solve_layout(inner) else {
+            self.record_splitter_diagnostics(&[]);
             Paragraph::new("Pane layout solve failed.")
                 .style(Style::new().fg(theme::accent::ERROR))
                 .render(inner, frame);
             return;
         };
+        let splitters = collect_splitter_primitives(
+            &self.pane_tree,
+            &layout,
+            inner,
+            self.pane_hover_pointer.get(),
+            self.pane_active_gesture.get(),
+        );
+        self.record_splitter_diagnostics(&splitters);
 
         for node in self.pane_tree.nodes() {
             let PaneNodeKind::Leaf(leaf) = &node.kind else {
@@ -821,6 +861,7 @@ impl LayoutLab {
             let anchor = self.pane_selection.anchor == Some(node.id);
             let active = self
                 .pane_active_gesture
+                .get()
                 .is_some_and(|gesture| gesture.leaf == node.id);
             let accent = if active {
                 theme::accent::WARNING
@@ -870,16 +911,20 @@ impl LayoutLab {
             }
         }
 
+        self.render_splitter_primitives(frame, &splitters);
         self.render_pane_preview_overlays(frame, inner);
 
         let mode_label = pane_mode_label(self.pane_intelligence_mode);
         let timeline_status = self.pane_timeline_status();
         let status = format!(
-            "mode:{mode_label}  sel:{}  tl:{}/{}  ops:{}",
+            "mode:{mode_label} sel:{} tl:{}/{} ops:{} sp:{}/h{}/a{}",
             self.pane_selection.selected.len(),
             timeline_status.cursor,
             timeline_status.len,
             self.pane_last_applied_ops,
+            self.pane_splitter_total.get(),
+            self.pane_splitter_hovered.get(),
+            self.pane_splitter_active.get(),
         );
         let status_area = Rect::new(inner.x, inner.y, inner.width.min(48), 1);
         Paragraph::new(truncate_to_width(&status, usize::from(status_area.width)))
@@ -963,6 +1008,41 @@ impl LayoutLab {
         }
     }
 
+    fn render_splitter_primitives(&self, frame: &mut Frame, splitters: &[PaneSplitterPrimitive]) {
+        for splitter in splitters {
+            let (rail_cell, handle_cell) = pane_splitter_cells(splitter.axis, splitter.state);
+            frame.draw_rect_filled(splitter.rail_rect, rail_cell);
+            frame.draw_rect_filled(splitter.handle_rect, handle_cell);
+        }
+    }
+
+    fn record_splitter_diagnostics(&self, splitters: &[PaneSplitterPrimitive]) {
+        let mut hovered = 0u16;
+        let mut active = 0u16;
+        let mut work_units = 0u32;
+        for splitter in splitters {
+            match splitter.state {
+                PaneSplitterVisualState::Hover => {
+                    hovered = hovered.saturating_add(1);
+                }
+                PaneSplitterVisualState::Active => {
+                    active = active.saturating_add(1);
+                }
+                PaneSplitterVisualState::Idle => {}
+            }
+            let rail_area = u32::from(splitter.rail_rect.width)
+                .saturating_mul(u32::from(splitter.rail_rect.height));
+            let handle_area = u32::from(splitter.handle_rect.width)
+                .saturating_mul(u32::from(splitter.handle_rect.height));
+            work_units = work_units.saturating_add(rail_area.saturating_add(handle_area));
+        }
+        self.pane_splitter_total
+            .set(splitters.len().min(u16::MAX as usize) as u16);
+        self.pane_splitter_hovered.set(hovered);
+        self.pane_splitter_active.set(active);
+        self.pane_splitter_work_units.set(work_units);
+    }
+
     fn handle_pane_pointer_down(&mut self, pointer: PanePointerPosition, shift: bool) {
         let viewport = self.pane_preview.get();
         if viewport.is_empty() {
@@ -978,9 +1058,10 @@ impl LayoutLab {
         };
 
         update_selection_for_pointer_down(&mut self.pane_selection, context.leaf, shift);
+        let mut active_gesture = self.pane_active_gesture.get();
         arm_active_gesture(
             PaneGestureArmState {
-                active_gesture: &mut self.pane_active_gesture,
+                active_gesture: &mut active_gesture,
                 gesture_timeline_cursor_start: &mut self.pane_gesture_timeline_cursor_start,
                 live_reflow_signature: &mut self.pane_live_reflow_signature,
                 preview_state: &mut self.pane_preview_state,
@@ -990,6 +1071,7 @@ impl LayoutLab {
             context.leaf,
             context.mode,
         );
+        self.pane_active_gesture.set(active_gesture);
 
         self.pane_last_pointer = Some(pointer);
         self.pane_last_motion = PaneMotionVector::from_delta(0, 0, 16, 0);
@@ -998,7 +1080,7 @@ impl LayoutLab {
     }
 
     fn apply_pane_drag(&mut self, pointer: PanePointerPosition, committed: bool) {
-        let Some(active) = self.pane_active_gesture else {
+        let Some(active) = self.pane_active_gesture.get() else {
             return;
         };
 
@@ -1063,13 +1145,14 @@ impl LayoutLab {
     }
 
     fn finish_pane_gesture(&mut self) {
-        self.pane_active_gesture = None;
+        self.pane_active_gesture.set(None);
         self.pane_gesture_timeline_cursor_start = None;
         self.pane_live_reflow_signature = None;
         self.pane_preview_state = PanePreviewState::default();
         self.pane_last_pointer = None;
         self.pane_last_delta_sign = None;
         self.pane_drag_direction_changes = 0;
+        self.pane_hover_pointer.set(None);
     }
 
     fn cancel_pane_gesture(&mut self) {
@@ -1403,6 +1486,7 @@ impl LayoutLab {
             .join(",");
         let gesture = self
             .pane_active_gesture
+            .get()
             .map_or("Idle".to_string(), |gesture| format!("{:?}", gesture.mode));
         let preview = self
             .pane_preview_state
@@ -1424,6 +1508,7 @@ impl LayoutLab {
              Gesture: {} (Esc cancel)\n\
              Dock: {} {:02}%\n\
              Timeline: {}/{} (u/y/R)\n\
+             Splitters: {} h:{} a:{} wu:{}\n\
              Magnetic Field: {:.1} (wheel in pane)\n\
              Workspace Gen: {}",
             self.current_preset + 1,
@@ -1441,6 +1526,10 @@ impl LayoutLab {
             self.pane_preview_state.dock_strength_bps / 100,
             timeline_status.cursor,
             timeline_status.len,
+            self.pane_splitter_total.get(),
+            self.pane_splitter_hovered.get(),
+            self.pane_splitter_active.get(),
+            self.pane_splitter_work_units.get(),
             self.pane_magnetic_field_cells,
             self.pane_workspace_generation,
         );
@@ -1583,6 +1672,43 @@ fn align_position(idx: usize) -> (Alignment, VerticalAlignment, &'static str) {
         7 => (Alignment::Center, VerticalAlignment::Bottom, "BotCenter"),
         _ => (Alignment::Right, VerticalAlignment::Bottom, "BotRight"),
     }
+}
+
+fn pane_splitter_cells(
+    axis: ftui_layout::SplitAxis,
+    state: PaneSplitterVisualState,
+) -> (RenderCell, RenderCell) {
+    let (rail_fg, rail_bg, handle_fg, handle_bg) = match state {
+        PaneSplitterVisualState::Idle => (
+            theme::fg::MUTED,
+            theme::alpha::SURFACE,
+            theme::fg::SECONDARY,
+            theme::alpha::SURFACE,
+        ),
+        PaneSplitterVisualState::Hover => (
+            theme::accent::ACCENT_10,
+            theme::alpha::SURFACE,
+            theme::accent::ACCENT_6,
+            theme::alpha::SURFACE,
+        ),
+        PaneSplitterVisualState::Active => (
+            theme::accent::WARNING,
+            theme::alpha::SURFACE,
+            theme::accent::WARNING,
+            theme::alpha::SURFACE,
+        ),
+    };
+    let rail_glyph = match axis {
+        ftui_layout::SplitAxis::Horizontal => '│',
+        ftui_layout::SplitAxis::Vertical => '─',
+    };
+    let rail_cell = RenderCell::from_char(rail_glyph)
+        .with_fg(rail_fg.into())
+        .with_bg(rail_bg.into());
+    let handle_cell = RenderCell::from_char('■')
+        .with_fg(handle_fg.into())
+        .with_bg(handle_bg.into());
+    (rail_cell, handle_cell)
 }
 
 fn pane_mode_label(mode: PaneLayoutIntelligenceMode) -> &'static str {
@@ -2733,6 +2859,186 @@ mod tests {
             lab.pane_selection.selected.len() >= 2,
             "shift-click should keep both panes selected"
         );
+    }
+
+    #[test]
+    fn pane_splitter_hover_diagnostics_track_mouse_move() {
+        let mut lab = LayoutLab::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(140, 40, &mut pool);
+        lab.view(&mut frame, Rect::new(0, 0, 140, 40));
+
+        let pane_area = lab.pane_preview.get();
+        let layout = lab
+            .pane_tree
+            .solve_layout(pane_area)
+            .expect("pane layout should solve");
+        let splitter = collect_splitter_primitives(&lab.pane_tree, &layout, pane_area, None, None)
+            .first()
+            .copied()
+            .expect("splitter primitive");
+        let hover_x = splitter
+            .rail_rect
+            .x
+            .saturating_add(splitter.rail_rect.width / 2);
+        let hover_y = splitter
+            .rail_rect
+            .y
+            .saturating_add(splitter.rail_rect.height / 2);
+
+        lab.handle_mouse(MouseEventKind::Moved, hover_x, hover_y, Modifiers::NONE);
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(140, 40, &mut pool);
+        lab.view(&mut frame, Rect::new(0, 0, 140, 40));
+
+        assert!(lab.pane_splitter_total.get() >= 1);
+        assert!(
+            lab.pane_splitter_hovered.get() >= 1,
+            "hover diagnostics should report at least one hovered splitter"
+        );
+    }
+
+    #[test]
+    fn pane_splitter_active_diagnostics_track_resize_drag() {
+        let mut lab = LayoutLab::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(140, 40, &mut pool);
+        lab.view(&mut frame, Rect::new(0, 0, 140, 40));
+
+        let pane_area = lab.pane_preview.get();
+        let layout = lab
+            .pane_tree
+            .solve_layout(pane_area)
+            .expect("pane layout should solve");
+        let splitters = collect_splitter_primitives(&lab.pane_tree, &layout, pane_area, None, None);
+        let (drag_x, drag_y) = splitters
+            .iter()
+            .find_map(|splitter| {
+                let x = splitter
+                    .rail_rect
+                    .x
+                    .saturating_add(splitter.rail_rect.width / 2);
+                let y = splitter
+                    .rail_rect
+                    .y
+                    .saturating_add(splitter.rail_rect.height / 2);
+                let pointer = PanePointerPosition::new(i32::from(x), i32::from(y));
+                pointer_down_context_at(
+                    &lab.pane_tree,
+                    pane_area,
+                    pointer,
+                    PANE_EDGE_GRIP_INSET_CELLS,
+                )
+                .filter(|context| {
+                    matches!(
+                        context.mode,
+                        crate::pane_interaction::PaneGestureMode::Resize(_)
+                    )
+                })
+                .map(|_| (x, y))
+            })
+            .expect("expected splitter point that maps to a resize gesture");
+
+        lab.handle_mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            drag_x,
+            drag_y,
+            Modifiers::NONE,
+        );
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(140, 40, &mut pool);
+        lab.view(&mut frame, Rect::new(0, 0, 140, 40));
+        assert!(
+            lab.pane_splitter_active.get() >= 1,
+            "active diagnostics should report a splitter while gesture is armed"
+        );
+
+        lab.handle_mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            drag_x,
+            drag_y,
+            Modifiers::NONE,
+        );
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(140, 40, &mut pool);
+        lab.view(&mut frame, Rect::new(0, 0, 140, 40));
+        assert_eq!(
+            lab.pane_splitter_active.get(),
+            0,
+            "active diagnostics should clear after gesture completion"
+        );
+    }
+
+    #[test]
+    fn pane_splitter_diagnostics_reset_when_preview_too_small() {
+        let lab = LayoutLab::new();
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 30, &mut pool);
+        lab.render_pane_preview_panel(&mut frame, Rect::new(0, 0, 50, 18));
+        assert!(
+            lab.pane_splitter_total.get() > 0,
+            "large preview should produce splitter diagnostics"
+        );
+
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(80, 30, &mut pool);
+        lab.render_pane_preview_panel(&mut frame, Rect::new(0, 0, 7, 3));
+        assert_eq!(lab.pane_splitter_total.get(), 0);
+        assert_eq!(lab.pane_splitter_hovered.get(), 0);
+        assert_eq!(lab.pane_splitter_active.get(), 0);
+        assert_eq!(lab.pane_splitter_work_units.get(), 0);
+    }
+
+    #[test]
+    fn embedded_mouse_routing_clears_latched_hover_state() {
+        let mut lab = LayoutLab::new();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(140, 40, &mut pool);
+        lab.view(&mut frame, Rect::new(0, 0, 140, 40));
+
+        let pane_area = lab.pane_preview.get();
+        let hover_x = pane_area.x.saturating_add(1);
+        let hover_y = pane_area.y.saturating_add(1);
+        lab.update_embedded_pane_workspace_mouse(
+            MouseEventKind::Moved,
+            hover_x,
+            hover_y,
+            Modifiers::NONE,
+        );
+        assert!(
+            lab.pane_hover_pointer.get().is_some(),
+            "hover should latch in pane"
+        );
+        assert!(
+            lab.pane_workspace_wants_mouse(0, 0),
+            "latched hover should keep routing active for out-of-bounds move"
+        );
+
+        lab.update_embedded_pane_workspace_mouse(MouseEventKind::Moved, 0, 0, Modifiers::NONE);
+        assert!(
+            lab.pane_hover_pointer.get().is_none(),
+            "out-of-bounds move should clear hover when no drag is active"
+        );
+        assert!(
+            !lab.pane_workspace_wants_mouse(0, 0),
+            "routing should stop once hover/drag is cleared"
+        );
+    }
+
+    #[test]
+    fn clear_embedded_bounds_resets_hover_routing() {
+        let lab = LayoutLab::new();
+        lab.pane_preview.set(Rect::new(10, 10, 12, 6));
+        lab.pane_hover_pointer
+            .set(Some(PanePointerPosition::new(12, 12)));
+
+        assert!(lab.pane_workspace_wants_mouse(0, 0));
+        lab.clear_embedded_pane_workspace_bounds();
+        assert!(!lab.pane_workspace_wants_mouse(0, 0));
     }
 }
 
