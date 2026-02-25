@@ -242,12 +242,12 @@ pub struct FlakeDetector {
     observation_count: usize,
     /// Rolling window for variance estimation.
     variance_window: VecDeque<f64>,
-    /// Online mean for variance calculation.
-    online_mean: f64,
-    /// Online M2 for variance calculation (Welford's algorithm).
-    online_m2: f64,
     /// Evidence log (if logging enabled).
     evidence_log: Vec<EvidenceLog>,
+    /// Observation index where a flaky decision was first reached.
+    first_flaky_at: Option<usize>,
+    /// Maximum cumulative e-value observed over the detector lifetime.
+    max_e_value: f64,
 }
 
 impl FlakeDetector {
@@ -264,9 +264,9 @@ impl FlakeDetector {
             e_cumulative: 1.0, // Identity element
             observation_count: 0,
             variance_window: VecDeque::with_capacity(capacity),
-            online_mean: 0.0,
-            online_m2: 0.0,
             evidence_log: Vec::new(),
+            first_flaky_at: None,
+            max_e_value: 1.0,
         }
     }
 
@@ -293,6 +293,12 @@ impl FlakeDetector {
         let threshold = self.config.threshold();
         let is_flaky = self.e_cumulative > threshold;
         let warmed_up = self.observation_count >= self.config.min_observations;
+        let decision = is_flaky && warmed_up;
+
+        if decision && self.first_flaky_at.is_none() {
+            self.first_flaky_at = Some(self.observation_count);
+        }
+        self.max_e_value = self.max_e_value.max(self.e_cumulative);
 
         // Log if enabled
         if self.config.enable_logging {
@@ -302,7 +308,7 @@ impl FlakeDetector {
                 e_increment,
                 e_cumulative: self.e_cumulative,
                 variance: sigma * sigma,
-                decision: is_flaky && warmed_up,
+                decision,
             });
         }
 
@@ -342,9 +348,9 @@ impl FlakeDetector {
         self.e_cumulative = 1.0;
         self.observation_count = 0;
         self.variance_window.clear();
-        self.online_mean = 0.0;
-        self.online_m2 = 0.0;
         self.evidence_log.clear();
+        self.first_flaky_at = None;
+        self.max_e_value = 1.0;
     }
 
     /// Get the current e-value.
@@ -454,24 +460,12 @@ impl FlakeDetector {
     /// Generate summary statistics.
     #[must_use]
     pub fn summary(&self) -> FlakeSummary {
-        let first_flaky_at = self
-            .evidence_log
-            .iter()
-            .find(|e| e.decision)
-            .map(|e| e.observation_idx);
-
-        let max_e_value = self
-            .evidence_log
-            .iter()
-            .map(|e| e.e_cumulative)
-            .fold(1.0_f64, f64::max);
-
         FlakeSummary {
             total_observations: self.observation_count,
             final_e_value: self.e_cumulative,
             is_flaky: self.e_cumulative > self.config.threshold(),
-            first_flaky_at,
-            max_e_value,
+            first_flaky_at: self.first_flaky_at,
+            max_e_value: self.max_e_value,
             threshold: self.config.threshold(),
         }
     }
@@ -992,6 +986,20 @@ mod tests {
         detector.observe(2.0);
         assert!(detector.evidence_log().is_empty());
         assert!(detector.evidence_to_jsonl().is_empty());
+    }
+
+    #[test]
+    fn summary_tracks_metrics_when_logging_disabled() {
+        let config = FlakeConfig::new(0.05).with_min_observations(1);
+        let mut detector = FlakeDetector::new(config);
+        detector.observe(5.0);
+        detector.observe(5.0);
+        detector.observe(-1.0);
+
+        let summary = detector.summary();
+        assert_eq!(summary.first_flaky_at, Some(2));
+        assert!(summary.max_e_value > summary.threshold);
+        assert!(summary.max_e_value + f64::EPSILON >= summary.final_e_value);
     }
 
     // ── Reset clears everything ──────────────────────────────────

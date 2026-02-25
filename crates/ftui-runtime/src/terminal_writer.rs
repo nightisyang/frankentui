@@ -1673,16 +1673,16 @@ impl<W: Write> TerminalWriter<W> {
                         emit_stats.diff_cells = self.diff_scratch.len();
                         emit_stats.diff_runs = self.diff_scratch.runs().len();
                     } else {
-                        // Full redraw — clip to visible_height so the
-                        // Presenter does not emit cursor moves past the
-                        // terminal bottom.
-                        let full = BufferDiff::full(buffer.width(), visible_height);
+                        // Full redraw — clip to the visible terminal region and
+                        // to the buffer's actual height. This avoids generating
+                        // diff runs for rows that are outside `buffer`.
+                        let render_height = buffer.height().min(visible_height);
+                        let full = BufferDiff::full(buffer.width(), render_height);
                         presenter.prepare_runs(&full);
                         presenter.emit_diff_runs(buffer, Some(&self.pool), Some(&self.links))?;
 
-                        emit_stats.diff_cells =
-                            (buffer.width() as usize) * (visible_height as usize);
-                        emit_stats.diff_runs = visible_height as usize;
+                        emit_stats.diff_cells = full.len();
+                        emit_stats.diff_runs = full.runs().len();
                     }
                 }
             }

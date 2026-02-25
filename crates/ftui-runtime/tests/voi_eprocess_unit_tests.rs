@@ -473,7 +473,11 @@ fn both_spans_emitted_in_combined_workflow() {
     assert!(
         !voi_spans.is_empty(),
         "expected voi.evaluate span, got spans: {:?}",
-        voi_handle.spans().iter().map(|s| &s.name).collect::<Vec<_>>()
+        voi_handle
+            .spans()
+            .iter()
+            .map(|s| &s.name)
+            .collect::<Vec<_>>()
     );
 
     let ep_spans: Vec<_> = ep_handle
@@ -485,7 +489,11 @@ fn both_spans_emitted_in_combined_workflow() {
     assert!(
         !ep_spans.is_empty(),
         "expected eprocess.update span, got spans: {:?}",
-        ep_handle.spans().iter().map(|s| &s.name).collect::<Vec<_>>()
+        ep_handle
+            .spans()
+            .iter()
+            .map(|s| &s.name)
+            .collect::<Vec<_>>()
     );
 
     // Verify key fields on each

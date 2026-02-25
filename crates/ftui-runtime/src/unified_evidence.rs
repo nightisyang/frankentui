@@ -160,8 +160,13 @@ impl EvidenceEntry {
     /// Posterior probability derived from log-odds.
     #[must_use]
     pub fn posterior_probability(&self) -> f64 {
-        let odds = self.log_posterior.exp();
-        odds / (1.0 + odds)
+        let log_posterior = self.log_posterior;
+        if log_posterior >= 0.0 {
+            1.0 / (1.0 + (-log_posterior).exp())
+        } else {
+            let exp_lp = log_posterior.exp();
+            exp_lp / (1.0 + exp_lp)
+        }
     }
 
     /// Number of evidence terms present.
@@ -663,6 +668,21 @@ mod tests {
     }
 
     #[test]
+    fn posterior_probability_extreme_log_odds_stays_finite() {
+        let mut high = make_entry(DecisionDomain::DiffStrategy, "full");
+        high.log_posterior = 1000.0;
+        let high_prob = high.posterior_probability();
+        assert!(high_prob.is_finite());
+        assert!(high_prob > 0.999_999);
+
+        let mut low = make_entry(DecisionDomain::DiffStrategy, "full");
+        low.log_posterior = -1000.0;
+        let low_prob = low.posterior_probability();
+        assert!(low_prob.is_finite());
+        assert!(low_prob < 0.000_001);
+    }
+
+    #[test]
     fn evidence_count() {
         let entry = make_entry(DecisionDomain::DiffStrategy, "full");
         assert_eq!(entry.evidence_count(), 2); // two Some, one None
@@ -734,6 +754,24 @@ mod tests {
             .unwrap();
         assert_eq!(diff.decision_count, 5);
         assert!(diff.mean_posterior > 0.0);
+    }
+
+    #[test]
+    fn summary_mean_posterior_is_finite_for_extreme_log_odds() {
+        let mut ledger = UnifiedEvidenceLedger::new(10);
+        let mut entry = make_entry(DecisionDomain::DiffStrategy, "full");
+        entry.log_posterior = 1000.0;
+        ledger.record(entry.clone());
+        ledger.record(entry);
+
+        let summary = ledger.summary();
+        let diff = summary
+            .domains
+            .iter()
+            .find(|domain| domain.domain == DecisionDomain::DiffStrategy)
+            .expect("diff strategy summary");
+        assert!(diff.mean_posterior.is_finite());
+        assert!(diff.mean_posterior > 0.999_999);
     }
 
     #[test]

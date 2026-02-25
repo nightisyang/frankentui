@@ -1180,7 +1180,7 @@ fn redistribute_overflow(floors: &[u16], total: u16) -> Vec<u16> {
 
     while overflow > 0 {
         let mut reduced_any = false;
-        let reduce_amount = (overflow as usize / n).max(1) as u16;
+        let reduce_amount = (overflow / n as u64).min(u16::MAX as u64).max(1) as u16;
 
         for &idx in &indices {
             if overflow == 0 {
