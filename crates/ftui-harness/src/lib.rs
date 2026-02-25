@@ -45,6 +45,7 @@
 pub mod asciicast;
 pub mod determinism;
 pub mod flicker_detection;
+pub mod frame_comparison;
 pub mod golden;
 pub mod hdd;
 pub mod input_storm;
