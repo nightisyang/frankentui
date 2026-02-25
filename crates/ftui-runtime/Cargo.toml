@@ -95,6 +95,10 @@ tracing-subscriber = { version = "0.3.20", features = ["registry", "env-filter"]
 name = "deterministic_replay"
 required-features = ["event-trace"]
 
+[[test]]
+name = "e2e_recipe_d_deterministic_replay"
+required-features = ["event-trace"]
+
 [[bench]]
 name = "telemetry_bench"
 harness = false
