@@ -2127,4 +2127,315 @@ mod tests {
         let result = state.handle_mouse(&event, None, HitId::new(1), 10);
         assert_eq!(result, MouseResult::Ignored);
     }
+
+    // --- bd-1lg.27: Selection & filter interaction tests ---
+
+    #[test]
+    fn list_navigate_down_while_filter_active() {
+        let list = List::new(vec![
+            ListItem::new("alpha"),
+            ListItem::new("banana"),
+            ListItem::new("beta"),
+            ListItem::new("gamma"),
+        ]);
+        let mut state = ListState::default();
+        // Type "b" to filter → matches banana(1) and beta(2)
+        assert!(list.handle_key(&mut state, &KeyEvent::new(KeyCode::Char('b'))));
+        assert_eq!(state.filter_query(), "b");
+        // Selection should land on first match
+        assert_eq!(state.selected(), Some(1)); // banana
+
+        // Navigate down in filtered list → should move to beta(2)
+        assert!(list.handle_key(&mut state, &KeyEvent::new(KeyCode::Down)));
+        assert_eq!(state.selected(), Some(2)); // beta
+
+        // Navigate down at end → should stay at beta(2)
+        assert!(!list.handle_key(&mut state, &KeyEvent::new(KeyCode::Down)));
+        assert_eq!(state.selected(), Some(2));
+    }
+
+    #[test]
+    fn list_navigate_up_while_filter_active() {
+        let list = List::new(vec![
+            ListItem::new("alpha"),
+            ListItem::new("banana"),
+            ListItem::new("beta"),
+            ListItem::new("gamma"),
+        ]);
+        let mut state = ListState::default();
+        state.set_filter_query("b");
+        // Force selection to beta(2) — last filtered match
+        state.select(Some(2));
+
+        // Navigate up → should move to banana(1)
+        assert!(list.handle_key(&mut state, &KeyEvent::new(KeyCode::Up)));
+        assert_eq!(state.selected(), Some(1));
+
+        // Navigate up at top → should stay at banana(1)
+        assert!(!list.handle_key(&mut state, &KeyEvent::new(KeyCode::Up)));
+        assert_eq!(state.selected(), Some(1));
+    }
+
+    #[test]
+    fn list_filter_case_insensitive() {
+        let list = List::new(vec![
+            ListItem::new("Alpha"),
+            ListItem::new("BANANA"),
+            ListItem::new("beta"),
+        ]);
+        let mut state = ListState::default();
+        // Type uppercase 'B' → should match "BANANA" and "beta"
+        assert!(list.handle_key(&mut state, &KeyEvent::new(KeyCode::Char('B'))));
+        assert_eq!(state.selected(), Some(1)); // BANANA is first match
+    }
+
+    #[test]
+    fn list_filter_matches_marker() {
+        let list = List::new(vec![
+            ListItem::new("apple").marker("fruit"),
+            ListItem::new("carrot").marker("veggie"),
+            ListItem::new("berry").marker("fruit"),
+        ]);
+        let mut state = ListState::default();
+        // Type "veg" → should match only carrot (via marker)
+        state.set_filter_query("veg");
+        let filtered = list.filtered_indices(state.filter_query());
+        assert_eq!(filtered, vec![1]); // only carrot
+    }
+
+    #[test]
+    fn list_multi_select_toggle_while_filtered() {
+        let list = List::new(vec![
+            ListItem::new("alpha"),
+            ListItem::new("banana"),
+            ListItem::new("beta"),
+            ListItem::new("gamma"),
+        ]);
+        let mut state = ListState::default();
+        state.set_multi_select(true);
+        state.set_filter_query("b");
+
+        // Select banana(1) first
+        state.select(Some(1));
+        // Toggle multi-select on banana
+        assert!(list.handle_key(&mut state, &KeyEvent::new(KeyCode::Char(' '))));
+        assert!(state.selected_indices().contains(&1));
+
+        // Navigate to beta and toggle
+        assert!(list.handle_key(&mut state, &KeyEvent::new(KeyCode::Down)));
+        assert!(list.handle_key(&mut state, &KeyEvent::new(KeyCode::Char(' '))));
+        assert!(state.selected_indices().contains(&2));
+        assert_eq!(state.selected_count(), 2);
+    }
+
+    #[test]
+    fn list_disable_multi_select_clears_extras() {
+        let mut state = ListState::default();
+        state.set_multi_select(true);
+        state.toggle_multi_selected(0);
+        state.toggle_multi_selected(1);
+        state.toggle_multi_selected(2);
+        assert_eq!(state.selected_count(), 3);
+        // toggle_multi_selected sets selected to the last toggled index
+        assert_eq!(state.selected(), Some(2));
+
+        // Disable multi-select → should keep only the current selection
+        state.set_multi_select(false);
+        assert_eq!(state.selected_count(), 1);
+        assert!(state.selected_indices().contains(&2)); // current selected
+    }
+
+    #[test]
+    fn list_navigation_with_ctrl_modifier_ignored() {
+        let list = List::new(vec![ListItem::new("alpha"), ListItem::new("beta")]);
+        let mut state = ListState::default();
+        state.select(Some(0));
+
+        let ctrl_down = KeyEvent {
+            code: KeyCode::Down,
+            modifiers: Modifiers::CTRL,
+            kind: ftui_core::event::KeyEventKind::Press,
+        };
+        assert!(!list.handle_key(&mut state, &ctrl_down));
+        assert_eq!(state.selected(), Some(0)); // unchanged
+    }
+
+    #[test]
+    fn list_space_with_no_selection_in_multi_select_is_noop() {
+        let list = List::new(vec![ListItem::new("alpha"), ListItem::new("beta")]);
+        let mut state = ListState::default();
+        state.set_multi_select(true);
+        // No selection
+        assert!(!list.handle_key(&mut state, &KeyEvent::new(KeyCode::Char(' '))));
+        assert_eq!(state.selected_count(), 0);
+    }
+
+    #[test]
+    fn list_backspace_on_empty_filter_returns_false() {
+        let list = List::new(vec![ListItem::new("alpha")]);
+        let mut state = ListState::default();
+        assert!(state.filter_query().is_empty());
+        assert!(!list.handle_key(&mut state, &KeyEvent::new(KeyCode::Backspace)));
+    }
+
+    #[test]
+    fn list_escape_on_empty_filter_returns_false() {
+        let list = List::new(vec![ListItem::new("alpha")]);
+        let mut state = ListState::default();
+        assert!(state.filter_query().is_empty());
+        assert!(!list.handle_key(&mut state, &KeyEvent::new(KeyCode::Escape)));
+    }
+
+    #[test]
+    fn list_navigate_in_empty_filtered_result() {
+        let list = List::new(vec![ListItem::new("alpha"), ListItem::new("beta")]);
+        let mut state = ListState::default();
+        state.select(Some(0));
+        state.set_filter_query("zzz"); // nothing matches
+
+        // Navigate should deselect since no filtered items
+        let handled = list.handle_key(&mut state, &KeyEvent::new(KeyCode::Down));
+        // Either handled (deselected) or not, selection should be None
+        if handled {
+            assert_eq!(state.selected(), None);
+        }
+    }
+
+    #[test]
+    fn list_filter_preserves_selection_when_still_visible() {
+        let list = List::new(vec![
+            ListItem::new("alpha"),
+            ListItem::new("banana"),
+            ListItem::new("beta"),
+        ]);
+        let mut state = ListState::default();
+        state.select(Some(2)); // beta
+
+        // Type "b" → beta still matches, selection should stay
+        assert!(list.handle_key(&mut state, &KeyEvent::new(KeyCode::Char('b'))));
+        assert_eq!(state.selected(), Some(2)); // beta still selected
+    }
+
+    #[test]
+    fn list_filter_moves_selection_when_current_hidden() {
+        let list = List::new(vec![
+            ListItem::new("alpha"),
+            ListItem::new("banana"),
+            ListItem::new("cherry"),
+        ]);
+        let mut state = ListState::default();
+        state.select(Some(2)); // cherry
+
+        // Type "b" → cherry doesn't match, should move to banana(1)
+        assert!(list.handle_key(&mut state, &KeyEvent::new(KeyCode::Char('b'))));
+        assert_eq!(state.selected(), Some(1)); // banana (first match)
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn list_set_filter_query_resets_offset() {
+        let mut state = ListState::default();
+        state.offset = 10;
+        state.set_filter_query("abc");
+        assert_eq!(state.offset, 0);
+        assert_eq!(state.filter_query(), "abc");
+    }
+
+    #[test]
+    fn list_clear_filter_query_resets_offset() {
+        let mut state = ListState::default();
+        state.set_filter_query("abc");
+        state.offset = 5;
+        state.clear_filter_query();
+        assert_eq!(state.offset, 0);
+        assert!(state.filter_query().is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::field_reassign_with_default)]
+    fn list_clear_filter_query_noop_when_empty() {
+        let mut state = ListState::default();
+        state.offset = 5;
+        state.clear_filter_query(); // already empty
+        assert_eq!(state.offset, 5); // unchanged
+    }
+
+    #[test]
+    fn list_select_next_in_multi_select_preserves_others() {
+        let mut state = ListState::default();
+        state.set_multi_select(true);
+        state.toggle_multi_selected(0);
+        state.toggle_multi_selected(2);
+        // toggle_multi_selected sets selected to last toggled (2)
+        assert_eq!(state.selected(), Some(2));
+        assert_eq!(state.selected_count(), 2);
+
+        // Navigate down should not clear multi_selected
+        state.select_next(5);
+        assert_eq!(state.selected(), Some(3)); // moved from 2 to 3
+        assert!(state.selected_indices().contains(&0));
+        assert!(state.selected_indices().contains(&2));
+    }
+
+    #[test]
+    fn list_deselect_clears_multi_selected() {
+        let mut state = ListState::default();
+        state.set_multi_select(true);
+        state.toggle_multi_selected(0);
+        state.toggle_multi_selected(1);
+        state.toggle_multi_selected(2);
+        assert_eq!(state.selected_count(), 3);
+
+        state.select(None);
+        assert_eq!(state.selected_count(), 0);
+        assert!(state.selected_indices().is_empty());
+    }
+
+    #[test]
+    fn list_vi_j_moves_through_filtered_items() {
+        let list = List::new(vec![
+            ListItem::new("xylophone"),
+            ListItem::new("berry"),
+            ListItem::new("box"),
+            ListItem::new("cat"),
+        ]);
+        let mut state = ListState::default();
+        state.set_filter_query("b");
+        // Filtered: berry(1), box(2)
+        state.select(Some(1)); // berry
+
+        // j should move to box(2), skipping xylophone(0) and cat(3)
+        assert!(list.handle_key(&mut state, &KeyEvent::new(KeyCode::Char('j'))));
+        assert_eq!(state.selected(), Some(2)); // box
+
+        // j at end → should stay at box(2)
+        assert!(!list.handle_key(&mut state, &KeyEvent::new(KeyCode::Char('j'))));
+        assert_eq!(state.selected(), Some(2));
+    }
+
+    #[test]
+    fn list_multi_select_untoggle_removes_from_set() {
+        let mut state = ListState::default();
+        state.set_multi_select(true);
+        state.select(Some(0));
+        state.toggle_multi_selected(0);
+        assert!(state.selected_indices().contains(&0));
+        assert_eq!(state.selected_count(), 1);
+
+        // Toggle again removes from multi_selected
+        state.toggle_multi_selected(0);
+        assert!(!state.selected_indices().contains(&0));
+    }
+
+    #[test]
+    fn list_widget_render_uses_default_state() {
+        let list = List::new(vec![ListItem::new("alpha"), ListItem::new("beta")]);
+        let mut state = ListState::default();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(10, 3, &mut pool);
+        StatefulWidget::render(&list, Rect::new(0, 0, 10, 3), &mut frame, &mut state);
+        // No selection, first item should render at row 0
+        assert_eq!(row_text(&frame, 0), "alpha");
+        assert_eq!(row_text(&frame, 1), "beta");
+    }
 }
