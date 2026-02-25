@@ -871,13 +871,58 @@ impl Tree {
         true
     }
 
-    /// Handle keyboard expand/collapse at the currently selected visible row.
+    /// Handle keyboard navigation at the currently selected visible row.
+    ///
+    /// Supported keys:
+    /// - **Enter / Space**: Toggle expand/collapse on the selected node.
+    /// - **Right**: Expand the selected node (if collapsed and has children).
+    /// - **Left**: Collapse the selected node (if expanded).
     ///
     /// Returns `true` when an expand/collapse action was applied.
     pub fn handle_key(&mut self, key: &KeyEvent, selected_visible_index: usize) -> bool {
         match key.code {
             KeyCode::Enter | KeyCode::Char(' ') => {
                 self.toggle_node_at_visible_index(selected_visible_index, "keyboard")
+            }
+            KeyCode::Right => {
+                // Expand if collapsed and has children.
+                if let Some(node) = self.node_at_visible_index_mut(selected_visible_index)
+                    && !node.is_expanded()
+                    && node.has_children()
+                {
+                    #[cfg(feature = "tracing")]
+                    let label = node.label().to_owned();
+                    node.toggle_expanded();
+                    #[cfg(feature = "tracing")]
+                    Self::log_expand_collapse(
+                        "expand",
+                        "keyboard",
+                        selected_visible_index,
+                        &label,
+                    );
+                    return true;
+                }
+                false
+            }
+            KeyCode::Left => {
+                // Collapse if expanded.
+                if let Some(node) = self.node_at_visible_index_mut(selected_visible_index)
+                    && node.is_expanded()
+                    && node.has_children()
+                {
+                    #[cfg(feature = "tracing")]
+                    let label = node.label().to_owned();
+                    node.toggle_expanded();
+                    #[cfg(feature = "tracing")]
+                    Self::log_expand_collapse(
+                        "collapse",
+                        "keyboard",
+                        selected_visible_index,
+                        &label,
+                    );
+                    return true;
+                }
+                false
             }
             _ => false,
         }
@@ -1880,6 +1925,317 @@ mod tests {
         assert!(!tree.root().children()[0].is_expanded());
         assert!(tree.handle_key(&KeyEvent::new(KeyCode::Char(' ')), 1));
         assert!(tree.root().children()[0].is_expanded());
+    }
+
+    // =========================================================================
+    // Keyboard navigation tests (bd-1lg.26)
+    // =========================================================================
+
+    #[test]
+    fn tree_handle_key_right_expands_collapsed_node() {
+        let mut tree = Tree::new(
+            TreeNode::new("root")
+                .child(
+                    TreeNode::new("a")
+                        .with_expanded(false)
+                        .child(TreeNode::new("a1")),
+                )
+                .child(TreeNode::new("b")),
+        );
+        assert!(!tree.root().children()[0].is_expanded());
+
+        // Right arrow on collapsed parent should expand it.
+        assert!(tree.handle_key(&KeyEvent::new(KeyCode::Right), 1));
+        assert!(tree.root().children()[0].is_expanded());
+    }
+
+    #[test]
+    fn tree_handle_key_right_on_expanded_node_is_noop() {
+        let mut tree = Tree::new(
+            TreeNode::new("root")
+                .child(TreeNode::new("a").child(TreeNode::new("a1")))
+                .child(TreeNode::new("b")),
+        );
+        assert!(tree.root().children()[0].is_expanded());
+
+        // Right arrow on already-expanded node should be no-op.
+        assert!(!tree.handle_key(&KeyEvent::new(KeyCode::Right), 1));
+        assert!(tree.root().children()[0].is_expanded());
+    }
+
+    #[test]
+    fn tree_handle_key_right_on_leaf_is_noop() {
+        let mut tree = Tree::new(
+            TreeNode::new("root")
+                .child(TreeNode::new("a").child(TreeNode::new("a1")))
+                .child(TreeNode::new("b")),
+        );
+
+        // Right arrow on leaf node "b" (index 3) should be no-op.
+        assert!(!tree.handle_key(&KeyEvent::new(KeyCode::Right), 3));
+    }
+
+    #[test]
+    fn tree_handle_key_left_collapses_expanded_node() {
+        let mut tree = Tree::new(
+            TreeNode::new("root")
+                .child(TreeNode::new("a").child(TreeNode::new("a1")))
+                .child(TreeNode::new("b")),
+        );
+        assert!(tree.root().children()[0].is_expanded());
+
+        // Left arrow on expanded parent should collapse it.
+        assert!(tree.handle_key(&KeyEvent::new(KeyCode::Left), 1));
+        assert!(!tree.root().children()[0].is_expanded());
+    }
+
+    #[test]
+    fn tree_handle_key_left_on_collapsed_node_is_noop() {
+        let mut tree = Tree::new(
+            TreeNode::new("root")
+                .child(
+                    TreeNode::new("a")
+                        .with_expanded(false)
+                        .child(TreeNode::new("a1")),
+                )
+                .child(TreeNode::new("b")),
+        );
+        assert!(!tree.root().children()[0].is_expanded());
+
+        // Left arrow on already-collapsed node should be no-op.
+        assert!(!tree.handle_key(&KeyEvent::new(KeyCode::Left), 1));
+        assert!(!tree.root().children()[0].is_expanded());
+    }
+
+    #[test]
+    fn tree_handle_key_left_on_leaf_is_noop() {
+        let mut tree = Tree::new(
+            TreeNode::new("root")
+                .child(TreeNode::new("a").child(TreeNode::new("a1")))
+                .child(TreeNode::new("b")),
+        );
+
+        // Left arrow on leaf node "b" (index 3) should be no-op.
+        assert!(!tree.handle_key(&KeyEvent::new(KeyCode::Left), 3));
+    }
+
+    #[test]
+    fn tree_handle_key_left_right_round_trip() {
+        let mut tree = Tree::new(
+            TreeNode::new("root")
+                .child(TreeNode::new("a").child(TreeNode::new("a1")))
+                .child(TreeNode::new("b")),
+        );
+
+        // Collapse with Left.
+        assert!(tree.root().children()[0].is_expanded());
+        assert!(tree.handle_key(&KeyEvent::new(KeyCode::Left), 1));
+        assert!(!tree.root().children()[0].is_expanded());
+
+        // Expand with Right.
+        assert!(tree.handle_key(&KeyEvent::new(KeyCode::Right), 1));
+        assert!(tree.root().children()[0].is_expanded());
+    }
+
+    #[test]
+    fn tree_handle_key_unhandled_keys_return_false() {
+        let mut tree = Tree::new(
+            TreeNode::new("root")
+                .child(TreeNode::new("a").child(TreeNode::new("a1")))
+                .child(TreeNode::new("b")),
+        );
+
+        // Up/Down are not handled by the tree widget (caller manages selection).
+        assert!(!tree.handle_key(&KeyEvent::new(KeyCode::Up), 1));
+        assert!(!tree.handle_key(&KeyEvent::new(KeyCode::Down), 1));
+        assert!(!tree.handle_key(&KeyEvent::new(KeyCode::Tab), 1));
+        assert!(!tree.handle_key(&KeyEvent::new(KeyCode::Escape), 1));
+    }
+
+    #[test]
+    fn tree_visible_index_navigation_after_collapse() {
+        let mut tree = Tree::new(
+            TreeNode::new("root")
+                .child(
+                    TreeNode::new("a")
+                        .child(TreeNode::new("a1"))
+                        .child(TreeNode::new("a2")),
+                )
+                .child(TreeNode::new("b")),
+        );
+
+        // Before collapse: root=0, a=1, a1=2, a2=3, b=4
+        assert_eq!(
+            tree.node_at_visible_index_mut(4)
+                .map(|n| n.label().to_string()),
+            Some("b".to_string())
+        );
+
+        // Collapse "a" with Left key
+        assert!(tree.handle_key(&KeyEvent::new(KeyCode::Left), 1));
+
+        // After collapse: root=0, a=1, b=2
+        assert_eq!(
+            tree.node_at_visible_index_mut(2)
+                .map(|n| n.label().to_string()),
+            Some("b".to_string())
+        );
+        assert!(tree.node_at_visible_index_mut(3).is_none());
+    }
+
+    // =========================================================================
+    // Lazy loading tests (bd-1lg.26)
+    // =========================================================================
+
+    #[test]
+    fn tree_lazy_children_materialized_visible_count() {
+        let mut node = TreeNode::new("root").with_lazy_children(vec![
+            TreeNode::new("child1").child(TreeNode::new("grandchild")),
+            TreeNode::new("child2"),
+        ]);
+
+        // Before expand: only root visible.
+        assert_eq!(node.visible_count(), 1);
+
+        // Expand → lazy children materialize.
+        node.toggle_expanded();
+        // root + child1 (expanded) + grandchild + child2 = 4
+        assert_eq!(node.visible_count(), 4);
+    }
+
+    #[test]
+    fn tree_lazy_children_second_toggle_collapses() {
+        let mut node = TreeNode::new("root")
+            .with_lazy_children(vec![TreeNode::new("child1"), TreeNode::new("child2")]);
+
+        // Expand.
+        node.toggle_expanded();
+        assert!(node.is_expanded());
+        assert_eq!(node.children().len(), 2);
+
+        // Collapse. Children stay materialized but hidden.
+        node.toggle_expanded();
+        assert!(!node.is_expanded());
+        assert_eq!(node.children().len(), 2); // still there
+        assert_eq!(node.visible_count(), 1); // only root visible
+    }
+
+    #[test]
+    fn tree_lazy_children_with_right_key() {
+        let mut tree = Tree::new(TreeNode::new("root").child(
+            TreeNode::new("lazy-parent").with_lazy_children(vec![TreeNode::new("lazy-child")]),
+        ));
+
+        // root=0, lazy-parent=1 (collapsed, has lazy children)
+        assert!(!tree.root().children()[0].is_expanded());
+        assert!(tree.root().children()[0].has_children());
+
+        // Right key should expand and materialize lazy children.
+        assert!(tree.handle_key(&KeyEvent::new(KeyCode::Right), 1));
+        assert!(tree.root().children()[0].is_expanded());
+        assert_eq!(tree.root().children()[0].children().len(), 1);
+        assert_eq!(
+            tree.root().children()[0].children()[0].label(),
+            "lazy-child"
+        );
+    }
+
+    // =========================================================================
+    // Search filter tests (bd-1lg.26)
+    // =========================================================================
+
+    #[test]
+    fn tree_search_case_insensitive() {
+        let tree = Tree::new(
+            TreeNode::new("root")
+                .child(TreeNode::new("Alpha"))
+                .child(TreeNode::new("Beta")),
+        )
+        .with_search_query("alpha");
+
+        let flat = tree.flatten();
+        assert_eq!(flat.len(), 2); // root + Alpha
+        assert_eq!(flat[1].label, "Alpha");
+    }
+
+    #[test]
+    fn tree_search_no_match_falls_back_to_unfiltered() {
+        let tree = Tree::new(
+            TreeNode::new("root")
+                .child(TreeNode::new("Alpha"))
+                .child(TreeNode::new("Beta")),
+        )
+        .with_search_query("zzz-no-match");
+
+        let flat = tree.flatten();
+        // When nothing matches (including root), filter_node returns None,
+        // so flatten falls back to the unfiltered tree.
+        assert_eq!(flat.len(), 3); // root + Alpha + Beta
+    }
+
+    #[test]
+    fn tree_search_cleared() {
+        let tree = Tree::new(
+            TreeNode::new("root")
+                .child(TreeNode::new("Alpha"))
+                .child(TreeNode::new("Beta")),
+        )
+        .with_search_query("alpha")
+        .without_search_query();
+
+        let flat = tree.flatten();
+        assert_eq!(flat.len(), 3); // root + Alpha + Beta
+    }
+
+    // =========================================================================
+    // Expansion state correctness (bd-1lg.26)
+    // =========================================================================
+
+    #[test]
+    fn tree_expand_deep_nesting() {
+        let mut tree = Tree::new(
+            TreeNode::new("root").child(
+                TreeNode::new("d1").with_expanded(false).child(
+                    TreeNode::new("d2")
+                        .with_expanded(false)
+                        .child(TreeNode::new("d3")),
+                ),
+            ),
+        );
+
+        // Initially: root + d1 (collapsed) = 2 visible
+        assert_eq!(tree.root().visible_count(), 2);
+
+        // Expand d1
+        assert!(tree.handle_key(&KeyEvent::new(KeyCode::Right), 1));
+        // root + d1 + d2 (collapsed) = 3 visible
+        assert_eq!(tree.root().visible_count(), 3);
+
+        // Expand d2 (now at index 2)
+        assert!(tree.handle_key(&KeyEvent::new(KeyCode::Right), 2));
+        // root + d1 + d2 + d3 = 4 visible
+        assert_eq!(tree.root().visible_count(), 4);
+    }
+
+    #[test]
+    fn tree_collapse_parent_hides_all_descendants() {
+        let mut tree = Tree::new(
+            TreeNode::new("root")
+                .child(
+                    TreeNode::new("a")
+                        .child(TreeNode::new("a1").child(TreeNode::new("a1x")))
+                        .child(TreeNode::new("a2")),
+                )
+                .child(TreeNode::new("b")),
+        );
+
+        // All expanded: root + a + a1 + a1x + a2 + b = 6
+        assert_eq!(tree.root().visible_count(), 6);
+
+        // Collapse "a" → hides a1, a1x, a2
+        assert!(tree.handle_key(&KeyEvent::new(KeyCode::Left), 1));
+        // root + a (collapsed) + b = 3
+        assert_eq!(tree.root().visible_count(), 3);
     }
 
     #[cfg(feature = "tracing")]
