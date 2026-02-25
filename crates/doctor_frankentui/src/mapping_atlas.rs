@@ -103,7 +103,7 @@ pub struct FailureMode {
 }
 
 /// Strategy for resolving mapping issues.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RemediationStrategy {
     /// Suggested approach.
     pub approach: String,

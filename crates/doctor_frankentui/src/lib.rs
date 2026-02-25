@@ -12,6 +12,7 @@ pub mod fixture_taxonomy;
 pub mod harness;
 pub mod import;
 pub mod intent_inference;
+pub mod ir_explainer;
 pub mod ir_normalize;
 pub mod ir_versioning;
 pub mod keyseq;
@@ -31,6 +32,7 @@ pub mod style_semantics;
 pub mod suite;
 pub mod tape;
 pub mod trace;
+pub mod translation_planner;
 pub mod tsx_parser;
 pub mod util;
 
