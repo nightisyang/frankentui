@@ -48,6 +48,7 @@ pub mod flicker_detection;
 pub mod golden;
 pub mod hdd;
 pub mod input_storm;
+pub mod lab_integration;
 pub mod resize_storm;
 pub mod terminal_model;
 pub mod time_travel;
@@ -70,6 +71,7 @@ pub use determinism::{
     DeterminismFixture, JsonValue, LabScenario, LabScenarioContext, LabScenarioResult,
     LabScenarioRun, TestJsonlLogger, lab_scenarios_run_total,
 };
+pub use lab_integration::{Lab, LabConfig, LabOutput, LabSession};
 pub use ftui_core::geometry::Rect;
 pub use ftui_render::buffer;
 pub use ftui_render::cell;
