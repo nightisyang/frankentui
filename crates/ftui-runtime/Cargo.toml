@@ -93,3 +93,7 @@ required-features = ["telemetry"]
 [[bench]]
 name = "tick_strategy_bench"
 harness = false
+
+[[bench]]
+name = "ivm_bench"
+harness = false
