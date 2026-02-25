@@ -15,6 +15,9 @@ const SUPPORTED_EVIDENCE_MANIFEST_SCHEMA_VERSION: &str = "evidence-manifest-v1";
 const BUILTIN_CONFIDENCE_MODEL_JSON: &str =
     include_str!("../contracts/opentui_confidence_model_v1.json");
 const SUPPORTED_CONFIDENCE_MODEL_SCHEMA_VERSION: &str = "confidence-model-v1";
+const BUILTIN_LICENSING_PROVENANCE_JSON: &str =
+    include_str!("../contracts/opentui_licensing_provenance_v1.json");
+const SUPPORTED_LICENSING_PROVENANCE_SCHEMA_VERSION: &str = "licensing-provenance-v1";
 const REQUIRED_POLICY_CATEGORIES: [&str; 6] = [
     "state",
     "layout",
@@ -1487,6 +1490,535 @@ impl ConfidenceModel {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Licensing & Provenance Guardrails — IP-risk and attribution enforcement
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct LicensingProvenanceContract {
+    pub contract_id: String,
+    pub schema_version: String,
+    pub contract_version: String,
+    pub licensing_policy: LicensingPolicy,
+    pub provenance_chain_policy: ProvenanceChainPolicy,
+    pub ip_artifact_statuses: Vec<String>,
+    pub fail_safe_defaults: FailSafeDefaults,
+    pub attribution_template: AttributionTemplate,
+    pub risk_flags: Vec<LicensingRiskFlag>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LicensingPolicy {
+    pub allowed_license_classes: Vec<String>,
+    pub blocked_license_classes: Vec<String>,
+    pub copyleft_boundary_action: String,
+    pub missing_license_action: String,
+    pub ambiguous_license_action: String,
+    pub license_class_definitions: Vec<LicenseClassDefinition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LicenseClassDefinition {
+    pub class_id: String,
+    pub description: String,
+    pub risk_level: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProvenanceChainPolicy {
+    pub required_stages: Vec<String>,
+    pub hash_algorithm: String,
+    pub chain_must_be_unbroken: bool,
+    pub each_stage_must_record: Vec<String>,
+    pub attribution_required: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FailSafeDefaults {
+    pub on_missing_provenance: String,
+    pub on_broken_chain: String,
+    pub on_blocked_license: String,
+    pub on_unknown_license: String,
+    pub on_expired_attribution: String,
+    pub on_needs_counsel: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AttributionTemplate {
+    pub format: String,
+    pub required_fields: Vec<String>,
+    pub optional_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LicensingRiskFlag {
+    pub flag_id: String,
+    pub severity: String,
+    pub description: String,
+}
+
+// ---------------------------------------------------------------------------
+// Runtime types for provenance tracking and IP artifact assessment
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IpArtifactStatus {
+    Clear,
+    Expired,
+    Unknown,
+    NeedsCounsel,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IpArtifactRecord {
+    pub artifact_id: String,
+    pub license_spdx: Option<String>,
+    pub license_class: String,
+    pub status: IpArtifactStatus,
+    pub risk_flags: Vec<String>,
+    pub design_around_notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProvenanceChainRecord {
+    pub stage_id: String,
+    pub input_hash: String,
+    pub output_hash: String,
+    pub tool_version: String,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ProvenanceReport {
+    pub run_id: String,
+    pub chain: Vec<ProvenanceChainRecord>,
+    pub ip_artifacts: Vec<IpArtifactRecord>,
+    pub attribution_notice: String,
+    pub unresolved_risk_flags: Vec<String>,
+    pub overall_status: IpArtifactStatus,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProvenanceAction {
+    Accept,
+    Hold,
+    Reject,
+}
+
+impl LicensingProvenanceContract {
+    pub fn parse_and_validate(raw_json: &str) -> Result<Self> {
+        let parsed: Self = serde_json::from_str(raw_json)?;
+        parsed.validate()?;
+        Ok(parsed)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != SUPPORTED_LICENSING_PROVENANCE_SCHEMA_VERSION {
+            return Err(SemanticContractError::Validation(format!(
+                "unsupported licensing provenance schema_version '{}' (expected '{}')",
+                self.schema_version, SUPPORTED_LICENSING_PROVENANCE_SCHEMA_VERSION
+            )));
+        }
+        if self.contract_id.trim().is_empty() {
+            return Err(SemanticContractError::Validation(
+                "contract_id must not be empty".to_string(),
+            ));
+        }
+
+        self.validate_licensing_policy()?;
+        self.validate_provenance_chain_policy()?;
+        self.validate_ip_artifact_statuses()?;
+        self.validate_fail_safe_defaults()?;
+        self.validate_attribution_template()?;
+        self.validate_risk_flags()?;
+
+        Ok(())
+    }
+
+    fn validate_licensing_policy(&self) -> Result<()> {
+        let lp = &self.licensing_policy;
+        if lp.allowed_license_classes.is_empty() {
+            return Err(SemanticContractError::Validation(
+                "licensing_policy.allowed_license_classes must not be empty".to_string(),
+            ));
+        }
+        if lp.blocked_license_classes.is_empty() {
+            return Err(SemanticContractError::Validation(
+                "licensing_policy.blocked_license_classes must not be empty".to_string(),
+            ));
+        }
+        if lp.license_class_definitions.is_empty() {
+            return Err(SemanticContractError::Validation(
+                "licensing_policy.license_class_definitions must not be empty".to_string(),
+            ));
+        }
+
+        // Every referenced class must have a definition.
+        let defined_classes: BTreeSet<_> = lp
+            .license_class_definitions
+            .iter()
+            .map(|d| d.class_id.as_str())
+            .collect();
+        for class in lp
+            .allowed_license_classes
+            .iter()
+            .chain(lp.blocked_license_classes.iter())
+        {
+            if !defined_classes.contains(class.as_str()) {
+                return Err(SemanticContractError::Validation(format!(
+                    "license class '{}' referenced but not defined in license_class_definitions",
+                    class
+                )));
+            }
+        }
+
+        // Allowed and blocked must be disjoint.
+        let allowed: BTreeSet<_> = lp.allowed_license_classes.iter().collect();
+        let blocked: BTreeSet<_> = lp.blocked_license_classes.iter().collect();
+        let overlap: Vec<_> = allowed.intersection(&blocked).collect();
+        if !overlap.is_empty() {
+            return Err(SemanticContractError::Validation(format!(
+                "license classes cannot be both allowed and blocked: {:?}",
+                overlap
+            )));
+        }
+
+        // Validate class definitions have non-empty fields.
+        let mut seen_ids = BTreeSet::new();
+        let valid_risk_levels = ["low", "medium", "high", "critical"];
+        for def in &lp.license_class_definitions {
+            if def.class_id.trim().is_empty() {
+                return Err(SemanticContractError::Validation(
+                    "license class_id must not be empty".to_string(),
+                ));
+            }
+            if !seen_ids.insert(def.class_id.clone()) {
+                return Err(SemanticContractError::Validation(format!(
+                    "duplicate license class_id '{}'",
+                    def.class_id
+                )));
+            }
+            if def.description.trim().is_empty() {
+                return Err(SemanticContractError::Validation(format!(
+                    "license class '{}' has empty description",
+                    def.class_id
+                )));
+            }
+            if !valid_risk_levels.contains(&def.risk_level.as_str()) {
+                return Err(SemanticContractError::Validation(format!(
+                    "license class '{}' has invalid risk_level '{}' (expected: low, medium, high, critical)",
+                    def.class_id, def.risk_level
+                )));
+            }
+        }
+
+        // Validate action strings.
+        let valid_actions = ["fail_safe", "reject", "hold", "needs_counsel", "warn"];
+        for (name, action) in [
+            ("copyleft_boundary_action", &lp.copyleft_boundary_action),
+            ("missing_license_action", &lp.missing_license_action),
+            ("ambiguous_license_action", &lp.ambiguous_license_action),
+        ] {
+            if !valid_actions.contains(&action.as_str()) {
+                return Err(SemanticContractError::Validation(format!(
+                    "licensing_policy.{name} '{}' not a valid action",
+                    action
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_provenance_chain_policy(&self) -> Result<()> {
+        let pcp = &self.provenance_chain_policy;
+        if pcp.required_stages.is_empty() {
+            return Err(SemanticContractError::Validation(
+                "provenance_chain_policy.required_stages must not be empty".to_string(),
+            ));
+        }
+        if pcp.hash_algorithm.trim().is_empty() {
+            return Err(SemanticContractError::Validation(
+                "provenance_chain_policy.hash_algorithm must not be empty".to_string(),
+            ));
+        }
+        if pcp.each_stage_must_record.is_empty() {
+            return Err(SemanticContractError::Validation(
+                "provenance_chain_policy.each_stage_must_record must not be empty".to_string(),
+            ));
+        }
+        // Validate required recording fields.
+        let required_recording = ["input_hash", "output_hash", "tool_version", "timestamp"];
+        for required in required_recording {
+            if !pcp.each_stage_must_record.iter().any(|f| f == required) {
+                return Err(SemanticContractError::Validation(format!(
+                    "provenance_chain_policy.each_stage_must_record missing required field '{}'",
+                    required
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_ip_artifact_statuses(&self) -> Result<()> {
+        if self.ip_artifact_statuses.is_empty() {
+            return Err(SemanticContractError::Validation(
+                "ip_artifact_statuses must not be empty".to_string(),
+            ));
+        }
+        let required = ["clear", "unknown", "blocked"];
+        for r in required {
+            if !self.ip_artifact_statuses.iter().any(|s| s == r) {
+                return Err(SemanticContractError::Validation(format!(
+                    "ip_artifact_statuses must include '{r}'"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_fail_safe_defaults(&self) -> Result<()> {
+        let fsd = &self.fail_safe_defaults;
+        let valid_actions = ["accept", "hold", "reject"];
+        for (name, action) in [
+            ("on_missing_provenance", &fsd.on_missing_provenance),
+            ("on_broken_chain", &fsd.on_broken_chain),
+            ("on_blocked_license", &fsd.on_blocked_license),
+            ("on_unknown_license", &fsd.on_unknown_license),
+            ("on_expired_attribution", &fsd.on_expired_attribution),
+            ("on_needs_counsel", &fsd.on_needs_counsel),
+        ] {
+            if !valid_actions.contains(&action.as_str()) {
+                return Err(SemanticContractError::Validation(format!(
+                    "fail_safe_defaults.{name} '{}' not a valid action (accept, hold, reject)",
+                    action
+                )));
+            }
+        }
+        // Critical paths must default to reject (fail-safe requirement).
+        if fsd.on_missing_provenance != "reject" {
+            return Err(SemanticContractError::Validation(
+                "fail_safe_defaults.on_missing_provenance must be 'reject' for safety".to_string(),
+            ));
+        }
+        if fsd.on_broken_chain != "reject" {
+            return Err(SemanticContractError::Validation(
+                "fail_safe_defaults.on_broken_chain must be 'reject' for safety".to_string(),
+            ));
+        }
+        if fsd.on_blocked_license != "reject" {
+            return Err(SemanticContractError::Validation(
+                "fail_safe_defaults.on_blocked_license must be 'reject' for safety".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_attribution_template(&self) -> Result<()> {
+        let at = &self.attribution_template;
+        if at.format.trim().is_empty() {
+            return Err(SemanticContractError::Validation(
+                "attribution_template.format must not be empty".to_string(),
+            ));
+        }
+        if at.required_fields.is_empty() {
+            return Err(SemanticContractError::Validation(
+                "attribution_template.required_fields must not be empty".to_string(),
+            ));
+        }
+        for field in &at.required_fields {
+            if field.trim().is_empty() {
+                return Err(SemanticContractError::Validation(
+                    "attribution_template contains empty required field".to_string(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_risk_flags(&self) -> Result<()> {
+        let mut seen_ids = BTreeSet::new();
+        let valid_severities = ["low", "medium", "high", "critical"];
+        for flag in &self.risk_flags {
+            if flag.flag_id.trim().is_empty() {
+                return Err(SemanticContractError::Validation(
+                    "risk flag_id must not be empty".to_string(),
+                ));
+            }
+            if !seen_ids.insert(flag.flag_id.clone()) {
+                return Err(SemanticContractError::Validation(format!(
+                    "duplicate risk flag_id '{}'",
+                    flag.flag_id
+                )));
+            }
+            if !valid_severities.contains(&flag.severity.as_str()) {
+                return Err(SemanticContractError::Validation(format!(
+                    "risk flag '{}' has invalid severity '{}' (expected: low, medium, high, critical)",
+                    flag.flag_id, flag.severity
+                )));
+            }
+            if flag.description.trim().is_empty() {
+                return Err(SemanticContractError::Validation(format!(
+                    "risk flag '{}' has empty description",
+                    flag.flag_id
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Look up a license class definition by class_id.
+    #[must_use]
+    pub fn license_class(&self, class_id: &str) -> Option<&LicenseClassDefinition> {
+        self.licensing_policy
+            .license_class_definitions
+            .iter()
+            .find(|def| def.class_id == class_id)
+    }
+
+    /// Check if a given license class is allowed.
+    #[must_use]
+    pub fn is_license_allowed(&self, class_id: &str) -> bool {
+        self.licensing_policy
+            .allowed_license_classes
+            .iter()
+            .any(|c| c == class_id)
+    }
+
+    /// Check if a given license class is blocked.
+    #[must_use]
+    pub fn is_license_blocked(&self, class_id: &str) -> bool {
+        self.licensing_policy
+            .blocked_license_classes
+            .iter()
+            .any(|c| c == class_id)
+    }
+
+    /// Determine the fail-safe action for a given IP artifact status.
+    #[must_use]
+    pub fn fail_safe_action(&self, status: IpArtifactStatus) -> ProvenanceAction {
+        let action_str = match status {
+            IpArtifactStatus::Clear => return ProvenanceAction::Accept,
+            IpArtifactStatus::Blocked => &self.fail_safe_defaults.on_blocked_license,
+            IpArtifactStatus::Unknown => &self.fail_safe_defaults.on_unknown_license,
+            IpArtifactStatus::NeedsCounsel => &self.fail_safe_defaults.on_needs_counsel,
+            IpArtifactStatus::Expired => &self.fail_safe_defaults.on_expired_attribution,
+        };
+        match action_str.as_str() {
+            "accept" => ProvenanceAction::Accept,
+            "hold" => ProvenanceAction::Hold,
+            _ => ProvenanceAction::Reject,
+        }
+    }
+
+    /// Validate a provenance chain: check it covers all required stages
+    /// and has an unbroken hash chain.
+    pub fn validate_provenance_chain(
+        &self,
+        chain: &[ProvenanceChainRecord],
+    ) -> Result<()> {
+        let required = &self.provenance_chain_policy.required_stages;
+        let chain_stage_ids: BTreeSet<_> = chain.iter().map(|r| r.stage_id.as_str()).collect();
+
+        for stage in required {
+            if !chain_stage_ids.contains(stage.as_str()) {
+                return Err(SemanticContractError::Validation(format!(
+                    "provenance chain missing required stage '{stage}'"
+                )));
+            }
+        }
+
+        if self.provenance_chain_policy.chain_must_be_unbroken {
+            for window in chain.windows(2) {
+                if window[0].output_hash != window[1].input_hash {
+                    return Err(SemanticContractError::Validation(format!(
+                        "provenance chain broken: stage '{}' output_hash ({}) != stage '{}' input_hash ({})",
+                        window[0].stage_id, window[0].output_hash,
+                        window[1].stage_id, window[1].input_hash
+                    )));
+                }
+            }
+        }
+
+        for record in chain {
+            if record.tool_version.trim().is_empty() {
+                return Err(SemanticContractError::Validation(format!(
+                    "provenance record for stage '{}' missing tool_version",
+                    record.stage_id
+                )));
+            }
+            if record.timestamp.trim().is_empty() {
+                return Err(SemanticContractError::Validation(format!(
+                    "provenance record for stage '{}' missing timestamp",
+                    record.stage_id
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Assess a set of IP artifacts and produce a provenance report.
+    #[must_use]
+    pub fn assess_ip_artifacts(
+        &self,
+        run_id: &str,
+        chain: &[ProvenanceChainRecord],
+        artifacts: &[IpArtifactRecord],
+    ) -> ProvenanceReport {
+        let mut unresolved_flags = Vec::new();
+        let mut worst_status = IpArtifactStatus::Clear;
+
+        for artifact in artifacts {
+            if self.is_license_blocked(&artifact.license_class) {
+                worst_status = IpArtifactStatus::Blocked;
+            }
+            match artifact.status {
+                IpArtifactStatus::Blocked => worst_status = IpArtifactStatus::Blocked,
+                IpArtifactStatus::NeedsCounsel if worst_status != IpArtifactStatus::Blocked => {
+                    worst_status = IpArtifactStatus::NeedsCounsel;
+                }
+                IpArtifactStatus::Unknown
+                    if worst_status != IpArtifactStatus::Blocked
+                        && worst_status != IpArtifactStatus::NeedsCounsel =>
+                {
+                    worst_status = IpArtifactStatus::Unknown;
+                }
+                IpArtifactStatus::Expired
+                    if worst_status == IpArtifactStatus::Clear =>
+                {
+                    worst_status = IpArtifactStatus::Expired;
+                }
+                _ => {}
+            }
+            for flag in &artifact.risk_flags {
+                if !unresolved_flags.contains(flag) {
+                    unresolved_flags.push(flag.clone());
+                }
+            }
+        }
+
+        ProvenanceReport {
+            run_id: run_id.to_string(),
+            chain: chain.to_vec(),
+            ip_artifacts: artifacts.to_vec(),
+            attribution_notice: String::new(), // Populated by caller
+            unresolved_risk_flags: unresolved_flags,
+            overall_status: worst_status,
+        }
+    }
+}
+
 pub fn load_builtin_semantic_contract() -> Result<SemanticEquivalenceContract> {
     SemanticEquivalenceContract::parse_and_validate(BUILTIN_CONTRACT_JSON)
 }
@@ -1501,6 +2033,10 @@ pub fn load_builtin_evidence_manifest() -> Result<EvidenceManifest> {
 
 pub fn load_builtin_confidence_model() -> Result<ConfidenceModel> {
     ConfidenceModel::parse_and_validate(BUILTIN_CONFIDENCE_MODEL_JSON)
+}
+
+pub fn load_builtin_licensing_provenance() -> Result<LicensingProvenanceContract> {
+    LicensingProvenanceContract::parse_and_validate(BUILTIN_LICENSING_PROVENANCE_JSON)
 }
 
 #[cfg(test)]
@@ -3146,5 +3682,459 @@ mod tests {
                 covered
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Licensing & Provenance Guardrails tests
+    // -----------------------------------------------------------------------
+
+    fn load_licensing() -> Result<super::LicensingProvenanceContract> {
+        super::load_builtin_licensing_provenance()
+    }
+
+    #[test]
+    fn builtin_licensing_provenance_parses_and_validates() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        assert_eq!(
+            contract.schema_version,
+            super::SUPPORTED_LICENSING_PROVENANCE_SCHEMA_VERSION
+        );
+        assert!(!contract.contract_id.is_empty());
+    }
+
+    #[test]
+    fn licensing_policy_has_allowed_and_blocked_classes() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        assert!(
+            !contract.licensing_policy.allowed_license_classes.is_empty(),
+            "must have allowed license classes"
+        );
+        assert!(
+            !contract.licensing_policy.blocked_license_classes.is_empty(),
+            "must have blocked license classes"
+        );
+    }
+
+    #[test]
+    fn licensing_allowed_and_blocked_are_disjoint() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        let allowed: std::collections::BTreeSet<_> = contract
+            .licensing_policy
+            .allowed_license_classes
+            .iter()
+            .collect();
+        let blocked: std::collections::BTreeSet<_> = contract
+            .licensing_policy
+            .blocked_license_classes
+            .iter()
+            .collect();
+        let overlap: Vec<_> = allowed.intersection(&blocked).collect();
+        assert!(
+            overlap.is_empty(),
+            "allowed and blocked classes must be disjoint, overlap: {:?}",
+            overlap
+        );
+    }
+
+    #[test]
+    fn licensing_class_definitions_cover_all_references() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        let defined: std::collections::BTreeSet<_> = contract
+            .licensing_policy
+            .license_class_definitions
+            .iter()
+            .map(|d| d.class_id.as_str())
+            .collect();
+        for class in contract
+            .licensing_policy
+            .allowed_license_classes
+            .iter()
+            .chain(contract.licensing_policy.blocked_license_classes.iter())
+        {
+            assert!(
+                defined.contains(class.as_str()),
+                "class '{}' must have a definition",
+                class
+            );
+        }
+    }
+
+    #[test]
+    fn licensing_class_lookup_works() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        for def in &contract.licensing_policy.license_class_definitions {
+            let found = contract
+                .license_class(&def.class_id)
+                .expect("class must be found");
+            assert_eq!(found.description, def.description);
+        }
+        assert!(
+            contract.license_class("nonexistent-class").is_none(),
+            "unknown class must return None"
+        );
+    }
+
+    #[test]
+    fn licensing_is_allowed_and_blocked_are_correct() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        for class in &contract.licensing_policy.allowed_license_classes {
+            assert!(
+                contract.is_license_allowed(class),
+                "class '{}' should be allowed",
+                class
+            );
+            assert!(
+                !contract.is_license_blocked(class),
+                "class '{}' should not be blocked",
+                class
+            );
+        }
+        for class in &contract.licensing_policy.blocked_license_classes {
+            assert!(
+                contract.is_license_blocked(class),
+                "class '{}' should be blocked",
+                class
+            );
+            assert!(
+                !contract.is_license_allowed(class),
+                "class '{}' should not be allowed",
+                class
+            );
+        }
+    }
+
+    #[test]
+    fn provenance_chain_policy_has_required_stages() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        assert!(
+            !contract.provenance_chain_policy.required_stages.is_empty(),
+            "required_stages must not be empty"
+        );
+        assert!(
+            contract.provenance_chain_policy.chain_must_be_unbroken,
+            "chain_must_be_unbroken should be true for safety"
+        );
+    }
+
+    #[test]
+    fn provenance_chain_policy_requires_essential_recording_fields() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        let fields = &contract.provenance_chain_policy.each_stage_must_record;
+        for required in ["input_hash", "output_hash", "tool_version", "timestamp"] {
+            assert!(
+                fields.iter().any(|f| f == required),
+                "each_stage_must_record missing '{}'",
+                required
+            );
+        }
+    }
+
+    #[test]
+    fn fail_safe_defaults_reject_critical_issues() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        let fsd = &contract.fail_safe_defaults;
+        assert_eq!(
+            fsd.on_missing_provenance, "reject",
+            "missing provenance must default to reject"
+        );
+        assert_eq!(
+            fsd.on_broken_chain, "reject",
+            "broken chain must default to reject"
+        );
+        assert_eq!(
+            fsd.on_blocked_license, "reject",
+            "blocked license must default to reject"
+        );
+    }
+
+    #[test]
+    fn fail_safe_action_returns_correct_action() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        assert_eq!(
+            contract.fail_safe_action(super::IpArtifactStatus::Clear),
+            super::ProvenanceAction::Accept
+        );
+        assert_eq!(
+            contract.fail_safe_action(super::IpArtifactStatus::Blocked),
+            super::ProvenanceAction::Reject
+        );
+        assert_eq!(
+            contract.fail_safe_action(super::IpArtifactStatus::Unknown),
+            super::ProvenanceAction::Hold
+        );
+        assert_eq!(
+            contract.fail_safe_action(super::IpArtifactStatus::NeedsCounsel),
+            super::ProvenanceAction::Hold
+        );
+    }
+
+    #[test]
+    fn attribution_template_has_required_fields() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        assert!(
+            !contract.attribution_template.required_fields.is_empty(),
+            "attribution template must have required fields"
+        );
+        assert!(
+            !contract.attribution_template.format.is_empty(),
+            "attribution template must have a format"
+        );
+    }
+
+    #[test]
+    fn risk_flags_have_unique_ids_and_valid_severities() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        let mut seen = std::collections::BTreeSet::new();
+        for flag in &contract.risk_flags {
+            assert!(
+                seen.insert(&flag.flag_id),
+                "duplicate risk flag_id '{}'",
+                flag.flag_id
+            );
+            assert!(
+                ["low", "medium", "high", "critical"]
+                    .contains(&flag.severity.as_str()),
+                "flag '{}' has invalid severity '{}'",
+                flag.flag_id,
+                flag.severity
+            );
+        }
+    }
+
+    #[test]
+    fn validate_provenance_chain_accepts_valid_chain() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        let chain = contract
+            .provenance_chain_policy
+            .required_stages
+            .iter()
+            .enumerate()
+            .map(|(i, stage_id)| super::ProvenanceChainRecord {
+                stage_id: stage_id.clone(),
+                input_hash: format!("sha256:hash_{i}"),
+                output_hash: format!("sha256:hash_{}", i + 1),
+                tool_version: "1.0.0".to_string(),
+                timestamp: "2026-02-25T12:00:00Z".to_string(),
+            })
+            .collect::<Vec<_>>();
+        contract
+            .validate_provenance_chain(&chain)
+            .expect("valid chain should pass");
+    }
+
+    #[test]
+    fn validate_provenance_chain_rejects_missing_stage() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        // Chain missing the first required stage
+        let chain = contract
+            .provenance_chain_policy
+            .required_stages
+            .iter()
+            .skip(1) // Skip first required stage
+            .enumerate()
+            .map(|(i, stage_id)| super::ProvenanceChainRecord {
+                stage_id: stage_id.clone(),
+                input_hash: format!("sha256:hash_{i}"),
+                output_hash: format!("sha256:hash_{}", i + 1),
+                tool_version: "1.0.0".to_string(),
+                timestamp: "2026-02-25T12:00:00Z".to_string(),
+            })
+            .collect::<Vec<_>>();
+        let error = contract
+            .validate_provenance_chain(&chain)
+            .expect_err("missing stage should fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("missing required stage")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_provenance_chain_rejects_broken_hash_link() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        let mut chain: Vec<super::ProvenanceChainRecord> = contract
+            .provenance_chain_policy
+            .required_stages
+            .iter()
+            .enumerate()
+            .map(|(i, stage_id)| super::ProvenanceChainRecord {
+                stage_id: stage_id.clone(),
+                input_hash: format!("sha256:hash_{i}"),
+                output_hash: format!("sha256:hash_{}", i + 1),
+                tool_version: "1.0.0".to_string(),
+                timestamp: "2026-02-25T12:00:00Z".to_string(),
+            })
+            .collect();
+        if chain.len() >= 2 {
+            chain[1].input_hash = "sha256:BROKEN".to_string();
+            let error = contract
+                .validate_provenance_chain(&chain)
+                .expect_err("broken chain should fail");
+            assert!(
+                matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("chain broken")),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn assess_ip_artifacts_clear_status_for_all_clear() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        let artifacts = vec![super::IpArtifactRecord {
+            artifact_id: "dep-1".to_string(),
+            license_spdx: Some("MIT".to_string()),
+            license_class: "permissive".to_string(),
+            status: super::IpArtifactStatus::Clear,
+            risk_flags: vec![],
+            design_around_notes: None,
+        }];
+        let report = contract.assess_ip_artifacts("run-1", &[], &artifacts);
+        assert_eq!(report.overall_status, super::IpArtifactStatus::Clear);
+        assert!(report.unresolved_risk_flags.is_empty());
+    }
+
+    #[test]
+    fn assess_ip_artifacts_blocked_status_propagates() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        let artifacts = vec![
+            super::IpArtifactRecord {
+                artifact_id: "dep-clear".to_string(),
+                license_spdx: Some("MIT".to_string()),
+                license_class: "permissive".to_string(),
+                status: super::IpArtifactStatus::Clear,
+                risk_flags: vec![],
+                design_around_notes: None,
+            },
+            super::IpArtifactRecord {
+                artifact_id: "dep-blocked".to_string(),
+                license_spdx: Some("GPL-3.0".to_string()),
+                license_class: "strong_copyleft".to_string(),
+                status: super::IpArtifactStatus::Blocked,
+                risk_flags: vec!["lp-copyleft-contamination".to_string()],
+                design_around_notes: Some("Consider removing this dependency".to_string()),
+            },
+        ];
+        let report = contract.assess_ip_artifacts("run-1", &[], &artifacts);
+        assert_eq!(report.overall_status, super::IpArtifactStatus::Blocked);
+        assert!(report.unresolved_risk_flags.contains(&"lp-copyleft-contamination".to_string()));
+    }
+
+    #[test]
+    fn assess_ip_artifacts_unknown_status_propagates() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        // Use a non-blocked license class with Unknown status to test status propagation
+        let artifacts = vec![super::IpArtifactRecord {
+            artifact_id: "dep-unknown".to_string(),
+            license_spdx: None,
+            license_class: "permissive".to_string(),
+            status: super::IpArtifactStatus::Unknown,
+            risk_flags: vec!["lp-no-license-detected".to_string()],
+            design_around_notes: None,
+        }];
+        let report = contract.assess_ip_artifacts("run-1", &[], &artifacts);
+        assert_eq!(report.overall_status, super::IpArtifactStatus::Unknown);
+    }
+
+    #[test]
+    fn assess_ip_artifacts_blocked_class_overrides_clear_status() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        // Even with Clear status, a blocked license class should propagate to Blocked
+        let artifacts = vec![super::IpArtifactRecord {
+            artifact_id: "dep-gpl".to_string(),
+            license_spdx: Some("GPL-3.0".to_string()),
+            license_class: "unknown".to_string(), // "unknown" is a blocked class
+            status: super::IpArtifactStatus::Clear,
+            risk_flags: vec![],
+            design_around_notes: None,
+        }];
+        let report = contract.assess_ip_artifacts("run-1", &[], &artifacts);
+        assert_eq!(report.overall_status, super::IpArtifactStatus::Blocked);
+    }
+
+    #[test]
+    fn licensing_provenance_round_trip_serialization_is_stable() {
+        let contract = load_licensing().expect("builtin licensing provenance should parse");
+        let serialized =
+            serde_json::to_string_pretty(&contract).expect("should serialize");
+        let deserialized: super::LicensingProvenanceContract =
+            serde_json::from_str(&serialized).expect("should deserialize");
+        assert_eq!(contract, deserialized, "round-trip must be stable");
+    }
+
+    #[test]
+    fn invalid_licensing_rejects_wrong_schema_version() {
+        let mut contract = load_licensing().expect("builtin licensing provenance should parse");
+        contract.schema_version = "wrong-version".to_string();
+        let raw = serde_json::to_string(&contract).expect("should serialize");
+        let error = super::LicensingProvenanceContract::parse_and_validate(&raw)
+            .expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("unsupported")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_licensing_rejects_empty_contract_id() {
+        let mut contract = load_licensing().expect("builtin licensing provenance should parse");
+        contract.contract_id = String::new();
+        let raw = serde_json::to_string(&contract).expect("should serialize");
+        let error = super::LicensingProvenanceContract::parse_and_validate(&raw)
+            .expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("contract_id")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_licensing_rejects_overlapping_allowed_blocked() {
+        let mut contract = load_licensing().expect("builtin licensing provenance should parse");
+        contract
+            .licensing_policy
+            .allowed_license_classes
+            .push("strong_copyleft".to_string());
+        let raw = serde_json::to_string(&contract).expect("should serialize");
+        let error = super::LicensingProvenanceContract::parse_and_validate(&raw)
+            .expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("both allowed and blocked")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_licensing_rejects_non_reject_for_blocked_license() {
+        let mut contract = load_licensing().expect("builtin licensing provenance should parse");
+        contract.fail_safe_defaults.on_blocked_license = "accept".to_string();
+        let raw = serde_json::to_string(&contract).expect("should serialize");
+        let error = super::LicensingProvenanceContract::parse_and_validate(&raw)
+            .expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("on_blocked_license")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_licensing_rejects_duplicate_risk_flag_id() {
+        let mut contract = load_licensing().expect("builtin licensing provenance should parse");
+        if contract.risk_flags.len() >= 2 {
+            contract.risk_flags[1].flag_id = contract.risk_flags[0].flag_id.clone();
+            let raw = serde_json::to_string(&contract).expect("should serialize");
+            let error = super::LicensingProvenanceContract::parse_and_validate(&raw)
+                .expect_err("must fail");
+            assert!(
+                matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("duplicate risk flag_id")),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn licensing_provenance_determinism_check() {
+        let c1 = load_licensing().expect("should parse");
+        let c2 = load_licensing().expect("should parse");
+        assert_eq!(c1, c2, "repeated parsing must be deterministic");
     }
 }
