@@ -894,12 +894,7 @@ impl Tree {
                     let label = node.label().to_owned();
                     node.toggle_expanded();
                     #[cfg(feature = "tracing")]
-                    Self::log_expand_collapse(
-                        "expand",
-                        "keyboard",
-                        selected_visible_index,
-                        &label,
-                    );
+                    Self::log_expand_collapse("expand", "keyboard", selected_visible_index, &label);
                     return true;
                 }
                 false

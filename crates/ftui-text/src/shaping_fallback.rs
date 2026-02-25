@@ -22,6 +22,16 @@
 //!   NoopShaper → terminal/monospace rendering (always succeeds)
 //! ```
 //!
+//! Ligature-sensitive flows are explicitly policy-controlled via
+//! [`LigatureMode`]:
+//! - `Auto`: preserve caller-provided feature set; if ligatures are unsupported,
+//!   force-disable standard ligatures for deterministic canonical output.
+//! - `Enabled`: force standard ligatures on when supported.
+//! - `Disabled`: force canonical grapheme boundaries.
+//!
+//! If ligatures are requested but unsupported by [`RuntimeCapability`],
+//! fallback returns deterministic canonical grapheme rendering.
+//!
 //! Both paths produce a [`ShapedLineLayout`] with identical interface,
 //! ensuring downstream code (cursor navigation, selection, copy) works
 //! without branching on which path was taken.
@@ -45,6 +55,25 @@ use crate::layout_policy::{LayoutTier, RuntimeCapability};
 use crate::script_segmentation::{RunDirection, Script};
 use crate::shaped_render::ShapedLineLayout;
 use crate::shaping::{FontFeatures, NoopShaper, ShapedRun, TextShaper};
+
+// ---------------------------------------------------------------------------
+// LigatureMode — explicit ligature policy
+// ---------------------------------------------------------------------------
+
+/// Explicit ligature-mode policy for shaping fallback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum LigatureMode {
+    /// Preserve the configured feature set.
+    ///
+    /// If runtime capability reports ligatures unsupported, standard ligatures
+    /// are force-disabled to avoid backend-default variability.
+    #[default]
+    Auto,
+    /// Force standard ligatures on (`liga`, `clig`), if supported.
+    Enabled,
+    /// Force standard ligatures off with canonical grapheme boundaries.
+    Disabled,
+}
 
 // ---------------------------------------------------------------------------
 // FallbackEvent — what happened during shaping
@@ -155,6 +184,8 @@ pub struct ShapingFallback<S: TextShaper = NoopShaper> {
     shaping_tier: LayoutTier,
     /// Current runtime capabilities.
     capabilities: RuntimeCapability,
+    /// Explicit ligature policy for shaping output.
+    ligature_mode: LigatureMode,
     /// Whether to validate shaped output and reject suspicious results.
     validate_output: bool,
 }
@@ -168,6 +199,7 @@ impl ShapingFallback<NoopShaper> {
             features: FontFeatures::default(),
             shaping_tier: LayoutTier::Quality,
             capabilities: RuntimeCapability::TERMINAL,
+            ligature_mode: LigatureMode::Disabled,
             validate_output: false,
         }
     }
@@ -182,6 +214,7 @@ impl<S: TextShaper> ShapingFallback<S> {
             features: FontFeatures::default(),
             shaping_tier: LayoutTier::Balanced,
             capabilities,
+            ligature_mode: LigatureMode::Auto,
             validate_output: true,
         }
     }
@@ -194,6 +227,11 @@ impl<S: TextShaper> ShapingFallback<S> {
     /// Set the minimum tier for shaping.
     pub fn set_shaping_tier(&mut self, tier: LayoutTier) {
         self.shaping_tier = tier;
+    }
+
+    /// Set explicit ligature policy.
+    pub fn set_ligature_mode(&mut self, mode: LigatureMode) {
+        self.ligature_mode = mode;
     }
 
     /// Update runtime capabilities (e.g., after font load/unload).
@@ -235,9 +273,40 @@ impl<S: TextShaper> ShapingFallback<S> {
             );
         }
 
+        let ligature_requested = match self.ligature_mode {
+            LigatureMode::Enabled => true,
+            LigatureMode::Disabled => false,
+            LigatureMode::Auto => self.features.standard_ligatures_enabled().unwrap_or(false),
+        };
+        if ligature_requested && !self.capabilities.ligature_support {
+            tracing::debug!(
+                text_len = text.len(),
+                mode = ?self.ligature_mode,
+                "Ligatures requested but unsupported, using canonical grapheme fallback"
+            );
+            return (
+                ShapedLineLayout::from_text(text),
+                FallbackEvent::SkippedByPolicy,
+            );
+        }
+
+        let mut effective_features = self.features.clone();
+        match self.ligature_mode {
+            LigatureMode::Enabled => effective_features.set_standard_ligatures(true),
+            LigatureMode::Disabled => effective_features.set_standard_ligatures(false),
+            LigatureMode::Auto => {
+                // Keep AUTO deterministic across runtimes: when ligatures are
+                // unsupported, explicitly disable standard ligatures so we do
+                // not depend on backend default-feature behavior.
+                if !self.capabilities.ligature_support {
+                    effective_features.set_standard_ligatures(false);
+                }
+            }
+        }
+
         // Try shaping with the primary shaper.
         {
-            let run = shaper.shape(text, script, direction, &self.features);
+            let run = shaper.shape(text, script, direction, &effective_features);
 
             if self.validate_output
                 && let Some(rejection) = validate_shaped_run(text, &run)
@@ -325,6 +394,72 @@ fn validate_shaped_run(text: &str, run: &ShapedRun) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shaping::ShapedGlyph;
+
+    #[derive(Debug, Clone, Copy)]
+    struct FeatureAwareLigatureShaper;
+
+    impl TextShaper for FeatureAwareLigatureShaper {
+        fn shape(
+            &self,
+            text: &str,
+            _script: Script,
+            _direction: RunDirection,
+            features: &FontFeatures,
+        ) -> ShapedRun {
+            // Simulate default-enabled standard ligatures unless explicitly
+            // disabled by caller features.
+            let ligatures_on = features.feature_value(*b"liga").unwrap_or(1) != 0;
+            if ligatures_on && text == "file" {
+                return ShapedRun {
+                    glyphs: vec![
+                        ShapedGlyph {
+                            glyph_id: 1,
+                            cluster: 0, // "fi" ligature
+                            x_advance: 2,
+                            y_advance: 0,
+                            x_offset: 0,
+                            y_offset: 0,
+                        },
+                        ShapedGlyph {
+                            glyph_id: 2,
+                            cluster: 2,
+                            x_advance: 1,
+                            y_advance: 0,
+                            x_offset: 0,
+                            y_offset: 0,
+                        },
+                        ShapedGlyph {
+                            glyph_id: 3,
+                            cluster: 3,
+                            x_advance: 1,
+                            y_advance: 0,
+                            x_offset: 0,
+                            y_offset: 0,
+                        },
+                    ],
+                    total_advance: 4,
+                };
+            }
+
+            let mut glyphs = Vec::new();
+            for (byte_offset, ch) in text.char_indices() {
+                glyphs.push(ShapedGlyph {
+                    glyph_id: ch as u32,
+                    cluster: byte_offset as u32,
+                    x_advance: 1,
+                    y_advance: 0,
+                    x_offset: 0,
+                    y_offset: 0,
+                });
+            }
+            let total_advance = i32::try_from(glyphs.len()).unwrap_or(i32::MAX);
+            ShapedRun {
+                glyphs,
+                total_advance,
+            }
+        }
+    }
 
     // -----------------------------------------------------------------------
     // Terminal mode
@@ -593,5 +728,67 @@ mod tests {
         // FULL caps support Quality tier, so shaping should still work.
         let (_, event) = fb.shape_line("test", Script::Latin, RunDirection::Ltr);
         assert_eq!(event, FallbackEvent::ShapedSuccessfully);
+    }
+
+    #[test]
+    fn ligature_mode_enabled_without_capability_falls_back() {
+        let mut fb =
+            ShapingFallback::with_shaper(FeatureAwareLigatureShaper, RuntimeCapability::TERMINAL);
+        fb.set_ligature_mode(LigatureMode::Enabled);
+
+        let (layout, event) = fb.shape_line("file", Script::Latin, RunDirection::Ltr);
+        assert_eq!(event, FallbackEvent::SkippedByPolicy);
+        assert_eq!(layout.total_cells(), 4);
+        assert_eq!(layout.cluster_map().byte_to_cell(1), 1);
+    }
+
+    #[test]
+    fn ligature_mode_enabled_with_capability_shapes() {
+        let mut fb =
+            ShapingFallback::with_shaper(FeatureAwareLigatureShaper, RuntimeCapability::FULL);
+        fb.set_ligature_mode(LigatureMode::Enabled);
+
+        let (layout, event) = fb.shape_line("file", Script::Latin, RunDirection::Ltr);
+        assert_eq!(event, FallbackEvent::ShapedSuccessfully);
+        assert_eq!(layout.total_cells(), 4);
+        assert_eq!(layout.cluster_map().byte_to_cell(1), 0); // "fi" snapped
+        assert_eq!(layout.extract_text("file", 0, 2), "fi");
+    }
+
+    #[test]
+    fn ligature_mode_disabled_forces_canonical_boundaries() {
+        let mut fb =
+            ShapingFallback::with_shaper(FeatureAwareLigatureShaper, RuntimeCapability::FULL);
+        fb.set_ligature_mode(LigatureMode::Disabled);
+
+        let (layout, event) = fb.shape_line("file", Script::Latin, RunDirection::Ltr);
+        assert_eq!(event, FallbackEvent::ShapedSuccessfully);
+        assert_eq!(layout.total_cells(), 4);
+        assert_eq!(layout.cluster_map().byte_to_cell(1), 1);
+    }
+
+    #[test]
+    fn auto_mode_honors_explicit_ligature_request_when_unsupported() {
+        let mut fb =
+            ShapingFallback::with_shaper(FeatureAwareLigatureShaper, RuntimeCapability::TERMINAL);
+        let mut features = FontFeatures::default();
+        features.set_standard_ligatures(true);
+        fb.set_features(features);
+
+        let (layout, event) = fb.shape_line("file", Script::Latin, RunDirection::Ltr);
+        assert_eq!(event, FallbackEvent::SkippedByPolicy);
+        assert_eq!(layout.cluster_map().byte_to_cell(1), 1);
+    }
+
+    #[test]
+    fn auto_mode_disables_implicit_ligatures_when_unsupported() {
+        let fb =
+            ShapingFallback::with_shaper(FeatureAwareLigatureShaper, RuntimeCapability::TERMINAL);
+
+        // No explicit features set. The test shaper defaults `liga` to enabled,
+        // so AUTO must inject an explicit disable when ligatures are unsupported.
+        let (layout, event) = fb.shape_line("file", Script::Latin, RunDirection::Ltr);
+        assert_eq!(event, FallbackEvent::ShapedSuccessfully);
+        assert_eq!(layout.cluster_map().byte_to_cell(1), 1);
     }
 }

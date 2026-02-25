@@ -115,6 +115,12 @@ pub struct RuntimeCapability {
     /// Whether inter-character spacing (tracking) is supported by the renderer.
     pub tracking_support: bool,
 
+    /// Whether ligature rendering is supported by the active runtime.
+    ///
+    /// If false, shaping should deterministically fall back to canonical
+    /// grapheme rendering for ligature-sensitive paths.
+    pub ligature_support: bool,
+
     /// Maximum paragraph length (in words) that can be processed by the
     /// optimal breaker within the frame budget. 0 = unlimited.
     pub max_paragraph_words: usize,
@@ -127,6 +133,7 @@ impl RuntimeCapability {
         subpixel_positioning: true,
         hyphenation_available: true,
         tracking_support: true,
+        ligature_support: true,
         max_paragraph_words: 0,
     };
 
@@ -136,6 +143,7 @@ impl RuntimeCapability {
         subpixel_positioning: false,
         hyphenation_available: false,
         tracking_support: false,
+        ligature_support: false,
         max_paragraph_words: 0,
     };
 
@@ -145,6 +153,7 @@ impl RuntimeCapability {
         subpixel_positioning: true,
         hyphenation_available: true,
         tracking_support: false,
+        ligature_support: true,
         max_paragraph_words: 0,
     };
 
@@ -179,11 +188,12 @@ impl fmt::Display for RuntimeCapability {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "proportional={} subpixel={} hyphen={} tracking={}",
+            "proportional={} subpixel={} hyphen={} tracking={} ligature={}",
             self.proportional_fonts,
             self.subpixel_positioning,
             self.hyphenation_available,
-            self.tracking_support
+            self.tracking_support,
+            self.ligature_support
         )
     }
 }
@@ -600,12 +610,14 @@ mod tests {
         let caps = RuntimeCapability::default();
         assert!(!caps.proportional_fonts);
         assert!(!caps.subpixel_positioning);
+        assert!(!caps.ligature_support);
     }
 
     #[test]
     fn capability_display() {
         let s = format!("{}", RuntimeCapability::FULL);
         assert!(s.contains("proportional=true"));
+        assert!(s.contains("ligature=true"));
     }
 
     // ── LayoutPolicy resolve ─────────────────────────────────────────

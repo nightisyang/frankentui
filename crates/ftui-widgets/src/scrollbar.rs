@@ -304,8 +304,12 @@ impl ScrollbarState {
                 MouseResult::Scrolled
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                self.drag_anchor = None;
-                MouseResult::Ignored
+                let was_dragging = self.drag_anchor.take().is_some();
+                if was_dragging {
+                    MouseResult::Scrolled
+                } else {
+                    MouseResult::Ignored
+                }
             }
             MouseEventKind::ScrollUp => {
                 self.scroll_up(3);

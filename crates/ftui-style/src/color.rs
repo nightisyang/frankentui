@@ -548,7 +548,7 @@ pub fn rgb_to_256(r: u8, g: u8, b: u8) -> u8 {
         if r < 8 {
             return 16;
         }
-        if r > 248 {
+        if r > 246 {
             return 231;
         }
         let idx = ((r - 8) / 10).min(23);
@@ -1227,12 +1227,15 @@ mod downgrade_edge_cases {
         // r >= 8 -> grayscale ramp starts
         assert_eq!(rgb_to_256(8, 8, 8), 232);
 
-        // r > 248 -> 231 (white in cube)
+        // r > 246 -> 231 (white in cube, nearest neighbor for values
+        // closer to 255 than to 238, the last grayscale ramp entry)
+        assert_eq!(rgb_to_256(247, 247, 247), 231);
+        assert_eq!(rgb_to_256(248, 248, 248), 231);
         assert_eq!(rgb_to_256(249, 249, 249), 231);
         assert_eq!(rgb_to_256(255, 255, 255), 231);
 
-        // r = 248 is still in grayscale ramp
-        assert_eq!(rgb_to_256(248, 248, 248), 255);
+        // r = 246 is still in grayscale ramp (closer to 238 than 255)
+        assert_eq!(rgb_to_256(246, 246, 246), 255);
     }
 
     #[test]
