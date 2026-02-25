@@ -91,6 +91,10 @@ opentelemetry_sdk = { version = "0.31", features = ["testing"] }
 tracing-opentelemetry = "0.32"
 tracing-subscriber = { version = "0.3.20", features = ["registry", "env-filter"] }
 
+[[test]]
+name = "deterministic_replay"
+required-features = ["event-trace"]
+
 [[bench]]
 name = "telemetry_bench"
 harness = false
