@@ -2,11 +2,13 @@
 
 pub mod capture;
 pub mod cli;
+pub mod composition_semantics;
 pub mod doctor;
 pub mod error;
 pub mod harness;
 pub mod import;
 pub mod keyseq;
+pub mod migration_ir;
 pub mod module_graph;
 pub mod profile;
 pub mod redact;
