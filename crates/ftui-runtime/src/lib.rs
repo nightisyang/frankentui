@@ -34,6 +34,8 @@ pub mod cost_model;
 pub mod debug_trace;
 pub mod decision_core;
 pub mod diff_evidence;
+#[cfg(feature = "event-trace")]
+pub mod event_trace;
 pub mod effect_system;
 pub mod eprocess_throttle;
 pub mod evidence_bridges;
@@ -147,6 +149,10 @@ pub use cost_model::{
 pub use decision_core::{
     Action as DecisionAction, Decision, DecisionCore, Outcome as DecisionOutcome, Posterior,
     State as DecisionState, argmin_expected_loss, second_best_loss,
+};
+#[cfg(feature = "event-trace")]
+pub use event_trace::{
+    EventReplayer, EventTraceReader, EventTraceWriter, TraceFile, TraceRecord,
 };
 pub use effect_system::{
     effects_command_total, effects_executed_total, effects_subscription_total,
