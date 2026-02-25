@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod adversarial_fixtures;
+pub mod backend_capability;
 pub mod capability_gap;
 pub mod capture;
 pub mod cli;
