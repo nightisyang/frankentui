@@ -37,11 +37,31 @@
 //! // Replay: same seed → identical checksums
 //! ```
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use crate::determinism::{JsonValue, LabScenario, LabScenarioRun, TestJsonlLogger};
 use ftui_core::event::Event;
 use ftui_render::buffer::Buffer;
 use ftui_runtime::program::Model;
 use ftui_runtime::simulator::ProgramSimulator;
+use tracing::info_span;
+
+/// Global counter for recordings created.
+static LAB_RECORDINGS_TOTAL: AtomicU64 = AtomicU64::new(0);
+/// Global counter for replays executed.
+static LAB_REPLAYS_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Read the total number of recordings created in-process.
+#[must_use]
+pub fn lab_recordings_total() -> u64 {
+    LAB_RECORDINGS_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Read the total number of replays executed in-process.
+#[must_use]
+pub fn lab_replays_total() -> u64 {
+    LAB_REPLAYS_TOTAL.load(Ordering::Relaxed)
+}
 
 // ============================================================================
 // Configuration
@@ -500,6 +520,244 @@ impl Lab {
         }
 
         run1.output
+    }
+}
+
+// ============================================================================
+// Recording / Replay
+// ============================================================================
+
+/// A captured recording of a deterministic scenario run.
+///
+/// Contains the configuration, frame checksums, and event log from a single
+/// run. Can be replayed with [`Lab::replay`] to verify determinism.
+#[derive(Debug, Clone)]
+pub struct Recording {
+    /// Configuration used for this recording.
+    pub config: LabConfig,
+    /// Scenario metadata from the recording run.
+    pub scenario_name: String,
+    /// Seed used for recording.
+    pub seed: u64,
+    /// Frame checksum records captured during the recording.
+    pub frame_records: Vec<FrameRecord>,
+    /// Event log captured during the recording.
+    pub event_log: Vec<EventRecord>,
+    /// Number of ticks in the recorded scenario.
+    pub tick_count: u64,
+    /// Run identifier for the recording.
+    pub run_id: String,
+}
+
+/// Result of replaying a recording against a new model instance.
+#[derive(Debug, Clone)]
+pub struct ReplayResult {
+    /// Whether the replay matched the recording (no divergence).
+    pub matched: bool,
+    /// Frame checksum records from the replay run.
+    pub replay_frame_records: Vec<FrameRecord>,
+    /// Index of the first divergent frame, if any.
+    pub first_divergence: Option<usize>,
+    /// Descriptive summary of any divergence found.
+    pub divergence_detail: Option<String>,
+    /// Number of frames compared.
+    pub frames_compared: usize,
+}
+
+impl Lab {
+    /// Record a deterministic scenario run.
+    ///
+    /// Executes the scenario closure and captures frame checksums and event
+    /// ordering into a [`Recording`] that can later be replayed with
+    /// [`Lab::replay`].
+    ///
+    /// Emits a `lab.record` tracing span.
+    pub fn record<M: Model>(
+        config: LabConfig,
+        model: M,
+        run: impl FnOnce(&mut LabSession<M>),
+    ) -> Recording {
+        let _span = info_span!(
+            "lab.record",
+            scenario_name = config.scenario_name.as_str(),
+            seed = config.seed,
+        )
+        .entered();
+
+        let scenario_run = Self::run_scenario(config.clone(), model, |session| {
+            session.log_info(
+                "lab.record.start",
+                &[
+                    ("scenario_name", JsonValue::str(&config.scenario_name)),
+                    ("seed", JsonValue::u64(config.seed)),
+                ],
+            );
+            run(session);
+            session.log_info(
+                "lab.record.stop",
+                &[
+                    (
+                        "frame_count",
+                        JsonValue::u64(session.frame_records().len() as u64),
+                    ),
+                    (
+                        "event_count",
+                        JsonValue::u64(session.event_log().len() as u64),
+                    ),
+                ],
+            );
+        });
+
+        LAB_RECORDINGS_TOTAL.fetch_add(1, Ordering::Relaxed);
+
+        Recording {
+            scenario_name: scenario_run.result.scenario_name.clone(),
+            seed: scenario_run.result.seed,
+            run_id: scenario_run.result.run_id.clone(),
+            frame_records: scenario_run.output.frame_records,
+            event_log: scenario_run.output.event_log,
+            tick_count: scenario_run.output.tick_count,
+            config,
+        }
+    }
+
+    /// Replay a recording with a new model instance.
+    ///
+    /// Re-runs the same scenario closure with the same seed/config from the
+    /// recording and compares frame checksums. Returns a [`ReplayResult`]
+    /// indicating whether the replay matched.
+    ///
+    /// Emits a `lab.replay` tracing span. Logs WARN for any divergence.
+    pub fn replay<M: Model>(
+        recording: &Recording,
+        model: M,
+        run: impl FnOnce(&mut LabSession<M>),
+    ) -> ReplayResult {
+        let _span = info_span!(
+            "lab.replay",
+            scenario_name = recording.scenario_name.as_str(),
+            seed = recording.seed,
+            recording_run_id = recording.run_id.as_str(),
+        )
+        .entered();
+
+        let replay_run =
+            Self::run_scenario(recording.config.clone(), model, |session| {
+                session.log_info(
+                    "lab.replay.start",
+                    &[
+                        ("scenario_name", JsonValue::str(&recording.scenario_name)),
+                        ("seed", JsonValue::u64(recording.seed)),
+                        ("recording_run_id", JsonValue::str(&recording.run_id)),
+                        (
+                            "expected_frames",
+                            JsonValue::u64(recording.frame_records.len() as u64),
+                        ),
+                    ],
+                );
+                run(session);
+            });
+
+        LAB_REPLAYS_TOTAL.fetch_add(1, Ordering::Relaxed);
+
+        let replay_frames = &replay_run.output.frame_records;
+        let recorded_frames = &recording.frame_records;
+
+        let frames_compared = recorded_frames.len().min(replay_frames.len());
+        let mut first_divergence = None;
+        let mut divergence_detail = None;
+
+        // Check frame count match
+        if recorded_frames.len() != replay_frames.len() {
+            first_divergence = Some(frames_compared);
+            divergence_detail = Some(format!(
+                "frame count mismatch: recorded={}, replayed={}",
+                recorded_frames.len(),
+                replay_frames.len()
+            ));
+        }
+
+        // Check individual frame checksums
+        for i in 0..frames_compared {
+            if recorded_frames[i].checksum != replay_frames[i].checksum {
+                if first_divergence.is_none() {
+                    first_divergence = Some(i);
+                    divergence_detail = Some(format!(
+                        "frame {i} checksum mismatch: recorded={:016x}, replayed={:016x}",
+                        recorded_frames[i].checksum, replay_frames[i].checksum
+                    ));
+                }
+                break;
+            }
+        }
+
+        let matched = first_divergence.is_none();
+
+        ReplayResult {
+            matched,
+            replay_frame_records: replay_run.output.frame_records,
+            first_divergence,
+            divergence_detail,
+            frames_compared,
+        }
+    }
+
+    /// Record and immediately replay, asserting determinism.
+    ///
+    /// Convenience method: runs the scenario twice (once to record, once to
+    /// replay) and panics if any frame checksum diverges.
+    ///
+    /// # Panics
+    ///
+    /// Panics on any divergence between recording and replay.
+    pub fn assert_replay_deterministic<M, MF, SF>(
+        config: LabConfig,
+        model_factory: MF,
+        scenario_fn: SF,
+    ) -> Recording
+    where
+        M: Model,
+        MF: Fn() -> M,
+        SF: Fn(&mut LabSession<M>),
+    {
+        let recording = Self::record(config, model_factory(), |s| scenario_fn(s));
+        let result = Self::replay(&recording, model_factory(), |s| scenario_fn(s));
+
+        if !result.matched {
+            let detail = result
+                .divergence_detail
+                .unwrap_or_else(|| "unknown divergence".to_string());
+            panic!(
+                "replay diverged from recording (seed={}, scenario={}): {}",
+                recording.seed, recording.scenario_name, detail
+            );
+        }
+
+        recording
+    }
+}
+
+/// Assert that two [`LabOutput`]s are frame-identical.
+///
+/// Compares frame counts and all checksums. Panics with a descriptive
+/// message on the first mismatch.
+pub fn assert_outputs_match(a: &LabOutput, b: &LabOutput) {
+    assert_eq!(
+        a.frame_count, b.frame_count,
+        "frame count mismatch: a={}, b={}",
+        a.frame_count, b.frame_count
+    );
+    for (i, (fa, fb)) in a
+        .frame_records
+        .iter()
+        .zip(b.frame_records.iter())
+        .enumerate()
+    {
+        assert_eq!(
+            fa.checksum, fb.checksum,
+            "frame {i} checksum mismatch: a={:016x}, b={:016x}",
+            fa.checksum, fb.checksum
+        );
     }
 }
 
@@ -988,5 +1246,291 @@ mod tests {
             let log = s.command_log();
             assert!(!log.is_empty());
         });
+    }
+
+    // ── Recording / Replay tests ─────────────────────────────────────
+
+    #[test]
+    fn record_captures_frame_checksums() {
+        let config = LabConfig::new("test", "record_basic", 42).viewport(20, 5);
+        let recording = Lab::record(config, Counter { value: 0 }, |s| {
+            s.init();
+            s.send(CounterMsg::Increment);
+            s.capture_frame();
+            s.send(CounterMsg::Increment);
+            s.capture_frame();
+        });
+
+        assert_eq!(recording.frame_records.len(), 2);
+        assert_eq!(recording.seed, 42);
+        assert_eq!(recording.scenario_name, "record_basic");
+        assert!(!recording.run_id.is_empty());
+    }
+
+    #[test]
+    fn record_captures_event_log() {
+        let config = LabConfig::new("test", "record_events", 42);
+        let recording = Lab::record(config, Counter { value: 0 }, |s| {
+            s.init();
+            s.send(CounterMsg::Increment);
+            s.tick();
+            s.inject_event(key_event('+'));
+        });
+
+        assert_eq!(recording.event_log.len(), 3);
+        assert_eq!(recording.tick_count, 1);
+    }
+
+    #[test]
+    fn replay_matches_recording() {
+        let config = LabConfig::new("test", "replay_match", 42).viewport(20, 5);
+        let recording = Lab::record(config, Counter { value: 0 }, |s| {
+            s.init();
+            for _ in 0..5 {
+                s.send(CounterMsg::Increment);
+                s.tick();
+                s.capture_frame();
+            }
+        });
+
+        let result = Lab::replay(&recording, Counter { value: 0 }, |s| {
+            s.init();
+            for _ in 0..5 {
+                s.send(CounterMsg::Increment);
+                s.tick();
+                s.capture_frame();
+            }
+        });
+
+        assert!(result.matched, "replay should match recording");
+        assert_eq!(result.frames_compared, 5);
+        assert!(result.first_divergence.is_none());
+        assert!(result.divergence_detail.is_none());
+    }
+
+    #[test]
+    fn replay_detects_frame_count_mismatch() {
+        let config = LabConfig::new("test", "replay_count_diff", 42).viewport(20, 5);
+        let recording = Lab::record(config, Counter { value: 0 }, |s| {
+            s.init();
+            s.capture_frame();
+            s.capture_frame();
+            s.capture_frame();
+        });
+
+        // Replay with fewer frames
+        let result = Lab::replay(&recording, Counter { value: 0 }, |s| {
+            s.init();
+            s.capture_frame();
+        });
+
+        assert!(!result.matched);
+        assert!(result.first_divergence.is_some());
+        let detail = result.divergence_detail.unwrap();
+        assert!(
+            detail.contains("frame count mismatch"),
+            "expected frame count mismatch message, got: {detail}"
+        );
+    }
+
+    #[test]
+    fn replay_detects_checksum_mismatch() {
+        let config = LabConfig::new("test", "replay_checksum_diff", 42).viewport(20, 5);
+        let recording = Lab::record(config, Counter { value: 0 }, |s| {
+            s.init();
+            s.send(CounterMsg::Increment); // value=1
+            s.capture_frame();
+        });
+
+        // Replay with different state → different checksum
+        let result = Lab::replay(&recording, Counter { value: 0 }, |s| {
+            s.init();
+            s.send(CounterMsg::Increment);
+            s.send(CounterMsg::Increment); // value=2 (diverges)
+            s.capture_frame();
+        });
+
+        assert!(!result.matched);
+        assert_eq!(result.first_divergence, Some(0));
+        let detail = result.divergence_detail.unwrap();
+        assert!(
+            detail.contains("checksum mismatch"),
+            "expected checksum mismatch message, got: {detail}"
+        );
+    }
+
+    #[test]
+    fn assert_replay_deterministic_passes() {
+        let config = LabConfig::new("test", "replay_det", 42).viewport(20, 5);
+        let recording = Lab::assert_replay_deterministic(
+            config,
+            || Counter { value: 0 },
+            |s| {
+                s.init();
+                for _ in 0..5 {
+                    s.send(CounterMsg::Increment);
+                    s.tick();
+                    s.capture_frame();
+                }
+            },
+        );
+
+        assert_eq!(recording.frame_records.len(), 5);
+    }
+
+    #[test]
+    #[should_panic(expected = "replay diverged")]
+    fn assert_replay_deterministic_panics_on_divergence() {
+        // This test uses a model that behaves differently on each creation,
+        // simulated by using different initial values.
+        let call_count = std::sync::atomic::AtomicU32::new(0);
+        let config = LabConfig::new("test", "replay_diverge", 42).viewport(20, 5);
+
+        Lab::assert_replay_deterministic(
+            config,
+            || {
+                let n = call_count.fetch_add(1, Ordering::Relaxed);
+                // First model starts at 0, second at 100 → different frames
+                Counter {
+                    value: (n * 100) as i32,
+                }
+            },
+            |s| {
+                s.init();
+                s.capture_frame();
+            },
+        );
+    }
+
+    #[test]
+    fn recording_counters_increment() {
+        let before_record = lab_recordings_total();
+        let before_replay = lab_replays_total();
+
+        let config = LabConfig::new("test", "counters", 42).viewport(10, 3);
+        let recording = Lab::record(config, Counter { value: 0 }, |s| {
+            s.init();
+            s.capture_frame();
+        });
+
+        assert!(
+            lab_recordings_total() > before_record,
+            "lab_recordings_total should increment"
+        );
+
+        Lab::replay(&recording, Counter { value: 0 }, |s| {
+            s.init();
+            s.capture_frame();
+        });
+
+        assert!(
+            lab_replays_total() > before_replay,
+            "lab_replays_total should increment"
+        );
+    }
+
+    #[test]
+    fn assert_outputs_match_passes_for_identical() {
+        let config = LabConfig::new("test", "output_match", 42).viewport(20, 5);
+        let run1 = Lab::run_scenario(config.clone(), Counter { value: 0 }, |s| {
+            s.init();
+            s.send(CounterMsg::Increment);
+            s.capture_frame();
+        });
+        let run2 = Lab::run_scenario(config, Counter { value: 0 }, |s| {
+            s.init();
+            s.send(CounterMsg::Increment);
+            s.capture_frame();
+        });
+
+        assert_outputs_match(&run1.output, &run2.output);
+    }
+
+    #[test]
+    #[should_panic(expected = "checksum mismatch")]
+    fn assert_outputs_match_panics_on_difference() {
+        let config1 = LabConfig::new("test", "output_diff", 42).viewport(20, 5);
+        let config2 = LabConfig::new("test", "output_diff", 42).viewport(20, 5);
+        let run1 = Lab::run_scenario(config1, Counter { value: 0 }, |s| {
+            s.init();
+            s.capture_frame(); // value=0
+        });
+        let run2 = Lab::run_scenario(config2, Counter { value: 5 }, |s| {
+            s.init();
+            s.capture_frame(); // value=5
+        });
+
+        assert_outputs_match(&run1.output, &run2.output);
+    }
+
+    #[test]
+    fn replay_100_seeds_all_match() {
+        for seed in 0..100 {
+            let config = LabConfig::new("test", "replay_100", seed).viewport(20, 5);
+            let recording = Lab::record(config, Counter { value: 0 }, |s| {
+                s.init();
+                s.send(CounterMsg::Increment);
+                s.tick();
+                s.capture_frame();
+            });
+            let result = Lab::replay(&recording, Counter { value: 0 }, |s| {
+                s.init();
+                s.send(CounterMsg::Increment);
+                s.tick();
+                s.capture_frame();
+            });
+            assert!(
+                result.matched,
+                "seed {seed}: replay diverged from recording"
+            );
+        }
+    }
+
+    #[test]
+    fn recording_config_is_preserved() {
+        let config = LabConfig::new("prefix123", "scenario456", 789)
+            .viewport(100, 50)
+            .time_step_ms(33);
+        let recording = Lab::record(config, Counter { value: 0 }, |s| {
+            s.init();
+            s.capture_frame();
+        });
+
+        assert_eq!(recording.config.prefix, "prefix123");
+        assert_eq!(recording.config.scenario_name, "scenario456");
+        assert_eq!(recording.config.seed, 789);
+        assert_eq!(recording.config.viewport_width, 100);
+        assert_eq!(recording.config.viewport_height, 50);
+        assert_eq!(recording.config.time_step_ms, 33);
+    }
+
+    #[test]
+    fn replay_result_carries_replay_frames() {
+        let config = LabConfig::new("test", "replay_frames", 42).viewport(20, 5);
+        let recording = Lab::record(config, Counter { value: 0 }, |s| {
+            s.init();
+            s.send(CounterMsg::Increment);
+            s.capture_frame();
+            s.send(CounterMsg::Increment);
+            s.capture_frame();
+        });
+        let result = Lab::replay(&recording, Counter { value: 0 }, |s| {
+            s.init();
+            s.send(CounterMsg::Increment);
+            s.capture_frame();
+            s.send(CounterMsg::Increment);
+            s.capture_frame();
+        });
+
+        assert!(result.matched);
+        assert_eq!(result.replay_frame_records.len(), 2);
+        // Replay frames should match recording frames
+        for (rec, rep) in recording
+            .frame_records
+            .iter()
+            .zip(result.replay_frame_records.iter())
+        {
+            assert_eq!(rec.checksum, rep.checksum);
+        }
     }
 }
