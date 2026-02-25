@@ -346,6 +346,16 @@ fn extract_components(content: &str, file_path: &str, result: &mut FileParse) {
                 event_handlers: Vec::new(),
                 line: lineno,
             });
+
+            result.symbols.push(SymbolEntry {
+                id: format!("{file_path}::{name}"),
+                name: name.clone(),
+                kind: SymbolKind::Component,
+                file: file_path.to_string(),
+                line: lineno,
+                is_exported: is_export,
+                imported_from: None,
+            });
             continue;
         }
 
@@ -364,6 +374,16 @@ fn extract_components(content: &str, file_path: &str, result: &mut FileParse) {
                 hooks: Vec::new(),
                 event_handlers: Vec::new(),
                 line: lineno,
+            });
+
+            result.symbols.push(SymbolEntry {
+                id: format!("{file_path}::{name}"),
+                name: name.clone(),
+                kind: SymbolKind::Component,
+                file: file_path.to_string(),
+                line: lineno,
+                is_exported: is_export,
+                imported_from: None,
             });
             continue;
         }
@@ -429,7 +449,9 @@ fn extract_components(content: &str, file_path: &str, result: &mut FileParse) {
 
     // If no components found but file has JSX, emit a diagnostic.
     if result.components.is_empty() && content.contains("</") && content.contains("return") {
-        let has_jsx = Regex::new(r"<[A-Z]\w*[\s/>]").expect("jsx check").is_match(content);
+        let has_jsx = Regex::new(r"<[A-Z]\w*[\s/>]")
+            .expect("jsx check")
+            .is_match(content);
         if has_jsx {
             result.diagnostics.push(ParseDiagnostic {
                 severity: DiagnosticSeverity::Info,
@@ -461,7 +483,7 @@ fn extract_hooks(content: &str, file_path: &str, result: &mut FileParse) {
 
     // Standalone hook calls without binding.
     let re_standalone_hook =
-        Regex::new(r#"(?m)^\s+(use[A-Z]\w*)\s*\(([^)]*)\)"#).expect("standalone hook regex");
+        Regex::new(r#"(?m)^\s*(use[A-Z]\w*)\s*\(([^)]*)\)"#).expect("standalone hook regex");
 
     for (line_idx, line) in content.lines().enumerate() {
         let lineno = line_idx + 1;
@@ -481,16 +503,34 @@ fn extract_hooks(content: &str, file_path: &str, result: &mut FileParse) {
                 args_snippet: truncate_snippet(&args, 100),
                 line: lineno,
             });
-        } else if let Some(caps) = re_standalone_hook.captures(line) {
-            let hook_name = caps[1].to_string();
-            let args = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
+        } else {
+            // Also scan statement fragments on the same line so constructs like
+            // `const App = () => { useEffect(...); ... }` are captured.
+            for segment in line.split('{').flat_map(|s| s.split(';')) {
+                if let Some(caps) = re_standalone_hook.captures(segment) {
+                    let hook_name = caps[1].to_string();
+                    let args = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
 
-            result.hooks.push(HookCall {
-                name: hook_name,
-                binding: None,
-                args_snippet: truncate_snippet(&args, 100),
-                line: lineno,
-            });
+                    result.hooks.push(HookCall {
+                        name: hook_name,
+                        binding: None,
+                        args_snippet: truncate_snippet(&args, 100),
+                        line: lineno,
+                    });
+                }
+            }
+        }
+    }
+
+    // Expand effect-hook snippets across multiple lines so downstream semantic
+    // analyzers can classify side effects and cleanups accurately.
+    let lines: Vec<&str> = content.lines().collect();
+    for hook in &mut result.hooks {
+        if is_effect_hook(&hook.name)
+            && let Some(expanded) =
+                extract_multiline_hook_args(&lines, hook.line.saturating_sub(1), &hook.name)
+        {
+            hook.args_snippet = truncate_snippet(&expanded, 100);
         }
     }
 
@@ -500,7 +540,7 @@ fn extract_hooks(content: &str, file_path: &str, result: &mut FileParse) {
         if let Some(comp) = result
             .components
             .iter_mut()
-            .filter(|c| c.line < hook.line)
+            .filter(|c| c.line <= hook.line)
             .last()
         {
             comp.hooks.push(hook.clone());
@@ -508,10 +548,9 @@ fn extract_hooks(content: &str, file_path: &str, result: &mut FileParse) {
     }
 
     // Add hook symbols for custom hooks defined in this file.
-    let re_custom_hook = Regex::new(
-        r#"(?m)^[^\S\n]*(export\s+)?(?:function|const)\s+(use[A-Z]\w*)"#,
-    )
-    .expect("custom hook def regex");
+    let re_custom_hook =
+        Regex::new(r#"(?m)^[^\S\n]*(export\s+)?(?:function|const)\s+(use[A-Z]\w*)"#)
+            .expect("custom hook def regex");
 
     for (line_idx, line) in content.lines().enumerate() {
         if let Some(caps) = re_custom_hook.captures(line) {
@@ -528,6 +567,130 @@ fn extract_hooks(content: &str, file_path: &str, result: &mut FileParse) {
             });
         }
     }
+}
+
+fn is_effect_hook(name: &str) -> bool {
+    matches!(name, "useEffect" | "useLayoutEffect" | "useInsertionEffect")
+}
+
+fn extract_multiline_hook_args(
+    lines: &[&str],
+    start_line_idx: usize,
+    hook_name: &str,
+) -> Option<String> {
+    let mut window = String::new();
+    for line in lines.iter().skip(start_line_idx).take(80) {
+        window.push_str(line);
+        window.push('\n');
+        if let Some(args) = extract_hook_args_from_window(&window, hook_name) {
+            return Some(args);
+        }
+    }
+    None
+}
+
+fn extract_hook_args_from_window(window: &str, hook_name: &str) -> Option<String> {
+    let hook_pos = find_hook_call_in_window(window, hook_name)?;
+    let tail = &window[hook_pos + hook_name.len()..];
+
+    // Locate the opening call parenthesis at generic depth 0.
+    let mut open_paren_idx = None;
+    let mut angle_depth = 0usize;
+    let mut in_string: Option<char> = None;
+    let mut escaped = false;
+    for (idx, ch) in tail.char_indices() {
+        if let Some(quote) = in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == quote {
+                in_string = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' | '`' => in_string = Some(ch),
+            '<' => angle_depth += 1,
+            '>' if angle_depth > 0 => angle_depth -= 1,
+            '(' if angle_depth == 0 => {
+                open_paren_idx = Some(idx);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let open_idx = open_paren_idx?;
+
+    // Parse balanced call args, honoring nested parens and quoted strings.
+    let args_tail = &tail[open_idx + 1..];
+    let mut depth = 1usize;
+    let mut in_string: Option<char> = None;
+    let mut escaped = false;
+    for (idx, ch) in args_tail.char_indices() {
+        if let Some(quote) = in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == quote {
+                in_string = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' | '`' => in_string = Some(ch),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(args_tail[..idx].trim().to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
+}
+
+fn find_hook_call_in_window(window: &str, hook_name: &str) -> Option<usize> {
+    let mut search_start = 0usize;
+    while search_start < window.len() {
+        let relative = window[search_start..].find(hook_name)?;
+        let pos = search_start + relative;
+
+        let prev_ok = pos == 0
+            || window[..pos]
+                .chars()
+                .next_back()
+                .is_none_or(|ch| !is_identifier_char(ch));
+        let after = &window[pos + hook_name.len()..];
+        let next_ok = after
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_whitespace() || ch == '(' || ch == '<');
+
+        if prev_ok && next_ok {
+            return Some(pos);
+        }
+        search_start = pos + hook_name.len();
+    }
+    None
+}
+
+fn is_identifier_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'
 }
 
 // ── JSX Element Extraction ───────────────────────────────────────────────
@@ -592,10 +755,14 @@ fn extract_jsx_props(props_str: &str) -> Vec<JsxProp> {
     let mut props = Vec::new();
 
     // Spread props: {...expr}
-    let re_spread = Regex::new(r"\{\.\.\.(\w+)\}").expect("spread regex");
+    let re_spread = Regex::new(r"\{\.\.\.([^}]+)\}").expect("spread regex");
     for caps in re_spread.captures_iter(props_str) {
+        let spread_expr = caps[1].trim().to_string();
+        if spread_expr.is_empty() {
+            continue;
+        }
         props.push(JsxProp {
-            name: caps[1].to_string(),
+            name: spread_expr,
             is_spread: true,
             value_snippet: None,
         });
@@ -603,7 +770,8 @@ fn extract_jsx_props(props_str: &str) -> Vec<JsxProp> {
 
     // Named props: name="value" or name={expr} or name (boolean)
     let re_prop =
-        Regex::new(r#"(\w+)\s*=\s*(?:"([^"]*)"|'([^']*)'|\{([^}]*)\})"#).expect("prop regex");
+        Regex::new(r#"([A-Za-z_][A-Za-z0-9_:\.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|\{([^}]*)\})"#)
+            .expect("prop regex");
     for caps in re_prop.captures_iter(props_str) {
         let name = caps[1].to_string();
         let value = caps
@@ -618,11 +786,23 @@ fn extract_jsx_props(props_str: &str) -> Vec<JsxProp> {
         });
     }
 
-    // Boolean props: just a name without =
-    let re_bool = Regex::new(r#"(?:^|\s)([a-zA-Z]\w*)(?:\s|$)"#).expect("bool prop regex");
-    for caps in re_bool.captures_iter(props_str) {
+    // Boolean props: attribute names without assignment (`disabled`, `required`).
+    // We sanitize quoted/braced value payloads first to avoid false matches
+    // from words inside string literals or expressions.
+    let sanitized = sanitize_jsx_attribute_values(props_str);
+    let re_bool = Regex::new(r#"(?:^|\s)([A-Za-z_][A-Za-z0-9_:\.-]*)"#).expect("bool prop regex");
+    for caps in re_bool.captures_iter(&sanitized) {
+        let Some(name_match) = caps.get(1) else {
+            continue;
+        };
+        let after = &sanitized[name_match.end()..];
+        let has_assignment = after.chars().find(|c| !c.is_whitespace()) == Some('=');
+        if has_assignment {
+            continue;
+        }
+
         let name = caps[1].to_string();
-        // Skip if already found as a named prop.
+        // Skip if already found as a named/spread prop.
         if !props.iter().any(|p| p.name == name) {
             props.push(JsxProp {
                 name,
@@ -635,22 +815,93 @@ fn extract_jsx_props(props_str: &str) -> Vec<JsxProp> {
     props
 }
 
+fn sanitize_jsx_attribute_values(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' | '\'' => {
+                let quote = ch;
+                out.push(' ');
+                let mut escaped = false;
+                for c in chars.by_ref() {
+                    out.push(' ');
+                    if escaped {
+                        escaped = false;
+                        continue;
+                    }
+                    if c == '\\' {
+                        escaped = true;
+                        continue;
+                    }
+                    if c == quote {
+                        break;
+                    }
+                }
+            }
+            '{' => {
+                out.push(' ');
+                let mut depth = 1usize;
+                let mut in_string: Option<char> = None;
+                let mut escaped = false;
+
+                for c in chars.by_ref() {
+                    out.push(' ');
+                    if let Some(quote) = in_string {
+                        if escaped {
+                            escaped = false;
+                            continue;
+                        }
+                        if c == '\\' {
+                            escaped = true;
+                            continue;
+                        }
+                        if c == quote {
+                            in_string = None;
+                        }
+                        continue;
+                    }
+
+                    match c {
+                        '"' | '\'' | '`' => {
+                            in_string = Some(c);
+                        }
+                        '{' => {
+                            depth += 1;
+                        }
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => out.push(ch),
+        }
+    }
+
+    out
+}
+
 // ── Type Extraction ──────────────────────────────────────────────────────
 
 fn extract_types(content: &str, file_path: &str, result: &mut FileParse) {
     // Interface declarations.
-    let re_interface = Regex::new(
-        r#"(?m)^[^\S\n]*(export\s+)?interface\s+(\w+)(?:\s+extends\s+[^{]+)?\s*\{"#,
-    )
-    .expect("interface regex");
+    let re_interface =
+        Regex::new(r#"(?m)^[^\S\n]*(export\s+)?interface\s+(\w+)(?:\s+extends\s+[^{]+)?\s*\{"#)
+            .expect("interface regex");
 
     // Type alias declarations.
-    let re_type_alias =
-        Regex::new(r#"(?m)^[^\S\n]*(export\s+)?type\s+(\w+)(?:<[^>]+>)?\s*="#).expect("type alias regex");
+    let re_type_alias = Regex::new(r#"(?m)^[^\S\n]*(export\s+)?type\s+(\w+)(?:<[^>]+>)?\s*="#)
+        .expect("type alias regex");
 
     // Enum declarations.
-    let re_enum =
-        Regex::new(r#"(?m)^[^\S\n]*(export\s+)?(?:const\s+)?enum\s+(\w+)\s*\{"#).expect("enum regex");
+    let re_enum = Regex::new(r#"(?m)^[^\S\n]*(export\s+)?(?:const\s+)?enum\s+(\w+)\s*\{"#)
+        .expect("enum regex");
 
     let lines: Vec<&str> = content.lines().collect();
 
@@ -774,32 +1025,25 @@ fn extract_interface_fields(lines: &[&str], start_line: usize) -> Vec<TypeField>
 
 fn extract_symbols(content: &str, file_path: &str, result: &mut FileParse) {
     // Import symbols.
-    let re_named_import = Regex::new(
-        r#"(?m)^[^\S\n]*import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]"#,
-    )
-    .expect("named import regex");
+    let re_named_import =
+        Regex::new(r#"(?m)^[^\S\n]*import\s+\{([^}]+)\}\s+from\s+['"]([^'"]+)['"]"#)
+            .expect("named import regex");
 
-    let re_default_import = Regex::new(
-        r#"(?m)^[^\S\n]*import\s+(\w+)\s+from\s+['"]([^'"]+)['"]"#,
-    )
-    .expect("default import regex");
+    let re_default_import = Regex::new(r#"(?m)^[^\S\n]*import\s+(\w+)\s+from\s+['"]([^'"]+)['"]"#)
+        .expect("default import regex");
 
-    let re_namespace_import = Regex::new(
-        r#"(?m)^[^\S\n]*import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]"#,
-    )
-    .expect("namespace import regex");
+    let re_namespace_import =
+        Regex::new(r#"(?m)^[^\S\n]*import\s+\*\s+as\s+(\w+)\s+from\s+['"]([^'"]+)['"]"#)
+            .expect("namespace import regex");
 
     // Exported constants/variables.
-    let re_exported_const = Regex::new(
-        r#"(?m)^[^\S\n]*export\s+(?:const|let|var)\s+(\w+)"#,
-    )
-    .expect("exported const regex");
+    let re_exported_const = Regex::new(r#"(?m)^[^\S\n]*export\s+(?:const|let|var)\s+(\w+)"#)
+        .expect("exported const regex");
 
     // Exported functions (non-component, lowercase).
-    let re_exported_func = Regex::new(
-        r#"(?m)^[^\S\n]*export\s+(?:default\s+)?function\s+([a-z]\w*)"#,
-    )
-    .expect("exported func regex");
+    let re_exported_func =
+        Regex::new(r#"(?m)^[^\S\n]*export\s+(?:default\s+)?function\s+([a-z]\w*)"#)
+            .expect("exported func regex");
 
     for (line_idx, line) in content.lines().enumerate() {
         let lineno = line_idx + 1;
@@ -925,15 +1169,16 @@ fn extract_symbols(content: &str, file_path: &str, result: &mut FileParse) {
     }
 
     // Event handlers from JSX (on* props).
-    let re_event_handler = Regex::new(
-        r#"(on[A-Z]\w*)\s*=\s*(?:\{([^}]+)\}|"([^"]*)")"#,
-    )
-    .expect("event handler regex");
+    let re_event_handler =
+        Regex::new(r#"(on[A-Z]\w*)\s*=\s*(?:\{([^}]+)\}|"([^"]*)")"#).expect("event handler regex");
 
     for (line_idx, line) in content.lines().enumerate() {
         for caps in re_event_handler.captures_iter(line) {
             let event_name = caps[1].to_string();
-            let handler = caps.get(2).or(caps.get(3)).map(|m| m.as_str().trim().to_string());
+            let handler = caps
+                .get(2)
+                .or(caps.get(3))
+                .map(|m| m.as_str().trim().to_string());
             let is_inline = handler
                 .as_ref()
                 .is_some_and(|h| h.contains("=>") || h.contains('('));
@@ -949,7 +1194,7 @@ fn extract_symbols(content: &str, file_path: &str, result: &mut FileParse) {
             if let Some(comp) = result
                 .components
                 .iter_mut()
-                .filter(|c| c.line < line_idx + 1)
+                .filter(|c| c.line <= line_idx + 1)
                 .last()
             {
                 comp.event_handlers.push(eh);
@@ -1030,10 +1275,7 @@ export default function App(props: AppProps) {
         assert_eq!(result.components[0].name, "App");
         assert_eq!(result.components[0].kind, ComponentKind::FunctionComponent);
         assert!(result.components[0].is_default_export);
-        assert_eq!(
-            result.components[0].props_type.as_deref(),
-            Some("AppProps")
-        );
+        assert_eq!(result.components[0].props_type.as_deref(), Some("AppProps"));
     }
 
     #[test]
@@ -1088,6 +1330,31 @@ export const ExpensiveList = React.memo(({ items }) => {
     }
 
     #[test]
+    fn parse_forward_ref_and_memo_emit_component_symbols() {
+        let src = r#"
+export const Input = React.forwardRef((props, ref) => {
+    return <input ref={ref} />;
+});
+export const ExpensiveList = React.memo(({ items }) => {
+    return <ul>{items.map(i => <li key={i}>{i}</li>)}</ul>;
+});
+"#;
+        let result = parse_file(src, "Components.tsx");
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|s| s.name == "Input" && s.kind == SymbolKind::Component)
+        );
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|s| s.name == "ExpensiveList" && s.kind == SymbolKind::Component)
+        );
+    }
+
+    #[test]
     fn parse_hooks() {
         let src = r#"
 function Counter() {
@@ -1109,6 +1376,55 @@ function Counter() {
     }
 
     #[test]
+    fn parse_multiline_effect_hook_arguments() {
+        let src = r#"
+function DataLoader() {
+    useEffect(() => {
+        fetch('/api/data').then(r => r.json());
+        return () => console.log('cleanup');
+    }, []);
+    return <div />;
+}
+"#;
+        let result = parse_file(src, "DataLoader.tsx");
+        let effect = result
+            .hooks
+            .iter()
+            .find(|h| h.name == "useEffect")
+            .expect("useEffect hook not found");
+        assert!(effect.args_snippet.contains("fetch('/api/data')"));
+        assert!(effect.args_snippet.contains("return () =>"));
+    }
+
+    #[test]
+    fn parse_multiline_effect_ignores_identifier_substring_matches() {
+        let src = r#"
+function DataLoader() {
+    myuseEffect();
+    useEffect(() => {
+        fetch('/api/data').then(r => r.json());
+        return () => console.log('cleanup');
+    }, []);
+    return <div />;
+}
+"#;
+        let result = parse_file(src, "DataLoader.tsx");
+        let effect = result
+            .hooks
+            .iter()
+            .find(|h| h.name == "useEffect")
+            .expect("useEffect hook not found");
+        assert!(effect.args_snippet.contains("fetch('/api/data')"));
+    }
+
+    #[test]
+    fn parse_unindented_standalone_hook_call() {
+        let src = "function App() {\nuseEffect(() => {}, []);\nreturn <div />;\n}\n";
+        let result = parse_file(src, "Counter.tsx");
+        assert!(result.hooks.iter().any(|h| h.name == "useEffect"));
+    }
+
+    #[test]
     fn hooks_associated_with_component() {
         let src = r#"
 function App() {
@@ -1120,6 +1436,18 @@ function App() {
         assert_eq!(result.components.len(), 1);
         assert_eq!(result.components[0].hooks.len(), 1);
         assert_eq!(result.components[0].hooks[0].name, "useState");
+    }
+
+    #[test]
+    fn hooks_associated_with_same_line_component_declaration() {
+        let src = r#"
+const App = () => { useMemo(() => 42, []); return <div />; };
+"#;
+        let result = parse_file(src, "App.tsx");
+        assert_eq!(result.components.len(), 1);
+        assert_eq!(result.hooks.len(), 1);
+        assert_eq!(result.components[0].hooks.len(), 1);
+        assert_eq!(result.components[0].hooks[0].name, "useMemo");
     }
 
     #[test]
@@ -1143,10 +1471,7 @@ function App() {
         assert!(header.unwrap().is_component);
         assert!(header.unwrap().is_self_closing);
 
-        let fragment = result
-            .jsx_elements
-            .iter()
-            .find(|e| e.tag == "Fragment");
+        let fragment = result.jsx_elements.iter().find(|e| e.tag == "Fragment");
         assert!(fragment.is_some());
         assert!(fragment.unwrap().is_fragment);
     }
@@ -1157,6 +1482,27 @@ function App() {
         assert!(props.iter().any(|p| p.name == "name" && !p.is_spread));
         assert!(props.iter().any(|p| p.name == "age" && !p.is_spread));
         assert!(props.iter().any(|p| p.name == "rest" && p.is_spread));
+    }
+
+    #[test]
+    fn parse_jsx_props_ignores_words_inside_values_and_supports_hyphenated_names() {
+        let props =
+            extract_jsx_props(r#"title="hello world" data-test-id="abc" disabled aria-hidden"#);
+
+        assert!(props.iter().any(|p| p.name == "title" && !p.is_spread));
+        assert!(
+            props
+                .iter()
+                .any(|p| p.name == "data-test-id" && !p.is_spread)
+        );
+        assert!(props.iter().any(|p| p.name == "disabled" && !p.is_spread));
+        assert!(
+            props
+                .iter()
+                .any(|p| p.name == "aria-hidden" && !p.is_spread)
+        );
+        assert!(!props.iter().any(|p| p.name == "hello"));
+        assert!(!props.iter().any(|p| p.name == "world"));
     }
 
     #[test]
@@ -1256,8 +1602,16 @@ function Form() {
         let result = parse_file(src, "Form.tsx");
         assert!(!result.components.is_empty());
         let handlers = &result.components[0].event_handlers;
-        assert!(handlers.iter().any(|h| h.event_name == "onSubmit" && !h.is_inline));
-        assert!(handlers.iter().any(|h| h.event_name == "onChange" && h.is_inline));
+        assert!(
+            handlers
+                .iter()
+                .any(|h| h.event_name == "onSubmit" && !h.is_inline)
+        );
+        assert!(
+            handlers
+                .iter()
+                .any(|h| h.event_name == "onChange" && h.is_inline)
+        );
     }
 
     #[test]
@@ -1267,10 +1621,12 @@ export const MAX_RETRIES = 3;
 export const API_URL = 'https://api.example.com';
 "#;
         let result = parse_file(src, "config.ts");
-        assert!(result
-            .symbols
-            .iter()
-            .any(|s| s.name == "MAX_RETRIES" && s.kind == SymbolKind::Constant));
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|s| s.name == "MAX_RETRIES" && s.kind == SymbolKind::Constant)
+        );
     }
 
     #[test]
@@ -1281,10 +1637,12 @@ export function formatDate(d: Date): string {
 }
 "#;
         let result = parse_file(src, "utils.ts");
-        assert!(result
-            .symbols
-            .iter()
-            .any(|s| s.name == "formatDate" && s.kind == SymbolKind::Function));
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|s| s.name == "formatDate" && s.kind == SymbolKind::Function)
+        );
     }
 
     #[test]
@@ -1296,10 +1654,12 @@ export function useTheme() {
 }
 "#;
         let result = parse_file(src, "hooks.ts");
-        assert!(result
-            .symbols
-            .iter()
-            .any(|s| s.name == "useTheme" && s.kind == SymbolKind::Hook));
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|s| s.name == "useTheme" && s.kind == SymbolKind::Hook)
+        );
     }
 
     #[test]

@@ -50,6 +50,10 @@ Each stage in the pipeline is recorded with:
 | `stage_id` | string | Unique stage name (e.g., `intake`, `extraction`) |
 | `stage_index` | u32 | Zero-based consecutive index |
 | `correlation_id` | string | `run:<run_id>:stage:<stage_id>` |
+| `claim_id` | string | Semantic contract clause claim linked to this stage |
+| `evidence_id` | string | Stable artifact-graph evidence node ID for this stage |
+| `policy_id` | string | Transformation policy contract identifier (must be run-consistent) |
+| `trace_id` | string | End-to-end trace identifier (must be run-consistent) |
 | `started_at` | string | ISO 8601 timestamp |
 | `finished_at` | string | ISO 8601 timestamp |
 | `status` | enum | `ok`, `failed`, or `skipped` |
@@ -73,7 +77,7 @@ This enables replay tooling to verify lineage integrity.
 Each stage emits a structured JSONL record on completion:
 
 ```json
-{"event":"stage_completed","run_id":"...","correlation_id":"...","stage_id":"...","stage_index":0,"timestamp":"...","status":"ok","input_hash":"...","output_hash":"...","artifact_count":2,"error":null}
+{"event":"stage_completed","run_id":"...","correlation_id":"...","stage_id":"...","stage_index":0,"claim_id":"ST-001","evidence_id":"evidence:...","policy_id":"opentui-transform-policy-v1","trace_id":"trace:...","timestamp":"...","status":"ok","input_hash":"...","output_hash":"...","artifact_count":2,"error":null}
 ```
 
 ## Certification Verdict
@@ -103,7 +107,11 @@ Each stage emits a structured JSONL record on completion:
 2. `manifest_id` and `run_id` must be non-empty.
 3. Source fingerprint must have a non-empty `source_hash` and at least one of `repo_url`/`local_path`.
 4. Stages must be non-empty, consecutively indexed starting at 0, with unique `stage_id` values.
-5. Hash chain must be unbroken between consecutive `ok` stages.
-6. Failed stages must include an error message.
-7. Certification confidence must be in [0.0, 1.0]; `accept` requires zero test failures.
-8. Determinism attestation runs must be >0; divergence=true is incompatible with stable=true.
+5. Every stage must emit non-empty `claim_id`, `evidence_id`, `policy_id`, and `trace_id`.
+6. `evidence_id` values must be unique within a manifest; `policy_id` and `trace_id` must be consistent across all stages.
+7. Every stage `claim_id` must appear in semantic clause coverage `covered` (stage evidence may not point at `uncovered` claims).
+8. Every `covered` claim must have at least one linked stage record; no orphan covered claims are allowed.
+9. Hash chain must be unbroken between consecutive `ok` stages.
+10. Failed stages must include an error message.
+11. Certification confidence must be in [0.0, 1.0]; `accept` requires zero test failures.
+12. Determinism attestation runs must be >0; divergence=true is incompatible with stable=true.

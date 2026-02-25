@@ -7,11 +7,9 @@
 //! 3. Structured logs include policy rule IDs and redaction token fingerprints.
 
 use doctor_frankentui::redact::{
-    builtin_patterns, redact_content, scan_content, unredact_content, ScanReport,
+    ScanReport, builtin_patterns, redact_content, scan_content, unredact_content,
 };
-use doctor_frankentui::sandbox::{
-    SandboxEnforcer, SandboxPolicy, SandboxProfile, ViolationKind,
-};
+use doctor_frankentui::sandbox::{SandboxEnforcer, SandboxPolicy, SandboxProfile, ViolationKind};
 use std::path::Path;
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -310,10 +308,7 @@ fn redaction_records_contain_no_raw_secrets() {
             "value_hash should be 64-char SHA-256 hex"
         );
         assert!(
-            record
-                .value_hash
-                .chars()
-                .all(|c| c.is_ascii_hexdigit()),
+            record.value_hash.chars().all(|c| c.is_ascii_hexdigit()),
             "value_hash should be hex only"
         );
     }
@@ -321,9 +316,7 @@ fn redaction_records_contain_no_raw_secrets() {
 
 #[test]
 fn scan_report_contains_no_raw_secrets() {
-    let content = format!(
-        "token = {SECRET_GITHUB}\nkey = {SECRET_AWS}"
-    );
+    let content = format!("token = {SECRET_GITHUB}\nkey = {SECRET_AWS}");
     let findings = scan_content(&content, ".env", &builtin_patterns());
     let report = ScanReport::from_findings("report-test", &findings);
 
@@ -349,7 +342,10 @@ fn round_trip_restores_all_secrets() {
 
     let result = redact_content(&content, ".env", &builtin_patterns(), "round-trip");
     let restored = unredact_content(&result.content, &result.map);
-    assert_eq!(restored, content, "round-trip must restore original content exactly");
+    assert_eq!(
+        restored, content,
+        "round-trip must restore original content exactly"
+    );
 }
 
 #[test]
@@ -370,7 +366,11 @@ DEBUG=false";
     assert!(result.content.contains("DEBUG=false"));
 
     // Secret lines should be redacted.
-    assert!(!result.content.contains("my-super-secret-key-value-12345678"));
+    assert!(
+        !result
+            .content
+            .contains("my-super-secret-key-value-12345678")
+    );
     assert!(!result.content.contains("sk_test_4eC39HqLyjWDarjtT1zdp7dc"));
 
     // Round-trip should restore.
@@ -628,9 +628,7 @@ fn resource_violations_get_exit_code_53() {
 
 #[test]
 fn redaction_is_deterministic_across_multiple_calls() {
-    let content = format!(
-        "KEY={SECRET_AWS}\nTOKEN={SECRET_GITHUB}\nDB={SECRET_DB}"
-    );
+    let content = format!("KEY={SECRET_AWS}\nTOKEN={SECRET_GITHUB}\nDB={SECRET_DB}");
 
     let results: Vec<_> = (0..5)
         .map(|_| redact_content(&content, ".env", &builtin_patterns(), "det-test"))

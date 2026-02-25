@@ -9,6 +9,9 @@ use ftui_runtime::decision_core::{
     second_best_loss,
 };
 use ftui_runtime::unified_evidence::{DecisionDomain, EvidenceTerm, UnifiedEvidenceLedger};
+use ftui_runtime::voi_sampling::{
+    DeferredRefinementConfig, DeferredRefinementScheduler, RefinementCandidate,
+};
 
 // ============================================================================
 // Domain Types
@@ -930,4 +933,110 @@ fn decision_and_calibration_counts() {
 
     assert_eq!(ctrl.decision_count, 42);
     assert_eq!(ctrl.calibration_count, 42);
+}
+
+/// VOI-guided deferred scheduler must never violate hard frame budget.
+#[test]
+fn deferred_scheduler_budget_guard_e2e() {
+    let mut scheduler = DeferredRefinementScheduler::new(DeferredRefinementConfig {
+        min_spare_budget_us: 300,
+        max_refinements_per_frame: 2,
+        voi_gain_cutoff: 0.01,
+        fairness_boost_per_skip: 0.02,
+        fairness_boost_cap: 0.6,
+    });
+
+    let phases: &[(Regime, u64)] = &[
+        (Regime::Stable, 16),
+        (Regime::Bursty, 16),
+        (Regime::Resize, 16),
+        (Regime::Degraded, 16),
+    ];
+
+    let mut frame_idx = 0u64;
+    for &(regime, count) in phases {
+        for _ in 0..count {
+            let mandatory_work_us = match regime {
+                Regime::Stable => 1_700,
+                Regime::Bursty => 2_100,
+                Regime::Resize => 2_250,
+                Regime::Degraded => 2_300,
+            };
+
+            let candidates = [
+                RefinementCandidate {
+                    region_id: 10,
+                    estimated_cost_us: 500,
+                    voi_gain: 0.20,
+                },
+                RefinementCandidate {
+                    region_id: 20,
+                    estimated_cost_us: 450,
+                    voi_gain: 0.12,
+                },
+                RefinementCandidate {
+                    region_id: 30,
+                    estimated_cost_us: 650,
+                    voi_gain: 0.08,
+                },
+            ];
+
+            let plan = scheduler.plan_frame(3_000, mandatory_work_us, &candidates);
+            assert!(
+                plan.hard_budget_respected(),
+                "hard budget violated at frame {frame_idx}: {:?}",
+                plan
+            );
+            frame_idx = frame_idx.saturating_add(1);
+        }
+    }
+}
+
+/// Fairness boost should prevent indefinite starvation of a low-VOI region.
+#[test]
+fn deferred_scheduler_fairness_e2e_no_starvation() {
+    let mut scheduler = DeferredRefinementScheduler::new(DeferredRefinementConfig {
+        min_spare_budget_us: 400,
+        max_refinements_per_frame: 1,
+        voi_gain_cutoff: 0.01,
+        fairness_boost_per_skip: 0.05,
+        fairness_boost_cap: 2.0,
+    });
+
+    let candidates = [
+        RefinementCandidate {
+            region_id: 1,
+            estimated_cost_us: 700,
+            voi_gain: 0.22,
+        },
+        RefinementCandidate {
+            region_id: 2,
+            estimated_cost_us: 700,
+            voi_gain: 0.02,
+        },
+    ];
+
+    let mut low_region_selected = 0u32;
+    let mut last_low_pick: Option<u64> = None;
+    let mut max_gap = 0u64;
+    for frame in 0..40u64 {
+        let plan = scheduler.plan_frame(4_000, 2_700, &candidates);
+        let picked_low = plan.selected.iter().any(|s| s.region_id == 2);
+        if picked_low {
+            low_region_selected = low_region_selected.saturating_add(1);
+            if let Some(prev) = last_low_pick {
+                max_gap = max_gap.max(frame.saturating_sub(prev));
+            }
+            last_low_pick = Some(frame);
+        }
+    }
+
+    assert!(
+        low_region_selected > 0,
+        "low-VOI region should be selected eventually via fairness boost"
+    );
+    assert!(
+        max_gap <= 20,
+        "low-VOI region should not starve for very long stretches (max_gap={max_gap})"
+    );
 }

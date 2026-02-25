@@ -860,6 +860,11 @@ impl IrBuilder {
         self.capabilities_optional.insert(cap);
     }
 
+    /// Add a platform assumption.
+    pub fn add_platform_assumption(&mut self, assumption: PlatformAssumption) {
+        self.platform_assumptions.push(assumption);
+    }
+
     /// Add an accessibility entry.
     pub fn add_accessibility(&mut self, entry: AccessibilityEntry) {
         self.accessibility.insert(entry.node_id.clone(), entry);
@@ -988,6 +993,11 @@ mod tests {
         });
 
         builder.require_capability(Capability::KeyboardInput);
+        builder.add_platform_assumption(PlatformAssumption {
+            assumption: "Browser DOM APIs are available at runtime".to_string(),
+            evidence: "useEffect(() => window.addEventListener(...))".to_string(),
+            impact_if_wrong: "Event wiring fails in non-DOM hosts".to_string(),
+        });
 
         builder.build()
     }
@@ -1202,6 +1212,7 @@ mod tests {
                 .required
                 .contains(&Capability::KeyboardInput)
         );
+        assert!(!ir.capabilities.platform_assumptions.is_empty());
     }
 
     #[test]

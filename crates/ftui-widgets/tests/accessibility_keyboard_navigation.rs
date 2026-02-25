@@ -19,8 +19,7 @@ use ftui_render::cell::PackedRgba;
 use ftui_style::Style;
 use ftui_style::theme::themes;
 use ftui_widgets::focus::{
-    FocusEvent, FocusId, FocusIndicator, FocusIndicatorKind, FocusManager, FocusNode,
-    NavDirection,
+    FocusEvent, FocusId, FocusIndicator, FocusIndicatorKind, FocusManager, FocusNode, NavDirection,
 };
 use ftui_widgets::list::{List, ListItem, ListState};
 use ftui_widgets::tabs::TabsState;
@@ -398,9 +397,11 @@ fn right_arrow_expands_collapsed_tree_node() {
 fn left_arrow_collapses_expanded_tree_node() {
     let root = TreeNode::new("Root")
         .with_expanded(true)
-        .with_children(vec![TreeNode::new("Beta")
-            .with_expanded(true)
-            .with_children(vec![TreeNode::new("Beta-1")])]);
+        .with_children(vec![
+            TreeNode::new("Beta")
+                .with_expanded(true)
+                .with_children(vec![TreeNode::new("Beta-1")]),
+        ]);
     let mut tree = Tree::new(root);
 
     // Left arrow on expanded node should collapse it
@@ -794,7 +795,10 @@ fn focus_lost_event_on_blur() {
         matches!(event, Some(FocusEvent::FocusLost { id: 1 })),
         "Blur should emit FocusLost, got {event:?}"
     );
-    assert!(fm.current().is_none(), "No widget should be focused after blur");
+    assert!(
+        fm.current().is_none(),
+        "No widget should be focused after blur"
+    );
 }
 
 // ============================================================================
@@ -899,10 +903,7 @@ fn tabs_right_arrow_at_end_does_not_wrap() {
 
     // Right at end should not wrap (returns false)
     assert!(!state.handle_key(&KeyEvent::new(KeyCode::Right), 3));
-    assert_eq!(
-        state.active, 2,
-        "Right at end should stay at last tab"
-    );
+    assert_eq!(state.active, 2, "Right at end should stay at last tab");
 }
 
 #[test]
@@ -912,10 +913,7 @@ fn tabs_left_arrow_at_start_does_not_wrap() {
 
     // Left at start should not wrap
     assert!(!state.handle_key(&KeyEvent::new(KeyCode::Left), 3));
-    assert_eq!(
-        state.active, 0,
-        "Left at start should stay at first tab"
-    );
+    assert_eq!(state.active, 0, "Left at start should stay at first tab");
 }
 
 // ============================================================================

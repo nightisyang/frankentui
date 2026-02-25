@@ -150,27 +150,62 @@ fn e2e_contract_gate_green_path() {
     let mut clause_results = Vec::new();
 
     // Stage 1: Load all contracts
-    trace.push(log_entry("load_contracts", "start", "Loading all 5 contract schemas", None));
+    trace.push(log_entry(
+        "load_contracts",
+        "start",
+        "Loading all 5 contract schemas",
+        None,
+    ));
 
     let sem_contract = load_builtin_semantic_contract().expect("semantic contract should parse");
-    trace.push(log_entry("load_contracts", "ok", "Semantic equivalence contract loaded", None));
+    trace.push(log_entry(
+        "load_contracts",
+        "ok",
+        "Semantic equivalence contract loaded",
+        None,
+    ));
 
     let policy_matrix = load_builtin_transformation_policy_matrix().expect("policy should parse");
-    trace.push(log_entry("load_contracts", "ok", "Transformation policy matrix loaded", None));
+    trace.push(log_entry(
+        "load_contracts",
+        "ok",
+        "Transformation policy matrix loaded",
+        None,
+    ));
 
     let manifest = valid_evidence_manifest();
-    trace.push(log_entry("load_contracts", "ok", "Evidence manifest loaded", None));
+    trace.push(log_entry(
+        "load_contracts",
+        "ok",
+        "Evidence manifest loaded",
+        None,
+    ));
 
     let confidence = load_builtin_confidence_model().expect("confidence model should parse");
-    trace.push(log_entry("load_contracts", "ok", "Confidence model loaded", None));
+    trace.push(log_entry(
+        "load_contracts",
+        "ok",
+        "Confidence model loaded",
+        None,
+    ));
 
     let licensing = load_builtin_licensing_provenance().expect("licensing contract should parse");
-    trace.push(log_entry("load_contracts", "ok", "Licensing/provenance contract loaded", None));
+    trace.push(log_entry(
+        "load_contracts",
+        "ok",
+        "Licensing/provenance contract loaded",
+        None,
+    ));
 
     stages_passed.push("load_contracts".into());
 
     // Stage 2: Validate evidence manifest
-    trace.push(log_entry("validate_manifest", "start", "Validating evidence manifest integrity", None));
+    trace.push(log_entry(
+        "validate_manifest",
+        "start",
+        "Validating evidence manifest integrity",
+        None,
+    ));
 
     assert!(!manifest.stages.is_empty(), "manifest must have stages");
     for window in manifest.stages.windows(2) {
@@ -179,21 +214,53 @@ fn e2e_contract_gate_green_path() {
             "hash chain integrity"
         );
     }
+    let run_policy_id = manifest.stages[0].policy_id.clone();
+    let run_trace_id = manifest.stages[0].trace_id.clone();
     for stage in &manifest.stages {
+        assert!(
+            !stage.claim_id.is_empty(),
+            "stage claim_id must not be empty"
+        );
+        assert!(
+            !stage.evidence_id.is_empty(),
+            "stage evidence_id must not be empty"
+        );
+        assert_eq!(
+            stage.policy_id, run_policy_id,
+            "policy_id must be consistent across all stages"
+        );
+        assert_eq!(
+            stage.trace_id, run_trace_id,
+            "trace_id must be consistent across all stages"
+        );
         trace.push(log_entry(
             "validate_manifest",
             "ok",
-            &format!("Stage '{}' (index {}) validated", stage.stage_id, stage.stage_index),
+            &format!(
+                "Stage '{}' (index {}) validated",
+                stage.stage_id, stage.stage_index
+            ),
             None,
         ));
     }
     stages_passed.push("validate_manifest".into());
 
     // Stage 3: Validate semantic clause coverage
-    trace.push(log_entry("clause_coverage", "start", "Checking semantic clause coverage", None));
+    trace.push(log_entry(
+        "clause_coverage",
+        "start",
+        "Checking semantic clause coverage",
+        None,
+    ));
 
-    let covered = &manifest.certification_verdict.semantic_clause_coverage.covered;
-    let uncovered = &manifest.certification_verdict.semantic_clause_coverage.uncovered;
+    let covered = &manifest
+        .certification_verdict
+        .semantic_clause_coverage
+        .covered;
+    let uncovered = &manifest
+        .certification_verdict
+        .semantic_clause_coverage
+        .uncovered;
 
     for clause in &sem_contract.clauses {
         let is_covered = covered.iter().any(|c| c == &clause.clause_id);
@@ -206,19 +273,77 @@ fn e2e_contract_gate_green_path() {
         trace.push(log_entry(
             "clause_coverage",
             status,
-            &format!("Clause {} [{}]: {}", clause.clause_id, clause.severity, clause.title),
+            &format!(
+                "Clause {} [{}]: {}",
+                clause.clause_id, clause.severity, clause.title
+            ),
             Some(&clause.clause_id),
         ));
     }
 
     assert!(
-        uncovered.is_empty(),
-        "green-path fixture should have no uncovered clauses"
+        !covered.is_empty(),
+        "green-path fixture must include covered clauses"
     );
+    let covered_set = covered
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let uncovered_set = uncovered
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(
+        covered_set.is_disjoint(&uncovered_set),
+        "covered and uncovered clause sets must be disjoint"
+    );
+    let declared = covered_set
+        .union(&uncovered_set)
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let contract_clauses = sem_contract
+        .clauses
+        .iter()
+        .map(|clause| clause.clause_id.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        declared, contract_clauses,
+        "coverage partition must account for all contract clauses"
+    );
+
+    let contract_gate = manifest
+        .execute_runtime_contract_gate(&sem_contract)
+        .expect("runtime contract gate should pass");
+    assert!(
+        contract_gate.passed,
+        "compiled validator gate should produce a passing report"
+    );
+    for validator in &contract_gate.validator_results {
+        assert!(
+            validator.passed,
+            "validator '{}' should pass with builtin manifest coverage",
+            validator.validator_id
+        );
+        trace.push(log_entry(
+            "clause_coverage",
+            "ok",
+            &format!(
+                "Validator '{}' executed with full claim linkage",
+                validator.validator_id
+            ),
+            None,
+        ));
+    }
+
     stages_passed.push("clause_coverage".into());
 
     // Stage 4: Validate transformation policy
-    trace.push(log_entry("policy_validation", "start", "Checking policy matrix completeness", None));
+    trace.push(log_entry(
+        "policy_validation",
+        "start",
+        "Checking policy matrix completeness",
+        None,
+    ));
 
     let planner_rows = policy_matrix.planner_rows();
     let cert_rows = policy_matrix.certification_rows();
@@ -233,13 +358,27 @@ fn e2e_contract_gate_green_path() {
     stages_passed.push("policy_validation".into());
 
     // Stage 5: Confidence model verdict
-    trace.push(log_entry("confidence_verdict", "start", "Computing Bayesian posterior", None));
+    trace.push(log_entry(
+        "confidence_verdict",
+        "start",
+        "Computing Bayesian posterior",
+        None,
+    ));
 
     let test_pass = manifest.certification_verdict.test_pass_count;
     let test_fail = manifest.certification_verdict.test_fail_count;
     let posterior = confidence.compute_posterior(test_pass, test_fail);
     let decision = confidence.decide(&posterior);
-    let el_result = confidence.expected_loss_decision(&posterior, None, None);
+    let cert_stage = manifest
+        .stages
+        .iter()
+        .find(|stage| stage.stage_id == "certification")
+        .expect("certification stage must exist");
+    let el_result = confidence.expected_loss_decision(
+        &posterior,
+        Some(cert_stage.claim_id.clone()),
+        Some(cert_stage.policy_id.clone()),
+    );
 
     trace.push(log_entry(
         "confidence_verdict",
@@ -254,7 +393,12 @@ fn e2e_contract_gate_green_path() {
     stages_passed.push("confidence_verdict".into());
 
     // Stage 6: Licensing/provenance check
-    trace.push(log_entry("licensing_check", "start", "Validating licensing and provenance", None));
+    trace.push(log_entry(
+        "licensing_check",
+        "start",
+        "Validating licensing and provenance",
+        None,
+    ));
 
     let chain = build_valid_provenance_chain();
     licensing
@@ -272,7 +416,10 @@ fn e2e_contract_gate_green_path() {
             ProvenanceAction::Hold => "review",
             ProvenanceAction::Reject => "fail",
         },
-        &format!("overall_status={:?}, flags={:?}", ip_report.overall_status, ip_report.unresolved_risk_flags),
+        &format!(
+            "overall_status={:?}, flags={:?}",
+            ip_report.overall_status, ip_report.unresolved_risk_flags
+        ),
         None,
     ));
     assert_eq!(ip_action, ProvenanceAction::Accept);
@@ -292,12 +439,16 @@ fn e2e_contract_gate_green_path() {
     // Verify report structure
     let report_json = serde_json::to_string_pretty(&report).expect("report must serialize");
     assert!(!report_json.is_empty());
-    assert!(stages_failed.is_empty(), "green path should have zero failures");
+    assert!(
+        stages_failed.is_empty(),
+        "green path should have zero failures"
+    );
     assert_eq!(stages_passed.len(), 6, "all 6 stages should pass");
 
     // Verify all trace entries are valid JSON
     for line in &trace {
-        let _: serde_json::Value = serde_json::from_str(line).expect("trace line must be valid JSON");
+        let _: serde_json::Value =
+            serde_json::from_str(line).expect("trace line must be valid JSON");
     }
 
     // Verify deterministic run ID in all trace entries
@@ -317,7 +468,12 @@ fn e2e_contract_gate_green_path() {
 fn e2e_contract_gate_red_path_broken_hash_chain() {
     let mut trace = Vec::new();
 
-    trace.push(log_entry("validate_manifest", "start", "Validating manifest with broken hash chain", None));
+    trace.push(log_entry(
+        "validate_manifest",
+        "start",
+        "Validating manifest with broken hash chain",
+        None,
+    ));
 
     let mut manifest = valid_evidence_manifest();
     // Intentionally break the hash chain
@@ -348,7 +504,10 @@ fn e2e_contract_gate_red_path_broken_hash_chain() {
     assert!(trace.len() >= 2, "trace must have start and fail entries");
     let last = &trace[trace.len() - 1];
     assert!(last.contains("fail"), "last trace entry must show failure");
-    assert!(last.contains("REJECTED"), "last trace entry must show rejection");
+    assert!(
+        last.contains("REJECTED"),
+        "last trace entry must show rejection"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -360,7 +519,12 @@ fn e2e_contract_gate_red_path_blocked_license() {
     let mut trace = Vec::new();
     let licensing = load_builtin_licensing_provenance().expect("licensing should parse");
 
-    trace.push(log_entry("licensing_check", "start", "Validating artifacts with blocked license", None));
+    trace.push(log_entry(
+        "licensing_check",
+        "start",
+        "Validating artifacts with blocked license",
+        None,
+    ));
 
     let artifacts = vec![
         IpArtifactRecord {
@@ -398,11 +562,18 @@ fn e2e_contract_gate_red_path_blocked_license() {
 
     assert_eq!(report.overall_status, IpArtifactStatus::Blocked);
     assert_eq!(action, ProvenanceAction::Reject);
-    assert!(report.unresolved_risk_flags.contains(&"lp-copyleft-contamination".into()));
+    assert!(
+        report
+            .unresolved_risk_flags
+            .contains(&"lp-copyleft-contamination".into())
+    );
 
     // Verify trace includes remediation hints
     let last = &trace[trace.len() - 1];
-    assert!(last.contains("remediation"), "trace must include remediation hints");
+    assert!(
+        last.contains("remediation"),
+        "trace must include remediation hints"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -413,7 +584,12 @@ fn e2e_contract_gate_red_path_blocked_license() {
 fn e2e_contract_gate_red_path_accept_with_failures() {
     let mut trace = Vec::new();
 
-    trace.push(log_entry("validate_manifest", "start", "Validating manifest with inconsistent verdict", None));
+    trace.push(log_entry(
+        "validate_manifest",
+        "start",
+        "Validating manifest with inconsistent verdict",
+        None,
+    ));
 
     let mut manifest = valid_evidence_manifest();
     manifest.certification_verdict.verdict = VerdictOutcome::Accept;
@@ -447,7 +623,12 @@ fn e2e_contract_gate_red_path_low_confidence() {
     let mut trace = Vec::new();
     let confidence = load_builtin_confidence_model().expect("confidence should parse");
 
-    trace.push(log_entry("confidence_verdict", "start", "Computing posterior for low-confidence scenario", None));
+    trace.push(log_entry(
+        "confidence_verdict",
+        "start",
+        "Computing posterior for low-confidence scenario",
+        None,
+    ));
 
     // Simulate 2 passes, 50 failures
     let posterior = confidence.compute_posterior(2, 50);
@@ -488,7 +669,12 @@ fn e2e_contract_gate_red_path_broken_provenance() {
     let mut trace = Vec::new();
     let licensing = load_builtin_licensing_provenance().expect("licensing should parse");
 
-    trace.push(log_entry("licensing_check", "start", "Validating broken provenance chain", None));
+    trace.push(log_entry(
+        "licensing_check",
+        "start",
+        "Validating broken provenance chain",
+        None,
+    ));
 
     let mut chain = build_valid_provenance_chain();
     if chain.len() >= 2 {
@@ -518,7 +704,12 @@ fn e2e_contract_gate_red_path_missing_provenance_stage() {
     let mut trace = Vec::new();
     let licensing = load_builtin_licensing_provenance().expect("licensing should parse");
 
-    trace.push(log_entry("licensing_check", "start", "Validating provenance with missing stage", None));
+    trace.push(log_entry(
+        "licensing_check",
+        "start",
+        "Validating provenance with missing stage",
+        None,
+    ));
 
     // Only provide 2 of the 5 required stages
     let partial_chain = vec![
@@ -595,7 +786,8 @@ fn e2e_contract_gate_jsonl_trace_is_well_formed() {
     let lines: Vec<&str> = jsonl.lines().collect();
     assert_eq!(lines.len(), trace.len());
     for line in lines {
-        let _: serde_json::Value = serde_json::from_str(line).expect("each line must be valid JSON");
+        let _: serde_json::Value =
+            serde_json::from_str(line).expect("each line must be valid JSON");
     }
 }
 
@@ -660,7 +852,10 @@ fn e2e_contract_gate_report_is_deterministic() {
 
     let run1 = run();
     let run2 = run();
-    assert_eq!(run1, run2, "gate report must be deterministic across identical runs");
+    assert_eq!(
+        run1, run2,
+        "gate report must be deterministic across identical runs"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

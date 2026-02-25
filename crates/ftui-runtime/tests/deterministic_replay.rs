@@ -134,11 +134,7 @@ impl Model for CounterModel {
 // ============================================================================
 
 /// Record events into a trace, running them through a model, capture frames.
-fn record_session(
-    events: &[(Event, u64)],
-    width: u16,
-    height: u16,
-) -> (Vec<Buffer>, Vec<u8>) {
+fn record_session(events: &[(Event, u64)], width: u16, height: u16) -> (Vec<Buffer>, Vec<u8>) {
     let mut model = CounterModel::new();
     model.viewport = (width, height);
     let _ = model.init();
@@ -148,9 +144,13 @@ fn record_session(
     let mut trace_buf = Vec::new();
 
     {
-        let mut writer =
-            EventTraceWriter::from_writer(&mut trace_buf, "test_session", (width, height), Some(42))
-                .expect("create writer");
+        let mut writer = EventTraceWriter::from_writer(
+            &mut trace_buf,
+            "test_session",
+            (width, height),
+            Some(42),
+        )
+        .expect("create writer");
 
         for (event, ts_ns) in events {
             // Record the event.
@@ -231,7 +231,11 @@ fn hundred_event_session_round_trip() {
     assert_eq!(replayed_frames.len(), 100);
 
     // Every frame must be identical.
-    for (i, (rec, rep)) in recorded_frames.iter().zip(replayed_frames.iter()).enumerate() {
+    for (i, (rec, rep)) in recorded_frames
+        .iter()
+        .zip(replayed_frames.iter())
+        .enumerate()
+    {
         assert!(
             rec.content_eq(rep),
             "frame {i} differs between record and replay"
@@ -279,11 +283,12 @@ fn resize_events_mid_session() {
     let replayed_frames = replay_session(&trace_data, 80, 24);
 
     assert_eq!(recorded_frames.len(), replayed_frames.len());
-    for (i, (rec, rep)) in recorded_frames.iter().zip(replayed_frames.iter()).enumerate() {
-        assert!(
-            rec.content_eq(rep),
-            "frame {i} differs after resize events"
-        );
+    for (i, (rec, rep)) in recorded_frames
+        .iter()
+        .zip(replayed_frames.iter())
+        .enumerate()
+    {
+        assert!(rec.content_eq(rep), "frame {i} differs after resize events");
     }
 
     // Verify the trace file preserves resize events.
@@ -333,7 +338,11 @@ fn concurrent_timer_events() {
     let replayed_frames = replay_session(&trace_data, 80, 24);
 
     assert_eq!(recorded_frames.len(), replayed_frames.len());
-    for (i, (rec, rep)) in recorded_frames.iter().zip(replayed_frames.iter()).enumerate() {
+    for (i, (rec, rep)) in recorded_frames
+        .iter()
+        .zip(replayed_frames.iter())
+        .enumerate()
+    {
         assert!(
             rec.content_eq(rep),
             "frame {i} differs with concurrent timers"
@@ -347,7 +356,10 @@ fn concurrent_timer_events() {
         .iter()
         .filter(|(e, _)| matches!(e, Event::Tick))
         .count();
-    assert!(tick_count >= 50, "expected at least 50 ticks, got {tick_count}");
+    assert!(
+        tick_count >= 50,
+        "expected at least 50 ticks, got {tick_count}"
+    );
 }
 
 // ============================================================================
@@ -466,7 +478,11 @@ fn evidence_replay_detects_nondeterminism() {
     assert!(verifier.summary().contains("FAIL"));
 
     // Should detect both action and log_posterior mismatches.
-    let fields: Vec<&str> = verifier.mismatches().iter().map(|m| m.field.as_str()).collect();
+    let fields: Vec<&str> = verifier
+        .mismatches()
+        .iter()
+        .map(|m| m.field.as_str())
+        .collect();
     assert!(fields.contains(&"action"), "expected action mismatch");
     assert!(
         fields.contains(&"log_posterior"),
@@ -586,9 +602,8 @@ fn corrupted_trace_partial_jsonl() {
     // Valid header line, then a truncated/invalid second line.
     let mut buf = Vec::new();
     {
-        let mut writer =
-            EventTraceWriter::from_writer(&mut buf, "partial", (80, 24), None)
-                .expect("create writer");
+        let mut writer = EventTraceWriter::from_writer(&mut buf, "partial", (80, 24), None)
+            .expect("create writer");
         writer.record(&Event::Tick, 100).expect("record");
         writer.finish().expect("finish");
     }
@@ -627,9 +642,8 @@ fn corrupted_trace_mismatched_event_count() {
     // but event count in summary won't match actual records.
     let mut buf = Vec::new();
     {
-        let mut writer =
-            EventTraceWriter::from_writer(&mut buf, "mismatch", (80, 24), None)
-                .expect("create writer");
+        let mut writer = EventTraceWriter::from_writer(&mut buf, "mismatch", (80, 24), None)
+            .expect("create writer");
         writer.record(&Event::Tick, 100).expect("record");
         writer.finish().expect("finish");
     }
@@ -660,9 +674,8 @@ fn replay_preserves_event_ordering() {
 
     let mut buf = Vec::new();
     {
-        let mut writer =
-            EventTraceWriter::from_writer(&mut buf, "order_test", (80, 24), None)
-                .expect("create writer");
+        let mut writer = EventTraceWriter::from_writer(&mut buf, "order_test", (80, 24), None)
+            .expect("create writer");
         for (event, ts) in &events {
             writer.record(event, *ts).expect("record");
         }
@@ -698,9 +711,8 @@ fn replay_with_paste_events() {
 
     let mut buf = Vec::new();
     {
-        let mut writer =
-            EventTraceWriter::from_writer(&mut buf, "paste_test", (80, 24), None)
-                .expect("create writer");
+        let mut writer = EventTraceWriter::from_writer(&mut buf, "paste_test", (80, 24), None)
+            .expect("create writer");
         for (event, ts) in &events {
             writer.record(event, *ts).expect("record");
         }
@@ -726,9 +738,7 @@ fn gzip_round_trip_with_evidence() {
     {
         let mut writer =
             EventTraceWriter::gzip(&path, "gz_evidence", (80, 24)).expect("create gz writer");
-        writer
-            .record(&Event::Tick, 1_000)
-            .expect("record tick");
+        writer.record(&Event::Tick, 1_000).expect("record tick");
         writer
             .record_evidence(&evidence, 1_500)
             .expect("record evidence");
@@ -762,9 +772,8 @@ fn replayer_advance_until_with_evidence_in_trace() {
     // Evidence records should not interfere with EventReplayer's event-only replay.
     let mut buf = Vec::new();
     {
-        let mut writer =
-            EventTraceWriter::from_writer(&mut buf, "advance_test", (80, 24), None)
-                .expect("create writer");
+        let mut writer = EventTraceWriter::from_writer(&mut buf, "advance_test", (80, 24), None)
+            .expect("create writer");
 
         writer
             .record(&Event::Key(KeyEvent::new(KeyCode::Char('a'))), 1_000)
@@ -806,13 +815,9 @@ fn large_session_with_mixed_events_and_evidence() {
     let mut evidence_entries = Vec::new();
 
     {
-        let mut writer = EventTraceWriter::from_writer(
-            &mut trace_buf,
-            "stress_test",
-            (80, 24),
-            Some(12345),
-        )
-        .expect("create writer");
+        let mut writer =
+            EventTraceWriter::from_writer(&mut trace_buf, "stress_test", (80, 24), Some(12345))
+                .expect("create writer");
 
         for i in 0..200u64 {
             let ts = i * 16_000_000;
@@ -872,11 +877,12 @@ fn large_session_with_mixed_events_and_evidence() {
     // Replay events.
     let replayed_frames = replay_session(&trace_buf, 80, 24);
     assert_eq!(replayed_frames.len(), 200);
-    for (i, (rec, rep)) in recorded_frames.iter().zip(replayed_frames.iter()).enumerate() {
-        assert!(
-            rec.content_eq(rep),
-            "frame {i} differs in stress test"
-        );
+    for (i, (rec, rep)) in recorded_frames
+        .iter()
+        .zip(replayed_frames.iter())
+        .enumerate()
+    {
+        assert!(rec.content_eq(rep), "frame {i} differs in stress test");
     }
 
     // Verify evidence.

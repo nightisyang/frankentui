@@ -188,7 +188,10 @@ fn standalone_progress_renders() {
     let mut frame = Frame::new(20, 1, &mut pool);
     Widget::render(&progress, Rect::new(0, 0, 20, 1), &mut frame);
     let row = row_text(&frame, 0);
-    assert!(row.contains("50%"), "Progress bar label should render: {row:?}");
+    assert!(
+        row.contains("50%"),
+        "Progress bar label should render: {row:?}"
+    );
 }
 
 // ============================================================================
@@ -334,7 +337,10 @@ fn standalone_list_measurable() {
     let items = vec![ListItem::new("short"), ListItem::new("a longer item")];
     let list = List::new(items);
     let constraints = list.measure(Size::new(100, 50));
-    assert!(constraints.preferred.width > 0, "Should have non-zero width");
+    assert!(
+        constraints.preferred.width > 0,
+        "Should have non-zero width"
+    );
     assert!(
         constraints.preferred.height >= 2,
         "Should have height for 2 items"

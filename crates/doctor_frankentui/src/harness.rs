@@ -335,12 +335,16 @@ impl Harness {
         }
 
         // Capture initial frame.
-        if self.config.capture_renders && let Ok(content) = runner.capture_frame() {
+        if self.config.capture_renders
+            && let Ok(content) = runner.capture_frame()
+        {
             frames.push(make_frame(0, 0, &self.config, &content, None));
         }
 
         // Capture initial state.
-        if self.config.capture_state_traces && let Ok(state) = runner.capture_state() {
+        if self.config.capture_state_traces
+            && let Ok(state) = runner.capture_state()
+        {
             state_traces.push(make_state_trace(0, 0, state, "init"));
         }
 
@@ -370,7 +374,9 @@ impl Harness {
             let mut state_delta = None;
 
             // Capture post-event state.
-            if self.config.capture_state_traces && let Ok(new_state) = runner.capture_state() {
+            if self.config.capture_state_traces
+                && let Ok(new_state) = runner.capture_state()
+            {
                 state_delta = Some(new_state.clone());
                 state_traces.push(make_state_trace(
                     state_traces.len(),
@@ -384,7 +390,9 @@ impl Harness {
             }
 
             // Capture post-event frame.
-            if self.config.capture_renders && let Ok(content) = runner.capture_frame() {
+            if self.config.capture_renders
+                && let Ok(content) = runner.capture_frame()
+            {
                 frames.push(make_frame(
                     frames.len(),
                     start_time.elapsed().as_millis() as u64,
@@ -412,7 +420,10 @@ impl Harness {
         let metadata = RunMetadata {
             started_at: started_at.clone(),
             finished_at,
-            viewport: format!("{}x{}", self.config.viewport_width, self.config.viewport_height),
+            viewport: format!(
+                "{}x{}",
+                self.config.viewport_width, self.config.viewport_height
+            ),
             events_injected: interactions.len(),
             frames_captured: frames.len(),
             state_traces_captured: state_traces.len(),
@@ -440,12 +451,7 @@ impl Harness {
         result
     }
 
-    fn failed_result(
-        &self,
-        started_at: &str,
-        elapsed: Duration,
-        _error: &str,
-    ) -> BaselineResult {
+    fn failed_result(&self, started_at: &str, elapsed: Duration, _error: &str) -> BaselineResult {
         let finished_at = chrono::Utc::now().to_rfc3339();
         BaselineResult {
             run_id: self.config.run_id.clone(),
@@ -587,9 +593,8 @@ pub fn compare_baselines(baseline: &BaselineResult, candidate: &BaselineResult) 
         });
     }
 
-    let equivalent =
-        baseline.content_fingerprint == candidate.content_fingerprint
-            && baseline.state_fingerprint == candidate.state_fingerprint;
+    let equivalent = baseline.content_fingerprint == candidate.content_fingerprint
+        && baseline.state_fingerprint == candidate.state_fingerprint;
 
     DiffResult {
         baseline_run_id: baseline.run_id.clone(),
@@ -685,10 +690,7 @@ mod tests {
         fn new() -> Self {
             Self {
                 running: false,
-                frame_content: vec![
-                    "Hello, World!".to_string(),
-                    "Line 2".to_string(),
-                ],
+                frame_content: vec!["Hello, World!".to_string(), "Line 2".to_string()],
                 state: serde_json::json!({"counter": 0, "active": true}),
                 event_log: Vec::new(),
                 should_fail_init: false,
@@ -727,8 +729,7 @@ mod tests {
                     self.event_log.push(format!("text:{text}"));
                 }
                 EventKind::Resize { width, height } => {
-                    self.event_log
-                        .push(format!("resize:{width}x{height}"));
+                    self.event_log.push(format!("resize:{width}x{height}"));
                 }
                 EventKind::Snapshot { label } => {
                     self.event_log.push(format!("snapshot:{label}"));

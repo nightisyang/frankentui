@@ -170,9 +170,9 @@ impl SandboxPolicy {
                     "**/*credential*".into(),
                     "**/*token*".into(),
                 ],
-                write_allow: vec![], // No writes at all.
-                max_read_bytes: 256 * 1024 * 1024,  // 256 MiB
-                max_file_size: 16 * 1024 * 1024,     // 16 MiB
+                write_allow: vec![],               // No writes at all.
+                max_read_bytes: 256 * 1024 * 1024, // 256 MiB
+                max_file_size: 16 * 1024 * 1024,   // 16 MiB
                 max_depth: 20,
                 max_file_count: 50_000,
             },
@@ -193,9 +193,9 @@ impl SandboxPolicy {
             resource: ResourcePolicy {
                 max_wall_time_secs: 120,
                 max_cpu_time_secs: 60,
-                max_memory_bytes: 512 * 1024 * 1024,  // 512 MiB
+                max_memory_bytes: 512 * 1024 * 1024, // 512 MiB
                 max_open_fds: 256,
-                max_output_bytes: 8 * 1024 * 1024,     // 8 MiB
+                max_output_bytes: 8 * 1024 * 1024, // 8 MiB
             },
         }
     }
@@ -213,9 +213,9 @@ impl SandboxPolicy {
                     "**/*credential*".into(),
                     "**/*token*".into(),
                 ],
-                write_allow: vec![], // No writes.
-                max_read_bytes: 1024 * 1024 * 1024,  // 1 GiB
-                max_file_size: 64 * 1024 * 1024,      // 64 MiB
+                write_allow: vec![],                // No writes.
+                max_read_bytes: 1024 * 1024 * 1024, // 1 GiB
+                max_file_size: 64 * 1024 * 1024,    // 64 MiB
                 max_depth: 30,
                 max_file_count: 200_000,
             },
@@ -247,9 +247,9 @@ impl SandboxPolicy {
             resource: ResourcePolicy {
                 max_wall_time_secs: 300,
                 max_cpu_time_secs: 120,
-                max_memory_bytes: 2 * 1024 * 1024 * 1024,  // 2 GiB
+                max_memory_bytes: 2 * 1024 * 1024 * 1024, // 2 GiB
                 max_open_fds: 1024,
-                max_output_bytes: 32 * 1024 * 1024,         // 32 MiB
+                max_output_bytes: 32 * 1024 * 1024, // 32 MiB
             },
         }
     }
@@ -260,13 +260,10 @@ impl SandboxPolicy {
             profile_name: "permissive".into(),
             fs: FsPolicy {
                 read_allow: vec!["**".into()],
-                read_deny: vec![
-                    "**/.env*".into(),
-                    "**/*secret*".into(),
-                ],
+                read_deny: vec!["**/.env*".into(), "**/*secret*".into()],
                 write_allow: vec![], // Still no writes during analysis.
-                max_read_bytes: 4 * 1024 * 1024 * 1024,   // 4 GiB
-                max_file_size: 256 * 1024 * 1024,           // 256 MiB
+                max_read_bytes: 4 * 1024 * 1024 * 1024, // 4 GiB
+                max_file_size: 256 * 1024 * 1024, // 256 MiB
                 max_depth: 50,
                 max_file_count: 1_000_000,
             },
@@ -291,9 +288,9 @@ impl SandboxPolicy {
             resource: ResourcePolicy {
                 max_wall_time_secs: 600,
                 max_cpu_time_secs: 300,
-                max_memory_bytes: 4 * 1024 * 1024 * 1024,  // 4 GiB
+                max_memory_bytes: 4 * 1024 * 1024 * 1024, // 4 GiB
                 max_open_fds: 4096,
-                max_output_bytes: 128 * 1024 * 1024,        // 128 MiB
+                max_output_bytes: 128 * 1024 * 1024, // 128 MiB
             },
         }
     }
@@ -358,9 +355,9 @@ impl ViolationKind {
             | Self::FsDepthExceeded
             | Self::FsFileCountExceeded => EXIT_SANDBOX_FS_VIOLATION,
 
-            Self::NetworkBlocked
-            | Self::NetworkHostDenied
-            | Self::NetworkConnectionLimit => EXIT_SANDBOX_NETWORK_VIOLATION,
+            Self::NetworkBlocked | Self::NetworkHostDenied | Self::NetworkConnectionLimit => {
+                EXIT_SANDBOX_NETWORK_VIOLATION
+            }
 
             Self::ProcessBlocked
             | Self::ProcessExecutableDenied
@@ -577,8 +574,14 @@ impl SandboxEnforcer {
         let mut counters = BTreeMap::new();
         counters.insert("bytes_read".into(), self.bytes_read);
         counters.insert("files_enumerated".into(), self.files_enumerated);
-        counters.insert("subprocesses_spawned".into(), u64::from(self.subprocesses_spawned));
-        counters.insert("connections_opened".into(), u64::from(self.connections_opened));
+        counters.insert(
+            "subprocesses_spawned".into(),
+            u64::from(self.subprocesses_spawned),
+        );
+        counters.insert(
+            "connections_opened".into(),
+            u64::from(self.connections_opened),
+        );
         counters.insert("output_bytes".into(), self.output_bytes);
 
         SandboxReport {
@@ -629,7 +632,8 @@ impl SandboxEnforcer {
             }
         }
 
-        self.audit.record("fs", "allow", &format!("read: {path_str}"));
+        self.audit
+            .record("fs", "allow", &format!("read: {path_str}"));
         Ok(())
     }
 
@@ -663,15 +667,13 @@ impl SandboxEnforcer {
             return Err(Box::new(v));
         }
 
-        self.audit.record("fs", "allow", &format!("write: {path_str}"));
+        self.audit
+            .record("fs", "allow", &format!("write: {path_str}"));
         Ok(())
     }
 
     /// Record bytes read and check cumulative limit.
-    pub fn record_bytes_read(
-        &mut self,
-        bytes: u64,
-    ) -> SandboxResult {
+    pub fn record_bytes_read(&mut self, bytes: u64) -> SandboxResult {
         self.bytes_read = self.bytes_read.saturating_add(bytes);
         if self.bytes_read > self.policy.fs.max_read_bytes {
             let v = SandboxViolation::new(
@@ -692,11 +694,7 @@ impl SandboxEnforcer {
     }
 
     /// Check a single file's size against the limit.
-    pub fn check_file_size(
-        &mut self,
-        path: &Path,
-        size: u64,
-    ) -> SandboxResult {
+    pub fn check_file_size(&mut self, path: &Path, size: u64) -> SandboxResult {
         if size > self.policy.fs.max_file_size {
             let v = SandboxViolation::new(
                 ViolationKind::FsFileSizeExceeded,
@@ -708,10 +706,7 @@ impl SandboxEnforcer {
                 ),
             )
             .with_path(path.to_string_lossy().to_string())
-            .with_limits(
-                self.policy.fs.max_file_size.to_string(),
-                size.to_string(),
-            );
+            .with_limits(self.policy.fs.max_file_size.to_string(), size.to_string());
             self.audit.record_violation("fs", &v);
             return Err(Box::new(v));
         }
@@ -728,10 +723,7 @@ impl SandboxEnforcer {
                     depth, self.policy.fs.max_depth
                 ),
             )
-            .with_limits(
-                self.policy.fs.max_depth.to_string(),
-                depth.to_string(),
-            );
+            .with_limits(self.policy.fs.max_depth.to_string(), depth.to_string());
             self.audit.record_violation("fs", &v);
             return Err(Box::new(v));
         }
@@ -762,10 +754,7 @@ impl SandboxEnforcer {
     // ── Network Checks ───────────────────────────────────────────────────
 
     /// Check whether a network connection to the given host is allowed.
-    pub fn check_network(
-        &mut self,
-        host: &str,
-    ) -> SandboxResult {
+    pub fn check_network(&mut self, host: &str) -> SandboxResult {
         if !self.policy.network.allow_network {
             let v = SandboxViolation::new(
                 ViolationKind::NetworkBlocked,
@@ -823,10 +812,7 @@ impl SandboxEnforcer {
     // ── Process Checks ───────────────────────────────────────────────────
 
     /// Check whether spawning a subprocess with the given executable is allowed.
-    pub fn check_subprocess(
-        &mut self,
-        executable: &str,
-    ) -> SandboxResult {
+    pub fn check_subprocess(&mut self, executable: &str) -> SandboxResult {
         if !self.policy.process.allow_subprocess {
             let v = SandboxViolation::new(
                 ViolationKind::ProcessBlocked,
@@ -905,10 +891,7 @@ impl SandboxEnforcer {
     }
 
     /// Record subprocess output bytes and check limit.
-    pub fn record_output_bytes(
-        &mut self,
-        bytes: u64,
-    ) -> SandboxResult {
+    pub fn record_output_bytes(&mut self, bytes: u64) -> SandboxResult {
         self.output_bytes = self.output_bytes.saturating_add(bytes);
         if self.output_bytes > self.policy.resource.max_output_bytes {
             let v = SandboxViolation::new(
@@ -1030,12 +1013,10 @@ fn glob_match_inner(pattern: &str, path: &str) -> bool {
                 }
                 return false;
             }
-            '?' => {
-                match path_chars.next() {
-                    Some('/') | None => return false,
-                    _ => {}
-                }
-            }
+            '?' => match path_chars.next() {
+                Some('/') | None => return false,
+                _ => {}
+            },
             c => {
                 if path_chars.next() != Some(c) {
                     return false;
@@ -1178,8 +1159,7 @@ mod tests {
 
     #[test]
     fn enforcer_denies_read_in_deny_list() {
-        let mut enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Standard, "test-run");
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Standard, "test-run");
         let result = enforcer.check_read(Path::new("/project/.env.local"));
         assert!(result.is_err());
         let v = result.unwrap_err();
@@ -1211,8 +1191,7 @@ mod tests {
 
     #[test]
     fn enforcer_denies_all_writes_when_write_allow_empty() {
-        let mut enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
         let result = enforcer.check_write(Path::new("/any/path"));
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind, ViolationKind::FsWriteDenied);
@@ -1229,8 +1208,7 @@ mod tests {
 
     #[test]
     fn enforcer_tracks_cumulative_bytes_read() {
-        let mut enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
         // Strict limit: 256 MiB. Read in small chunks should work.
         assert!(enforcer.record_bytes_read(1024).is_ok());
         assert!(enforcer.record_bytes_read(1024).is_ok());
@@ -1242,22 +1220,16 @@ mod tests {
 
     #[test]
     fn enforcer_rejects_oversized_file() {
-        let mut enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
         // Strict max_file_size: 16 MiB.
-        let result =
-            enforcer.check_file_size(Path::new("/big.bin"), 32 * 1024 * 1024);
+        let result = enforcer.check_file_size(Path::new("/big.bin"), 32 * 1024 * 1024);
         assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().kind,
-            ViolationKind::FsFileSizeExceeded
-        );
+        assert_eq!(result.unwrap_err().kind, ViolationKind::FsFileSizeExceeded);
     }
 
     #[test]
     fn enforcer_rejects_excessive_depth() {
-        let mut enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
         assert!(enforcer.check_depth(5).is_ok());
         let result = enforcer.check_depth(25);
         assert!(result.is_err());
@@ -1274,18 +1246,14 @@ mod tests {
         assert!(enforcer.record_file_enumerated().is_ok());
         let result = enforcer.record_file_enumerated();
         assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().kind,
-            ViolationKind::FsFileCountExceeded
-        );
+        assert_eq!(result.unwrap_err().kind, ViolationKind::FsFileCountExceeded);
     }
 
     // ── Network enforcement ──────────────────────────────────────────────
 
     #[test]
     fn strict_profile_blocks_all_network() {
-        let mut enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
         let result = enforcer.check_network("example.com");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind, ViolationKind::NetworkBlocked);
@@ -1293,16 +1261,14 @@ mod tests {
 
     #[test]
     fn permissive_network_allows_registry_hosts() {
-        let mut enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Permissive, "test-run");
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Permissive, "test-run");
         assert!(enforcer.check_network("registry.npmjs.org").is_ok());
         assert!(enforcer.check_network("crates.io").is_ok());
     }
 
     #[test]
     fn permissive_profile_denies_unlisted_hosts() {
-        let mut enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Permissive, "test-run");
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Permissive, "test-run");
         let result = enforcer.check_network("evil.com");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind, ViolationKind::NetworkHostDenied);
@@ -1327,8 +1293,7 @@ mod tests {
 
     #[test]
     fn strict_profile_blocks_all_subprocesses() {
-        let mut enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
         let result = enforcer.check_subprocess("node");
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind, ViolationKind::ProcessBlocked);
@@ -1336,8 +1301,7 @@ mod tests {
 
     #[test]
     fn standard_profile_allows_toolchain_executables() {
-        let mut enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Standard, "test-run");
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Standard, "test-run");
         assert!(enforcer.check_subprocess("node").is_ok());
         assert!(enforcer.check_subprocess("git").is_ok());
         assert!(enforcer.check_subprocess("tsc").is_ok());
@@ -1345,8 +1309,7 @@ mod tests {
 
     #[test]
     fn standard_profile_denies_unknown_executables() {
-        let mut enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Standard, "test-run");
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Standard, "test-run");
         let result = enforcer.check_subprocess("curl");
         assert!(result.is_err());
         assert_eq!(
@@ -1389,8 +1352,7 @@ mod tests {
 
     #[test]
     fn subprocess_timeout_from_policy() {
-        let enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Standard, "test-run");
+        let enforcer = SandboxEnforcer::from_profile(SandboxProfile::Standard, "test-run");
         assert_eq!(enforcer.subprocess_timeout(), Duration::from_secs(30));
     }
 
@@ -1415,8 +1377,7 @@ mod tests {
 
     #[test]
     fn audit_log_records_decisions() {
-        let mut enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
         // Init entry.
         assert_eq!(enforcer.audit_log().len(), 1);
 
@@ -1479,8 +1440,7 @@ mod tests {
 
     #[test]
     fn report_captures_counters() {
-        let mut enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Standard, "test-run");
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Standard, "test-run");
         let _ = enforcer.record_bytes_read(1024);
         let _ = enforcer.check_subprocess("node");
         enforcer.record_subprocess_exit();
@@ -1496,8 +1456,7 @@ mod tests {
 
     #[test]
     fn report_serializes_to_json() {
-        let enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
+        let enforcer = SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
         let report = enforcer.into_report();
         let json = serde_json::to_string(&report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1548,8 +1507,7 @@ mod tests {
 
     #[test]
     fn subprocess_exit_does_not_underflow() {
-        let mut enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Standard, "test-run");
+        let mut enforcer = SandboxEnforcer::from_profile(SandboxProfile::Standard, "test-run");
         // Call exit without prior spawn — should not panic.
         enforcer.record_subprocess_exit();
         enforcer.record_subprocess_exit();
@@ -1582,8 +1540,7 @@ mod tests {
 
     #[test]
     fn enforcer_elapsed_increases() {
-        let enforcer =
-            SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
+        let enforcer = SandboxEnforcer::from_profile(SandboxProfile::Strict, "test-run");
         let d1 = enforcer.elapsed();
         std::thread::sleep(Duration::from_millis(10));
         let d2 = enforcer.elapsed();

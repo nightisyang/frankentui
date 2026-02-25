@@ -20,9 +20,7 @@
 
 use std::fmt::Write as _;
 
-use ftui_core::event::{
-    Event, KeyCode, KeyEvent, MouseEvent, MouseEventKind,
-};
+use ftui_core::event::{Event, KeyCode, KeyEvent, MouseEvent, MouseEventKind};
 use ftui_harness::golden::compute_buffer_checksum;
 use ftui_render::buffer::Buffer;
 use ftui_render::cell::Cell;
@@ -32,9 +30,7 @@ use ftui_runtime::event_trace::{
     EventReplayer, EventTraceReader, EventTraceWriter, EvidenceVerifier,
 };
 use ftui_runtime::program::{Cmd, Model};
-use ftui_runtime::unified_evidence::{
-    DecisionDomain, EvidenceEntry, EvidenceTerm,
-};
+use ftui_runtime::unified_evidence::{DecisionDomain, EvidenceEntry, EvidenceTerm};
 
 // ============================================================================
 // Test Model: Multi-widget app simulating realistic interaction
@@ -278,31 +274,19 @@ fn generate_scripted_interaction() -> Vec<(Event, u64, &'static str)> {
     // Phase 1: Type text in editor (50 keystrokes)
     let text = "Hello World! This is a test of deterministic replay.";
     for c in text.chars().take(50) {
-        events.push((
-            Event::Key(KeyEvent::new(KeyCode::Char(c))),
-            ts,
-            "key",
-        ));
+        events.push((Event::Key(KeyEvent::new(KeyCode::Char(c))), ts, "key"));
         ts += 50_000_000; // 50ms between keystrokes
     }
 
     // Phase 2: Navigate between tabs (10 tab switches)
     for _ in 0..10 {
-        events.push((
-            Event::Key(KeyEvent::new(KeyCode::Tab)),
-            ts,
-            "key",
-        ));
+        events.push((Event::Key(KeyEvent::new(KeyCode::Tab)), ts, "key"));
         ts += 200_000_000; // 200ms between tab switches
     }
 
     // Phase 3: Scroll list (20 scroll events)
     for _ in 0..15 {
-        events.push((
-            Event::Key(KeyEvent::new(KeyCode::Down)),
-            ts,
-            "key",
-        ));
+        events.push((Event::Key(KeyEvent::new(KeyCode::Down)), ts, "key"));
         ts += 30_000_000; // 30ms between scrolls
     }
     for _ in 0..5 {
@@ -335,11 +319,7 @@ fn generate_scripted_interaction() -> Vec<(Event, u64, &'static str)> {
     ts += 500_000_000;
 
     // Phase 5: Toggle theme
-    events.push((
-        Event::Key(KeyEvent::new(KeyCode::Char('t'))),
-        ts,
-        "key",
-    ));
+    events.push((Event::Key(KeyEvent::new(KeyCode::Char('t'))), ts, "key"));
     ts += 100_000_000;
 
     // Phase 6: Intersperse timer ticks
@@ -350,11 +330,7 @@ fn generate_scripted_interaction() -> Vec<(Event, u64, &'static str)> {
 
     // Phase 7: More typing after theme switch
     for c in "Final text after theme.".chars() {
-        events.push((
-            Event::Key(KeyEvent::new(KeyCode::Char(c))),
-            ts,
-            "key",
-        ));
+        events.push((Event::Key(KeyEvent::new(KeyCode::Char(c))), ts, "key"));
         ts += 40_000_000;
     }
 
@@ -423,13 +399,9 @@ fn record_full_session(seed: u64) -> RecordResult {
     let mut evidence_entries = Vec::new();
 
     {
-        let mut writer = EventTraceWriter::from_writer(
-            &mut trace_buf,
-            "recipe_d_session",
-            (80, 24),
-            Some(seed),
-        )
-        .expect("create writer");
+        let mut writer =
+            EventTraceWriter::from_writer(&mut trace_buf, "recipe_d_session", (80, 24), Some(seed))
+                .expect("create writer");
 
         let mut next_evidence_idx = 0;
 
@@ -563,10 +535,7 @@ fn recipe_d_full_session_exact_replay() {
     let (all_match, replay_log, _frames) =
         replay_and_verify(&result.trace_data, &result.frame_hashes, seed);
 
-    assert!(
-        all_match,
-        "not all frames matched during replay"
-    );
+    assert!(all_match, "not all frames matched during replay");
 
     // Verify log line count matches frame count.
     assert_eq!(replay_log.len(), result.frame_hashes.len());
@@ -574,10 +543,7 @@ fn recipe_d_full_session_exact_replay() {
     // Every log line should have match: true.
     for (i, log_line) in replay_log.iter().enumerate() {
         let parsed: serde_json::Value = serde_json::from_str(log_line).expect("parse log");
-        assert_eq!(
-            parsed["match"], true,
-            "frame {i} should match"
-        );
+        assert_eq!(parsed["match"], true, "frame {i} should match");
         assert!(
             parsed["divergence_point"].is_null(),
             "frame {i} should have no divergence"
@@ -761,11 +727,7 @@ fn find_first_divergence(
         }
     }
 
-    if lo < total {
-        Some(lo)
-    } else {
-        None
-    }
+    if lo < total { Some(lo) } else { None }
 }
 
 /// Replay up to frame_idx and return that frame's hash.

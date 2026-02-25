@@ -37,6 +37,12 @@ pub const DEFAULT_ARENA_CAPACITY: usize = 256 * 1024;
 /// single values. All allocations are invalidated on [`reset()`](Self::reset),
 /// which should be called at frame boundaries.
 ///
+/// # Drop semantics
+///
+/// `bumpalo` intentionally does not run `Drop` for values allocated in the arena
+/// when calling [`reset()`](Self::reset) or when the arena itself is dropped.
+/// Only allocate short-lived scratch values that do not require destructor logic.
+///
 /// # Capacity
 ///
 /// The arena starts with an initial capacity and grows automatically when
@@ -110,7 +116,10 @@ impl FrameArena {
         self.bump.allocated_bytes()
     }
 
-    /// Returns the total bytes of unused capacity in the arena.
+    /// Returns total allocated bytes including allocator metadata.
+    ///
+    /// This reflects chunk footprint, not currently live allocation usage.
+    /// Chunk memory is retained across [`reset()`](Self::reset) for reuse.
     pub fn allocated_bytes_including_metadata(&self) -> usize {
         self.bump.allocated_bytes_including_metadata()
     }
@@ -133,6 +142,21 @@ impl Default for FrameArena {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use std::cell::Cell as DropCounter;
+    use std::mem::align_of;
+    use std::rc::Rc;
+
+    #[derive(Clone)]
+    struct DropSpy {
+        drops: Rc<DropCounter<usize>>,
+    }
+
+    impl Drop for DropSpy {
+        fn drop(&mut self) {
+            self.drops.set(self.drops.get() + 1);
+        }
+    }
 
     #[test]
     fn new_creates_arena_with_capacity() {
@@ -245,6 +269,16 @@ mod tests {
     }
 
     #[test]
+    fn default_capacity_grows_beyond_256kb_without_panic() {
+        let arena = FrameArena::default();
+        let large = vec![0xAB; DEFAULT_ARENA_CAPACITY + 64 * 1024];
+        let s = arena.alloc_slice(&large);
+        assert_eq!(s.len(), large.len());
+        assert_eq!(s[0], 0xAB);
+        assert!(arena.allocated_bytes() >= DEFAULT_ARENA_CAPACITY);
+    }
+
+    #[test]
     fn allocated_bytes_tracks_usage() {
         let arena = FrameArena::new(4096);
         let initial = arena.allocated_bytes();
@@ -275,9 +309,97 @@ mod tests {
     }
 
     #[test]
+    fn allocations_respect_alignment_requirements() {
+        let arena = FrameArena::new(4096);
+
+        let p_u8 = arena.alloc(1u8) as *mut u8 as usize;
+        let p_u32 = arena.alloc(2u32) as *mut u32 as usize;
+        let p_u64 = arena.alloc(3u64) as *mut u64 as usize;
+        let p_u128 = arena.alloc(4u128) as *mut u128 as usize;
+
+        assert_eq!(p_u8 % align_of::<u8>(), 0);
+        assert_eq!(p_u32 % align_of::<u32>(), 0);
+        assert_eq!(p_u64 % align_of::<u64>(), 0);
+        assert_eq!(p_u128 % align_of::<u128>(), 0);
+    }
+
+    #[test]
+    fn reset_reuses_existing_chunks_without_extra_growth() {
+        let mut arena = FrameArena::new(128);
+        let payload = vec![7u8; 32 * 1024];
+
+        let first = arena.alloc_slice(&payload);
+        assert_eq!(first.len(), payload.len());
+        let grown = arena.allocated_bytes_including_metadata();
+        assert!(grown > 128);
+
+        arena.reset();
+
+        let second = arena.alloc_slice(&payload);
+        assert_eq!(second.len(), payload.len());
+        let after = arena.allocated_bytes_including_metadata();
+        assert!(
+            after <= grown + 1024,
+            "arena should reuse existing chunks after reset: before={grown}, after={after}"
+        );
+    }
+
+    #[test]
+    fn reset_does_not_run_drop_glue_for_allocated_values() {
+        let drops = Rc::new(DropCounter::new(0));
+        {
+            let mut arena = FrameArena::new(1024);
+            let _spy = arena.alloc(DropSpy {
+                drops: Rc::clone(&drops),
+            });
+            arena.reset();
+            assert_eq!(
+                drops.get(),
+                0,
+                "reset() must not run Drop for bump allocations"
+            );
+        }
+        assert_eq!(
+            drops.get(),
+            0,
+            "dropping arena must not run Drop for bump allocations"
+        );
+    }
+
+    #[test]
     fn debug_impl() {
         let arena = FrameArena::new(1024);
         let debug = format!("{arena:?}");
         assert!(debug.contains("FrameArena"));
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_random_alloc_reset_sequences_never_panic(ops in prop::collection::vec((0u8..=3, 0u16..1024), 1..300)) {
+            let mut arena = FrameArena::new(256);
+            for (op, size_hint) in ops {
+                match op {
+                    0 => {
+                        let len = (size_hint as usize % 256) + 1;
+                        let s = "x".repeat(len);
+                        let alloc = arena.alloc_str(&s);
+                        prop_assert_eq!(alloc.len(), len);
+                    }
+                    1 => {
+                        let len = (size_hint as usize % 128) + 1;
+                        let data = vec![size_hint as u32; len];
+                        let alloc = arena.alloc_slice(&data);
+                        prop_assert_eq!(alloc.len(), len);
+                    }
+                    2 => {
+                        let value = arena.alloc(size_hint as u64);
+                        prop_assert_eq!(*value, size_hint as u64);
+                    }
+                    _ => {
+                        arena.reset();
+                    }
+                }
+            }
+        }
     }
 }

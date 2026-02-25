@@ -116,7 +116,7 @@
 //! }
 //! ```
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use web_time::{Duration, Instant};
 
@@ -763,6 +763,216 @@ fn boundary_score(e_value: f64, threshold: f64) -> f64 {
 fn log10_ratio(score: f64, cost: f64) -> f64 {
     let ratio = (score + EPS) / (cost + EPS);
     ratio.ln() / std::f64::consts::LN_10
+}
+
+// =============================================================================
+// Deferred refinement scheduler (bd-2vr05.15.4.4)
+// =============================================================================
+
+/// Configuration for VOI-guided deferred refinement scheduling.
+///
+/// This scheduler only allocates work from spare frame budget and uses a
+/// deterministic VOI score with fairness boosts to avoid starvation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeferredRefinementConfig {
+    /// Minimum spare budget to keep reserved for non-optional work.
+    pub min_spare_budget_us: u64,
+    /// Hard cap on optional refinements scheduled per frame.
+    pub max_refinements_per_frame: usize,
+    /// Minimum effective VOI required to schedule a refinement.
+    pub voi_gain_cutoff: f64,
+    /// Fairness boost added per skipped frame for a region.
+    pub fairness_boost_per_skip: f64,
+    /// Maximum fairness boost for a region.
+    pub fairness_boost_cap: f64,
+}
+
+impl Default for DeferredRefinementConfig {
+    fn default() -> Self {
+        Self {
+            min_spare_budget_us: 500,
+            max_refinements_per_frame: 2,
+            voi_gain_cutoff: 0.01,
+            fairness_boost_per_skip: 0.02,
+            fairness_boost_cap: 1.0,
+        }
+    }
+}
+
+/// Candidate optional refinement unit for a region/paragraph bucket.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RefinementCandidate {
+    /// Deterministic region identifier.
+    pub region_id: u64,
+    /// Estimated runtime cost for this refinement.
+    pub estimated_cost_us: u64,
+    /// Predicted value-of-information gain (higher is better).
+    pub voi_gain: f64,
+}
+
+/// Selected refinement with explainable scoring terms.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RefinementSelection {
+    pub region_id: u64,
+    pub estimated_cost_us: u64,
+    pub voi_gain: f64,
+    pub fairness_boost: f64,
+    pub effective_voi: f64,
+    pub score: f64,
+}
+
+/// Frame-level refinement plan.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeferredRefinementPlan {
+    pub frame_budget_us: u64,
+    pub mandatory_work_us: u64,
+    pub reserved_spare_us: u64,
+    pub optional_budget_us: u64,
+    pub spent_optional_us: u64,
+    pub selected: Vec<RefinementSelection>,
+}
+
+impl DeferredRefinementPlan {
+    /// Hard budget predicate for CI assertions.
+    #[must_use]
+    pub fn hard_budget_respected(&self) -> bool {
+        self.mandatory_work_us
+            .saturating_add(self.reserved_spare_us)
+            .saturating_add(self.spent_optional_us)
+            <= self.frame_budget_us
+    }
+}
+
+/// Deterministic VOI-guided scheduler for optional deferred refinements.
+#[derive(Debug, Clone)]
+pub struct DeferredRefinementScheduler {
+    config: DeferredRefinementConfig,
+    skipped_frames: BTreeMap<u64, u32>,
+}
+
+impl DeferredRefinementScheduler {
+    /// Create a scheduler from explicit config.
+    #[must_use]
+    pub fn new(config: DeferredRefinementConfig) -> Self {
+        Self {
+            config,
+            skipped_frames: BTreeMap::new(),
+        }
+    }
+
+    /// Access scheduler config.
+    #[must_use]
+    pub fn config(&self) -> &DeferredRefinementConfig {
+        &self.config
+    }
+
+    /// Number of consecutive frames this region has been skipped.
+    #[must_use]
+    pub fn skipped_frames_for(&self, region_id: u64) -> u32 {
+        self.skipped_frames.get(&region_id).copied().unwrap_or(0)
+    }
+
+    /// Compute a deterministic frame plan under a hard budget cap.
+    ///
+    /// - `frame_budget_us`: total frame budget.
+    /// - `mandatory_work_us`: non-optional cost already committed.
+    /// - `candidates`: optional refinements for this frame.
+    pub fn plan_frame(
+        &mut self,
+        frame_budget_us: u64,
+        mandatory_work_us: u64,
+        candidates: &[RefinementCandidate],
+    ) -> DeferredRefinementPlan {
+        let reserved_spare_us = self.config.min_spare_budget_us;
+        let available_after_mandatory = frame_budget_us.saturating_sub(mandatory_work_us);
+        let optional_budget_us = available_after_mandatory.saturating_sub(reserved_spare_us);
+
+        let mut scored = Vec::with_capacity(candidates.len());
+        for candidate in candidates.iter().copied() {
+            let skip_count = self.skipped_frames_for(candidate.region_id);
+            let fairness_boost = (skip_count as f64 * self.config.fairness_boost_per_skip)
+                .min(self.config.fairness_boost_cap);
+            let voi_gain = if candidate.voi_gain.is_finite() {
+                candidate.voi_gain.max(0.0)
+            } else {
+                0.0
+            };
+            let effective_voi = voi_gain + fairness_boost;
+            let normalized_cost = candidate.estimated_cost_us.max(1) as f64;
+            let score = effective_voi / normalized_cost;
+            scored.push((
+                candidate,
+                fairness_boost,
+                effective_voi,
+                score,
+                candidate.region_id,
+            ));
+        }
+
+        // Deterministic ordering:
+        // 1) score DESC, 2) effective_voi DESC, 3) region_id ASC.
+        scored.sort_by(|a, b| {
+            b.3.total_cmp(&a.3)
+                .then_with(|| b.2.total_cmp(&a.2))
+                .then_with(|| a.4.cmp(&b.4))
+        });
+
+        let mut remaining_optional_us = optional_budget_us;
+        let mut selected = Vec::with_capacity(self.config.max_refinements_per_frame);
+        let mut selected_ids = BTreeMap::<u64, ()>::new();
+
+        for (candidate, fairness_boost, effective_voi, score, _) in scored {
+            if selected.len() >= self.config.max_refinements_per_frame {
+                break;
+            }
+            if effective_voi < self.config.voi_gain_cutoff {
+                continue;
+            }
+            if candidate.estimated_cost_us > remaining_optional_us {
+                continue;
+            }
+            selected.push(RefinementSelection {
+                region_id: candidate.region_id,
+                estimated_cost_us: candidate.estimated_cost_us,
+                voi_gain: if candidate.voi_gain.is_finite() {
+                    candidate.voi_gain.max(0.0)
+                } else {
+                    0.0
+                },
+                fairness_boost,
+                effective_voi,
+                score,
+            });
+            selected_ids.insert(candidate.region_id, ());
+            remaining_optional_us =
+                remaining_optional_us.saturating_sub(candidate.estimated_cost_us);
+        }
+
+        // Update fairness accounting for all regions visible this frame.
+        for candidate in candidates {
+            if selected_ids.contains_key(&candidate.region_id) {
+                self.skipped_frames.insert(candidate.region_id, 0);
+            } else {
+                let next = self
+                    .skipped_frames_for(candidate.region_id)
+                    .saturating_add(1);
+                self.skipped_frames.insert(candidate.region_id, next);
+            }
+        }
+
+        let spent_optional_us = optional_budget_us.saturating_sub(remaining_optional_us);
+        let plan = DeferredRefinementPlan {
+            frame_budget_us,
+            mandatory_work_us,
+            reserved_spare_us,
+            optional_budget_us,
+            spent_optional_us,
+            selected,
+        };
+
+        debug_assert!(plan.hard_budget_respected());
+        plan
+    }
 }
 
 // =============================================================================
@@ -1938,6 +2148,124 @@ mod tests {
             (after_taken + after_skipped) >= (before_taken + before_skipped) + 10,
             "expected at least 10 counter increments total, \
              taken: {before_taken}→{after_taken}, skipped: {before_skipped}→{after_skipped}"
+        );
+    }
+
+    // =========================================================================
+    // Deferred refinement scheduler tests (bd-2vr05.15.4.4)
+    // =========================================================================
+
+    #[test]
+    fn deferred_scheduler_respects_hard_budget() {
+        let mut scheduler = DeferredRefinementScheduler::new(DeferredRefinementConfig {
+            min_spare_budget_us: 200,
+            max_refinements_per_frame: 3,
+            voi_gain_cutoff: 0.01,
+            fairness_boost_per_skip: 0.02,
+            fairness_boost_cap: 0.5,
+        });
+
+        let candidates = [
+            RefinementCandidate {
+                region_id: 1,
+                estimated_cost_us: 600,
+                voi_gain: 0.25,
+            },
+            RefinementCandidate {
+                region_id: 2,
+                estimated_cost_us: 500,
+                voi_gain: 0.21,
+            },
+            RefinementCandidate {
+                region_id: 3,
+                estimated_cost_us: 300,
+                voi_gain: 0.08,
+            },
+        ];
+
+        let plan = scheduler.plan_frame(3_000, 1_900, &candidates);
+        assert!(plan.hard_budget_respected());
+        assert!(plan.spent_optional_us <= plan.optional_budget_us);
+        assert!(
+            plan.mandatory_work_us
+                .saturating_add(plan.reserved_spare_us)
+                .saturating_add(plan.spent_optional_us)
+                <= 3_000
+        );
+    }
+
+    #[test]
+    fn deferred_scheduler_is_deterministic_for_identical_inputs() {
+        let config = DeferredRefinementConfig {
+            min_spare_budget_us: 100,
+            max_refinements_per_frame: 2,
+            voi_gain_cutoff: 0.01,
+            fairness_boost_per_skip: 0.03,
+            fairness_boost_cap: 0.6,
+        };
+        let mut a = DeferredRefinementScheduler::new(config.clone());
+        let mut b = DeferredRefinementScheduler::new(config);
+
+        let candidates = [
+            RefinementCandidate {
+                region_id: 11,
+                estimated_cost_us: 450,
+                voi_gain: 0.13,
+            },
+            RefinementCandidate {
+                region_id: 22,
+                estimated_cost_us: 500,
+                voi_gain: 0.11,
+            },
+            RefinementCandidate {
+                region_id: 33,
+                estimated_cost_us: 350,
+                voi_gain: 0.07,
+            },
+        ];
+
+        for _ in 0..25 {
+            let pa = a.plan_frame(2_800, 1_600, &candidates);
+            let pb = b.plan_frame(2_800, 1_600, &candidates);
+            assert_eq!(pa, pb);
+        }
+    }
+
+    #[test]
+    fn deferred_scheduler_fairness_avoids_starvation() {
+        let mut scheduler = DeferredRefinementScheduler::new(DeferredRefinementConfig {
+            min_spare_budget_us: 400,
+            max_refinements_per_frame: 1,
+            voi_gain_cutoff: 0.01,
+            fairness_boost_per_skip: 0.05,
+            fairness_boost_cap: 2.0,
+        });
+
+        let candidates = [
+            RefinementCandidate {
+                region_id: 100,
+                estimated_cost_us: 700,
+                voi_gain: 0.20,
+            },
+            RefinementCandidate {
+                region_id: 200,
+                estimated_cost_us: 700,
+                voi_gain: 0.02,
+            },
+        ];
+
+        let mut low_region_selected = 0u32;
+        for _ in 0..30 {
+            let plan = scheduler.plan_frame(4_000, 2_700, &candidates);
+            assert!(plan.hard_budget_respected());
+            if plan.selected.iter().any(|s| s.region_id == 200) {
+                low_region_selected = low_region_selected.saturating_add(1);
+            }
+        }
+
+        assert!(
+            low_region_selected > 0,
+            "fairness boosting should eventually schedule the lower-VOI region"
         );
     }
 }

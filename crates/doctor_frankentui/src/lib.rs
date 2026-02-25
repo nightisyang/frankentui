@@ -8,6 +8,7 @@ pub mod composition_semantics;
 pub mod corpus;
 pub mod doctor;
 pub mod effect_canonical;
+pub mod effect_translator;
 pub mod error;
 pub mod fixture_taxonomy;
 pub mod gap_triage;

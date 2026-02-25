@@ -178,7 +178,9 @@ where
     F: FnOnce(),
 {
     let (layer, spans, events) = PipelineCapture::new();
-    let subscriber = tracing_subscriber::registry().with(layer);
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_subscriber::filter::LevelFilter::TRACE)
+        .with(layer);
     tracing::subscriber::with_default(subscriber, f);
     let s = spans.lock().unwrap().clone();
     let e = events.lock().unwrap().clone();

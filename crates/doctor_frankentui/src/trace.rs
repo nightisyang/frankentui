@@ -89,7 +89,12 @@ pub enum TracePayload {
         action: MouseAction,
     },
     /// Mouse scroll event.
-    Scroll { x: u16, y: u16, delta_x: i16, delta_y: i16 },
+    Scroll {
+        x: u16,
+        y: u16,
+        delta_x: i16,
+        delta_y: i16,
+    },
     /// Viewport resize event.
     Resize { width: u16, height: u16 },
     /// Render frame capture (output event, not input).
@@ -149,11 +154,7 @@ pub struct TraceBuilder {
 
 impl TraceBuilder {
     /// Create a new trace builder.
-    pub fn new(
-        trace_id: impl Into<String>,
-        run_id: impl Into<String>,
-        viewport: Viewport,
-    ) -> Self {
+    pub fn new(trace_id: impl Into<String>, run_id: impl Into<String>, viewport: Viewport) -> Self {
         Self {
             trace_id: trace_id.into(),
             run_id: run_id.into(),
@@ -165,11 +166,7 @@ impl TraceBuilder {
     }
 
     /// Add a metadata key-value pair.
-    pub fn with_metadata(
-        mut self,
-        key: impl Into<String>,
-        value: impl Into<String>,
-    ) -> Self {
+    pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.metadata.insert(key.into(), value.into());
         self
     }
@@ -236,16 +233,25 @@ impl std::fmt::Display for TraceValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SchemaVersionMismatch { expected, actual } => {
-                write!(f, "schema version mismatch: expected {expected}, got {actual}")
+                write!(
+                    f,
+                    "schema version mismatch: expected {expected}, got {actual}"
+                )
             }
             Self::NonMonotonicTimestamps { at_sequence } => {
                 write!(f, "non-monotonic timestamps at sequence {at_sequence}")
             }
             Self::NonContiguousSequence { expected, actual } => {
-                write!(f, "non-contiguous sequence: expected {expected}, got {actual}")
+                write!(
+                    f,
+                    "non-contiguous sequence: expected {expected}, got {actual}"
+                )
             }
             Self::IntegrityCheckFailed { expected, actual } => {
-                write!(f, "integrity check failed: expected {expected}, got {actual}")
+                write!(
+                    f,
+                    "integrity check failed: expected {expected}, got {actual}"
+                )
             }
             Self::EmptyTrace => write!(f, "trace contains no events"),
         }
@@ -423,7 +429,12 @@ pub fn compute_replay_drift(
 
     let steps = actual_offsets_ms.len().min(trace.events.len());
 
-    for (trace_event, &actual) in trace.events.iter().zip(actual_offsets_ms.iter()).take(steps) {
+    for (trace_event, &actual) in trace
+        .events
+        .iter()
+        .zip(actual_offsets_ms.iter())
+        .take(steps)
+    {
         let expected = trace_event.offset_ms;
         let drift = actual as i64 - expected as i64;
         let abs_drift = drift.unsigned_abs();
@@ -607,10 +618,7 @@ mod tests {
             Some("submit_form".into()),
         );
         let trace = builder.build();
-        assert_eq!(
-            trace.events[0].label.as_deref(),
-            Some("submit_form")
-        );
+        assert_eq!(trace.events[0].label.as_deref(), Some("submit_form"));
     }
 
     // ── Serialization ────────────────────────────────────────────────────
@@ -633,9 +641,7 @@ mod tests {
                 modifiers: vec!["ctrl".into()],
                 action: KeyAction::Press,
             },
-            TracePayload::TextInput {
-                text: "hi".into(),
-            },
+            TracePayload::TextInput { text: "hi".into() },
             TracePayload::Mouse {
                 x: 1,
                 y: 2,
@@ -667,7 +673,10 @@ mod tests {
 
         for payload in payloads {
             let json = serde_json::to_string(&payload).unwrap();
-            assert!(json.contains("\"type\""), "payload must have type tag: {json}");
+            assert!(
+                json.contains("\"type\""),
+                "payload must have type tag: {json}"
+            );
             let _: TracePayload = serde_json::from_str(&json).unwrap();
         }
     }
@@ -701,7 +710,10 @@ mod tests {
         let mut trace = sample_trace();
         trace.schema_version = "wrong-v99".into();
         let err = validate_trace(&trace).unwrap_err();
-        assert!(matches!(err, TraceValidationError::SchemaVersionMismatch { .. }));
+        assert!(matches!(
+            err,
+            TraceValidationError::SchemaVersionMismatch { .. }
+        ));
     }
 
     #[test]
@@ -740,7 +752,8 @@ mod tests {
     #[test]
     fn tampered_hash_fails_validation() {
         let mut trace = sample_trace();
-        trace.events_hash = "0000000000000000000000000000000000000000000000000000000000000000".into();
+        trace.events_hash =
+            "0000000000000000000000000000000000000000000000000000000000000000".into();
         let err = validate_trace(&trace).unwrap_err();
         assert!(matches!(
             err,
@@ -875,9 +888,18 @@ mod tests {
 
     #[test]
     fn viewport_equality() {
-        let v1 = Viewport { width: 80, height: 24 };
-        let v2 = Viewport { width: 80, height: 24 };
-        let v3 = Viewport { width: 120, height: 40 };
+        let v1 = Viewport {
+            width: 80,
+            height: 24,
+        };
+        let v2 = Viewport {
+            width: 80,
+            height: 24,
+        };
+        let v3 = Viewport {
+            width: 120,
+            height: 40,
+        };
         assert_eq!(v1, v2);
         assert_ne!(v1, v3);
     }

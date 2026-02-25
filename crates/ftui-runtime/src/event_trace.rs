@@ -148,10 +148,7 @@ pub enum TraceRecord {
 
     /// Evidence ledger entry from a Bayesian decision point (bd-3mjjt.4).
     #[serde(rename = "evidence")]
-    Evidence {
-        ts_ns: u64,
-        entry: SerEvidenceEntry,
-    },
+    Evidence { ts_ns: u64, entry: SerEvidenceEntry },
 
     /// Summary record (last line).
     #[serde(rename = "trace_summary")]
@@ -642,7 +639,11 @@ pub struct EventTraceWriter<W: Write> {
 
 impl EventTraceWriter<std::fs::File> {
     /// Create a writer for an uncompressed JSONL file.
-    pub fn plain(path: impl AsRef<Path>, session_name: &str, terminal_size: (u16, u16)) -> io::Result<Self> {
+    pub fn plain(
+        path: impl AsRef<Path>,
+        session_name: &str,
+        terminal_size: (u16, u16),
+    ) -> io::Result<Self> {
         let file = std::fs::File::create(path)?;
         Self::from_writer(file, session_name, terminal_size, None)
     }
@@ -690,8 +691,7 @@ impl<W: Write> EventTraceWriter<W> {
             terminal_size,
             seed,
         };
-        serde_json::to_writer(&mut w, &header)
-            .map_err(io::Error::other)?;
+        serde_json::to_writer(&mut w, &header).map_err(io::Error::other)?;
         w.write_all(b"\n")?;
 
         Ok(Self {
@@ -732,8 +732,7 @@ impl<W: Write> EventTraceWriter<W> {
 
     /// Write any trace record.
     pub fn write_record(&mut self, record: &TraceRecord) -> io::Result<()> {
-        serde_json::to_writer(&mut self.writer, record)
-            .map_err(io::Error::other)?;
+        serde_json::to_writer(&mut self.writer, record).map_err(io::Error::other)?;
         self.writer.write_all(b"\n")?;
 
         if let Some(ts) = record.ts_ns() {
@@ -788,8 +787,7 @@ impl<W: Write> EventTraceWriter<W> {
             total_duration_ns,
             total_evidence,
         };
-        serde_json::to_writer(&mut self.writer, &summary)
-            .map_err(io::Error::other)?;
+        serde_json::to_writer(&mut self.writer, &summary).map_err(io::Error::other)?;
         self.writer.write_all(b"\n")?;
         self.writer.flush()?;
 
@@ -842,8 +840,7 @@ impl EventTraceReader {
             if line.trim().is_empty() {
                 continue;
             }
-            let record: TraceRecord = serde_json::from_str(&line)
-                .map_err(io::Error::other)?;
+            let record: TraceRecord = serde_json::from_str(&line).map_err(io::Error::other)?;
             records.push(record);
         }
 
@@ -867,25 +864,24 @@ impl TraceFile {
     /// Get the header record, if present.
     #[must_use]
     pub fn header(&self) -> Option<&TraceRecord> {
-        self.records.first().filter(|r| matches!(r, TraceRecord::Header { .. }))
+        self.records
+            .first()
+            .filter(|r| matches!(r, TraceRecord::Header { .. }))
     }
 
     /// Get the summary record, if present.
     #[must_use]
     pub fn summary(&self) -> Option<&TraceRecord> {
-        self.records.last().filter(|r| matches!(r, TraceRecord::Summary { .. }))
+        self.records
+            .last()
+            .filter(|r| matches!(r, TraceRecord::Summary { .. }))
     }
 
     /// Extract only the event records (no header/summary/metadata).
     pub fn event_records(&self) -> Vec<&TraceRecord> {
         self.records
             .iter()
-            .filter(|r| {
-                !matches!(
-                    r,
-                    TraceRecord::Header { .. } | TraceRecord::Summary { .. }
-                )
-            })
+            .filter(|r| !matches!(r, TraceRecord::Header { .. } | TraceRecord::Summary { .. }))
             .collect()
     }
 
@@ -932,9 +928,7 @@ impl TraceFile {
     #[must_use]
     pub fn total_evidence(&self) -> Option<u64> {
         match self.summary()? {
-            TraceRecord::Summary {
-                total_evidence, ..
-            } => *total_evidence,
+            TraceRecord::Summary { total_evidence, .. } => *total_evidence,
             _ => None,
         }
     }
@@ -1277,8 +1271,7 @@ impl EvidenceVerifier {
     /// Whether all verified entries matched their recorded counterparts.
     #[must_use]
     pub fn is_deterministic(&self) -> bool {
-        self.mismatches.is_empty()
-            && self.verified_count == self.recorded.len()
+        self.mismatches.is_empty() && self.verified_count == self.recorded.len()
     }
 
     /// Get all mismatches found during verification.
@@ -1357,10 +1350,7 @@ mod tests {
 
     fn sample_events() -> Vec<(Event, u64)> {
         vec![
-            (
-                Event::Key(KeyEvent::new(KeyCode::Char('a'))),
-                1_000_000,
-            ),
+            (Event::Key(KeyEvent::new(KeyCode::Char('a'))), 1_000_000),
             (
                 Event::Mouse(MouseEvent::new(
                     MouseEventKind::Down(MouseButton::Left),
@@ -1395,10 +1385,7 @@ mod tests {
         for (event, ts) in sample_events() {
             let record = TraceRecord::from_event(&event, ts);
             let recovered = record.to_event().expect("should convert back to event");
-            assert_eq!(
-                event, recovered,
-                "round-trip failed for {event:?}"
-            );
+            assert_eq!(event, recovered, "round-trip failed for {event:?}");
             assert_eq!(record.ts_ns(), Some(ts));
         }
     }
@@ -1461,7 +1448,9 @@ mod tests {
             for (event, ts) in sample_events() {
                 writer.record(&event, ts).expect("record event");
             }
-            writer.record_frame_time(9_000_000, Some(1234)).expect("frame_time");
+            writer
+                .record_frame_time(9_000_000, Some(1234))
+                .expect("frame_time");
             writer.record_rng_seed(10_000_000, 99).expect("rng_seed");
 
             writer.finish().expect("finish");
@@ -1601,15 +1590,12 @@ mod tests {
     fn replayer_from_trace_file() {
         let mut buf = Vec::new();
         {
-            let mut writer =
-                EventTraceWriter::from_writer(&mut buf, "replay_test", (80, 24), None)
-                    .expect("create writer");
+            let mut writer = EventTraceWriter::from_writer(&mut buf, "replay_test", (80, 24), None)
+                .expect("create writer");
             writer
                 .record(&Event::Key(KeyEvent::new(KeyCode::Char('x'))), 100)
                 .expect("record");
-            writer
-                .record(&Event::Focus(false), 200)
-                .expect("record");
+            writer.record(&Event::Focus(false), 200).expect("record");
             writer.finish().expect("finish");
         }
 
@@ -1626,12 +1612,9 @@ mod tests {
     fn trace_file_event_records_excludes_header_summary() {
         let mut buf = Vec::new();
         {
-            let mut writer =
-                EventTraceWriter::from_writer(&mut buf, "filter_test", (80, 24), None)
-                    .expect("create writer");
-            writer
-                .record(&Event::Tick, 100)
-                .expect("record");
+            let mut writer = EventTraceWriter::from_writer(&mut buf, "filter_test", (80, 24), None)
+                .expect("create writer");
+            writer.record(&Event::Tick, 100).expect("record");
             writer
                 .record_frame_time(200, Some(500))
                 .expect("frame_time");
@@ -1649,8 +1632,7 @@ mod tests {
     #[test]
     fn key_with_modifiers_round_trip() {
         let event = Event::Key(
-            KeyEvent::new(KeyCode::Char('c'))
-                .with_modifiers(Modifiers::CTRL | Modifiers::SHIFT),
+            KeyEvent::new(KeyCode::Char('c')).with_modifiers(Modifiers::CTRL | Modifiers::SHIFT),
         );
         let record = TraceRecord::from_event(&event, 42);
         let json = serde_json::to_string(&record).unwrap();
@@ -1733,9 +1715,8 @@ mod tests {
     fn empty_trace_file() {
         let mut buf = Vec::new();
         {
-            let writer =
-                EventTraceWriter::from_writer(&mut buf, "empty", (80, 24), None)
-                    .expect("create writer");
+            let writer = EventTraceWriter::from_writer(&mut buf, "empty", (80, 24), None)
+                .expect("create writer");
             writer.finish().expect("finish");
         }
 
@@ -1747,9 +1728,8 @@ mod tests {
     #[test]
     fn writer_event_count() {
         let mut buf = Vec::new();
-        let mut writer =
-            EventTraceWriter::from_writer(&mut buf, "count", (80, 24), None)
-                .expect("create writer");
+        let mut writer = EventTraceWriter::from_writer(&mut buf, "count", (80, 24), None)
+            .expect("create writer");
 
         assert_eq!(writer.event_count(), 0);
         writer.record(&Event::Tick, 100).unwrap();
@@ -1764,9 +1744,8 @@ mod tests {
     fn json_schema_version_in_header() {
         let mut buf = Vec::new();
         {
-            let writer =
-                EventTraceWriter::from_writer(&mut buf, "schema", (80, 24), None)
-                    .expect("create writer");
+            let writer = EventTraceWriter::from_writer(&mut buf, "schema", (80, 24), None)
+                .expect("create writer");
             writer.finish().expect("finish");
         }
 
@@ -1890,9 +1869,8 @@ mod tests {
     fn trace_without_evidence_has_none_total() {
         let mut buf = Vec::new();
         {
-            let mut writer =
-                EventTraceWriter::from_writer(&mut buf, "no_ev", (80, 24), None)
-                    .expect("create writer");
+            let mut writer = EventTraceWriter::from_writer(&mut buf, "no_ev", (80, 24), None)
+                .expect("create writer");
             writer.record(&Event::Tick, 100).expect("tick");
             writer.finish().expect("finish");
         }
@@ -2230,9 +2208,8 @@ mod tests {
         // Verify that evidence and events can be interleaved and extracted independently.
         let mut buf = Vec::new();
         {
-            let mut writer =
-                EventTraceWriter::from_writer(&mut buf, "interleaved", (80, 24), None)
-                    .expect("create writer");
+            let mut writer = EventTraceWriter::from_writer(&mut buf, "interleaved", (80, 24), None)
+                .expect("create writer");
 
             writer
                 .record(&Event::Key(KeyEvent::new(KeyCode::Char('a'))), 1_000)

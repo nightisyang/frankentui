@@ -118,8 +118,10 @@ impl ComparisonResult {
             format!(
                 "Frame {}: FAIL (size mismatch: expected {}x{}, actual {}x{}, {} cell mismatches in clipped region)",
                 self.frame_id,
-                sz.expected_width, sz.expected_height,
-                sz.actual_width, sz.actual_height,
+                sz.expected_width,
+                sz.expected_height,
+                sz.actual_width,
+                sz.actual_height,
                 self.mismatch_count
             )
         } else {
@@ -137,8 +139,14 @@ impl ComparisonResult {
         if !self.mismatches.is_empty() {
             out.push('\n');
             for m in &self.mismatches {
-                let exp_char = m.expected.char_repr.map_or("?".to_string(), |c| format!("'{c}'"));
-                let act_char = m.actual.char_repr.map_or("?".to_string(), |c| format!("'{c}'"));
+                let exp_char = m
+                    .expected
+                    .char_repr
+                    .map_or("?".to_string(), |c| format!("'{c}'"));
+                let act_char = m
+                    .actual
+                    .char_repr
+                    .map_or("?".to_string(), |c| format!("'{c}'"));
                 out.push_str(&format!(
                     "  [{},{}] expected: {} (fg={:#010x} bg={:#010x} a={:#04x}) actual: {} (fg={:#010x} bg={:#010x} a={:#04x})\n",
                     m.x, m.y,
@@ -169,9 +177,7 @@ pub struct FrameComparator {
 
 impl Default for FrameComparator {
     fn default() -> Self {
-        Self {
-            max_mismatches: 50,
-        }
+        Self { max_mismatches: 50 }
     }
 }
 
@@ -216,18 +222,17 @@ impl FrameComparator {
         }
 
         // Check for size mismatch.
-        let size_mismatch = if expected.width() != actual.width()
-            || expected.height() != actual.height()
-        {
-            Some(SizeMismatch {
-                expected_width: expected.width(),
-                expected_height: expected.height(),
-                actual_width: actual.width(),
-                actual_height: actual.height(),
-            })
-        } else {
-            None
-        };
+        let size_mismatch =
+            if expected.width() != actual.width() || expected.height() != actual.height() {
+                Some(SizeMismatch {
+                    expected_width: expected.width(),
+                    expected_height: expected.height(),
+                    actual_width: actual.width(),
+                    actual_height: actual.height(),
+                })
+            } else {
+                None
+            };
 
         // Cell-by-cell comparison over the overlapping region.
         let cmp_width = expected.width().min(actual.width());
@@ -332,10 +337,7 @@ impl SequenceResult {
 
 /// Compare a sequence of (expected, actual) buffer pairs.
 #[must_use]
-pub fn compare_sequence(
-    pairs: &[(&Buffer, &Buffer)],
-    max_mismatches: usize,
-) -> SequenceResult {
+pub fn compare_sequence(pairs: &[(&Buffer, &Buffer)], max_mismatches: usize) -> SequenceResult {
     let comparator = FrameComparator::new().with_max_mismatches(max_mismatches);
     let mut frames = Vec::with_capacity(pairs.len());
     let mut passed = 0;

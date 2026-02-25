@@ -465,7 +465,10 @@ fn build_message_variants(
     for (id, event) in sorted_events {
         variants.push(MessageVariant {
             name: to_pascal_case(&event.name),
-            payload: event.payload_type.as_deref().map(|t| ir_type_to_rust(Some(t))),
+            payload: event
+                .payload_type
+                .as_deref()
+                .map(|t| ir_type_to_rust(Some(t))),
             source_kind: TranslatedEventKind::from(event.kind.clone()),
             source_id: id.clone(),
         });

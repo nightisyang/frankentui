@@ -18,8 +18,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::migration_ir::{
-    compute_integrity_hash, EffectRegistry, EventCatalog, IrNodeId, MigrationIr, StateGraph,
-    StyleIntent, ViewNodeKind, ViewTree,
+    EffectRegistry, EventCatalog, IrNodeId, MigrationIr, StateGraph, StyleIntent, ViewNodeKind,
+    ViewTree, compute_integrity_hash,
 };
 
 // ── Public API ──────────────────────────────────────────────────────────

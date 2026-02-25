@@ -34,10 +34,10 @@ pub mod cost_model;
 pub mod debug_trace;
 pub mod decision_core;
 pub mod diff_evidence;
-#[cfg(feature = "event-trace")]
-pub mod event_trace;
 pub mod effect_system;
 pub mod eprocess_throttle;
+#[cfg(feature = "event-trace")]
+pub mod event_trace;
 pub mod evidence_bridges;
 pub mod evidence_sink;
 pub mod evidence_telemetry;
@@ -150,11 +150,6 @@ pub use decision_core::{
     Action as DecisionAction, Decision, DecisionCore, Outcome as DecisionOutcome, Posterior,
     State as DecisionState, argmin_expected_loss, second_best_loss,
 };
-#[cfg(feature = "event-trace")]
-pub use event_trace::{
-    EvidenceMismatch, EvidenceVerifier, EventReplayer, EventTraceReader, EventTraceWriter,
-    SerDecisionDomain, SerEvidenceEntry, SerEvidenceTerm, TraceFile, TraceRecord,
-};
 pub use effect_system::{
     effects_command_total, effects_executed_total, effects_subscription_total,
     record_command_effect, record_subscription_start, record_subscription_stop,
@@ -163,6 +158,11 @@ pub use effect_system::{
 pub use eprocess_throttle::{
     EProcessThrottle, ThrottleConfig, ThrottleDecision, ThrottleLog, ThrottleStats,
     eprocess_rejections_total,
+};
+#[cfg(feature = "event-trace")]
+pub use event_trace::{
+    EventReplayer, EventTraceReader, EventTraceWriter, EvidenceMismatch, EvidenceVerifier,
+    SerDecisionDomain, SerEvidenceEntry, SerEvidenceTerm, TraceFile, TraceRecord,
 };
 pub use flake_detector::{EvidenceLog, FlakeConfig, FlakeDecision, FlakeDetector, FlakeSummary};
 pub use reactive::{BatchScope, Binding, BindingScope, Computed, Observable, TwoWayBinding};
@@ -187,8 +187,9 @@ pub use validation_pipeline::{
     ValidationPipeline, ValidatorStats,
 };
 pub use voi_sampling::{
-    VoiConfig, VoiDecision, VoiLogEntry, VoiObservation, VoiSampler, VoiSamplerSnapshot,
-    VoiSummary, voi_samples_skipped_total, voi_samples_taken_total,
+    DeferredRefinementConfig, DeferredRefinementPlan, DeferredRefinementScheduler,
+    RefinementCandidate, RefinementSelection, VoiConfig, VoiDecision, VoiLogEntry, VoiObservation,
+    VoiSampler, VoiSamplerSnapshot, VoiSummary, voi_samples_skipped_total, voi_samples_taken_total,
 };
 
 // State persistence

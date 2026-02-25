@@ -162,7 +162,6 @@ impl Rng {
     fn next_usize(&mut self, max: usize) -> usize {
         (self.next_u64() % (max as u64)) as usize
     }
-
 }
 
 // ── Scenario Planning ────────────────────────────────────────────────────
@@ -252,11 +251,18 @@ pub fn generate_from_coverage(
 
 // ── Single Fixture Generation ────────────────────────────────────────────
 
-fn generate_single(scenario: &StressScenario, config: &GeneratorConfig) -> Option<GeneratedFixture> {
+fn generate_single(
+    scenario: &StressScenario,
+    config: &GeneratorConfig,
+) -> Option<GeneratedFixture> {
     let mut rng = Rng::new(scenario.seed);
 
-    let (source, expected, complexity_tags) =
-        generate_source_for_dimension(&scenario.target_category, &scenario.target_dimension, config, &mut rng)?;
+    let (source, expected, complexity_tags) = generate_source_for_dimension(
+        &scenario.target_category,
+        &scenario.target_dimension,
+        config,
+        &mut rng,
+    )?;
 
     let filename = format!("{}.tsx", scenario.id);
 
@@ -1661,9 +1667,12 @@ export default function FocusManagementStress() {
 }"#
             .to_string();
             let mut p = empty_patterns();
-            p.accessibility_patterns.insert("FocusManagement".to_string());
-            p.accessibility_patterns.insert("KeyboardNavigation".to_string());
-            p.accessibility_patterns.insert("AriaAttributes".to_string());
+            p.accessibility_patterns
+                .insert("FocusManagement".to_string());
+            p.accessibility_patterns
+                .insert("KeyboardNavigation".to_string());
+            p.accessibility_patterns
+                .insert("AriaAttributes".to_string());
             p.effect_patterns.insert("EventListener".to_string());
             p.effect_patterns.insert("EffectCleanup".to_string());
             (src, p)
@@ -1699,7 +1708,8 @@ export default function LiveRegionsStress() {
             .to_string();
             let mut p = empty_patterns();
             p.accessibility_patterns.insert("LiveRegions".to_string());
-            p.accessibility_patterns.insert("AriaAttributes".to_string());
+            p.accessibility_patterns
+                .insert("AriaAttributes".to_string());
             p.accessibility_patterns.insert("SemanticHtml".to_string());
             p.state_patterns.insert("LocalState".to_string());
             (src, p)
@@ -1736,9 +1746,11 @@ export default function SkipNavStress() {
 }"##
             .to_string();
             let mut p = empty_patterns();
-            p.accessibility_patterns.insert("SkipNavigation".to_string());
+            p.accessibility_patterns
+                .insert("SkipNavigation".to_string());
             p.accessibility_patterns.insert("SemanticHtml".to_string());
-            p.accessibility_patterns.insert("AriaAttributes".to_string());
+            p.accessibility_patterns
+                .insert("AriaAttributes".to_string());
             (src, p)
         }
         "ReducedMotion" => {
@@ -1823,8 +1835,10 @@ export default function ScreenReaderStress() {
 }"#
             .to_string();
             let mut p = empty_patterns();
-            p.accessibility_patterns.insert("ScreenReaderText".to_string());
-            p.accessibility_patterns.insert("AriaAttributes".to_string());
+            p.accessibility_patterns
+                .insert("ScreenReaderText".to_string());
+            p.accessibility_patterns
+                .insert("AriaAttributes".to_string());
             p.accessibility_patterns.insert("LiveRegions".to_string());
             p.state_patterns.insert("LocalState".to_string());
             (src, p)
@@ -1981,7 +1995,8 @@ export default function ScrollbackStress() {
 }"#
             .to_string();
             let mut p = empty_patterns();
-            p.terminal_patterns.insert("ScrollbackPreservation".to_string());
+            p.terminal_patterns
+                .insert("ScrollbackPreservation".to_string());
             p.state_patterns.insert("LocalState".to_string());
             p.state_patterns.insert("RefState".to_string());
             p.effect_patterns.insert("DomManipulation".to_string());
@@ -2031,7 +2046,8 @@ export default function ClipboardStress() {
 }"#
             .to_string();
             let mut p = empty_patterns();
-            p.terminal_patterns.insert("ClipboardIntegration".to_string());
+            p.terminal_patterns
+                .insert("ClipboardIntegration".to_string());
             p.state_patterns.insert("LocalState".to_string());
             p.effect_patterns.insert("BrowserApi".to_string());
             (src, p)
@@ -2116,7 +2132,7 @@ function ChildEditor({ value, onChange }: { value: string; onChange: (v: string)
 }
 
 export default ParentChild;"#
-            .to_string();
+                .to_string();
             let mut p = empty_patterns();
             p.data_patterns.insert("BidirectionalBinding".to_string());
             p.data_patterns.insert("PropsDrilling".to_string());
@@ -2411,9 +2427,11 @@ mod tests {
     #[test]
     fn deterministic_output_from_same_seed() {
         let config = GeneratorConfig::default();
-        let report = make_report(vec![
-            make_blind_spot("ui", "RecursiveTree", BlindSpotImpact::High),
-        ]);
+        let report = make_report(vec![make_blind_spot(
+            "ui",
+            "RecursiveTree",
+            BlindSpotImpact::High,
+        )]);
 
         let result1 = generate_from_coverage(&report, &config);
         let result2 = generate_from_coverage(&report, &config);
@@ -2429,9 +2447,11 @@ mod tests {
 
     #[test]
     fn different_seeds_produce_different_output() {
-        let report = make_report(vec![
-            make_blind_spot("ui", "RecursiveTree", BlindSpotImpact::High),
-        ]);
+        let report = make_report(vec![make_blind_spot(
+            "ui",
+            "RecursiveTree",
+            BlindSpotImpact::High,
+        )]);
 
         let config1 = GeneratorConfig {
             base_seed: 42,
@@ -2449,7 +2469,10 @@ mod tests {
         assert_eq!(result1.fixtures.len(), 1);
         assert_eq!(result2.fixtures.len(), 1);
         // The scenario IDs differ because seed differs
-        assert_ne!(result1.fixtures[0].scenario.id, result2.fixtures[0].scenario.id);
+        assert_ne!(
+            result1.fixtures[0].scenario.id,
+            result2.fixtures[0].scenario.id
+        );
     }
 
     #[test]
@@ -2489,16 +2512,21 @@ mod tests {
 
     #[test]
     fn generated_fixture_has_synthetic_provenance() {
-        let report = make_report(vec![
-            make_blind_spot("ui", "PortalModal", BlindSpotImpact::High),
-        ]);
+        let report = make_report(vec![make_blind_spot(
+            "ui",
+            "PortalModal",
+            BlindSpotImpact::High,
+        )]);
 
         let config = GeneratorConfig::default();
         let result = generate_from_coverage(&report, &config);
 
         assert_eq!(result.fixtures.len(), 1);
         let entry = &result.fixtures[0].corpus_entry;
-        assert_eq!(entry.provenance.source_type, ProvenanceSourceType::Synthetic);
+        assert_eq!(
+            entry.provenance.source_type,
+            ProvenanceSourceType::Synthetic
+        );
         assert!(entry.source_url.starts_with("synthetic://"));
         assert!(entry.license_verified);
         assert_eq!(entry.license, "Apache-2.0");
@@ -2506,9 +2534,11 @@ mod tests {
 
     #[test]
     fn generated_source_is_nonempty_tsx() {
-        let report = make_report(vec![
-            make_blind_spot("state", "ExternalStore", BlindSpotImpact::High),
-        ]);
+        let report = make_report(vec![make_blind_spot(
+            "state",
+            "ExternalStore",
+            BlindSpotImpact::High,
+        )]);
 
         let config = GeneratorConfig::default();
         let result = generate_from_coverage(&report, &config);
@@ -2523,9 +2553,11 @@ mod tests {
 
     #[test]
     fn expected_patterns_populated() {
-        let report = make_report(vec![
-            make_blind_spot("effect", "TimerInterval", BlindSpotImpact::High),
-        ]);
+        let report = make_report(vec![make_blind_spot(
+            "effect",
+            "TimerInterval",
+            BlindSpotImpact::High,
+        )]);
 
         let config = GeneratorConfig::default();
         let result = generate_from_coverage(&report, &config);
@@ -2537,14 +2569,20 @@ mod tests {
 
     #[test]
     fn corpus_metrics_populated() {
-        let report = make_report(vec![
-            make_blind_spot("ui", "ErrorBoundary", BlindSpotImpact::High),
-        ]);
+        let report = make_report(vec![make_blind_spot(
+            "ui",
+            "ErrorBoundary",
+            BlindSpotImpact::High,
+        )]);
 
         let config = GeneratorConfig::default();
         let result = generate_from_coverage(&report, &config);
 
-        let metrics = result.fixtures[0].corpus_entry.expected_metrics.as_ref().unwrap();
+        let metrics = result.fixtures[0]
+            .corpus_entry
+            .expected_metrics
+            .as_ref()
+            .unwrap();
         assert!(metrics.file_count > 0);
         assert!(metrics.component_count > 0);
         assert!(metrics.loc_approx > 10);
@@ -2584,9 +2622,7 @@ mod tests {
         let config = GeneratorConfig::default();
 
         for (cat, dim) in categories {
-            let report = make_report(vec![
-                make_blind_spot(cat, dim, BlindSpotImpact::High),
-            ]);
+            let report = make_report(vec![make_blind_spot(cat, dim, BlindSpotImpact::High)]);
             let result = generate_from_coverage(&report, &config);
             assert_eq!(
                 result.fixtures.len(),
@@ -2659,15 +2695,21 @@ mod tests {
         assert_eq!(result.stats.skipped, 0);
 
         // Each fixture should have unique slug
-        let slugs: BTreeSet<_> = result.fixtures.iter().map(|f| f.scenario.id.clone()).collect();
+        let slugs: BTreeSet<_> = result
+            .fixtures
+            .iter()
+            .map(|f| f.scenario.id.clone())
+            .collect();
         assert_eq!(slugs.len(), 9);
     }
 
     #[test]
     fn generated_fixtures_have_active_flag() {
-        let report = make_report(vec![
-            make_blind_spot("ui", "RecursiveTree", BlindSpotImpact::High),
-        ]);
+        let report = make_report(vec![make_blind_spot(
+            "ui",
+            "RecursiveTree",
+            BlindSpotImpact::High,
+        )]);
 
         let config = GeneratorConfig::default();
         let result = generate_from_coverage(&report, &config);
@@ -2677,9 +2719,11 @@ mod tests {
 
     #[test]
     fn feature_tags_include_category_and_risk() {
-        let report = make_report(vec![
-            make_blind_spot("effect", "WebSocketConnection", BlindSpotImpact::High),
-        ]);
+        let report = make_report(vec![make_blind_spot(
+            "effect",
+            "WebSocketConnection",
+            BlindSpotImpact::High,
+        )]);
 
         let config = GeneratorConfig::default();
         let result = generate_from_coverage(&report, &config);
@@ -2693,9 +2737,11 @@ mod tests {
     #[test]
     fn context_provider_nesting_depth_varies_with_seed() {
         // Different seeds produce different nesting depths
-        let report = make_report(vec![
-            make_blind_spot("ui", "ContextProviderNesting", BlindSpotImpact::High),
-        ]);
+        let report = make_report(vec![make_blind_spot(
+            "ui",
+            "ContextProviderNesting",
+            BlindSpotImpact::High,
+        )]);
 
         let config1 = GeneratorConfig {
             base_seed: 1,
@@ -2713,10 +2759,12 @@ mod tests {
         assert_eq!(r1.fixtures.len(), 1);
         assert_eq!(r2.fixtures.len(), 1);
         // Both have ContextProviderNesting pattern
-        assert!(r1.fixtures[0]
-            .expected_patterns
-            .ui_patterns
-            .contains("ContextProviderNesting"));
+        assert!(
+            r1.fixtures[0]
+                .expected_patterns
+                .ui_patterns
+                .contains("ContextProviderNesting")
+        );
     }
 
     #[test]

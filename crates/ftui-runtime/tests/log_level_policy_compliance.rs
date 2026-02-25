@@ -189,7 +189,9 @@ where
     F: FnOnce(),
 {
     let (layer, handle) = EventCapture::new();
-    let subscriber = tracing_subscriber::registry().with(layer);
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_subscriber::filter::LevelFilter::TRACE)
+        .with(layer);
     tracing::subscriber::with_default(subscriber, f);
     handle
 }

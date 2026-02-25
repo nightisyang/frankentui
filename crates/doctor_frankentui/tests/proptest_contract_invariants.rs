@@ -19,9 +19,9 @@
 //! 14. Semantic contract clause lookup is consistent.
 
 use doctor_frankentui::semantic_contract::{
-    load_builtin_confidence_model, load_builtin_evidence_manifest,
-    load_builtin_semantic_contract, load_builtin_transformation_policy_matrix, BayesianPosterior,
-    MigrationDecision,
+    BayesianPosterior, MigrationDecision, load_builtin_confidence_model,
+    load_builtin_evidence_manifest, load_builtin_semantic_contract,
+    load_builtin_transformation_policy_matrix,
 };
 use proptest::prelude::*;
 

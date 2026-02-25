@@ -219,9 +219,7 @@ fn extract_from_source(content: &str) -> FileExtracts {
         {
             let spec = m.as_str().to_string();
             // Distinguish side-effect imports.
-            let kind = if trimmed.starts_with("import '")
-                || trimmed.starts_with("import \"")
-            {
+            let kind = if trimmed.starts_with("import '") || trimmed.starts_with("import \"") {
                 ImportKind::SideEffect
             } else {
                 ImportKind::Static
@@ -274,9 +272,7 @@ fn extract_from_source(content: &str) -> FileExtracts {
 // ── Specifier Resolution ─────────────────────────────────────────────────
 
 /// JS/TS file extensions to probe when resolving bare specifiers.
-const JS_EXTENSIONS: &[&str] = &[
-    ".ts", ".tsx", ".js", ".jsx", ".mts", ".mjs", ".cts", ".cjs",
-];
+const JS_EXTENSIONS: &[&str] = &[".ts", ".tsx", ".js", ".jsx", ".mts", ".mjs", ".cts", ".cjs"];
 
 /// Index filenames to probe when resolving directory imports.
 const INDEX_FILES: &[&str] = &[
@@ -463,9 +459,7 @@ pub fn build_module_graph(snapshot_root: &Path) -> ModuleGraph {
             None => continue,
         };
 
-        let file_size = std::fs::metadata(file_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let file_size = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
 
         let extracts = extract_from_source(&content);
         let from_dir = file_path.parent().unwrap_or(snapshot_root);
@@ -535,10 +529,7 @@ pub fn build_module_graph(snapshot_root: &Path) -> ModuleGraph {
 
     let orphan_count = modules
         .keys()
-        .filter(|id| {
-            !incoming.contains_key(id)
-                && !edges.iter().any(|e| &e.from == *id)
-        })
+        .filter(|id| !incoming.contains_key(id) && !edges.iter().any(|e| &e.from == *id))
         .count();
 
     let cycles = find_cycles_internal(&modules, &edges);
@@ -758,10 +749,7 @@ fn read_package_json_entries(root: &Path) -> Option<Vec<(String, String)>> {
             } else if let Some(inner) = dot.as_object() {
                 for key in ["import", "require", "default"] {
                     if let Some(val) = inner.get(key).and_then(|v| v.as_str()) {
-                        entries.push((
-                            format!("exports[\".\"].{key}"),
-                            normalize_entry_path(val),
-                        ));
+                        entries.push((format!("exports[\".\"].{key}"), normalize_entry_path(val)));
                     }
                 }
             }
@@ -801,11 +789,7 @@ fn read_script_references(root: &Path) -> Option<Vec<String>> {
         }
     }
 
-    if refs.is_empty() {
-        None
-    } else {
-        Some(refs)
-    }
+    if refs.is_empty() { None } else { Some(refs) }
 }
 
 /// Detect workspace sub-app entrypoints by scanning workspace package.json files.
@@ -976,10 +960,7 @@ fn find_cycles_internal(
 
 /// Compute the maximum depth (longest path from any root) in the DAG.
 /// For cyclic graphs, uses BFS with cycle breaking.
-fn compute_max_depth(
-    modules: &BTreeMap<ModuleId, ModuleNode>,
-    edges: &[ImportEdge],
-) -> usize {
+fn compute_max_depth(modules: &BTreeMap<ModuleId, ModuleNode>, edges: &[ImportEdge]) -> usize {
     let mut adj: HashMap<&ModuleId, Vec<&ModuleId>> = HashMap::new();
     let mut incoming: HashMap<&ModuleId, usize> = HashMap::new();
 
@@ -1164,10 +1145,7 @@ export default function main() {}
     #[test]
     fn build_graph_simple_project() {
         let dir = setup_project(&[
-            (
-                "package.json",
-                r#"{"name":"test","main":"src/index.ts"}"#,
-            ),
+            ("package.json", r#"{"name":"test","main":"src/index.ts"}"#),
             (
                 "src/index.ts",
                 r#"
@@ -1186,8 +1164,16 @@ export function greet() { return 'hello'; }
 
         let graph = build_module_graph(dir.path());
         assert_eq!(graph.modules.len(), 2);
-        assert!(graph.modules.contains_key(&ModuleId("src/index.ts".to_string())));
-        assert!(graph.modules.contains_key(&ModuleId("src/utils.ts".to_string())));
+        assert!(
+            graph
+                .modules
+                .contains_key(&ModuleId("src/index.ts".to_string()))
+        );
+        assert!(
+            graph
+                .modules
+                .contains_key(&ModuleId("src/utils.ts".to_string()))
+        );
 
         // One internal edge: index.ts → utils.ts.
         let internal_edges: Vec<_> = graph
@@ -1206,10 +1192,7 @@ export function greet() { return 'hello'; }
     #[test]
     fn entrypoint_from_package_json() {
         let dir = setup_project(&[
-            (
-                "package.json",
-                r#"{"name":"test","main":"./src/index.ts"}"#,
-            ),
+            ("package.json", r#"{"name":"test","main":"./src/index.ts"}"#),
             ("src/index.ts", "export default 42;"),
         ]);
 
@@ -1323,9 +1306,11 @@ export { b } from './b';
 
         let graph = build_module_graph(dir.path());
         assert_eq!(graph.modules.len(), 1);
-        assert!(graph
-            .modules
-            .contains_key(&ModuleId("src/index.ts".to_string())));
+        assert!(
+            graph
+                .modules
+                .contains_key(&ModuleId("src/index.ts".to_string()))
+        );
     }
 
     #[test]
@@ -1346,10 +1331,7 @@ export { b } from './b';
         let dir = setup_project(&[
             ("package.json", r#"{"name":"test"}"#),
             ("src/index.ts", "import { bar } from './components';"),
-            (
-                "src/components/index.ts",
-                "export { bar } from './bar';",
-            ),
+            ("src/components/index.ts", "export { bar } from './bar';"),
             ("src/components/bar.ts", "export const bar = 1;"),
         ]);
 
@@ -1378,10 +1360,7 @@ export { b } from './b';
     #[test]
     fn entrypoints_are_deterministically_sorted() {
         let dir = setup_project(&[
-            (
-                "package.json",
-                r#"{"name":"test","main":"./src/index.ts"}"#,
-            ),
+            ("package.json", r#"{"name":"test","main":"./src/index.ts"}"#),
             ("src/index.ts", "export default 1;"),
             ("src/index.tsx", "export default 2;"),
         ]);
@@ -1400,7 +1379,10 @@ export { b } from './b';
     fn graph_serializes_to_json() {
         let dir = setup_project(&[
             ("package.json", r#"{"name":"test"}"#),
-            ("src/index.ts", "import { a } from './a';\nexport default 1;"),
+            (
+                "src/index.ts",
+                "import { a } from './a';\nexport default 1;",
+            ),
             ("src/a.ts", "export const a = 1;"),
         ]);
 

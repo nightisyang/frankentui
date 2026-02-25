@@ -190,6 +190,43 @@ pub struct CertificationPolicyRow {
     pub user_messaging: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompiledClauseValidator {
+    pub validator_id: String,
+    pub clause_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContractValidatorExecution {
+    pub validator_id: String,
+    pub passed: bool,
+    pub missing_claim_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompiledContractGateReport {
+    pub passed: bool,
+    pub validator_results: Vec<ContractValidatorExecution>,
+    pub orphan_claim_ids: Vec<String>,
+}
+
+impl CompiledClauseValidator {
+    #[must_use]
+    pub fn execute(&self, observed_claim_ids: &BTreeSet<String>) -> ContractValidatorExecution {
+        let missing_claim_ids = self
+            .clause_ids
+            .iter()
+            .filter(|claim_id| !observed_claim_ids.contains(*claim_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        ContractValidatorExecution {
+            validator_id: self.validator_id.clone(),
+            passed: missing_claim_ids.is_empty(),
+            missing_claim_ids,
+        }
+    }
+}
+
 impl SemanticEquivalenceContract {
     pub fn parse_and_validate(raw_json: &str) -> Result<Self> {
         let parsed: Self = serde_json::from_str(raw_json)?;
@@ -293,6 +330,47 @@ impl SemanticEquivalenceContract {
             return Vec::new();
         };
         ids.iter().filter_map(|id| self.clause(id)).collect()
+    }
+
+    #[must_use]
+    pub fn compile_validators(&self) -> Vec<CompiledClauseValidator> {
+        self.validator_clause_map
+            .iter()
+            .map(|(validator_id, clause_ids)| CompiledClauseValidator {
+                validator_id: validator_id.clone(),
+                clause_ids: clause_ids.clone(),
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn execute_compiled_validators(
+        &self,
+        observed_claim_ids: &BTreeSet<String>,
+    ) -> CompiledContractGateReport {
+        let known_claim_ids = self
+            .clauses
+            .iter()
+            .map(|clause| clause.clause_id.clone())
+            .collect::<BTreeSet<_>>();
+        let orphan_claim_ids = observed_claim_ids
+            .iter()
+            .filter(|claim_id| !known_claim_ids.contains(*claim_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let validator_results = self
+            .compile_validators()
+            .into_iter()
+            .map(|validator| validator.execute(observed_claim_ids))
+            .collect::<Vec<_>>();
+        let passed =
+            orphan_claim_ids.is_empty() && validator_results.iter().all(|result| result.passed);
+
+        CompiledContractGateReport {
+            passed,
+            validator_results,
+            orphan_claim_ids,
+        }
     }
 }
 
@@ -645,6 +723,10 @@ pub struct StageRecord {
     pub stage_id: String,
     pub stage_index: u32,
     pub correlation_id: String,
+    pub claim_id: String,
+    pub evidence_id: String,
+    pub policy_id: String,
+    pub trace_id: String,
     pub started_at: String,
     pub finished_at: String,
     pub status: StageStatus,
@@ -726,6 +808,10 @@ pub struct StageEvidenceRecord {
     pub correlation_id: String,
     pub stage_id: String,
     pub stage_index: u32,
+    pub claim_id: String,
+    pub evidence_id: String,
+    pub policy_id: String,
+    pub trace_id: String,
     pub timestamp: String,
     pub status: StageStatus,
     pub input_hash: String,
@@ -818,7 +904,26 @@ impl EvidenceManifest {
         }
 
         let mut seen_ids = BTreeSet::new();
+        let mut seen_evidence_ids = BTreeSet::new();
+        let covered_claim_ids = self
+            .certification_verdict
+            .semantic_clause_coverage
+            .covered
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let mut declared_claim_ids = covered_claim_ids.clone();
+        declared_claim_ids.extend(
+            self.certification_verdict
+                .semantic_clause_coverage
+                .uncovered
+                .iter()
+                .cloned(),
+        );
+        let mut linked_claim_ids = BTreeSet::new();
         let mut prev_index: Option<u32> = None;
+        let mut expected_policy_id: Option<String> = None;
+        let mut expected_trace_id: Option<String> = None;
         for stage in &self.stages {
             if stage.stage_id.trim().is_empty() {
                 return Err(SemanticContractError::Validation(
@@ -852,6 +957,63 @@ impl EvidenceManifest {
                     "stage '{}' correlation_id must not be empty",
                     stage.stage_id
                 )));
+            }
+            if stage.claim_id.trim().is_empty() {
+                return Err(SemanticContractError::Validation(format!(
+                    "stage '{}' claim_id must not be empty",
+                    stage.stage_id
+                )));
+            }
+            if !covered_claim_ids.contains(&stage.claim_id) {
+                return Err(SemanticContractError::Validation(format!(
+                    "stage '{}' claim_id '{}' must be present in semantic_clause_coverage.covered",
+                    stage.stage_id, stage.claim_id
+                )));
+            }
+            linked_claim_ids.insert(stage.claim_id.clone());
+            if stage.evidence_id.trim().is_empty() {
+                return Err(SemanticContractError::Validation(format!(
+                    "stage '{}' evidence_id must not be empty",
+                    stage.stage_id
+                )));
+            }
+            if !seen_evidence_ids.insert(stage.evidence_id.clone()) {
+                return Err(SemanticContractError::Validation(format!(
+                    "duplicate evidence_id '{}'",
+                    stage.evidence_id
+                )));
+            }
+            if stage.policy_id.trim().is_empty() {
+                return Err(SemanticContractError::Validation(format!(
+                    "stage '{}' policy_id must not be empty",
+                    stage.stage_id
+                )));
+            }
+            if stage.trace_id.trim().is_empty() {
+                return Err(SemanticContractError::Validation(format!(
+                    "stage '{}' trace_id must not be empty",
+                    stage.stage_id
+                )));
+            }
+            if let Some(policy_id) = &expected_policy_id {
+                if stage.policy_id != *policy_id {
+                    return Err(SemanticContractError::Validation(format!(
+                        "stage '{}' policy_id '{}' does not match run policy_id '{}'",
+                        stage.stage_id, stage.policy_id, policy_id
+                    )));
+                }
+            } else {
+                expected_policy_id = Some(stage.policy_id.clone());
+            }
+            if let Some(trace_id) = &expected_trace_id {
+                if stage.trace_id != *trace_id {
+                    return Err(SemanticContractError::Validation(format!(
+                        "stage '{}' trace_id '{}' does not match run trace_id '{}'",
+                        stage.stage_id, stage.trace_id, trace_id
+                    )));
+                }
+            } else {
+                expected_trace_id = Some(stage.trace_id.clone());
             }
             if stage.started_at.trim().is_empty() || stage.finished_at.trim().is_empty() {
                 return Err(SemanticContractError::Validation(format!(
@@ -897,6 +1059,17 @@ impl EvidenceManifest {
             }
         }
 
+        let unlinked_covered_claims = covered_claim_ids
+            .difference(&linked_claim_ids)
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unlinked_covered_claims.is_empty() {
+            return Err(SemanticContractError::Validation(format!(
+                "covered claims missing stage linkage: {}",
+                unlinked_covered_claims.join(", ")
+            )));
+        }
+
         Ok(())
     }
 
@@ -933,6 +1106,47 @@ impl EvidenceManifest {
                 "certification_verdict cannot be 'accept' with failing tests".to_string(),
             ));
         }
+
+        let mut seen_covered = BTreeSet::new();
+        let mut seen_uncovered = BTreeSet::new();
+        for claim_id in &cv.semantic_clause_coverage.covered {
+            if claim_id.trim().is_empty() {
+                return Err(SemanticContractError::Validation(
+                    "semantic_clause_coverage.covered must not contain empty claim IDs".to_string(),
+                ));
+            }
+            if !seen_covered.insert(claim_id.clone()) {
+                return Err(SemanticContractError::Validation(format!(
+                    "semantic_clause_coverage.covered contains duplicate claim_id '{}'",
+                    claim_id
+                )));
+            }
+        }
+        for claim_id in &cv.semantic_clause_coverage.uncovered {
+            if claim_id.trim().is_empty() {
+                return Err(SemanticContractError::Validation(
+                    "semantic_clause_coverage.uncovered must not contain empty claim IDs"
+                        .to_string(),
+                ));
+            }
+            if seen_covered.contains(claim_id) {
+                return Err(SemanticContractError::Validation(format!(
+                    "semantic clause '{}' cannot be both covered and uncovered",
+                    claim_id
+                )));
+            }
+            if !seen_uncovered.insert(claim_id.clone()) {
+                return Err(SemanticContractError::Validation(format!(
+                    "semantic_clause_coverage.uncovered contains duplicate claim_id '{}'",
+                    claim_id
+                )));
+            }
+        }
+        if seen_covered.is_empty() && seen_uncovered.is_empty() {
+            return Err(SemanticContractError::Validation(
+                "semantic_clause_coverage must include at least one claim ID".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -961,6 +1175,10 @@ impl EvidenceManifest {
                 stage_id: stage.stage_id.clone(),
                 stage_index: stage.stage_index,
                 correlation_id: stage.correlation_id.clone(),
+                claim_id: stage.claim_id.clone(),
+                evidence_id: stage.evidence_id.clone(),
+                policy_id: stage.policy_id.clone(),
+                trace_id: stage.trace_id.clone(),
                 input_hash: stage.input_hash.clone(),
                 output_hash: stage.output_hash.clone(),
                 status: stage.status,
@@ -979,6 +1197,10 @@ impl EvidenceManifest {
                 correlation_id: stage.correlation_id.clone(),
                 stage_id: stage.stage_id.clone(),
                 stage_index: stage.stage_index,
+                claim_id: stage.claim_id.clone(),
+                evidence_id: stage.evidence_id.clone(),
+                policy_id: stage.policy_id.clone(),
+                trace_id: stage.trace_id.clone(),
                 timestamp: stage.finished_at.clone(),
                 status: stage.status,
                 input_hash: stage.input_hash.clone(),
@@ -1006,6 +1228,59 @@ impl EvidenceManifest {
             .iter()
             .find(|stage| stage.correlation_id == correlation_id)
     }
+
+    #[must_use]
+    pub fn observed_claim_ids(&self) -> BTreeSet<String> {
+        let mut observed = self
+            .certification_verdict
+            .semantic_clause_coverage
+            .covered
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        observed.extend(
+            self.certification_verdict
+                .semantic_clause_coverage
+                .uncovered
+                .iter()
+                .cloned(),
+        );
+        observed.extend(self.stages.iter().map(|stage| stage.claim_id.clone()));
+        observed
+    }
+
+    pub fn execute_runtime_contract_gate(
+        &self,
+        contract: &SemanticEquivalenceContract,
+    ) -> Result<CompiledContractGateReport> {
+        let observed_claim_ids = self.observed_claim_ids();
+        let report = contract.execute_compiled_validators(&observed_claim_ids);
+        if !report.orphan_claim_ids.is_empty() {
+            return Err(SemanticContractError::Validation(format!(
+                "contract gate orphan claims: {}",
+                report.orphan_claim_ids.join(", ")
+            )));
+        }
+        let failed_validators = report
+            .validator_results
+            .iter()
+            .filter(|result| !result.passed)
+            .map(|result| {
+                format!(
+                    "{}({})",
+                    result.validator_id,
+                    result.missing_claim_ids.join(",")
+                )
+            })
+            .collect::<Vec<_>>();
+        if !failed_validators.is_empty() {
+            return Err(SemanticContractError::Validation(format!(
+                "contract gate validator failures: {}",
+                failed_validators.join("; ")
+            )));
+        }
+        Ok(report)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1013,6 +1288,10 @@ pub struct StageLineageEntry {
     pub stage_id: String,
     pub stage_index: u32,
     pub correlation_id: String,
+    pub claim_id: String,
+    pub evidence_id: String,
+    pub policy_id: String,
+    pub trace_id: String,
     pub input_hash: String,
     pub output_hash: String,
     pub status: StageStatus,
@@ -1923,10 +2202,7 @@ impl LicensingProvenanceContract {
 
     /// Validate a provenance chain: check it covers all required stages
     /// and has an unbroken hash chain.
-    pub fn validate_provenance_chain(
-        &self,
-        chain: &[ProvenanceChainRecord],
-    ) -> Result<()> {
+    pub fn validate_provenance_chain(&self, chain: &[ProvenanceChainRecord]) -> Result<()> {
         let required = &self.provenance_chain_policy.required_stages;
         let chain_stage_ids: BTreeSet<_> = chain.iter().map(|r| r.stage_id.as_str()).collect();
 
@@ -1943,8 +2219,10 @@ impl LicensingProvenanceContract {
                 if window[0].output_hash != window[1].input_hash {
                     return Err(SemanticContractError::Validation(format!(
                         "provenance chain broken: stage '{}' output_hash ({}) != stage '{}' input_hash ({})",
-                        window[0].stage_id, window[0].output_hash,
-                        window[1].stage_id, window[1].input_hash
+                        window[0].stage_id,
+                        window[0].output_hash,
+                        window[1].stage_id,
+                        window[1].input_hash
                     )));
                 }
             }
@@ -1994,9 +2272,7 @@ impl LicensingProvenanceContract {
                 {
                     worst_status = IpArtifactStatus::Unknown;
                 }
-                IpArtifactStatus::Expired
-                    if worst_status == IpArtifactStatus::Clear =>
-                {
+                IpArtifactStatus::Expired if worst_status == IpArtifactStatus::Clear => {
                     worst_status = IpArtifactStatus::Expired;
                 }
                 _ => {}
@@ -2110,6 +2386,27 @@ mod tests {
                 .clauses_for_validator("validator-that-does-not-exist")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn compiled_validators_cover_validator_clause_map() {
+        let contract = load().expect("builtin contract should parse");
+        let compiled = contract.compile_validators();
+        assert_eq!(
+            compiled.len(),
+            contract.validator_clause_map.len(),
+            "compiled validator count should match map cardinality"
+        );
+        for validator in &compiled {
+            let mapped = contract
+                .validator_clause_map
+                .get(&validator.validator_id)
+                .expect("compiled validator should exist in map");
+            assert_eq!(
+                &validator.clause_ids, mapped,
+                "compiled clause IDs should match source map"
+            );
+        }
     }
 
     #[test]
@@ -2367,6 +2664,10 @@ mod tests {
         for (entry, stage) in lineage.iter().zip(manifest.stages.iter()) {
             assert_eq!(entry.stage_id, stage.stage_id);
             assert_eq!(entry.correlation_id, stage.correlation_id);
+            assert_eq!(entry.claim_id, stage.claim_id);
+            assert_eq!(entry.evidence_id, stage.evidence_id);
+            assert_eq!(entry.policy_id, stage.policy_id);
+            assert_eq!(entry.trace_id, stage.trace_id);
             assert_eq!(entry.input_hash, stage.input_hash);
             assert_eq!(entry.output_hash, stage.output_hash);
         }
@@ -2396,6 +2697,22 @@ mod tests {
             assert!(
                 !parsed["run_id"].as_str().unwrap_or("").is_empty(),
                 "run_id must not be empty"
+            );
+            assert!(
+                !parsed["claim_id"].as_str().unwrap_or("").is_empty(),
+                "claim_id must not be empty"
+            );
+            assert!(
+                !parsed["evidence_id"].as_str().unwrap_or("").is_empty(),
+                "evidence_id must not be empty"
+            );
+            assert!(
+                !parsed["policy_id"].as_str().unwrap_or("").is_empty(),
+                "policy_id must not be empty"
+            );
+            assert!(
+                !parsed["trace_id"].as_str().unwrap_or("").is_empty(),
+                "trace_id must not be empty"
             );
         }
     }
@@ -2540,6 +2857,82 @@ mod tests {
         let error = super::EvidenceManifest::parse_and_validate(&raw).expect_err("must fail");
         assert!(
             matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("identical_runs_count")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_evidence_manifest_rejects_empty_claim_id() {
+        let mut manifest = load_manifest().expect("builtin evidence manifest should parse");
+        manifest.stages[0].claim_id.clear();
+        let raw = serde_json::to_string(&manifest).expect("should serialize");
+        let error = super::EvidenceManifest::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("claim_id")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_evidence_manifest_rejects_duplicate_evidence_id() {
+        let mut manifest = load_manifest().expect("builtin evidence manifest should parse");
+        if manifest.stages.len() >= 2 {
+            manifest.stages[1].evidence_id = manifest.stages[0].evidence_id.clone();
+        }
+        let raw = serde_json::to_string(&manifest).expect("should serialize");
+        let error = super::EvidenceManifest::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("duplicate evidence_id")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_evidence_manifest_rejects_orphan_stage_claim() {
+        let mut manifest = load_manifest().expect("builtin evidence manifest should parse");
+        manifest.stages[0].claim_id = "UNKNOWN-CLAIM".to_string();
+        let raw = serde_json::to_string(&manifest).expect("should serialize");
+        let error = super::EvidenceManifest::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("semantic_clause_coverage.covered")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_evidence_manifest_rejects_unlinked_covered_claim() {
+        let mut manifest = load_manifest().expect("builtin evidence manifest should parse");
+        manifest
+            .certification_verdict
+            .semantic_clause_coverage
+            .covered
+            .push("TB-001".to_string());
+        let raw = serde_json::to_string(&manifest).expect("should serialize");
+        let error = super::EvidenceManifest::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("missing stage linkage")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_evidence_manifest_rejects_overlap_between_covered_and_uncovered() {
+        let mut manifest = load_manifest().expect("builtin evidence manifest should parse");
+        manifest
+            .certification_verdict
+            .semantic_clause_coverage
+            .uncovered
+            .push(
+                manifest
+                    .certification_verdict
+                    .semantic_clause_coverage
+                    .covered[0]
+                    .clone(),
+            );
+        let raw = serde_json::to_string(&manifest).expect("should serialize");
+        let error = super::EvidenceManifest::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("both covered and uncovered")),
             "unexpected error: {error}"
         );
     }
@@ -2929,8 +3322,8 @@ mod tests {
         if contract.clauses.len() >= 2 {
             contract.clauses[1].clause_id = contract.clauses[0].clause_id.clone();
             let raw = serde_json::to_string(&contract).expect("should serialize");
-            let error =
-                super::SemanticEquivalenceContract::parse_and_validate(&raw).expect_err("must fail");
+            let error = super::SemanticEquivalenceContract::parse_and_validate(&raw)
+                .expect_err("must fail");
             assert!(
                 matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("duplicate clause_id")),
                 "unexpected error: {error}"
@@ -2958,8 +3351,8 @@ mod tests {
             contract.deterministic_tie_breakers[1].priority =
                 contract.deterministic_tie_breakers[0].priority;
             let raw = serde_json::to_string(&contract).expect("should serialize");
-            let error =
-                super::SemanticEquivalenceContract::parse_and_validate(&raw).expect_err("must fail");
+            let error = super::SemanticEquivalenceContract::parse_and_validate(&raw)
+                .expect_err("must fail");
             assert!(
                 matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("duplicate tie-break priority")),
                 "unexpected error: {error}"
@@ -2984,7 +3377,9 @@ mod tests {
     fn semantic_contract_clause_lookup_returns_correct_clause() {
         let contract = load().expect("builtin contract should parse");
         for clause in &contract.clauses {
-            let found = contract.clause(&clause.clause_id).expect("clause must exist");
+            let found = contract
+                .clause(&clause.clause_id)
+                .expect("clause must exist");
             assert_eq!(found.title, clause.title);
             assert_eq!(found.severity, clause.severity);
         }
@@ -3025,7 +3420,9 @@ mod tests {
         let mut matrix = load_policy().expect("builtin policy matrix should parse");
         matrix.categories.retain(|c| c.category_id != "state");
         // Also remove catalog entries and policy cells referencing "state"
-        matrix.construct_catalog.retain(|e| e.category_id != "state");
+        matrix
+            .construct_catalog
+            .retain(|e| e.category_id != "state");
         let state_sigs: std::collections::BTreeSet<_> = matrix
             .policy_cells
             .iter()
@@ -3065,7 +3462,9 @@ mod tests {
     fn policy_for_construct_returns_none_for_unknown() {
         let matrix = load_policy().expect("builtin policy matrix should parse");
         assert!(
-            matrix.policy_for_construct("nonexistent_construct").is_none(),
+            matrix
+                .policy_for_construct("nonexistent_construct")
+                .is_none(),
             "unknown construct should return None"
         );
     }
@@ -3164,6 +3563,43 @@ mod tests {
         let error = super::EvidenceManifest::parse_and_validate(&raw).expect_err("must fail");
         assert!(
             matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("stages must not be empty")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn runtime_contract_gate_executes_compiled_validators() {
+        let contract = load().expect("builtin contract should parse");
+        let manifest = load_manifest().expect("builtin evidence manifest should parse");
+        let report = manifest
+            .execute_runtime_contract_gate(&contract)
+            .expect("runtime contract gate should pass");
+        assert!(report.passed, "report should be fully passing");
+        assert!(
+            report.validator_results.iter().all(|result| result.passed),
+            "all compiled validators should pass"
+        );
+        assert!(
+            report.orphan_claim_ids.is_empty(),
+            "no orphan claims should be present"
+        );
+    }
+
+    #[test]
+    fn runtime_contract_gate_rejects_orphan_coverage_claim() {
+        let contract = load().expect("builtin contract should parse");
+        let mut manifest = load_manifest().expect("builtin evidence manifest should parse");
+        manifest
+            .certification_verdict
+            .semantic_clause_coverage
+            .covered
+            .push("UNKNOWN-CLAIM".to_string());
+
+        let error = manifest
+            .execute_runtime_contract_gate(&contract)
+            .expect_err("orphan claim should fail runtime gate");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("orphan claims")),
             "unexpected error: {error}"
         );
     }
@@ -3378,9 +3814,7 @@ mod tests {
     #[test]
     fn posterior_computation_is_deterministic_across_calls() {
         let model = load_confidence().expect("builtin confidence model should parse");
-        let results: Vec<_> = (0..10)
-            .map(|_| model.compute_posterior(42, 8))
-            .collect();
+        let results: Vec<_> = (0..10).map(|_| model.compute_posterior(42, 8)).collect();
         for (i, result) in results.iter().enumerate().skip(1) {
             assert_eq!(
                 results[0], *result,
@@ -3393,9 +3827,7 @@ mod tests {
     fn decision_is_deterministic_across_calls() {
         let model = load_confidence().expect("builtin confidence model should parse");
         let posterior = model.compute_posterior(42, 8);
-        let decisions: Vec<_> = (0..10)
-            .map(|_| model.decide(&posterior))
-            .collect();
+        let decisions: Vec<_> = (0..10).map(|_| model.decide(&posterior)).collect();
         for (i, decision) in decisions.iter().enumerate().skip(1) {
             assert_eq!(
                 decisions[0], *decision,
@@ -3506,8 +3938,7 @@ mod tests {
     fn invalid_confidence_model_rejects_duplicate_source_id() {
         let mut model = load_confidence().expect("builtin confidence model should parse");
         if model.likelihood_sources.len() >= 2 {
-            model.likelihood_sources[1].source_id =
-                model.likelihood_sources[0].source_id.clone();
+            model.likelihood_sources[1].source_id = model.likelihood_sources[0].source_id.clone();
             let raw = serde_json::to_string(&model).expect("should serialize");
             let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
             assert!(
@@ -3595,8 +4026,7 @@ mod tests {
     fn invalid_confidence_model_rejects_duplicate_fallback_trigger() {
         let mut model = load_confidence().expect("builtin confidence model should parse");
         if model.fallback_triggers.len() >= 2 {
-            model.fallback_triggers[1].trigger_id =
-                model.fallback_triggers[0].trigger_id.clone();
+            model.fallback_triggers[1].trigger_id = model.fallback_triggers[0].trigger_id.clone();
             let raw = serde_json::to_string(&model).expect("should serialize");
             let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
             assert!(
@@ -3675,11 +4105,19 @@ mod tests {
             .iter()
             .map(|c| c.clause_id.as_str())
             .collect();
-        for covered in &manifest.certification_verdict.semantic_clause_coverage.covered {
+        let coverage = &manifest.certification_verdict.semantic_clause_coverage;
+        for covered in &coverage.covered {
             assert!(
                 clause_ids.contains(covered.as_str()),
                 "covered clause '{}' must exist in semantic contract",
                 covered
+            );
+        }
+        for uncovered in &coverage.uncovered {
+            assert!(
+                clause_ids.contains(uncovered.as_str()),
+                "uncovered clause '{}' must exist in semantic contract",
+                uncovered
             );
         }
     }
@@ -3892,8 +4330,7 @@ mod tests {
                 flag.flag_id
             );
             assert!(
-                ["low", "medium", "high", "critical"]
-                    .contains(&flag.severity.as_str()),
+                ["low", "medium", "high", "critical"].contains(&flag.severity.as_str()),
                 "flag '{}' has invalid severity '{}'",
                 flag.flag_id,
                 flag.severity
@@ -4016,7 +4453,11 @@ mod tests {
         ];
         let report = contract.assess_ip_artifacts("run-1", &[], &artifacts);
         assert_eq!(report.overall_status, super::IpArtifactStatus::Blocked);
-        assert!(report.unresolved_risk_flags.contains(&"lp-copyleft-contamination".to_string()));
+        assert!(
+            report
+                .unresolved_risk_flags
+                .contains(&"lp-copyleft-contamination".to_string())
+        );
     }
 
     #[test]
@@ -4054,8 +4495,7 @@ mod tests {
     #[test]
     fn licensing_provenance_round_trip_serialization_is_stable() {
         let contract = load_licensing().expect("builtin licensing provenance should parse");
-        let serialized =
-            serde_json::to_string_pretty(&contract).expect("should serialize");
+        let serialized = serde_json::to_string_pretty(&contract).expect("should serialize");
         let deserialized: super::LicensingProvenanceContract =
             serde_json::from_str(&serialized).expect("should deserialize");
         assert_eq!(contract, deserialized, "round-trip must be stable");
@@ -4066,8 +4506,8 @@ mod tests {
         let mut contract = load_licensing().expect("builtin licensing provenance should parse");
         contract.schema_version = "wrong-version".to_string();
         let raw = serde_json::to_string(&contract).expect("should serialize");
-        let error = super::LicensingProvenanceContract::parse_and_validate(&raw)
-            .expect_err("must fail");
+        let error =
+            super::LicensingProvenanceContract::parse_and_validate(&raw).expect_err("must fail");
         assert!(
             matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("unsupported")),
             "unexpected error: {error}"
@@ -4079,8 +4519,8 @@ mod tests {
         let mut contract = load_licensing().expect("builtin licensing provenance should parse");
         contract.contract_id = String::new();
         let raw = serde_json::to_string(&contract).expect("should serialize");
-        let error = super::LicensingProvenanceContract::parse_and_validate(&raw)
-            .expect_err("must fail");
+        let error =
+            super::LicensingProvenanceContract::parse_and_validate(&raw).expect_err("must fail");
         assert!(
             matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("contract_id")),
             "unexpected error: {error}"
@@ -4095,8 +4535,8 @@ mod tests {
             .allowed_license_classes
             .push("strong_copyleft".to_string());
         let raw = serde_json::to_string(&contract).expect("should serialize");
-        let error = super::LicensingProvenanceContract::parse_and_validate(&raw)
-            .expect_err("must fail");
+        let error =
+            super::LicensingProvenanceContract::parse_and_validate(&raw).expect_err("must fail");
         assert!(
             matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("both allowed and blocked")),
             "unexpected error: {error}"
@@ -4108,8 +4548,8 @@ mod tests {
         let mut contract = load_licensing().expect("builtin licensing provenance should parse");
         contract.fail_safe_defaults.on_blocked_license = "accept".to_string();
         let raw = serde_json::to_string(&contract).expect("should serialize");
-        let error = super::LicensingProvenanceContract::parse_and_validate(&raw)
-            .expect_err("must fail");
+        let error =
+            super::LicensingProvenanceContract::parse_and_validate(&raw).expect_err("must fail");
         assert!(
             matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("on_blocked_license")),
             "unexpected error: {error}"

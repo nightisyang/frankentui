@@ -49,8 +49,7 @@ pub fn builtin_patterns() -> Vec<SecretPattern> {
         SecretPattern {
             pattern_id: "aws-secret-key".into(),
             description: "AWS Secret Access Key".into(),
-            regex: r"(?i)aws[_\-]?secret[_\-]?access[_\-]?key\s*[:=]\s*[A-Za-z0-9/+=]{40}"
-                .into(),
+            regex: r"(?i)aws[_\-]?secret[_\-]?access[_\-]?key\s*[:=]\s*[A-Za-z0-9/+=]{40}".into(),
             severity: "critical".into(),
             category: "api_key".into(),
             high_entropy_only: false,
@@ -199,10 +198,7 @@ pub fn scan_content(
 }
 
 /// Scan a file on disk for secrets.
-pub fn scan_file(
-    path: &Path,
-    patterns: &[SecretPattern],
-) -> std::io::Result<Vec<SecretFinding>> {
+pub fn scan_file(path: &Path, patterns: &[SecretPattern]) -> std::io::Result<Vec<SecretFinding>> {
     let content = std::fs::read_to_string(path)?;
     let path_str = path.to_string_lossy();
     Ok(scan_content(&content, &path_str, patterns))
@@ -306,9 +302,7 @@ pub fn redact_content(
     for finding in &findings {
         // Check for overlap with already-applied redactions.
         let overlaps = applied_ranges.iter().any(|(line, start, end)| {
-            *line == finding.line_number
-                && finding.col_start < *end
-                && finding.col_end > *start
+            *line == finding.line_number && finding.col_start < *end && finding.col_end > *start
         });
         if overlaps {
             continue;
@@ -359,11 +353,7 @@ pub fn redact_content(
                     line_number: finding.line_number,
                 });
 
-                applied_ranges.push((
-                    finding.line_number,
-                    finding.col_start,
-                    finding.col_end,
-                ));
+                applied_ranges.push((finding.line_number, finding.col_start, finding.col_end));
             }
         }
     }
@@ -524,7 +514,9 @@ mod tests {
         let content = "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----";
         let findings = scan_content(content, "key.pem", &builtin_patterns());
         assert!(
-            findings.iter().any(|f| f.pattern_id == "private-key-header"),
+            findings
+                .iter()
+                .any(|f| f.pattern_id == "private-key-header"),
             "should detect private key header"
         );
     }
@@ -641,7 +633,10 @@ fn main() {
     fn redaction_records_are_produced() {
         let content = "GITHUB_TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456789";
         let result = redact_content(content, ".env", &builtin_patterns(), "run-1");
-        assert!(!result.records.is_empty(), "should produce redaction records");
+        assert!(
+            !result.records.is_empty(),
+            "should produce redaction records"
+        );
         for record in &result.records {
             assert!(record.placeholder.starts_with("[REDACTED:"));
             assert!(record.placeholder.ends_with(']'));
@@ -656,14 +651,8 @@ fn main() {
         let result = redact_content(content, ".env", &builtin_patterns(), "run-1");
         assert!(!result.map.is_empty(), "redaction map should not be empty");
         for (placeholder, original) in &result.map.entries {
-            assert!(
-                placeholder.starts_with("[REDACTED:"),
-                "placeholder format"
-            );
-            assert!(
-                !original.is_empty(),
-                "original value should not be empty"
-            );
+            assert!(placeholder.starts_with("[REDACTED:"), "placeholder format");
+            assert!(!original.is_empty(), "original value should not be empty");
         }
     }
 
@@ -733,11 +722,7 @@ key=AKIAIOSFODNN7EXAMPLE";
 
     #[test]
     fn scan_report_serializes_to_json() {
-        let findings = scan_content(
-            "key=AKIAIOSFODNN7EXAMPLE",
-            "test.txt",
-            &builtin_patterns(),
-        );
+        let findings = scan_content("key=AKIAIOSFODNN7EXAMPLE", "test.txt", &builtin_patterns());
         let report = ScanReport::from_findings("run-1", &findings);
         let json = serde_json::to_string(&report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
