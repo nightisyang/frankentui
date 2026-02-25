@@ -72,6 +72,7 @@ im = { version = "15.1", optional = true }
 
 [dev-dependencies]
 ftui-core = { path = "../ftui-core", version = "0.2.1", features = ["test-helpers"] }
+ftui-harness = { path = "../ftui-harness", version = "0.2.1" }
 criterion = { version = "0.8.2", features = ["html_reports"] }
 proptest = "1.7.0"
 tempfile = "3.22.0"
