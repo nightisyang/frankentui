@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod adversarial_fixtures;
+pub mod capability_gap;
 pub mod capture;
 pub mod cli;
 pub mod composition_semantics;
@@ -30,6 +31,7 @@ pub mod semantic_contract;
 pub mod state_effects;
 pub mod state_event_translator;
 pub mod style_semantics;
+pub mod style_translator;
 pub mod suite;
 pub mod tape;
 pub mod trace;
