@@ -4,6 +4,7 @@ pub mod adversarial_fixtures;
 pub mod capability_gap;
 pub mod capture;
 pub mod cli;
+pub mod code_emission;
 pub mod composition_semantics;
 pub mod corpus;
 pub mod doctor;
