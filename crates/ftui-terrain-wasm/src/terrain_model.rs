@@ -153,6 +153,19 @@ impl TerrainModel {
         curv.abs()
     }
 
+    /// Bilinear interpolation of grid elevation at fractional (row, col) position.
+    fn bilinear_sample(grid: &[Vec<f64>], fr: f64, fc: f64, rows: usize, cols: usize) -> f64 {
+        let r0 = (fr as usize).min(rows - 1);
+        let c0 = (fc as usize).min(cols - 1);
+        let r1 = (r0 + 1).min(rows - 1);
+        let c1 = (c0 + 1).min(cols - 1);
+        let dr = fr - r0 as f64;
+        let dc = fc - c0 as f64;
+        let top = grid[r0][c0] + (grid[r0][c1] - grid[r0][c0]) * dc;
+        let bot = grid[r1][c0] + (grid[r1][c1] - grid[r1][c0]) * dc;
+        top + (bot - top) * dr
+    }
+
     /// Project points into a flat f32 buffer: [x, y, r, g, b, ...] for direct canvas rendering.
     /// canvas_w/canvas_h are pixel dimensions of the target canvas.
     pub fn project_to_buffer(&self, canvas_w: f64, canvas_h: f64) -> Vec<f32> {
@@ -189,13 +202,23 @@ impl TerrainModel {
         }
         let ds = &self.datasets[self.active.min(self.datasets.len() - 1)];
         format!(
-            "{} | {:.0}-{:.0}m | az:{:.0} el:{:.0} | h:{:.1}x | d:{:.0}%",
+            "{} | {:.0}-{:.0}m | az:{:.0} el:{:.0} | z:{:.2}x | h:{:.1}x | d:{:.0}%",
             ds.name, ds.min_elev, ds.max_elev, self.azimuth, self.elevation,
-            self.height_scale, self.density * 100.0
+            self.zoom, self.height_scale, self.density * 100.0
         )
     }
 
-    /// Project terrain with curvature-adaptive interpolation.
+    /// Get current zoom level.
+    pub fn zoom(&self) -> f64 {
+        self.zoom
+    }
+
+    /// Set zoom level directly (clamped to valid range).
+    pub fn set_zoom(&mut self, zoom: f64) {
+        self.zoom = zoom.clamp(0.1, 8.0);
+    }
+
+    /// Project terrain with bilinear sub-grid sampling and curvature-adaptive stepping.
     fn project_adaptive(
         &self,
         ds: &TerrainDataset,
@@ -211,33 +234,60 @@ impl TerrainModel {
         let cx = canvas_w / 2.0;
         let cy = canvas_h / 2.0;
 
-        let base_step = (ds.rows.max(ds.cols) as f64 / (60.0 * self.density)).round().max(1.0) as usize;
+        let base_step = (ds.rows.max(ds.cols) as f64 / (60.0 * self.density)).round().max(1.0);
         let elev_range = (ds.max_elev - ds.min_elev).max(1.0);
 
-        let mut points = Vec::with_capacity(ds.rows * ds.cols / (base_step * base_step));
+        // Alternating refinement: rows refine first, then cols
+        let row_refine: f64 = if self.density >= 2.5 {
+            4.0
+        } else if self.density >= 1.25 {
+            2.0
+        } else {
+            1.0
+        };
+        let col_refine: f64 = if self.density >= 3.0 {
+            4.0
+        } else if self.density >= 1.5 {
+            2.0
+        } else {
+            1.0
+        };
 
-        let mut r = 0;
-        while r < ds.rows {
-            let mut c = 0;
-            while c < ds.cols {
-                // Compute curvature to determine local step size
-                let curv = Self::curvature_at(&ds.grid, r, c, ds.rows, ds.cols);
-                // Normalize curvature: high curvature → step=1, low → step=base_step
+        let row_step = (base_step / row_refine).max(1.0);
+        let col_step_base = (base_step / col_refine).max(1.0);
+        let min_col_step = col_step_base.min(1.0);
+        let half_cols = ds.cols as f64 / 2.0;
+        let half_rows = ds.rows as f64 / 2.0;
+
+        let est_rows = (ds.rows as f64 / row_step) as usize + 1;
+        let est_cols = (ds.cols as f64 / col_step_base) as usize + 1;
+        let mut points = Vec::with_capacity(est_rows * est_cols);
+
+        let rows_f = ds.rows as f64;
+        let cols_f = ds.cols as f64;
+
+        let mut fr = 0.0;
+        while fr < rows_f {
+            let mut fc = 0.0;
+            while fc < cols_f {
+                // Curvature at nearest grid point for adaptive column stepping
+                let gr = (fr.round() as usize).min(ds.rows - 1);
+                let gc = (fc.round() as usize).min(ds.cols - 1);
+                let curv = Self::curvature_at(&ds.grid, gr, gc, ds.rows, ds.cols);
                 let norm_curv = (curv / elev_range * 500.0).min(1.0);
-                let local_step = ((1.0 - norm_curv) * base_step as f64)
-                    .round()
-                    .max(1.0) as usize;
+                let local_col_step = ((1.0 - norm_curv) * col_step_base).max(min_col_step);
 
-                let x = c as f64 - ds.cols as f64 / 2.0;
-                let y = r as f64 - ds.rows as f64 / 2.0;
-                // Subtract min_elev so height_scale amplifies differences, not absolute elevation
-                let z = (ds.grid[r][c] - ds.min_elev) * self.height_scale * 0.015;
+                // Bilinear elevation at fractional position
+                let elev = Self::bilinear_sample(&ds.grid, fr, fc, ds.rows, ds.cols);
 
-                // Rotate azimuth
+                // 3D projection
+                let x = fc - half_cols;
+                let y = fr - half_rows;
+                let z = (elev - ds.min_elev) * self.height_scale * 0.015;
+
                 let rx = x * cos_az - y * sin_az;
                 let ry = x * sin_az + y * cos_az;
 
-                // Tilt elevation
                 let depth = ry * cos_el + z * sin_el;
                 let screen_y = ry * sin_el - z * cos_el;
 
@@ -245,40 +295,12 @@ impl TerrainModel {
                 let sy = screen_y * self.zoom + cy;
 
                 if sx >= 0.0 && sx < canvas_w && sy >= 0.0 && sy < canvas_h {
-                    // For high-curvature areas, add interpolated sub-points
-                    let norm_curv_threshold = norm_curv;
-                    if norm_curv_threshold > 0.3 && local_step == 1 {
-                        // Add extra dots between this and neighbors
-                        points.push(ProjectedPoint { sx, sy, depth, elev: ds.grid[r][c] });
-
-                        // Interpolate half-steps in both directions
-                        if c + 1 < ds.cols && r + 1 < ds.rows {
-                            let mid_elev = (ds.grid[r][c] + ds.grid[r][c + 1]
-                                + ds.grid[r + 1][c] + ds.grid[r + 1][c + 1]) / 4.0;
-                            let mx = (c as f64 + 0.5) - ds.cols as f64 / 2.0;
-                            let my = (r as f64 + 0.5) - ds.rows as f64 / 2.0;
-                            let mz = (mid_elev - ds.min_elev) * self.height_scale * 0.015;
-                            let mrx = mx * cos_az - my * sin_az;
-                            let mry = mx * sin_az + my * cos_az;
-                            let md = mry * cos_el + mz * sin_el;
-                            let msy = mry * sin_el - mz * cos_el;
-                            let msx = mrx * self.zoom + cx;
-                            let msyy = msy * self.zoom + cy;
-                            if msx >= 0.0 && msx < canvas_w && msyy >= 0.0 && msyy < canvas_h {
-                                points.push(ProjectedPoint {
-                                    sx: msx, sy: msyy, depth: md, elev: mid_elev,
-                                });
-                            }
-                        }
-                    } else {
-                        points.push(ProjectedPoint { sx, sy, depth, elev: ds.grid[r][c] });
-                    }
+                    points.push(ProjectedPoint { sx, sy, depth, elev });
                 }
 
-                c += local_step;
+                fc += local_col_step;
             }
-            // Adaptive row step based on average curvature of this row
-            r += base_step.max(1);
+            fr += row_step;
         }
 
         // Painter's algorithm: sort by depth (far first)

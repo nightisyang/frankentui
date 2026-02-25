@@ -190,6 +190,18 @@ impl TerrainRunner {
         self.inner.model_mut().state_info()
     }
 
+    /// Get current zoom level.
+    #[wasm_bindgen(js_name = getZoom)]
+    pub fn get_zoom(&self) -> f64 {
+        self.inner.model().zoom()
+    }
+
+    /// Set zoom level directly (clamped to 0.1..8.0).
+    #[wasm_bindgen(js_name = setZoom)]
+    pub fn set_zoom(&mut self, zoom: f64) {
+        self.inner.model_mut().set_zoom(zoom);
+    }
+
     /// Release resources.
     pub fn destroy(&mut self) {
         // No-op for now
