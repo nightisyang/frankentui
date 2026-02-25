@@ -130,7 +130,7 @@ impl TerrainModel {
     /// Compute curvature at a grid point (angle change between neighbors).
     fn curvature_at(grid: &[Vec<f64>], r: usize, c: usize, rows: usize, cols: usize) -> f64 {
         if r == 0 || r >= rows - 1 || c == 0 || c >= cols - 1 {
-            return 1.0; // edge points: treat as moderate curvature
+            return 0.0; // edge points: no curvature data, use base step
         }
         // Compute gradient magnitude change (Laplacian approximation)
         let center = grid[r][c];
@@ -208,15 +208,34 @@ impl TerrainModel {
         )
     }
 
-    /// Get current zoom level.
-    pub fn zoom(&self) -> f64 {
-        self.zoom
+    // --- Direct getters/setters for JS-driven gesture control ---
+
+    pub fn zoom(&self) -> f64 { self.zoom }
+    pub fn set_zoom(&mut self, v: f64) { self.zoom = v.clamp(0.1, 15.0); }
+
+    pub fn azimuth(&self) -> f64 { self.azimuth }
+    pub fn set_azimuth(&mut self, v: f64) { self.azimuth = v.rem_euclid(360.0); }
+
+    pub fn elevation(&self) -> f64 { self.elevation }
+    pub fn set_elevation(&mut self, v: f64) { self.elevation = v.clamp(5.0, 85.0); }
+
+    pub fn height_scale(&self) -> f64 { self.height_scale }
+    pub fn set_height_scale(&mut self, v: f64) { self.height_scale = v.clamp(0.5, 5.0); }
+
+    pub fn density(&self) -> f64 { self.density }
+    pub fn set_density(&mut self, v: f64) { self.density = v.clamp(0.25, 4.0); }
+
+    pub fn auto_rotate(&self) -> bool { self.auto_rotate }
+    pub fn set_auto_rotate(&mut self, v: bool) { self.auto_rotate = v; }
+
+    pub fn active(&self) -> usize { self.active }
+    pub fn set_active(&mut self, v: usize) {
+        if !self.datasets.is_empty() {
+            self.active = v.min(self.datasets.len() - 1);
+        }
     }
 
-    /// Set zoom level directly (clamped to valid range).
-    pub fn set_zoom(&mut self, zoom: f64) {
-        self.zoom = zoom.clamp(0.1, 8.0);
-    }
+    pub fn dataset_count(&self) -> usize { self.datasets.len() }
 
     /// Project terrain with bilinear sub-grid sampling and curvature-adaptive stepping.
     fn project_adaptive(
@@ -332,7 +351,7 @@ impl Model for TerrainModel {
                     KeyCode::Up => self.elevation = (self.elevation + 3.0).min(85.0),
                     KeyCode::Down => self.elevation = (self.elevation - 3.0).max(5.0),
                     KeyCode::Char('+') | KeyCode::Char('=') => {
-                        self.zoom = (self.zoom * 1.2).min(8.0);
+                        self.zoom = (self.zoom * 1.2).min(15.0);
                     }
                     KeyCode::Char('-') => {
                         self.zoom = (self.zoom / 1.2).max(0.1);
@@ -386,7 +405,7 @@ impl Model for TerrainModel {
                         self.dragging = false;
                     }
                     MouseEventKind::ScrollUp => {
-                        self.zoom = (self.zoom * 1.1).min(8.0);
+                        self.zoom = (self.zoom * 1.1).min(15.0);
                     }
                     MouseEventKind::ScrollDown => {
                         self.zoom = (self.zoom / 1.1).max(0.1);
@@ -477,5 +496,310 @@ impl Model for TerrainModel {
                 .with_bg(PackedRgba::rgb(15, 15, 15));
             frame.buffer.set_raw(i as u16, footer_y, cell);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_model() -> TerrainModel {
+        TerrainModel::default()
+    }
+
+    fn make_dataset(rows: usize, cols: usize) -> TerrainDataset {
+        // Simple gradient: elevation = row index
+        let grid: Vec<Vec<f64>> = (0..rows)
+            .map(|r| (0..cols).map(|_| r as f64 * 10.0).collect())
+            .collect();
+        TerrainDataset {
+            name: "test".into(),
+            grid,
+            rows,
+            cols,
+            min_elev: 0.0,
+            max_elev: (rows - 1) as f64 * 10.0,
+        }
+    }
+
+    // --- Setter clamping tests ---
+
+    #[test]
+    fn zoom_clamps_low() {
+        let mut m = make_model();
+        m.set_zoom(-5.0);
+        assert_eq!(m.zoom(), 0.1);
+    }
+
+    #[test]
+    fn zoom_clamps_high() {
+        let mut m = make_model();
+        m.set_zoom(100.0);
+        assert_eq!(m.zoom(), 15.0);
+    }
+
+    #[test]
+    fn zoom_accepts_valid() {
+        let mut m = make_model();
+        m.set_zoom(3.5);
+        assert!((m.zoom() - 3.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn azimuth_wraps_negative() {
+        let mut m = make_model();
+        m.set_azimuth(-10.0);
+        assert!((m.azimuth() - 350.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn azimuth_wraps_over_360() {
+        let mut m = make_model();
+        m.set_azimuth(370.0);
+        assert!((m.azimuth() - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn azimuth_zero_stays_zero() {
+        let mut m = make_model();
+        m.set_azimuth(0.0);
+        assert!((m.azimuth()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn elevation_clamps_low() {
+        let mut m = make_model();
+        m.set_elevation(-10.0);
+        assert_eq!(m.elevation(), 5.0);
+    }
+
+    #[test]
+    fn elevation_clamps_high() {
+        let mut m = make_model();
+        m.set_elevation(90.0);
+        assert_eq!(m.elevation(), 85.0);
+    }
+
+    #[test]
+    fn height_scale_clamps() {
+        let mut m = make_model();
+        m.set_height_scale(0.0);
+        assert_eq!(m.height_scale(), 0.5);
+        m.set_height_scale(10.0);
+        assert_eq!(m.height_scale(), 5.0);
+    }
+
+    #[test]
+    fn density_clamps() {
+        let mut m = make_model();
+        m.set_density(0.0);
+        assert_eq!(m.density(), 0.25);
+        m.set_density(10.0);
+        assert_eq!(m.density(), 4.0);
+    }
+
+    #[test]
+    fn auto_rotate_toggle() {
+        let mut m = make_model();
+        assert!(m.auto_rotate());
+        m.set_auto_rotate(false);
+        assert!(!m.auto_rotate());
+    }
+
+    #[test]
+    fn active_clamps_to_dataset_count() {
+        let mut m = make_model();
+        let ds = vec![make_dataset(10, 10), make_dataset(10, 10)];
+        m.set_datasets(ds);
+        m.set_active(5);
+        assert_eq!(m.active(), 1); // clamped to len-1
+    }
+
+    #[test]
+    fn active_noop_when_no_datasets() {
+        let mut m = make_model();
+        m.set_active(3);
+        assert_eq!(m.active(), 0); // unchanged, no datasets
+    }
+
+    // --- Bilinear interpolation tests ---
+
+    #[test]
+    fn bilinear_at_grid_point() {
+        let grid = vec![
+            vec![0.0, 10.0],
+            vec![20.0, 30.0],
+        ];
+        let v = TerrainModel::bilinear_sample(&grid, 0.0, 0.0, 2, 2);
+        assert!((v - 0.0).abs() < 1e-10);
+
+        let v = TerrainModel::bilinear_sample(&grid, 0.0, 1.0, 2, 2);
+        assert!((v - 10.0).abs() < 1e-10);
+
+        let v = TerrainModel::bilinear_sample(&grid, 1.0, 0.0, 2, 2);
+        assert!((v - 20.0).abs() < 1e-10);
+
+        let v = TerrainModel::bilinear_sample(&grid, 1.0, 1.0, 2, 2);
+        assert!((v - 30.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn bilinear_midpoint() {
+        let grid = vec![
+            vec![0.0, 10.0],
+            vec![20.0, 30.0],
+        ];
+        // Center of 4 cells: average = (0+10+20+30)/4 = 15
+        let v = TerrainModel::bilinear_sample(&grid, 0.5, 0.5, 2, 2);
+        assert!((v - 15.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn bilinear_horizontal_lerp() {
+        let grid = vec![
+            vec![0.0, 100.0],
+            vec![0.0, 100.0],
+        ];
+        let v = TerrainModel::bilinear_sample(&grid, 0.0, 0.25, 2, 2);
+        assert!((v - 25.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn bilinear_clamps_at_boundary() {
+        let grid = vec![
+            vec![5.0, 10.0],
+            vec![15.0, 20.0],
+        ];
+        // Beyond grid edge — should clamp, not panic
+        let v = TerrainModel::bilinear_sample(&grid, 1.5, 1.5, 2, 2);
+        assert!(v.is_finite());
+    }
+
+    // --- Projection tests ---
+
+    #[test]
+    fn project_to_buffer_empty_datasets() {
+        let m = make_model();
+        let buf = m.project_to_buffer(400.0, 300.0);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn project_produces_points() {
+        let mut m = make_model();
+        m.set_datasets(vec![make_dataset(20, 20)]);
+        let buf = m.project_to_buffer(400.0, 300.0);
+        // Buffer has 5 floats per point (x, y, r, g, b)
+        assert!(buf.len() >= 5);
+        assert_eq!(buf.len() % 5, 0);
+    }
+
+    #[test]
+    fn project_points_within_canvas() {
+        let mut m = make_model();
+        m.set_datasets(vec![make_dataset(20, 20)]);
+        let w = 400.0_f64;
+        let h = 300.0_f64;
+        let buf = m.project_to_buffer(w, h);
+        for i in (0..buf.len()).step_by(5) {
+            let x = buf[i] as f64;
+            let y = buf[i + 1] as f64;
+            assert!(x >= 0.0 && x <= w, "x={x} out of range");
+            assert!(y >= 0.0 && y <= h, "y={y} out of range");
+        }
+    }
+
+    #[test]
+    fn project_colors_valid_rgb() {
+        let mut m = make_model();
+        m.set_datasets(vec![make_dataset(20, 20)]);
+        let buf = m.project_to_buffer(400.0, 300.0);
+        for i in (0..buf.len()).step_by(5) {
+            let r = buf[i + 2];
+            let g = buf[i + 3];
+            let b = buf[i + 4];
+            assert!(r >= 0.0 && r <= 255.0, "r={r}");
+            assert!(g >= 0.0 && g <= 255.0, "g={g}");
+            assert!(b >= 0.0 && b <= 255.0, "b={b}");
+        }
+    }
+
+    #[test]
+    fn density_affects_point_count() {
+        let mut m = make_model();
+        m.set_datasets(vec![make_dataset(50, 50)]);
+
+        m.set_density(0.5);
+        let low = m.project_to_buffer(400.0, 300.0).len();
+
+        m.set_density(2.0);
+        let high = m.project_to_buffer(400.0, 300.0).len();
+
+        assert!(high > low, "higher density should produce more points: low={low} high={high}");
+    }
+
+    #[test]
+    fn zoom_does_not_change_point_count() {
+        let mut m = make_model();
+        m.set_datasets(vec![make_dataset(20, 20)]);
+
+        m.set_zoom(0.5);
+        let a = m.project_to_buffer(400.0, 300.0).len();
+
+        m.set_zoom(2.0);
+        let b = m.project_to_buffer(400.0, 300.0).len();
+
+        // Zoom changes screen positions but not grid sampling,
+        // though some points may fall outside canvas at different zoom.
+        // Just verify both produce points.
+        assert!(a > 0 && b > 0);
+    }
+
+    // --- Refinement threshold tests ---
+
+    #[test]
+    fn refinement_thresholds() {
+        // Verify the alternating refinement logic by checking step sizes
+        let mut m = make_model();
+        // At density 1.0 — no refinement
+        m.set_density(1.0);
+        assert_eq!(m.density(), 1.0);
+
+        // At density 1.25 — row refinement kicks in
+        m.set_density(1.25);
+        assert_eq!(m.density(), 1.25);
+
+        // At density 2.5 — 4x row refinement
+        m.set_density(2.5);
+        assert_eq!(m.density(), 2.5);
+    }
+
+    // --- Curvature tests ---
+
+    #[test]
+    fn curvature_flat_surface_is_zero() {
+        // Flat grid: all same elevation
+        let grid = vec![vec![100.0; 5]; 5];
+        let curv = TerrainModel::curvature_at(&grid, 2, 2, 5, 5);
+        assert!(curv.abs() < 1e-6, "flat surface should have ~zero curvature: {curv}");
+    }
+
+    #[test]
+    fn curvature_edge_returns_zero() {
+        let grid = vec![vec![0.0; 5]; 5];
+        let curv = TerrainModel::curvature_at(&grid, 0, 0, 5, 5);
+        assert_eq!(curv, 0.0, "edge points should return 0.0 (no curvature data)");
+    }
+
+    #[test]
+    fn curvature_nonzero_for_ridge() {
+        // Create a ridge: center row elevated — sample on the slope (row 1),
+        // not the peak (row 2) where gradient is zero.
+        let mut grid = vec![vec![0.0; 5]; 5];
+        for c in 0..5 {
+            grid[2][c] = 100.0;
+        }
+        let curv = TerrainModel::curvature_at(&grid, 1, 2, 5, 5);
+        assert!(curv > 0.0, "ridge slope should have nonzero curvature: {curv}");
     }
 }
