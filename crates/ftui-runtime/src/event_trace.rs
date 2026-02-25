@@ -1,11 +1,18 @@
 #![forbid(unsafe_code)]
 
-//! Event trace recording and replay for deterministic debugging (bd-3mjjt.2).
+//! Event trace recording and replay for deterministic debugging (bd-3mjjt.2,
+//! bd-3mjjt.4).
 //!
 //! Records all external events (keyboard, mouse, resize, paste, IME, focus,
-//! clipboard) with monotonic nanosecond timestamps to a gzip-compressed JSONL
-//! file. [`EventReplayer`] reads the trace back and feeds events in exact
-//! order with timing information.
+//! clipboard) and Bayesian evidence ledger entries with monotonic nanosecond
+//! timestamps to a gzip-compressed JSONL file. [`EventReplayer`] reads the
+//! trace back and feeds events in exact order with timing information.
+//!
+//! Evidence capture (bd-3mjjt.4): During recording, [`EventTraceWriter::record_evidence`]
+//! captures [`EvidenceEntry`](crate::unified_evidence::EvidenceEntry) decisions.
+//! During replay, [`EvidenceVerifier`] compares replayed evidence against the
+//! recording to validate that all Bayesian decisions are deterministic given
+//! the same input sequence.
 //!
 //! # Format
 //!
@@ -44,6 +51,8 @@ use ftui_core::event::{
     Modifiers, MouseButton, MouseEvent, MouseEventKind, PasteEvent,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::unified_evidence::{DecisionDomain, EvidenceEntry};
 
 // ---------------------------------------------------------------------------
 // Schema version
@@ -137,11 +146,20 @@ pub enum TraceRecord {
     #[serde(rename = "rng_seed")]
     RngSeed { ts_ns: u64, seed: u64 },
 
+    /// Evidence ledger entry from a Bayesian decision point (bd-3mjjt.4).
+    #[serde(rename = "evidence")]
+    Evidence {
+        ts_ns: u64,
+        entry: SerEvidenceEntry,
+    },
+
     /// Summary record (last line).
     #[serde(rename = "trace_summary")]
     Summary {
         total_events: u64,
         total_duration_ns: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        total_evidence: Option<u64>,
     },
 }
 
@@ -221,6 +239,104 @@ pub enum SerImePhase {
 pub enum SerClipboardSource {
     Osc52,
     Unknown,
+}
+
+// ---------------------------------------------------------------------------
+// Serializable evidence types (bd-3mjjt.4)
+// ---------------------------------------------------------------------------
+
+/// Serializable decision domain for event traces.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SerDecisionDomain {
+    #[serde(rename = "diff_strategy")]
+    DiffStrategy,
+    #[serde(rename = "resize_coalescing")]
+    ResizeCoalescing,
+    #[serde(rename = "frame_budget")]
+    FrameBudget,
+    #[serde(rename = "degradation")]
+    Degradation,
+    #[serde(rename = "voi_sampling")]
+    VoiSampling,
+    #[serde(rename = "hint_ranking")]
+    HintRanking,
+    #[serde(rename = "palette_scoring")]
+    PaletteScoring,
+}
+
+impl SerDecisionDomain {
+    /// Convert from a runtime [`DecisionDomain`].
+    pub fn from_domain(d: DecisionDomain) -> Self {
+        match d {
+            DecisionDomain::DiffStrategy => Self::DiffStrategy,
+            DecisionDomain::ResizeCoalescing => Self::ResizeCoalescing,
+            DecisionDomain::FrameBudget => Self::FrameBudget,
+            DecisionDomain::Degradation => Self::Degradation,
+            DecisionDomain::VoiSampling => Self::VoiSampling,
+            DecisionDomain::HintRanking => Self::HintRanking,
+            DecisionDomain::PaletteScoring => Self::PaletteScoring,
+        }
+    }
+
+    /// Convert back to a runtime [`DecisionDomain`].
+    pub fn into_domain(self) -> DecisionDomain {
+        match self {
+            Self::DiffStrategy => DecisionDomain::DiffStrategy,
+            Self::ResizeCoalescing => DecisionDomain::ResizeCoalescing,
+            Self::FrameBudget => DecisionDomain::FrameBudget,
+            Self::Degradation => DecisionDomain::Degradation,
+            Self::VoiSampling => DecisionDomain::VoiSampling,
+            Self::HintRanking => DecisionDomain::HintRanking,
+            Self::PaletteScoring => DecisionDomain::PaletteScoring,
+        }
+    }
+}
+
+/// Serializable evidence term for event traces.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SerEvidenceTerm {
+    pub label: String,
+    pub bayes_factor: f64,
+}
+
+/// Serializable evidence entry for event traces.
+///
+/// Mirrors [`EvidenceEntry`](crate::unified_evidence::EvidenceEntry) with
+/// owned strings instead of `&'static str`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SerEvidenceEntry {
+    pub decision_id: u64,
+    pub domain: SerDecisionDomain,
+    pub log_posterior: f64,
+    pub evidence: Vec<SerEvidenceTerm>,
+    pub action: String,
+    pub loss_avoided: f64,
+    pub confidence_interval: (f64, f64),
+}
+
+impl SerEvidenceEntry {
+    /// Convert from a runtime [`EvidenceEntry`](crate::unified_evidence::EvidenceEntry).
+    pub fn from_entry(e: &EvidenceEntry) -> Self {
+        let evidence = e
+            .top_evidence
+            .iter()
+            .flatten()
+            .map(|t| SerEvidenceTerm {
+                label: t.label.to_string(),
+                bayes_factor: t.bayes_factor,
+            })
+            .collect();
+
+        Self {
+            decision_id: e.decision_id,
+            domain: SerDecisionDomain::from_domain(e.domain),
+            log_posterior: e.log_posterior,
+            evidence,
+            action: e.action.to_string(),
+            loss_avoided: e.loss_avoided,
+            confidence_interval: e.confidence_interval,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -326,7 +442,8 @@ impl TraceRecord {
             TraceRecord::Header { .. }
             | TraceRecord::Summary { .. }
             | TraceRecord::FrameTime { .. }
-            | TraceRecord::RngSeed { .. } => None,
+            | TraceRecord::RngSeed { .. }
+            | TraceRecord::Evidence { .. } => None,
         }
     }
 
@@ -343,7 +460,8 @@ impl TraceRecord {
             | TraceRecord::Clipboard { ts_ns, .. }
             | TraceRecord::Tick { ts_ns, .. }
             | TraceRecord::FrameTime { ts_ns, .. }
-            | TraceRecord::RngSeed { ts_ns, .. } => Some(*ts_ns),
+            | TraceRecord::RngSeed { ts_ns, .. }
+            | TraceRecord::Evidence { ts_ns, .. } => Some(*ts_ns),
             TraceRecord::Header { .. } | TraceRecord::Summary { .. } => None,
         }
     }
@@ -517,6 +635,7 @@ impl SerClipboardSource {
 pub struct EventTraceWriter<W: Write> {
     writer: BufWriter<W>,
     event_count: u64,
+    evidence_count: u64,
     first_ts_ns: Option<u64>,
     last_ts_ns: u64,
 }
@@ -578,6 +697,7 @@ impl<W: Write> EventTraceWriter<W> {
         Ok(Self {
             writer: w,
             event_count: 0,
+            evidence_count: 0,
             first_ts_ns: None,
             last_ts_ns: 0,
         })
@@ -601,6 +721,15 @@ impl<W: Write> EventTraceWriter<W> {
         self.write_record(&record)
     }
 
+    /// Record an evidence ledger entry from a Bayesian decision point (bd-3mjjt.4).
+    pub fn record_evidence(&mut self, entry: &EvidenceEntry, ts_ns: u64) -> io::Result<()> {
+        let record = TraceRecord::Evidence {
+            ts_ns,
+            entry: SerEvidenceEntry::from_entry(entry),
+        };
+        self.write_record(&record)
+    }
+
     /// Write any trace record.
     pub fn write_record(&mut self, record: &TraceRecord) -> io::Result<()> {
         serde_json::to_writer(&mut self.writer, record)
@@ -614,9 +743,13 @@ impl<W: Write> EventTraceWriter<W> {
             self.last_ts_ns = ts;
         }
 
-        // Count event records (not header/summary/metadata).
+        // Count records by type.
         match record {
             TraceRecord::Header { .. } | TraceRecord::Summary { .. } => {}
+            TraceRecord::Evidence { .. } => {
+                self.evidence_count += 1;
+                self.event_count += 1;
+            }
             _ => self.event_count += 1,
         }
 
@@ -629,6 +762,12 @@ impl<W: Write> EventTraceWriter<W> {
         self.event_count
     }
 
+    /// Get the number of evidence records written.
+    #[inline]
+    pub fn evidence_count(&self) -> u64 {
+        self.evidence_count
+    }
+
     /// Finish the trace: write summary and flush.
     ///
     /// Returns the underlying writer for further use.
@@ -638,9 +777,16 @@ impl<W: Write> EventTraceWriter<W> {
             .map(|first| self.last_ts_ns.saturating_sub(first))
             .unwrap_or(0);
 
+        let total_evidence = if self.evidence_count > 0 {
+            Some(self.evidence_count)
+        } else {
+            None
+        };
+
         let summary = TraceRecord::Summary {
             total_events: self.event_count,
             total_duration_ns,
+            total_evidence,
         };
         serde_json::to_writer(&mut self.writer, &summary)
             .map_err(io::Error::other)?;
@@ -781,6 +927,28 @@ impl TraceFile {
             _ => None,
         }
     }
+
+    /// Get the total evidence count from the summary.
+    #[must_use]
+    pub fn total_evidence(&self) -> Option<u64> {
+        match self.summary()? {
+            TraceRecord::Summary {
+                total_evidence, ..
+            } => *total_evidence,
+            _ => None,
+        }
+    }
+
+    /// Extract evidence entries with timestamps from the trace.
+    pub fn evidence_entries(&self) -> Vec<(&SerEvidenceEntry, u64)> {
+        self.records
+            .iter()
+            .filter_map(|r| match r {
+                TraceRecord::Evidence { ts_ns, entry } => Some((entry, *ts_ns)),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -902,6 +1070,284 @@ impl EventReplayer {
 }
 
 // ---------------------------------------------------------------------------
+// EvidenceVerifier — validates determinism of Bayesian decisions (bd-3mjjt.4)
+// ---------------------------------------------------------------------------
+
+/// Describes a field-level mismatch between a recorded and replayed evidence entry.
+#[derive(Debug, Clone)]
+pub struct EvidenceMismatch {
+    /// Index of the evidence entry (0-based, in recording order).
+    pub index: usize,
+    /// Which field mismatched.
+    pub field: String,
+    /// Recorded value (formatted for display).
+    pub recorded: String,
+    /// Replayed value (formatted for display).
+    pub replayed: String,
+}
+
+/// Verifies that Bayesian evidence entries emitted during replay match those
+/// captured during recording.
+///
+/// Validates that all decisions are deterministic given the same input sequence:
+/// same `decision_id`, same `action`, same `log_posterior` within epsilon.
+pub struct EvidenceVerifier {
+    /// Tolerance for floating-point comparisons.
+    epsilon: f64,
+    /// Recorded evidence entries from the trace file.
+    recorded: Vec<SerEvidenceEntry>,
+    /// Mismatches found during verification.
+    mismatches: Vec<EvidenceMismatch>,
+    /// Number of entries verified so far.
+    verified_count: usize,
+}
+
+impl EvidenceVerifier {
+    /// Create a new verifier with the given floating-point tolerance.
+    ///
+    /// `epsilon` is used for comparing `log_posterior`, `loss_avoided`,
+    /// `bayes_factor`, and confidence interval bounds.
+    #[must_use]
+    pub fn new(epsilon: f64) -> Self {
+        Self {
+            epsilon,
+            recorded: Vec::new(),
+            mismatches: Vec::new(),
+            verified_count: 0,
+        }
+    }
+
+    /// Create a verifier pre-loaded with evidence from a [`TraceFile`].
+    #[must_use]
+    pub fn from_trace(trace: &TraceFile, epsilon: f64) -> Self {
+        let recorded = trace
+            .evidence_entries()
+            .into_iter()
+            .map(|(e, _)| e.clone())
+            .collect();
+        Self {
+            epsilon,
+            recorded,
+            mismatches: Vec::new(),
+            verified_count: 0,
+        }
+    }
+
+    /// Load recorded evidence from a slice of serializable entries.
+    pub fn load_recorded(&mut self, entries: &[SerEvidenceEntry]) {
+        self.recorded = entries.to_vec();
+        self.verified_count = 0;
+        self.mismatches.clear();
+    }
+
+    /// Verify a replayed [`EvidenceEntry`] against the next recorded entry.
+    ///
+    /// Returns `true` if the entry matches (or there is no corresponding
+    /// recorded entry to compare against). Returns `false` if a mismatch
+    /// is found.
+    pub fn verify(&mut self, entry: &EvidenceEntry) -> bool {
+        let idx = self.verified_count;
+        self.verified_count += 1;
+
+        if idx >= self.recorded.len() {
+            // More replayed entries than recorded — not a mismatch per se,
+            // but caller can check counts.
+            return true;
+        }
+
+        let recorded = &self.recorded[idx];
+        let replayed = SerEvidenceEntry::from_entry(entry);
+        let mut ok = true;
+
+        // decision_id
+        if recorded.decision_id != replayed.decision_id {
+            self.mismatches.push(EvidenceMismatch {
+                index: idx,
+                field: "decision_id".to_string(),
+                recorded: recorded.decision_id.to_string(),
+                replayed: replayed.decision_id.to_string(),
+            });
+            ok = false;
+        }
+
+        // domain
+        if recorded.domain != replayed.domain {
+            self.mismatches.push(EvidenceMismatch {
+                index: idx,
+                field: "domain".to_string(),
+                recorded: format!("{:?}", recorded.domain),
+                replayed: format!("{:?}", replayed.domain),
+            });
+            ok = false;
+        }
+
+        // action
+        if recorded.action != replayed.action {
+            self.mismatches.push(EvidenceMismatch {
+                index: idx,
+                field: "action".to_string(),
+                recorded: recorded.action.clone(),
+                replayed: replayed.action.clone(),
+            });
+            ok = false;
+        }
+
+        // log_posterior (within epsilon)
+        if (recorded.log_posterior - replayed.log_posterior).abs() > self.epsilon {
+            self.mismatches.push(EvidenceMismatch {
+                index: idx,
+                field: "log_posterior".to_string(),
+                recorded: format!("{:.6}", recorded.log_posterior),
+                replayed: format!("{:.6}", replayed.log_posterior),
+            });
+            ok = false;
+        }
+
+        // loss_avoided (within epsilon)
+        if (recorded.loss_avoided - replayed.loss_avoided).abs() > self.epsilon {
+            self.mismatches.push(EvidenceMismatch {
+                index: idx,
+                field: "loss_avoided".to_string(),
+                recorded: format!("{:.6}", recorded.loss_avoided),
+                replayed: format!("{:.6}", replayed.loss_avoided),
+            });
+            ok = false;
+        }
+
+        // confidence_interval (within epsilon)
+        if (recorded.confidence_interval.0 - replayed.confidence_interval.0).abs() > self.epsilon
+            || (recorded.confidence_interval.1 - replayed.confidence_interval.1).abs()
+                > self.epsilon
+        {
+            self.mismatches.push(EvidenceMismatch {
+                index: idx,
+                field: "confidence_interval".to_string(),
+                recorded: format!(
+                    "({:.6}, {:.6})",
+                    recorded.confidence_interval.0, recorded.confidence_interval.1
+                ),
+                replayed: format!(
+                    "({:.6}, {:.6})",
+                    replayed.confidence_interval.0, replayed.confidence_interval.1
+                ),
+            });
+            ok = false;
+        }
+
+        // evidence terms
+        if recorded.evidence.len() != replayed.evidence.len() {
+            self.mismatches.push(EvidenceMismatch {
+                index: idx,
+                field: "evidence.len".to_string(),
+                recorded: recorded.evidence.len().to_string(),
+                replayed: replayed.evidence.len().to_string(),
+            });
+            ok = false;
+        } else {
+            for (ti, (rec_term, rep_term)) in recorded
+                .evidence
+                .iter()
+                .zip(replayed.evidence.iter())
+                .enumerate()
+            {
+                if rec_term.label != rep_term.label {
+                    self.mismatches.push(EvidenceMismatch {
+                        index: idx,
+                        field: format!("evidence[{ti}].label"),
+                        recorded: rec_term.label.clone(),
+                        replayed: rep_term.label.clone(),
+                    });
+                    ok = false;
+                }
+                if (rec_term.bayes_factor - rep_term.bayes_factor).abs() > self.epsilon {
+                    self.mismatches.push(EvidenceMismatch {
+                        index: idx,
+                        field: format!("evidence[{ti}].bayes_factor"),
+                        recorded: format!("{:.6}", rec_term.bayes_factor),
+                        replayed: format!("{:.6}", rep_term.bayes_factor),
+                    });
+                    ok = false;
+                }
+            }
+        }
+
+        ok
+    }
+
+    /// Whether all verified entries matched their recorded counterparts.
+    #[must_use]
+    pub fn is_deterministic(&self) -> bool {
+        self.mismatches.is_empty()
+            && self.verified_count == self.recorded.len()
+    }
+
+    /// Get all mismatches found during verification.
+    #[must_use]
+    pub fn mismatches(&self) -> &[EvidenceMismatch] {
+        &self.mismatches
+    }
+
+    /// Number of entries verified so far.
+    #[must_use]
+    pub fn verified_count(&self) -> usize {
+        self.verified_count
+    }
+
+    /// Number of recorded entries to verify against.
+    #[must_use]
+    pub fn expected_count(&self) -> usize {
+        self.recorded.len()
+    }
+
+    /// Human-readable summary of the verification result.
+    pub fn summary(&self) -> String {
+        if self.mismatches.is_empty() {
+            if self.verified_count == self.recorded.len() {
+                format!(
+                    "PASS: all {} evidence entries are deterministic",
+                    self.verified_count
+                )
+            } else {
+                format!(
+                    "INCOMPLETE: verified {}/{} evidence entries (no mismatches so far)",
+                    self.verified_count,
+                    self.recorded.len()
+                )
+            }
+        } else {
+            format!(
+                "FAIL: {} mismatches in {} verified entries (of {} recorded)",
+                self.mismatches.len(),
+                self.verified_count,
+                self.recorded.len()
+            )
+        }
+    }
+
+    /// Detailed mismatch report.
+    pub fn detail_report(&self) -> String {
+        if self.mismatches.is_empty() {
+            return self.summary();
+        }
+        let mut out = self.summary();
+        out.push('\n');
+        for m in &self.mismatches {
+            out.push_str(&format!(
+                "  [{}] {}: recorded={}, replayed={}\n",
+                m.index, m.field, m.recorded, m.replayed
+            ));
+        }
+        out
+    }
+
+    /// Reset the verifier for another replay pass.
+    pub fn reset(&mut self) {
+        self.mismatches.clear();
+        self.verified_count = 0;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -971,6 +1417,7 @@ mod tests {
         let summary = TraceRecord::Summary {
             total_events: 5,
             total_duration_ns: 1_000_000,
+            total_evidence: None,
         };
         assert!(summary.to_event().is_none());
         assert!(summary.ts_ns().is_none());
@@ -1328,5 +1775,503 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(first_line).expect("parse json");
         assert_eq!(parsed["schema_version"], "event-trace-v1");
         assert_eq!(parsed["event"], "trace_header");
+    }
+
+    // ── bd-3mjjt.4: Evidence Capture & Verification Tests ───────────────
+
+    use crate::unified_evidence::{
+        DecisionDomain, EvidenceEntry, EvidenceEntryBuilder, EvidenceTerm,
+    };
+
+    fn make_test_evidence(domain: DecisionDomain, action: &'static str, id: u64) -> EvidenceEntry {
+        EvidenceEntry {
+            decision_id: id,
+            timestamp_ns: id * 1_000_000,
+            domain,
+            log_posterior: 1.386,
+            top_evidence: [
+                Some(EvidenceTerm::new("change_rate", 4.0)),
+                Some(EvidenceTerm::new("dirty_ratio", 2.5)),
+                None,
+            ],
+            action,
+            loss_avoided: 0.15,
+            confidence_interval: (0.72, 0.95),
+        }
+    }
+
+    #[test]
+    fn evidence_record_has_no_event() {
+        let entry = make_test_evidence(DecisionDomain::DiffStrategy, "dirty_rows", 0);
+        let record = TraceRecord::Evidence {
+            ts_ns: 1000,
+            entry: SerEvidenceEntry::from_entry(&entry),
+        };
+        assert!(record.to_event().is_none());
+        assert_eq!(record.ts_ns(), Some(1000));
+    }
+
+    #[test]
+    fn evidence_json_round_trip() {
+        let entry = make_test_evidence(DecisionDomain::FrameBudget, "hold", 42);
+        let record = TraceRecord::Evidence {
+            ts_ns: 5000,
+            entry: SerEvidenceEntry::from_entry(&entry),
+        };
+        let json = serde_json::to_string(&record).expect("serialize");
+        let parsed: TraceRecord = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(record, parsed);
+    }
+
+    #[test]
+    fn evidence_json_schema_fields() {
+        let entry = make_test_evidence(DecisionDomain::DiffStrategy, "dirty_rows", 7);
+        let record = TraceRecord::Evidence {
+            ts_ns: 3000,
+            entry: SerEvidenceEntry::from_entry(&entry),
+        };
+        let json = serde_json::to_string(&record).expect("serialize");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("parse");
+
+        assert_eq!(parsed["event"], "evidence");
+        assert_eq!(parsed["ts_ns"], 3000);
+        assert_eq!(parsed["entry"]["domain"], "diff_strategy");
+        assert_eq!(parsed["entry"]["action"], "dirty_rows");
+        assert_eq!(parsed["entry"]["decision_id"], 7);
+        assert!(parsed["entry"]["log_posterior"].as_f64().is_some());
+        assert!(parsed["entry"]["evidence"].as_array().is_some());
+    }
+
+    #[test]
+    fn write_and_read_evidence_in_trace() {
+        let mut buf = Vec::new();
+        {
+            let mut writer =
+                EventTraceWriter::from_writer(&mut buf, "evidence_test", (80, 24), None)
+                    .expect("create writer");
+
+            writer.record(&Event::Tick, 1_000).expect("tick");
+            writer
+                .record_evidence(
+                    &make_test_evidence(DecisionDomain::DiffStrategy, "dirty_rows", 0),
+                    1_500,
+                )
+                .expect("evidence 0");
+            writer.record(&Event::Tick, 2_000).expect("tick");
+            writer
+                .record_evidence(
+                    &make_test_evidence(DecisionDomain::FrameBudget, "hold", 1),
+                    2_500,
+                )
+                .expect("evidence 1");
+
+            assert_eq!(writer.event_count(), 4);
+            assert_eq!(writer.evidence_count(), 2);
+            writer.finish().expect("finish");
+        }
+
+        let trace = EventTraceReader::from_bytes(&buf).expect("read");
+        assert_eq!(trace.total_events(), Some(4));
+        assert_eq!(trace.total_evidence(), Some(2));
+
+        let evidence = trace.evidence_entries();
+        assert_eq!(evidence.len(), 2);
+        assert_eq!(evidence[0].0.action, "dirty_rows");
+        assert_eq!(evidence[0].1, 1_500);
+        assert_eq!(evidence[1].0.action, "hold");
+        assert_eq!(evidence[1].1, 2_500);
+
+        // Events still work normally.
+        let events = trace.events_with_timestamps();
+        assert_eq!(events.len(), 2); // Only Tick events convert to Event
+    }
+
+    #[test]
+    fn trace_without_evidence_has_none_total() {
+        let mut buf = Vec::new();
+        {
+            let mut writer =
+                EventTraceWriter::from_writer(&mut buf, "no_ev", (80, 24), None)
+                    .expect("create writer");
+            writer.record(&Event::Tick, 100).expect("tick");
+            writer.finish().expect("finish");
+        }
+
+        let trace = EventTraceReader::from_bytes(&buf).expect("read");
+        assert!(trace.total_evidence().is_none());
+        assert!(trace.evidence_entries().is_empty());
+    }
+
+    #[test]
+    fn verifier_identical_entries_pass() {
+        let entries: Vec<EvidenceEntry> = vec![
+            make_test_evidence(DecisionDomain::DiffStrategy, "dirty_rows", 0),
+            make_test_evidence(DecisionDomain::FrameBudget, "hold", 1),
+            make_test_evidence(DecisionDomain::VoiSampling, "sample", 2),
+        ];
+
+        // Record
+        let recorded: Vec<SerEvidenceEntry> =
+            entries.iter().map(SerEvidenceEntry::from_entry).collect();
+        let mut verifier = EvidenceVerifier::new(1e-10);
+        verifier.load_recorded(&recorded);
+
+        // Replay with identical entries
+        for entry in &entries {
+            assert!(verifier.verify(entry));
+        }
+        assert!(verifier.is_deterministic());
+        assert!(verifier.mismatches().is_empty());
+        assert!(verifier.summary().contains("PASS"));
+    }
+
+    #[test]
+    fn verifier_detects_action_mismatch() {
+        let recorded = vec![SerEvidenceEntry::from_entry(&make_test_evidence(
+            DecisionDomain::DiffStrategy,
+            "dirty_rows",
+            0,
+        ))];
+        let mut verifier = EvidenceVerifier::new(1e-10);
+        verifier.load_recorded(&recorded);
+
+        // Replay with different action
+        let mut replayed = make_test_evidence(DecisionDomain::DiffStrategy, "full", 0);
+        replayed.decision_id = 0;
+        assert!(!verifier.verify(&replayed));
+        assert!(!verifier.is_deterministic());
+        assert_eq!(verifier.mismatches().len(), 1);
+        assert_eq!(verifier.mismatches()[0].field, "action");
+    }
+
+    #[test]
+    fn verifier_detects_posterior_mismatch() {
+        let recorded = vec![SerEvidenceEntry::from_entry(&make_test_evidence(
+            DecisionDomain::DiffStrategy,
+            "dirty_rows",
+            0,
+        ))];
+        let mut verifier = EvidenceVerifier::new(1e-10);
+        verifier.load_recorded(&recorded);
+
+        let mut replayed = make_test_evidence(DecisionDomain::DiffStrategy, "dirty_rows", 0);
+        replayed.log_posterior = 2.0; // different
+        assert!(!verifier.verify(&replayed));
+        assert!(
+            verifier
+                .mismatches()
+                .iter()
+                .any(|m| m.field == "log_posterior")
+        );
+    }
+
+    #[test]
+    fn verifier_tolerance_allows_small_differences() {
+        let recorded = vec![SerEvidenceEntry::from_entry(&make_test_evidence(
+            DecisionDomain::DiffStrategy,
+            "dirty_rows",
+            0,
+        ))];
+        let mut verifier = EvidenceVerifier::new(0.01); // generous epsilon
+        verifier.load_recorded(&recorded);
+
+        let mut replayed = make_test_evidence(DecisionDomain::DiffStrategy, "dirty_rows", 0);
+        replayed.log_posterior = 1.386 + 0.005; // within epsilon
+        replayed.loss_avoided = 0.15 + 0.002; // within epsilon
+        assert!(verifier.verify(&replayed));
+        assert!(verifier.is_deterministic());
+    }
+
+    #[test]
+    fn verifier_detects_domain_mismatch() {
+        let recorded = vec![SerEvidenceEntry::from_entry(&make_test_evidence(
+            DecisionDomain::DiffStrategy,
+            "dirty_rows",
+            0,
+        ))];
+        let mut verifier = EvidenceVerifier::new(1e-10);
+        verifier.load_recorded(&recorded);
+
+        let replayed = make_test_evidence(DecisionDomain::FrameBudget, "dirty_rows", 0);
+        assert!(!verifier.verify(&replayed));
+        assert!(verifier.mismatches().iter().any(|m| m.field == "domain"));
+    }
+
+    #[test]
+    fn verifier_detects_evidence_term_mismatch() {
+        let recorded = vec![SerEvidenceEntry::from_entry(&make_test_evidence(
+            DecisionDomain::DiffStrategy,
+            "dirty_rows",
+            0,
+        ))];
+        let mut verifier = EvidenceVerifier::new(1e-10);
+        verifier.load_recorded(&recorded);
+
+        let mut replayed = make_test_evidence(DecisionDomain::DiffStrategy, "dirty_rows", 0);
+        // Change evidence term
+        replayed.top_evidence[0] = Some(EvidenceTerm::new("different_signal", 4.0));
+        assert!(!verifier.verify(&replayed));
+        assert!(
+            verifier
+                .mismatches()
+                .iter()
+                .any(|m| m.field.contains("label"))
+        );
+    }
+
+    #[test]
+    fn verifier_detects_evidence_bayes_factor_mismatch() {
+        let recorded = vec![SerEvidenceEntry::from_entry(&make_test_evidence(
+            DecisionDomain::DiffStrategy,
+            "dirty_rows",
+            0,
+        ))];
+        let mut verifier = EvidenceVerifier::new(1e-10);
+        verifier.load_recorded(&recorded);
+
+        let mut replayed = make_test_evidence(DecisionDomain::DiffStrategy, "dirty_rows", 0);
+        replayed.top_evidence[0] = Some(EvidenceTerm::new("change_rate", 9.0)); // different BF
+        assert!(!verifier.verify(&replayed));
+        assert!(
+            verifier
+                .mismatches()
+                .iter()
+                .any(|m| m.field.contains("bayes_factor"))
+        );
+    }
+
+    #[test]
+    fn verifier_detects_confidence_interval_mismatch() {
+        let recorded = vec![SerEvidenceEntry::from_entry(&make_test_evidence(
+            DecisionDomain::DiffStrategy,
+            "dirty_rows",
+            0,
+        ))];
+        let mut verifier = EvidenceVerifier::new(1e-10);
+        verifier.load_recorded(&recorded);
+
+        let mut replayed = make_test_evidence(DecisionDomain::DiffStrategy, "dirty_rows", 0);
+        replayed.confidence_interval = (0.50, 0.80); // different
+        assert!(!verifier.verify(&replayed));
+        assert!(
+            verifier
+                .mismatches()
+                .iter()
+                .any(|m| m.field == "confidence_interval")
+        );
+    }
+
+    #[test]
+    fn verifier_from_trace_integration() {
+        let mut buf = Vec::new();
+        let entries = vec![
+            make_test_evidence(DecisionDomain::DiffStrategy, "dirty_rows", 0),
+            make_test_evidence(DecisionDomain::FrameBudget, "hold", 1),
+        ];
+        {
+            let mut writer =
+                EventTraceWriter::from_writer(&mut buf, "verifier_test", (80, 24), None)
+                    .expect("create writer");
+            for (i, entry) in entries.iter().enumerate() {
+                writer
+                    .record_evidence(entry, (i as u64 + 1) * 1000)
+                    .expect("record evidence");
+            }
+            writer.finish().expect("finish");
+        }
+
+        let trace = EventTraceReader::from_bytes(&buf).expect("read");
+        let mut verifier = EvidenceVerifier::from_trace(&trace, 1e-10);
+
+        // Replay with identical entries
+        for entry in &entries {
+            assert!(verifier.verify(entry));
+        }
+        assert!(verifier.is_deterministic());
+        assert_eq!(verifier.verified_count(), 2);
+        assert_eq!(verifier.expected_count(), 2);
+    }
+
+    #[test]
+    fn verifier_reset() {
+        let recorded = vec![SerEvidenceEntry::from_entry(&make_test_evidence(
+            DecisionDomain::DiffStrategy,
+            "dirty_rows",
+            0,
+        ))];
+        let mut verifier = EvidenceVerifier::new(1e-10);
+        verifier.load_recorded(&recorded);
+
+        // First pass — mismatch
+        let replayed = make_test_evidence(DecisionDomain::DiffStrategy, "full", 0);
+        verifier.verify(&replayed);
+        assert!(!verifier.is_deterministic());
+
+        // Reset and replay correctly
+        verifier.reset();
+        assert_eq!(verifier.verified_count(), 0);
+        assert!(verifier.mismatches().is_empty());
+
+        let correct = make_test_evidence(DecisionDomain::DiffStrategy, "dirty_rows", 0);
+        assert!(verifier.verify(&correct));
+        assert!(verifier.is_deterministic());
+    }
+
+    #[test]
+    fn verifier_incomplete_reports_correctly() {
+        let recorded = vec![
+            SerEvidenceEntry::from_entry(&make_test_evidence(
+                DecisionDomain::DiffStrategy,
+                "dirty_rows",
+                0,
+            )),
+            SerEvidenceEntry::from_entry(&make_test_evidence(
+                DecisionDomain::FrameBudget,
+                "hold",
+                1,
+            )),
+        ];
+        let mut verifier = EvidenceVerifier::new(1e-10);
+        verifier.load_recorded(&recorded);
+
+        // Only verify first entry
+        let entry = make_test_evidence(DecisionDomain::DiffStrategy, "dirty_rows", 0);
+        verifier.verify(&entry);
+        assert!(!verifier.is_deterministic()); // not all verified
+        assert!(verifier.summary().contains("INCOMPLETE"));
+    }
+
+    #[test]
+    fn verifier_detail_report_shows_fields() {
+        let recorded = vec![SerEvidenceEntry::from_entry(&make_test_evidence(
+            DecisionDomain::DiffStrategy,
+            "dirty_rows",
+            0,
+        ))];
+        let mut verifier = EvidenceVerifier::new(1e-10);
+        verifier.load_recorded(&recorded);
+
+        let replayed = make_test_evidence(DecisionDomain::DiffStrategy, "full", 0);
+        verifier.verify(&replayed);
+
+        let report = verifier.detail_report();
+        assert!(report.contains("FAIL"));
+        assert!(report.contains("action"));
+        assert!(report.contains("dirty_rows"));
+        assert!(report.contains("full"));
+    }
+
+    #[test]
+    fn verifier_extra_replayed_entries_accepted() {
+        // If replay produces more evidence than recorded, extra entries
+        // are accepted (no panic, no false mismatch).
+        let recorded = vec![SerEvidenceEntry::from_entry(&make_test_evidence(
+            DecisionDomain::DiffStrategy,
+            "dirty_rows",
+            0,
+        ))];
+        let mut verifier = EvidenceVerifier::new(1e-10);
+        verifier.load_recorded(&recorded);
+
+        let first = make_test_evidence(DecisionDomain::DiffStrategy, "dirty_rows", 0);
+        let extra = make_test_evidence(DecisionDomain::FrameBudget, "hold", 1);
+        assert!(verifier.verify(&first));
+        assert!(verifier.verify(&extra)); // extra entry — no panic
+        assert_eq!(verifier.verified_count(), 2);
+    }
+
+    #[test]
+    fn ser_decision_domain_round_trip() {
+        for domain in DecisionDomain::ALL {
+            let ser = SerDecisionDomain::from_domain(domain);
+            let back = ser.into_domain();
+            assert_eq!(domain, back);
+
+            // JSON round-trip
+            let json = serde_json::to_string(&ser).expect("serialize");
+            let parsed: SerDecisionDomain = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(ser, parsed);
+        }
+    }
+
+    #[test]
+    fn ser_evidence_entry_from_entry_preserves_fields() {
+        let entry = EvidenceEntryBuilder::new(DecisionDomain::PaletteScoring, 42, 999_000)
+            .log_posterior(2.0)
+            .evidence("match_type", 9.0)
+            .evidence("position", 1.5)
+            .action("exact")
+            .loss_avoided(0.8)
+            .confidence_interval(0.90, 0.99)
+            .build();
+
+        let ser = SerEvidenceEntry::from_entry(&entry);
+        assert_eq!(ser.decision_id, 42);
+        assert_eq!(ser.domain, SerDecisionDomain::PaletteScoring);
+        assert!((ser.log_posterior - 2.0).abs() < 1e-10);
+        assert_eq!(ser.evidence.len(), 2);
+        assert_eq!(ser.action, "exact");
+        assert!((ser.loss_avoided - 0.8).abs() < 1e-10);
+        assert!((ser.confidence_interval.0 - 0.90).abs() < 1e-10);
+        assert!((ser.confidence_interval.1 - 0.99).abs() < 1e-10);
+    }
+
+    #[test]
+    fn ser_evidence_entry_json_round_trip() {
+        let entry = make_test_evidence(DecisionDomain::DiffStrategy, "dirty_rows", 5);
+        let ser = SerEvidenceEntry::from_entry(&entry);
+        let json = serde_json::to_string(&ser).expect("serialize");
+        let parsed: SerEvidenceEntry = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(ser, parsed);
+    }
+
+    #[test]
+    fn evidence_interleaved_with_events_in_trace() {
+        // Verify that evidence and events can be interleaved and extracted independently.
+        let mut buf = Vec::new();
+        {
+            let mut writer =
+                EventTraceWriter::from_writer(&mut buf, "interleaved", (80, 24), None)
+                    .expect("create writer");
+
+            writer
+                .record(&Event::Key(KeyEvent::new(KeyCode::Char('a'))), 1_000)
+                .expect("key");
+            writer
+                .record_evidence(
+                    &make_test_evidence(DecisionDomain::DiffStrategy, "dirty_rows", 0),
+                    1_500,
+                )
+                .expect("evidence");
+            writer
+                .record(&Event::Key(KeyEvent::new(KeyCode::Char('b'))), 2_000)
+                .expect("key");
+            writer
+                .record_evidence(
+                    &make_test_evidence(DecisionDomain::VoiSampling, "sample", 1),
+                    2_500,
+                )
+                .expect("evidence");
+            writer
+                .record(&Event::Key(KeyEvent::new(KeyCode::Char('c'))), 3_000)
+                .expect("key");
+
+            writer.finish().expect("finish");
+        }
+
+        let trace = EventTraceReader::from_bytes(&buf).expect("read");
+
+        // Events (only actual Event types)
+        let events = trace.events_with_timestamps();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].0, Event::Key(KeyEvent::new(KeyCode::Char('a'))));
+        assert_eq!(events[1].0, Event::Key(KeyEvent::new(KeyCode::Char('b'))));
+        assert_eq!(events[2].0, Event::Key(KeyEvent::new(KeyCode::Char('c'))));
+
+        // Evidence (separate extraction)
+        let evidence = trace.evidence_entries();
+        assert_eq!(evidence.len(), 2);
+        assert_eq!(evidence[0].0.action, "dirty_rows");
+        assert_eq!(evidence[1].0.action, "sample");
     }
 }

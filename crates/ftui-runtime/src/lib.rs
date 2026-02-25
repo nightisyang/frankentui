@@ -152,7 +152,8 @@ pub use decision_core::{
 };
 #[cfg(feature = "event-trace")]
 pub use event_trace::{
-    EventReplayer, EventTraceReader, EventTraceWriter, TraceFile, TraceRecord,
+    EvidenceMismatch, EvidenceVerifier, EventReplayer, EventTraceReader, EventTraceWriter,
+    SerDecisionDomain, SerEvidenceEntry, SerEvidenceTerm, TraceFile, TraceRecord,
 };
 pub use effect_system::{
     effects_command_total, effects_executed_total, effects_subscription_total,
