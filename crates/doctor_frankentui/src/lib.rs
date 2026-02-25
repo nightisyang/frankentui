@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod adversarial_fixtures;
 pub mod capture;
 pub mod cli;
 pub mod composition_semantics;
@@ -9,6 +10,7 @@ pub mod error;
 pub mod fixture_taxonomy;
 pub mod harness;
 pub mod import;
+pub mod intent_inference;
 pub mod ir_normalize;
 pub mod keyseq;
 pub mod lowering;
