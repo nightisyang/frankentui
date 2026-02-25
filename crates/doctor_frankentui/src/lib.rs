@@ -16,6 +16,7 @@ pub mod seed;
 pub mod semantic_contract;
 pub mod suite;
 pub mod tape;
+pub mod trace;
 pub mod util;
 
 pub use cli::run_from_env;
