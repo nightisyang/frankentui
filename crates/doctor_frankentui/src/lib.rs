@@ -10,6 +10,7 @@ pub mod doctor;
 pub mod effect_canonical;
 pub mod error;
 pub mod fixture_taxonomy;
+pub mod gap_triage;
 pub mod harness;
 pub mod import;
 pub mod intent_inference;
