@@ -568,6 +568,7 @@ mod tests {
     use super::*;
     use crate::effect_canonical::{ClassificationConfidence, TriggerCondition};
     use crate::migration_ir::{IrNodeId, Provenance};
+    use std::collections::BTreeSet;
 
     fn make_effect(
         name: &str,
