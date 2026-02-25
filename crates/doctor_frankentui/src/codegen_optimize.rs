@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::code_emission::{EmissionPlan, EmittedFile, FileKind};
+use crate::code_emission::{EmissionPlan, FileKind};
 
 // ── Constants ──────────────────────────────────────────────────────────
 
@@ -297,15 +297,15 @@ fn pass_style_constant_folding(
         let mut value_to_names: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for line in &lines {
             let trimmed = line.trim();
-            if let Some(rest) = trimmed.strip_prefix("pub const ") {
-                if let Some(eq_pos) = rest.find(" = ") {
-                    let name = &rest[..eq_pos];
-                    let value = rest[eq_pos + 3..].trim_end_matches(';').trim();
-                    value_to_names
-                        .entry(value.to_string())
-                        .or_default()
-                        .push(name.to_string());
-                }
+            if let Some(rest) = trimmed.strip_prefix("pub const ")
+                && let Some(eq_pos) = rest.find(" = ")
+            {
+                let name = &rest[..eq_pos];
+                let value = rest[eq_pos + 3..].trim_end_matches(';').trim();
+                value_to_names
+                    .entry(value.to_string())
+                    .or_default()
+                    .push(name.to_string());
             }
         }
 
@@ -348,27 +348,27 @@ fn pass_style_constant_folding(
                         fold_comment_added = true;
                     }
                     // Replace with alias
-                    if let Some(rest) = trimmed.strip_prefix("pub const ") {
-                        if let Some(eq_pos) = rest.find(" = ") {
-                            let name = &rest[..eq_pos];
-                            let value = rest[eq_pos + 3..].trim_end_matches(';').trim();
-                            // Find the canonical name for this value
-                            for (val, names) in &duplicates {
-                                if val == value && names.contains(&name.to_string()) {
-                                    let type_and_name = name;
-                                    // Extract the type annotation
-                                    if let Some(colon_pos) = type_and_name.find(':') {
-                                        let just_name = &type_and_name[..colon_pos];
-                                        let type_ann = &type_and_name[colon_pos..];
-                                        let canonical = &names[0];
-                                        let canonical_name =
-                                            canonical.split(':').next().unwrap_or(canonical);
-                                        new_lines.push(format!(
-                                            "pub const {just_name}{type_ann} = {canonical_name};"
-                                        ));
-                                    }
-                                    break;
+                    if let Some(rest) = trimmed.strip_prefix("pub const ")
+                        && let Some(eq_pos) = rest.find(" = ")
+                    {
+                        let name = &rest[..eq_pos];
+                        let value = rest[eq_pos + 3..].trim_end_matches(';').trim();
+                        // Find the canonical name for this value
+                        for (val, names) in &duplicates {
+                            if val == value && names.contains(&name.to_string()) {
+                                let type_and_name = name;
+                                // Extract the type annotation
+                                if let Some(colon_pos) = type_and_name.find(':') {
+                                    let just_name = &type_and_name[..colon_pos];
+                                    let type_ann = &type_and_name[colon_pos..];
+                                    let canonical = &names[0];
+                                    let canonical_name =
+                                        canonical.split(':').next().unwrap_or(canonical);
+                                    new_lines.push(format!(
+                                        "pub const {just_name}{type_ann} = {canonical_name};"
+                                    ));
                                 }
+                                break;
                             }
                         }
                     }
@@ -609,8 +609,7 @@ fn snippet(content: &str, max_lines: usize) -> String {
 mod tests {
     use super::*;
     use crate::code_emission::{
-        CrateDependency, EmissionDiagnostic, EmissionStats, EmittedFile, FileKind,
-        MigrationManifest, ModuleDecl, ModuleDependency, ProjectScaffold,
+        EmissionStats, EmittedFile, FileKind, MigrationManifest, ProjectScaffold,
     };
 
     fn make_plan_with_files(files: Vec<(&str, &str, FileKind)>) -> EmissionPlan {
