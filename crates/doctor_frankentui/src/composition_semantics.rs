@@ -26,8 +26,8 @@ use regex_lite::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::migration_ir::{
-    make_node_id, ConditionKind, IrNodeId, PropDecl, Provenance, RenderCondition, SlotAccepts,
-    SlotDecl, ViewNode, ViewNodeKind, ViewTree,
+    ConditionKind, IrNodeId, PropDecl, Provenance, RenderCondition, SlotAccepts, SlotDecl,
+    ViewNode, ViewNodeKind, ViewTree, make_node_id,
 };
 use crate::tsx_parser::{
     ComponentDecl, ComponentKind, FileParse, JsxElement, ProjectParse, TypeDeclKind,
@@ -474,18 +474,18 @@ fn extract_state_refs_from_snippet(snippet: &str) -> Vec<String> {
     // Look for identifiers inside dependency arrays: [foo, bar, baz]
     let re = Regex::new(r"\[([^\]]+)\]").unwrap();
     let mut refs = Vec::new();
-    if let Some(caps) = re.captures(snippet) {
-        if let Some(inner) = caps.get(1) {
-            for part in inner.as_str().split(',') {
-                let trimmed = part.trim();
-                if !trimmed.is_empty()
-                    && trimmed
-                        .chars()
-                        .next()
-                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-                {
-                    refs.push(trimmed.to_string());
-                }
+    if let Some(caps) = re.captures(snippet)
+        && let Some(inner) = caps.get(1)
+    {
+        for part in inner.as_str().split(',') {
+            let trimmed = part.trim();
+            if !trimmed.is_empty()
+                && trimmed
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            {
+                refs.push(trimmed.to_string());
             }
         }
     }
@@ -629,11 +629,7 @@ fn extract_initial_value(args: &str) -> Option<String> {
     // Simple: take everything before first comma or end
     let end = trimmed.find(',').unwrap_or(trimmed.len());
     let val = trimmed[..end].trim().to_string();
-    if val.is_empty() {
-        None
-    } else {
-        Some(val)
-    }
+    if val.is_empty() { None } else { Some(val) }
 }
 
 /// Extract generic type parameter: `useState<number>(0)` → `number`.
