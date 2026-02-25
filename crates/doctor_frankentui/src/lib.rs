@@ -7,6 +7,7 @@ pub mod error;
 pub mod harness;
 pub mod import;
 pub mod keyseq;
+pub mod module_graph;
 pub mod profile;
 pub mod redact;
 pub mod report;
