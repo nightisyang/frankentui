@@ -746,4 +746,350 @@ mod tests {
             "expected tabs.switch debug event"
         );
     }
+
+    // --- bd-1lg.28: Selection & switching tests ---
+
+    #[test]
+    fn tabs_select_zero_count_resets() {
+        let mut state = TabsState {
+            active: 3,
+            offset: 2,
+        };
+        assert!(!state.select(0, 0));
+        assert_eq!(state.active, 0);
+        assert_eq!(state.offset, 0);
+    }
+
+    #[test]
+    fn tabs_select_same_tab_returns_false() {
+        let mut state = TabsState::default();
+        state.select(2, 5);
+        assert!(!state.select(2, 5));
+    }
+
+    #[test]
+    fn tabs_select_out_of_range_clamps() {
+        let mut state = TabsState::default();
+        assert!(state.select(100, 5));
+        assert_eq!(state.active, 4); // clamped to last
+    }
+
+    #[test]
+    fn tabs_select_updates_offset_when_active_before_offset() {
+        let mut state = TabsState {
+            active: 3,
+            offset: 3,
+        };
+        assert!(state.select(1, 5));
+        assert_eq!(state.active, 1);
+        assert_eq!(state.offset, 1); // offset scrolled back to active
+    }
+
+    #[test]
+    fn tabs_next_at_last_tab_returns_false() {
+        let mut state = TabsState::default();
+        state.select(4, 5);
+        assert!(!state.next(5));
+        assert_eq!(state.active, 4);
+    }
+
+    #[test]
+    fn tabs_next_empty_returns_false() {
+        let mut state = TabsState::default();
+        assert!(!state.next(0));
+    }
+
+    #[test]
+    fn tabs_previous_at_first_tab_returns_false() {
+        let mut state = TabsState::default();
+        assert!(!state.previous(5));
+        assert_eq!(state.active, 0);
+    }
+
+    #[test]
+    fn tabs_previous_empty_returns_false() {
+        let mut state = TabsState::default();
+        assert!(!state.previous(0));
+    }
+
+    #[test]
+    fn tabs_handle_key_unhandled_returns_false() {
+        let mut state = TabsState::default();
+        assert!(!state.handle_key(&KeyEvent::new(KeyCode::Enter), 3));
+        assert!(!state.handle_key(&KeyEvent::new(KeyCode::Escape), 3));
+        assert!(!state.handle_key(&KeyEvent::new(KeyCode::Up), 3));
+    }
+
+    #[test]
+    fn tabs_handle_key_number_at_exact_tab_count_returns_false() {
+        let mut state = TabsState::default();
+        // 3 tabs: valid are '1','2','3'; '4' is out of range
+        assert!(!state.handle_key(&KeyEvent::new(KeyCode::Char('4')), 3));
+    }
+
+    #[test]
+    fn tabs_handle_key_number_one_selects_first() {
+        let mut state = TabsState::default();
+        state.select(2, 5);
+        assert!(state.handle_key(&KeyEvent::new(KeyCode::Char('1')), 5));
+        assert_eq!(state.active, 0);
+    }
+
+    // --- Mouse handling tests ---
+
+    use crate::mouse::MouseResult;
+    use ftui_core::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    #[test]
+    fn tabs_mouse_click_selects() {
+        let mut state = TabsState::default();
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 0);
+        let hit = Some((HitId::new(1), HitRegion::Content, 2u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 5);
+        assert_eq!(result, MouseResult::Selected(2));
+        assert_eq!(state.active, 2);
+    }
+
+    #[test]
+    fn tabs_mouse_click_same_tab_activates() {
+        let mut state = TabsState::default();
+        state.select(2, 5);
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 0);
+        let hit = Some((HitId::new(1), HitRegion::Content, 2u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 5);
+        assert_eq!(result, MouseResult::Activated(2));
+    }
+
+    #[test]
+    fn tabs_mouse_click_wrong_id_ignored() {
+        let mut state = TabsState::default();
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 0);
+        let hit = Some((HitId::new(99), HitRegion::Content, 2u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 5);
+        assert_eq!(result, MouseResult::Ignored);
+    }
+
+    #[test]
+    fn tabs_mouse_right_click_ignored() {
+        let mut state = TabsState::default();
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Right), 5, 0);
+        let hit = Some((HitId::new(1), HitRegion::Content, 2u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 5);
+        assert_eq!(result, MouseResult::Ignored);
+    }
+
+    #[test]
+    fn tabs_mouse_click_out_of_range() {
+        let mut state = TabsState::default();
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 0);
+        let hit = Some((HitId::new(1), HitRegion::Content, 20u64));
+        let result = state.handle_mouse(&event, hit, HitId::new(1), 5);
+        assert_eq!(result, MouseResult::Ignored);
+    }
+
+    #[test]
+    fn tabs_mouse_no_hit_ignored() {
+        let mut state = TabsState::default();
+        let event = MouseEvent::new(MouseEventKind::Down(MouseButton::Left), 5, 0);
+        let result = state.handle_mouse(&event, None, HitId::new(1), 5);
+        assert_eq!(result, MouseResult::Ignored);
+    }
+
+    // --- Close active tests ---
+
+    #[test]
+    fn tabs_close_active_empty_returns_none() {
+        let mut tabs = Tabs::new(Vec::<Tab>::new());
+        let mut state = TabsState::default();
+        assert!(tabs.close_active(&mut state).is_none());
+    }
+
+    #[test]
+    fn tabs_close_active_last_remaining_resets_state() {
+        let mut tabs = Tabs::new(vec![Tab::new("Only").closable(true)]);
+        let mut state = TabsState::default();
+        let removed = tabs.close_active(&mut state);
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().title(), "Only");
+        assert!(tabs.tabs().is_empty());
+        assert_eq!(state.active, 0);
+        assert_eq!(state.offset, 0);
+    }
+
+    #[test]
+    fn tabs_close_active_middle_shifts_active() {
+        let mut tabs = Tabs::new(vec![
+            Tab::new("A"),
+            Tab::new("B").closable(true),
+            Tab::new("C"),
+        ]);
+        let mut state = TabsState::default();
+        state.select(1, 3); // select B
+        let removed = tabs.close_active(&mut state);
+        assert_eq!(removed.unwrap().title(), "B");
+        assert_eq!(tabs.tabs().len(), 2);
+        // Active should stay at 1 (now "C"), or adjust if at end
+        assert!(state.active < tabs.tabs().len());
+    }
+
+    #[test]
+    fn tabs_close_active_at_end_moves_active_back() {
+        let mut tabs = Tabs::new(vec![
+            Tab::new("A"),
+            Tab::new("B"),
+            Tab::new("C").closable(true),
+        ]);
+        let mut state = TabsState::default();
+        state.select(2, 3); // select C (last)
+        tabs.close_active(&mut state);
+        assert_eq!(tabs.tabs().len(), 2);
+        assert_eq!(state.active, 1); // moved back to B
+    }
+
+    // --- Reorder tests ---
+
+    #[test]
+    fn tabs_move_active_left_at_boundary_returns_false() {
+        let mut tabs = Tabs::new(vec![Tab::new("A"), Tab::new("B")]);
+        let mut state = TabsState::default(); // active = 0
+        assert!(!tabs.move_active_left(&mut state));
+    }
+
+    #[test]
+    fn tabs_move_active_right_at_boundary_returns_false() {
+        let mut tabs = Tabs::new(vec![Tab::new("A"), Tab::new("B")]);
+        let mut state = TabsState::default();
+        state.select(1, 2); // active = last
+        assert!(!tabs.move_active_right(&mut state));
+    }
+
+    #[test]
+    fn tabs_move_active_single_tab_returns_false() {
+        let mut tabs = Tabs::new(vec![Tab::new("Only")]);
+        let mut state = TabsState::default();
+        assert!(!tabs.move_active_left(&mut state));
+        assert!(!tabs.move_active_right(&mut state));
+    }
+
+    // --- Render tests ---
+
+    #[test]
+    fn tabs_render_empty() {
+        let tabs = Tabs::new(Vec::<Tab>::new());
+        let mut state = TabsState::default();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 1, &mut pool);
+        StatefulWidget::render(&tabs, Rect::new(0, 0, 20, 1), &mut frame, &mut state);
+        // Should not panic; row should be blank
+        let row = row_text(&frame, 0);
+        assert_eq!(row.trim(), "");
+    }
+
+    #[test]
+    fn tabs_render_single_tab() {
+        let tabs = Tabs::new(vec![Tab::new("Solo")]);
+        let mut state = TabsState::default();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 1, &mut pool);
+        StatefulWidget::render(&tabs, Rect::new(0, 0, 20, 1), &mut frame, &mut state);
+        let row = row_text(&frame, 0);
+        assert!(row.contains("[Solo]"));
+    }
+
+    #[test]
+    fn tabs_render_zero_area() {
+        let tabs = Tabs::new(vec![Tab::new("A"), Tab::new("B")]);
+        let mut state = TabsState::default();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 1, &mut pool);
+        // Zero width area
+        StatefulWidget::render(&tabs, Rect::new(0, 0, 0, 1), &mut frame, &mut state);
+        // Should not panic
+    }
+
+    #[test]
+    fn tabs_render_closable_shows_marker() {
+        let tabs = Tabs::new(vec![Tab::new("File").closable(true)]);
+        let mut state = TabsState::default();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 1, &mut pool);
+        StatefulWidget::render(&tabs, Rect::new(0, 0, 20, 1), &mut frame, &mut state);
+        let row = row_text(&frame, 0);
+        assert!(row.contains("x"), "closable tab should show close marker");
+    }
+
+    #[test]
+    fn tabs_render_active_tab_bracketed() {
+        let tabs = Tabs::new(vec![Tab::new("A"), Tab::new("B"), Tab::new("C")]);
+        let mut state = TabsState::default();
+        state.select(1, 3);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 1, &mut pool);
+        StatefulWidget::render(&tabs, Rect::new(0, 0, 30, 1), &mut frame, &mut state);
+        let row = row_text(&frame, 0);
+        // Active tab B should be bracketed, A and C should not
+        assert!(row.contains("[B]"), "active tab should be bracketed");
+        assert!(row.contains(" A "), "inactive tab A should be space-padded");
+        assert!(row.contains(" C "), "inactive tab C should be space-padded");
+    }
+
+    #[test]
+    fn tabs_no_overflow_when_all_fit() {
+        let tabs = Tabs::new(vec![Tab::new("A"), Tab::new("B")]);
+        let mut state = TabsState::default();
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(30, 1, &mut pool);
+        StatefulWidget::render(&tabs, Rect::new(0, 0, 30, 1), &mut frame, &mut state);
+        let row = row_text(&frame, 0);
+        // Should not contain overflow markers
+        assert!(!row.starts_with('<'), "no left overflow marker expected");
+        assert!(!row.ends_with('>'), "no right overflow marker expected");
+    }
+
+    // --- Tab struct tests ---
+
+    #[test]
+    fn tab_new_defaults() {
+        let tab = Tab::new("test");
+        assert_eq!(tab.title(), "test");
+        assert!(!tab.is_closable());
+    }
+
+    #[test]
+    fn tab_closable_builder() {
+        let tab = Tab::new("temp").closable(true);
+        assert!(tab.is_closable());
+    }
+
+    // --- Widget trait stateless render ---
+
+    #[test]
+    fn tabs_widget_stateless_render() {
+        let tabs = Tabs::new(vec![Tab::new("X"), Tab::new("Y")]);
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(20, 1, &mut pool);
+        Widget::render(&tabs, Rect::new(0, 0, 20, 1), &mut frame);
+        let row = row_text(&frame, 0);
+        // Default state: active=0, so X should be bracketed
+        assert!(row.contains("[X]"));
+    }
+
+    // --- Overflow visible range tests ---
+
+    #[test]
+    fn tabs_overflow_both_sides() {
+        let tabs = Tabs::new((0..10).map(|i| Tab::new(format!("Tab{i}"))));
+        let mut state = TabsState::default();
+        state.select(5, 10); // middle tab
+        let mut pool = GraphemePool::new();
+        let mut frame = Frame::new(15, 1, &mut pool);
+        StatefulWidget::render(&tabs, Rect::new(0, 0, 15, 1), &mut frame, &mut state);
+        let row = row_text(&frame, 0);
+        // Should show both overflow markers
+        assert!(row.starts_with('<'), "expected left overflow marker");
+        assert!(
+            row.trim_end().ends_with('>'),
+            "expected right overflow marker"
+        );
+    }
 }
