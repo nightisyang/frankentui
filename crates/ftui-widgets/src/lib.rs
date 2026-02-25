@@ -179,6 +179,7 @@ pub mod paginator;
 pub mod panel;
 /// Multi-line styled text paragraph widget.
 pub mod paragraph;
+pub mod popover;
 pub mod pretty;
 pub mod progress;
 pub mod rule;
