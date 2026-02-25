@@ -2276,4 +2276,875 @@ mod tests {
             serde_json::from_str(&serialized).expect("should deserialize back");
         assert_eq!(model, deserialized, "round-trip must be stable");
     }
+
+    // -----------------------------------------------------------------------
+    // bd-3bxhj.1.6: Additional comprehensive tests
+    // -----------------------------------------------------------------------
+
+    // --- Malformed JSON rejection ---
+
+    #[test]
+    fn malformed_json_fails_gracefully_for_semantic_contract() {
+        let result = super::SemanticEquivalenceContract::parse_and_validate("not json at all");
+        assert!(
+            matches!(result, Err(SemanticContractError::Parse(_))),
+            "malformed JSON must produce Parse error, got: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn malformed_json_fails_gracefully_for_policy_matrix() {
+        let result = super::TransformationPolicyMatrix::parse_and_validate("{truncated");
+        assert!(
+            matches!(result, Err(SemanticContractError::Parse(_))),
+            "malformed JSON must produce Parse error"
+        );
+    }
+
+    #[test]
+    fn malformed_json_fails_gracefully_for_evidence_manifest() {
+        let result = super::EvidenceManifest::parse_and_validate("[1,2,3]");
+        assert!(
+            matches!(result, Err(SemanticContractError::Parse(_))),
+            "wrong JSON shape must produce Parse error"
+        );
+    }
+
+    #[test]
+    fn malformed_json_fails_gracefully_for_confidence_model() {
+        let result = super::ConfidenceModel::parse_and_validate("");
+        assert!(
+            matches!(result, Err(SemanticContractError::Parse(_))),
+            "empty string must produce Parse error"
+        );
+    }
+
+    // --- Schema version rejection ---
+
+    #[test]
+    fn semantic_contract_rejects_wrong_schema_version() {
+        let mut contract = load().expect("builtin contract should parse");
+        contract.schema_version = "wrong-version-v99".to_string();
+        let raw = serde_json::to_string(&contract).expect("should serialize");
+        let error =
+            super::SemanticEquivalenceContract::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("unsupported schema_version")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn policy_matrix_rejects_wrong_schema_version() {
+        let mut matrix = load_policy().expect("builtin policy matrix should parse");
+        matrix.schema_version = "wrong-version-v99".to_string();
+        let raw = serde_json::to_string(&matrix).expect("should serialize");
+        let error =
+            super::TransformationPolicyMatrix::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("unsupported")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn evidence_manifest_rejects_wrong_schema_version() {
+        let mut manifest = load_manifest().expect("builtin evidence manifest should parse");
+        manifest.schema_version = "wrong-version-v99".to_string();
+        let raw = serde_json::to_string(&manifest).expect("should serialize");
+        let error = super::EvidenceManifest::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("unsupported")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn confidence_model_rejects_wrong_schema_version() {
+        let mut model = load_confidence().expect("builtin confidence model should parse");
+        model.schema_version = "wrong-version-v99".to_string();
+        let raw = serde_json::to_string(&model).expect("should serialize");
+        let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("unsupported")),
+            "unexpected error: {error}"
+        );
+    }
+
+    // --- Semantic contract edge cases ---
+
+    #[test]
+    fn semantic_contract_rejects_empty_clauses() {
+        let mut contract = load().expect("builtin contract should parse");
+        contract.clauses.clear();
+        let raw = serde_json::to_string(&contract).expect("should serialize");
+        let error =
+            super::SemanticEquivalenceContract::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("clauses must not be empty")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn semantic_contract_rejects_duplicate_clause_ids() {
+        let mut contract = load().expect("builtin contract should parse");
+        if contract.clauses.len() >= 2 {
+            contract.clauses[1].clause_id = contract.clauses[0].clause_id.clone();
+            let raw = serde_json::to_string(&contract).expect("should serialize");
+            let error =
+                super::SemanticEquivalenceContract::parse_and_validate(&raw).expect_err("must fail");
+            assert!(
+                matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("duplicate clause_id")),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn semantic_contract_rejects_empty_tie_breakers() {
+        let mut contract = load().expect("builtin contract should parse");
+        contract.deterministic_tie_breakers.clear();
+        let raw = serde_json::to_string(&contract).expect("should serialize");
+        let error =
+            super::SemanticEquivalenceContract::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("deterministic_tie_breakers")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn semantic_contract_rejects_duplicate_tie_break_priority() {
+        let mut contract = load().expect("builtin contract should parse");
+        if contract.deterministic_tie_breakers.len() >= 2 {
+            contract.deterministic_tie_breakers[1].priority =
+                contract.deterministic_tie_breakers[0].priority;
+            let raw = serde_json::to_string(&contract).expect("should serialize");
+            let error =
+                super::SemanticEquivalenceContract::parse_and_validate(&raw).expect_err("must fail");
+            assert!(
+                matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("duplicate tie-break priority")),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn semantic_contract_rejects_empty_contract_id() {
+        let mut contract = load().expect("builtin contract should parse");
+        contract.contract_id = String::new();
+        let raw = serde_json::to_string(&contract).expect("should serialize");
+        let error =
+            super::SemanticEquivalenceContract::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("contract_id")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn semantic_contract_clause_lookup_returns_correct_clause() {
+        let contract = load().expect("builtin contract should parse");
+        for clause in &contract.clauses {
+            let found = contract.clause(&clause.clause_id).expect("clause must exist");
+            assert_eq!(found.title, clause.title);
+            assert_eq!(found.severity, clause.severity);
+        }
+    }
+
+    #[test]
+    fn semantic_contract_clauses_for_validator_returns_correct_count() {
+        let contract = load().expect("builtin contract should parse");
+        for (validator_id, clause_ids) in &contract.validator_clause_map {
+            let clauses = contract.clauses_for_validator(validator_id);
+            assert_eq!(
+                clauses.len(),
+                clause_ids.len(),
+                "validator '{}' should map to {} clauses",
+                validator_id,
+                clause_ids.len()
+            );
+        }
+    }
+
+    // --- Policy matrix edge cases ---
+
+    #[test]
+    fn policy_matrix_rejects_empty_policy_id() {
+        let mut matrix = load_policy().expect("builtin policy matrix should parse");
+        matrix.policy_id = String::new();
+        let raw = serde_json::to_string(&matrix).expect("should serialize");
+        let error =
+            super::TransformationPolicyMatrix::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("policy_id")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn policy_matrix_rejects_missing_required_category() {
+        let mut matrix = load_policy().expect("builtin policy matrix should parse");
+        matrix.categories.retain(|c| c.category_id != "state");
+        // Also remove catalog entries and policy cells referencing "state"
+        matrix.construct_catalog.retain(|e| e.category_id != "state");
+        let state_sigs: std::collections::BTreeSet<_> = matrix
+            .policy_cells
+            .iter()
+            .filter(|c| {
+                matrix
+                    .construct_catalog
+                    .iter()
+                    .all(|e| e.construct_signature != c.construct_signature)
+            })
+            .map(|c| c.construct_signature.clone())
+            .collect();
+        matrix
+            .policy_cells
+            .retain(|c| !state_sigs.contains(&c.construct_signature));
+        let raw = serde_json::to_string(&matrix).expect("should serialize");
+        let error =
+            super::TransformationPolicyMatrix::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("required policy category")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn policy_for_construct_returns_correct_cell() {
+        let matrix = load_policy().expect("builtin policy matrix should parse");
+        for cell in &matrix.policy_cells {
+            let found = matrix
+                .policy_for_construct(&cell.construct_signature)
+                .expect("construct must be found");
+            assert_eq!(found.handling_class, cell.handling_class);
+            assert_eq!(found.rationale, cell.rationale);
+        }
+    }
+
+    #[test]
+    fn policy_for_construct_returns_none_for_unknown() {
+        let matrix = load_policy().expect("builtin policy matrix should parse");
+        assert!(
+            matrix.policy_for_construct("nonexistent_construct").is_none(),
+            "unknown construct should return None"
+        );
+    }
+
+    #[test]
+    fn planner_rows_are_sorted_alphabetically() {
+        let matrix = load_policy().expect("builtin policy matrix should parse");
+        let rows = matrix.planner_rows();
+        for window in rows.windows(2) {
+            assert!(
+                window[0].construct_signature <= window[1].construct_signature,
+                "planner rows must be sorted: '{}' > '{}'",
+                window[0].construct_signature,
+                window[1].construct_signature
+            );
+        }
+    }
+
+    #[test]
+    fn certification_rows_have_clause_links_and_evidence() {
+        let matrix = load_policy().expect("builtin policy matrix should parse");
+        let rows = matrix.certification_rows();
+        for row in &rows {
+            assert!(
+                !row.semantic_clause_links.is_empty(),
+                "construct '{}' must have semantic clause links",
+                row.construct_signature
+            );
+            assert!(
+                !row.certification_evidence.is_empty(),
+                "construct '{}' must have certification evidence",
+                row.construct_signature
+            );
+        }
+    }
+
+    // --- Evidence manifest: no repo_url or local_path ---
+
+    #[test]
+    fn evidence_manifest_rejects_missing_source_location() {
+        let mut manifest = load_manifest().expect("builtin evidence manifest should parse");
+        manifest.source_fingerprint.repo_url = None;
+        manifest.source_fingerprint.local_path = None;
+        let raw = serde_json::to_string(&manifest).expect("should serialize");
+        let error = super::EvidenceManifest::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("repo_url or local_path")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn evidence_manifest_rejects_empty_parser_versions() {
+        let mut manifest = load_manifest().expect("builtin evidence manifest should parse");
+        manifest.source_fingerprint.parser_versions.clear();
+        let raw = serde_json::to_string(&manifest).expect("should serialize");
+        let error = super::EvidenceManifest::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("parser_versions")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn evidence_manifest_rejects_duplicate_stage_ids() {
+        let mut manifest = load_manifest().expect("builtin evidence manifest should parse");
+        if manifest.stages.len() >= 2 {
+            manifest.stages[1].stage_id = manifest.stages[0].stage_id.clone();
+            manifest.stages[1].stage_index = 1; // Keep consecutive
+            let raw = serde_json::to_string(&manifest).expect("should serialize");
+            let error = super::EvidenceManifest::parse_and_validate(&raw).expect_err("must fail");
+            assert!(
+                matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("duplicate stage_id")),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn evidence_manifest_rejects_empty_code_hash() {
+        let mut manifest = load_manifest().expect("builtin evidence manifest should parse");
+        manifest.generated_code_fingerprint.code_hash = String::new();
+        let raw = serde_json::to_string(&manifest).expect("should serialize");
+        let error = super::EvidenceManifest::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("code_hash")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn evidence_manifest_rejects_empty_stages() {
+        let mut manifest = load_manifest().expect("builtin evidence manifest should parse");
+        manifest.stages.clear();
+        let raw = serde_json::to_string(&manifest).expect("should serialize");
+        let error = super::EvidenceManifest::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("stages must not be empty")),
+            "unexpected error: {error}"
+        );
+    }
+
+    // --- Confidence model boundary threshold tests ---
+
+    #[test]
+    fn decision_at_exact_auto_approve_boundary() {
+        let model = load_confidence().expect("builtin confidence model should parse");
+        let threshold = model.decision_boundaries.auto_approve_threshold;
+        let posterior = super::BayesianPosterior {
+            alpha: 1.0,
+            beta: 1.0,
+            mean: threshold,
+            variance: 0.01,
+            credible_lower: threshold - 0.05,
+            credible_upper: threshold + 0.05,
+        };
+        let decision = model.decide(&posterior);
+        assert_eq!(
+            decision,
+            super::MigrationDecision::AutoApprove,
+            "mean exactly at auto_approve threshold ({threshold}) should auto-approve"
+        );
+    }
+
+    #[test]
+    fn decision_just_below_auto_approve_boundary() {
+        let model = load_confidence().expect("builtin confidence model should parse");
+        let threshold = model.decision_boundaries.auto_approve_threshold;
+        let posterior = super::BayesianPosterior {
+            alpha: 1.0,
+            beta: 1.0,
+            mean: threshold - 0.001,
+            variance: 0.01,
+            credible_lower: threshold - 0.1,
+            credible_upper: threshold - 0.001,
+        };
+        let decision = model.decide(&posterior);
+        assert_eq!(
+            decision,
+            super::MigrationDecision::HumanReview,
+            "mean just below auto_approve should be human_review"
+        );
+    }
+
+    #[test]
+    fn decision_at_exact_human_review_lower_boundary() {
+        let model = load_confidence().expect("builtin confidence model should parse");
+        let threshold = model.decision_boundaries.human_review_lower;
+        let posterior = super::BayesianPosterior {
+            alpha: 1.0,
+            beta: 1.0,
+            mean: threshold,
+            variance: 0.01,
+            credible_lower: threshold - 0.05,
+            credible_upper: threshold + 0.05,
+        };
+        let decision = model.decide(&posterior);
+        assert_eq!(
+            decision,
+            super::MigrationDecision::HumanReview,
+            "mean at human_review_lower ({threshold}) should be human_review"
+        );
+    }
+
+    #[test]
+    fn decision_just_below_human_review_lower_boundary() {
+        let model = load_confidence().expect("builtin confidence model should parse");
+        let threshold = model.decision_boundaries.human_review_lower;
+        let posterior = super::BayesianPosterior {
+            alpha: 1.0,
+            beta: 1.0,
+            mean: threshold - 0.001,
+            variance: 0.01,
+            credible_lower: threshold - 0.1,
+            credible_upper: threshold - 0.001,
+        };
+        let decision = model.decide(&posterior);
+        assert_eq!(
+            decision,
+            super::MigrationDecision::Reject,
+            "mean just below human_review_lower should be reject"
+        );
+    }
+
+    #[test]
+    fn decision_at_exact_reject_threshold() {
+        let model = load_confidence().expect("builtin confidence model should parse");
+        let threshold = model.decision_boundaries.reject_threshold;
+        let posterior = super::BayesianPosterior {
+            alpha: 1.0,
+            beta: 1.0,
+            mean: threshold,
+            variance: 0.01,
+            credible_lower: threshold - 0.05,
+            credible_upper: threshold + 0.05,
+        };
+        let decision = model.decide(&posterior);
+        assert_eq!(
+            decision,
+            super::MigrationDecision::Reject,
+            "mean at reject_threshold ({threshold}) should be reject"
+        );
+    }
+
+    #[test]
+    fn decision_at_exact_hard_reject_threshold() {
+        let model = load_confidence().expect("builtin confidence model should parse");
+        let threshold = model.decision_boundaries.hard_reject_threshold;
+        let posterior = super::BayesianPosterior {
+            alpha: 1.0,
+            beta: 1.0,
+            mean: threshold,
+            variance: 0.01,
+            credible_lower: threshold - 0.05,
+            credible_upper: threshold + 0.05,
+        };
+        let decision = model.decide(&posterior);
+        assert_eq!(
+            decision,
+            super::MigrationDecision::HardReject,
+            "mean at hard_reject ({threshold}) should be hard_reject"
+        );
+    }
+
+    #[test]
+    fn decision_at_exact_rollback_trigger() {
+        let model = load_confidence().expect("builtin confidence model should parse");
+        let threshold = model.decision_boundaries.rollback_trigger;
+        let posterior = super::BayesianPosterior {
+            alpha: 1.0,
+            beta: 1.0,
+            mean: threshold,
+            variance: 0.01,
+            credible_lower: 0.0,
+            credible_upper: threshold + 0.05,
+        };
+        let decision = model.decide(&posterior);
+        assert_eq!(
+            decision,
+            super::MigrationDecision::Rollback,
+            "mean at rollback_trigger ({threshold}) should be rollback"
+        );
+    }
+
+    #[test]
+    fn decision_below_rollback_trigger_is_conservative_fallback() {
+        let model = load_confidence().expect("builtin confidence model should parse");
+        let posterior = super::BayesianPosterior {
+            alpha: 1.0,
+            beta: 1.0,
+            mean: 0.001,
+            variance: 0.0001,
+            credible_lower: 0.0,
+            credible_upper: 0.01,
+        };
+        let decision = model.decide(&posterior);
+        assert_eq!(
+            decision,
+            super::MigrationDecision::ConservativeFallback,
+            "mean far below rollback_trigger should be conservative_fallback"
+        );
+    }
+
+    // --- Confidence model: expected loss boundary override ---
+
+    #[test]
+    fn expected_loss_respects_conservative_fallback_override() {
+        let model = load_confidence().expect("builtin confidence model should parse");
+        // Very low posterior mean => boundary says ConservativeFallback, EL might prefer something else
+        let posterior = super::BayesianPosterior {
+            alpha: 1.0,
+            beta: 100.0,
+            mean: 0.01,
+            variance: 0.0001,
+            credible_lower: 0.0,
+            credible_upper: 0.03,
+        };
+        let result = model.expected_loss_decision(&posterior, None, None);
+        assert_eq!(
+            result.decision,
+            super::MigrationDecision::ConservativeFallback,
+            "conservative_fallback boundary override must take precedence"
+        );
+    }
+
+    #[test]
+    fn expected_loss_respects_hard_reject_override() {
+        let model = load_confidence().expect("builtin confidence model should parse");
+        let db = &model.decision_boundaries;
+        // Mean in hard_reject zone
+        let mean = (db.hard_reject_threshold + db.reject_threshold) / 2.0;
+        let posterior = super::BayesianPosterior {
+            alpha: 1.0,
+            beta: 1.0,
+            mean,
+            variance: 0.01,
+            credible_lower: mean - 0.05,
+            credible_upper: mean + 0.05,
+        };
+        let result = model.expected_loss_decision(&posterior, None, None);
+        assert_eq!(
+            result.decision,
+            super::MigrationDecision::HardReject,
+            "hard_reject boundary override must take precedence"
+        );
+    }
+
+    // --- Determinism checks ---
+
+    #[test]
+    fn posterior_computation_is_deterministic_across_calls() {
+        let model = load_confidence().expect("builtin confidence model should parse");
+        let results: Vec<_> = (0..10)
+            .map(|_| model.compute_posterior(42, 8))
+            .collect();
+        for (i, result) in results.iter().enumerate().skip(1) {
+            assert_eq!(
+                results[0], *result,
+                "posterior computation must be deterministic (mismatch at iteration {i})"
+            );
+        }
+    }
+
+    #[test]
+    fn decision_is_deterministic_across_calls() {
+        let model = load_confidence().expect("builtin confidence model should parse");
+        let posterior = model.compute_posterior(42, 8);
+        let decisions: Vec<_> = (0..10)
+            .map(|_| model.decide(&posterior))
+            .collect();
+        for (i, decision) in decisions.iter().enumerate().skip(1) {
+            assert_eq!(
+                decisions[0], *decision,
+                "decision must be deterministic (mismatch at iteration {i})"
+            );
+        }
+    }
+
+    #[test]
+    fn expected_loss_decision_is_deterministic_across_calls() {
+        let model = load_confidence().expect("builtin confidence model should parse");
+        let posterior = model.compute_posterior(42, 8);
+        let results: Vec<_> = (0..10)
+            .map(|_| model.expected_loss_decision(&posterior, None, None))
+            .collect();
+        for (i, result) in results.iter().enumerate().skip(1) {
+            assert_eq!(
+                results[0].decision, result.decision,
+                "expected_loss_decision must be deterministic (mismatch at iteration {i})"
+            );
+            assert_eq!(results[0].rationale, result.rationale);
+        }
+    }
+
+    #[test]
+    fn evidence_manifest_lineage_is_deterministic() {
+        let manifest = load_manifest().expect("builtin evidence manifest should parse");
+        let lineage_a = manifest.stage_lineage();
+        let lineage_b = manifest.stage_lineage();
+        assert_eq!(lineage_a, lineage_b, "lineage must be deterministic");
+    }
+
+    #[test]
+    fn evidence_manifest_jsonl_is_deterministic() {
+        let manifest = load_manifest().expect("builtin evidence manifest should parse");
+        let jsonl_a = manifest.evidence_jsonl();
+        let jsonl_b = manifest.evidence_jsonl();
+        assert_eq!(jsonl_a, jsonl_b, "JSONL output must be deterministic");
+    }
+
+    #[test]
+    fn planner_rows_are_deterministic() {
+        let matrix = load_policy().expect("builtin policy matrix should parse");
+        let rows_a = matrix.planner_rows();
+        let rows_b = matrix.planner_rows();
+        assert_eq!(rows_a, rows_b, "planner rows must be deterministic");
+    }
+
+    #[test]
+    fn certification_rows_are_deterministic() {
+        let matrix = load_policy().expect("builtin policy matrix should parse");
+        let rows_a = matrix.certification_rows();
+        let rows_b = matrix.certification_rows();
+        assert_eq!(rows_a, rows_b, "certification rows must be deterministic");
+    }
+
+    // --- Confidence model: additional validation edge cases ---
+
+    #[test]
+    fn invalid_confidence_model_rejects_negative_beta() {
+        let mut model = load_confidence().expect("builtin confidence model should parse");
+        model.prior_config.semantic_pass_rate_beta = -1.0;
+        let raw = serde_json::to_string(&model).expect("should serialize");
+        let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("alpha and beta must be > 0")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_confidence_model_rejects_zero_performance_variance() {
+        let mut model = load_confidence().expect("builtin confidence model should parse");
+        model.prior_config.performance_variance_prior = 0.0;
+        let raw = serde_json::to_string(&model).expect("should serialize");
+        let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("performance_variance_prior")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_confidence_model_rejects_negative_penalty() {
+        let mut model = load_confidence().expect("builtin confidence model should parse");
+        model.prior_config.unsupported_feature_penalty_per_item = -1.0;
+        let raw = serde_json::to_string(&model).expect("should serialize");
+        let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("unsupported_feature_penalty_per_item")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_confidence_model_rejects_empty_likelihood_sources() {
+        let mut model = load_confidence().expect("builtin confidence model should parse");
+        model.likelihood_sources.clear();
+        let raw = serde_json::to_string(&model).expect("should serialize");
+        let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("likelihood_sources must not be empty")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_confidence_model_rejects_duplicate_source_id() {
+        let mut model = load_confidence().expect("builtin confidence model should parse");
+        if model.likelihood_sources.len() >= 2 {
+            model.likelihood_sources[1].source_id =
+                model.likelihood_sources[0].source_id.clone();
+            let raw = serde_json::to_string(&model).expect("should serialize");
+            let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
+            assert!(
+                matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("duplicate likelihood source_id")),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_confidence_model_rejects_weight_out_of_range() {
+        let mut model = load_confidence().expect("builtin confidence model should parse");
+        if !model.likelihood_sources.is_empty() {
+            model.likelihood_sources[0].weight = 1.5;
+            let raw = serde_json::to_string(&model).expect("should serialize");
+            let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
+            assert!(
+                matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("weight must be in")),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_confidence_model_rejects_boundary_out_of_range() {
+        let mut model = load_confidence().expect("builtin confidence model should parse");
+        model.decision_boundaries.auto_approve_threshold = 1.5;
+        let raw = serde_json::to_string(&model).expect("should serialize");
+        let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("must be in [0.0, 1.0]")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_confidence_model_rejects_empty_decision_actions() {
+        let mut model = load_confidence().expect("builtin confidence model should parse");
+        model.decision_space.actions.clear();
+        let raw = serde_json::to_string(&model).expect("should serialize");
+        let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("actions must not be empty")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_confidence_model_rejects_missing_required_action() {
+        let mut model = load_confidence().expect("builtin confidence model should parse");
+        model.decision_space.actions.retain(|a| a != "reject");
+        let raw = serde_json::to_string(&model).expect("should serialize");
+        let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("reject")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_confidence_model_rejects_zero_calibration_samples() {
+        let mut model = load_confidence().expect("builtin confidence model should parse");
+        model.calibration.min_calibration_samples = 0;
+        let raw = serde_json::to_string(&model).expect("should serialize");
+        let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("min_calibration_samples")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_confidence_model_rejects_zero_recalibration_drift() {
+        let mut model = load_confidence().expect("builtin confidence model should parse");
+        model.calibration.recalibration_trigger_drift = 0.0;
+        let raw = serde_json::to_string(&model).expect("should serialize");
+        let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("recalibration_trigger_drift")),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_confidence_model_rejects_duplicate_fallback_trigger() {
+        let mut model = load_confidence().expect("builtin confidence model should parse");
+        if model.fallback_triggers.len() >= 2 {
+            model.fallback_triggers[1].trigger_id =
+                model.fallback_triggers[0].trigger_id.clone();
+            let raw = serde_json::to_string(&model).expect("should serialize");
+            let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
+            assert!(
+                matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("duplicate fallback trigger_id")),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_confidence_model_rejects_invalid_fallback_action() {
+        let mut model = load_confidence().expect("builtin confidence model should parse");
+        if !model.fallback_triggers.is_empty() {
+            model.fallback_triggers[0].action = "invalid_action".to_string();
+            let raw = serde_json::to_string(&model).expect("should serialize");
+            let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
+            assert!(
+                matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("not in decision space")),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_confidence_model_rejects_accept_incorrect_zero() {
+        let mut model = load_confidence().expect("builtin confidence model should parse");
+        model.loss_matrix.accept_incorrect = 0.0;
+        let raw = serde_json::to_string(&model).expect("should serialize");
+        let error = super::ConfidenceModel::parse_and_validate(&raw).expect_err("must fail");
+        assert!(
+            matches!(error, SemanticContractError::Validation(ref msg) if msg.contains("accept_incorrect must be > 0")),
+            "unexpected error: {error}"
+        );
+    }
+
+    // --- Cross-contract consistency ---
+
+    #[test]
+    fn all_builtin_contracts_parse_and_validate_consistently() {
+        let contract = load().expect("semantic contract should parse");
+        let matrix = load_policy().expect("policy matrix should parse");
+        let manifest = load_manifest().expect("evidence manifest should parse");
+        let model = load_confidence().expect("confidence model should parse");
+
+        // Verify they all have non-empty identifiers
+        assert!(!contract.contract_id.is_empty());
+        assert!(!matrix.policy_id.is_empty());
+        assert!(!manifest.manifest_id.is_empty());
+        assert!(!model.model_id.is_empty());
+
+        // Policy matrix clause links must reference valid semantic contract clauses
+        let clause_ids: std::collections::BTreeSet<_> = contract
+            .clauses
+            .iter()
+            .map(|c| c.clause_id.as_str())
+            .collect();
+        for cell in &matrix.policy_cells {
+            for clause_ref in &cell.semantic_clause_links {
+                assert!(
+                    clause_ids.contains(clause_ref.as_str()),
+                    "policy cell '{}' references clause '{}' which doesn't exist in semantic contract",
+                    cell.construct_signature,
+                    clause_ref
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn evidence_manifest_covered_clauses_match_semantic_contract() {
+        let contract = load().expect("semantic contract should parse");
+        let manifest = load_manifest().expect("evidence manifest should parse");
+
+        let clause_ids: std::collections::BTreeSet<_> = contract
+            .clauses
+            .iter()
+            .map(|c| c.clause_id.as_str())
+            .collect();
+        for covered in &manifest.certification_verdict.semantic_clause_coverage.covered {
+            assert!(
+                clause_ids.contains(covered.as_str()),
+                "covered clause '{}' must exist in semantic contract",
+                covered
+            );
+        }
+    }
 }
