@@ -34,6 +34,7 @@ pub mod cost_model;
 pub mod debug_trace;
 pub mod decision_core;
 pub mod diff_evidence;
+pub mod effect_system;
 pub mod eprocess_throttle;
 pub mod evidence_bridges;
 pub mod evidence_sink;
@@ -146,6 +147,11 @@ pub use cost_model::{
 pub use decision_core::{
     Action as DecisionAction, Decision, DecisionCore, Outcome as DecisionOutcome, Posterior,
     State as DecisionState, argmin_expected_loss, second_best_loss,
+};
+pub use effect_system::{
+    effects_command_total, effects_executed_total, effects_subscription_total,
+    record_command_effect, record_subscription_start, record_subscription_stop,
+    trace_command_effect,
 };
 pub use eprocess_throttle::{
     EProcessThrottle, ThrottleConfig, ThrottleDecision, ThrottleLog, ThrottleStats,

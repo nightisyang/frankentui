@@ -3526,7 +3526,10 @@ impl<M: Model> Program<M, ftui_tty::TtyBackend, Stdout> {
             features,
             intercept_signals: config.intercept_signals,
         };
+        #[cfg(unix)]
         let backend = ftui_tty::TtyBackend::open(0, 0, options)?;
+        #[cfg(not(unix))]
+        let backend = ftui_tty::TtyBackend::new(0, 0);
 
         let writer = TerminalWriter::with_diff_config(
             io::stdout(),
@@ -3667,8 +3670,7 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
                         }
 
                         // Compute skipped screens for tracing.
-                        let skipped_count = all_screens_count
-                            .saturating_sub(tick_targets.len());
+                        let skipped_count = all_screens_count.saturating_sub(tick_targets.len());
 
                         if let Some(dispatch) = self.model.as_screen_tick_dispatch() {
                             for screen_id in &tick_targets {
@@ -4049,8 +4051,8 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
             }
             Cmd::Log(text) => {
                 let sanitized = sanitize(&text);
-                let mut text_crlf = if !sanitized.contains("\r\n") && sanitized.contains('\n') {
-                    sanitized.replace('\n', "\r\n")
+                let mut text_crlf = if sanitized.contains('\n') {
+                    sanitized.replace("\r\n", "\n").replace('\n', "\r\n")
                 } else {
                     sanitized.into_owned()
                 };
@@ -4063,12 +4065,22 @@ impl<M: Model, E: BackendEventSource<Error = io::Error>, W: Write + Send> Progra
                 self.writer.write_log(&text_crlf)?;
             }
             Cmd::Task(spec, f) => {
+                crate::effect_system::record_command_effect("task", 0);
                 if let Some(ref queue) = self.effect_queue {
                     queue.enqueue(spec, f);
                 } else {
                     let sender = self.task_sender.clone();
                     let handle = std::thread::spawn(move || {
+                        let start = Instant::now();
                         let msg = f();
+                        let duration_us = start.elapsed().as_micros() as u64;
+                        tracing::debug!(
+                            target: "ftui.effect",
+                            command_type = "task",
+                            duration_us = duration_us,
+                            effect_duration_us = duration_us,
+                            "task effect completed on background thread"
+                        );
                         let _ = sender.send(msg);
                     });
                     self.task_handles.push(handle);
@@ -9975,6 +9987,7 @@ mod tests {
 
     #[derive(Debug)]
     enum MultiScreenMsg {
+        #[expect(dead_code)]
         Event(Event),
     }
 
