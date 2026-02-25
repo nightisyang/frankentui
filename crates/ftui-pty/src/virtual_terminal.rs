@@ -173,6 +173,8 @@ enum ParseState {
     EscapeCharset(u8),
     Csi,
     Osc,
+    /// Seen ESC inside an OSC sequence — waiting for `\` to complete ST.
+    OscEscapeSeen,
 }
 
 /// Terminal quirks that can be simulated by the virtual terminal.
@@ -648,6 +650,7 @@ impl VirtualTerminal {
             ParseState::EscapeCharset(slot) => self.escape_charset(slot, byte),
             ParseState::Csi => self.csi(byte),
             ParseState::Osc => self.osc(byte),
+            ParseState::OscEscapeSeen => self.osc_escape_seen(byte),
         }
     }
 
@@ -896,12 +899,30 @@ impl VirtualTerminal {
                 self.parse_state = ParseState::Ground;
             }
             0x1b => {
-                // Could be ST (\x1b\\) — simplified: just end OSC
+                // Could be ST (\x1b\\) — transition to intermediate state
+                // to wait for the backslash.
+                self.parse_state = ParseState::OscEscapeSeen;
+            }
+            _ => {
+                self.osc_data.push(byte);
+            }
+        }
+    }
+
+    /// Handle byte after ESC was seen inside an OSC sequence.
+    fn osc_escape_seen(&mut self, byte: u8) {
+        match byte {
+            b'\\' => {
+                // ESC + \ = ST (String Terminator) — end the OSC.
                 self.dispatch_osc();
                 self.parse_state = ParseState::Ground;
             }
             _ => {
-                self.osc_data.push(byte);
+                // ESC followed by something other than \ — dispatch OSC
+                // and re-enter the Escape state to handle this byte.
+                self.dispatch_osc();
+                self.parse_state = ParseState::Escape;
+                self.escape(byte);
             }
         }
     }
@@ -1497,7 +1518,8 @@ impl VirtualTerminal {
     }
 
     fn scroll_up(&mut self) {
-        // Push the top line of the scroll region into scrollback
+        // Push the line scrolled out of the top of the active region into
+        // scrollback, regardless of whether the region starts at row 0.
         let top_start = self.idx(0, self.scroll_top);
         let top_end = top_start + usize::from(self.width);
         let line: Vec<VCell> = self.grid[top_start..top_end].to_vec();
@@ -2695,6 +2717,8 @@ mod tests {
         assert_eq!(vt.row_text(2), "DDDDD"); // shifted up from row 3
         assert_eq!(vt.row_text(3), ""); // blank at region bottom
         assert_eq!(vt.row_text(4), "EEEEE"); // outside region, untouched
+        assert_eq!(vt.scrollback_len(), 1);
+        assert_eq!(vt.scrollback_line(0), Some("BBBBB".to_string()));
     }
 
     #[test]

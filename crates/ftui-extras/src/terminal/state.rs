@@ -856,7 +856,7 @@ impl TerminalState {
         let width = self.grid.width();
 
         // Need at least 2 columns remaining; if only 1, wrap first
-        if x + 1 >= width && self.modes.contains(TerminalModes::WRAP) {
+        if x >= width.saturating_sub(1) && self.modes.contains(TerminalModes::WRAP) {
             // Not enough room — mark current row as soft-wrapped and wrap
             self.grid.set_line_flag(y, LineFlag::SoftWrap);
             self.cursor.x = 0;
@@ -880,16 +880,16 @@ impl TerminalState {
         }
 
         // Place the continuation marker
-        if let Some(cell) = self.grid.cell_mut(x + 1, y) {
+        if let Some(cell) = self.grid.cell_mut(x.saturating_add(1), y) {
             cell.ch = WIDE_CONTINUATION;
             cell.fg = self.pen.fg;
             cell.bg = self.pen.bg;
             cell.attrs = self.pen.attrs;
-            self.dirty.mark(x + 1, y);
+            self.dirty.mark(x.saturating_add(1), y);
         }
 
         // Advance cursor by 2
-        self.cursor.x += 2;
+        self.cursor.x = self.cursor.x.saturating_add(2);
 
         // Handle wrap after placing both cells
         if self.cursor.x >= width {
@@ -950,7 +950,8 @@ impl TerminalState {
                         .cells
                         .copy_within(src_start..src_start + width, dst_start);
                     // Shift line flags too
-                    self.grid.line_flags[y as usize] = self.grid.line_flags[src_y as usize];
+                    let src_flag = self.grid.line_flag(src_y);
+                    self.grid.set_line_flag(y, src_flag);
                 }
             }
             // Clear bottom lines of region
@@ -988,7 +989,8 @@ impl TerminalState {
                         .cells
                         .copy_within(src_start..src_start + width, dst_start);
                     // Shift line flags too
-                    self.grid.line_flags[y as usize] = self.grid.line_flags[src_y as usize];
+                    let src_flag = self.grid.line_flag(src_y);
+                    self.grid.set_line_flag(y, src_flag);
                 }
             }
             // Clear top lines of region
@@ -1020,7 +1022,8 @@ impl TerminalState {
                 for row in y + 1..height {
                     self.grid.clear_row(row);
                 }
-                self.dirty.mark_rect(0, y + 1, width, height - y - 1);
+                self.dirty
+                    .mark_rect(0, y + 1, width, height.saturating_sub(y).saturating_sub(1));
             }
             ClearRegion::StartToCursor => {
                 // Clear lines before cursor
