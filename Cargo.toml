@@ -14,6 +14,7 @@ members = [
     "crates/ftui-render",
     "crates/ftui-runtime",
     "crates/ftui-showcase-wasm",
+    "crates/ftui-terrain-wasm",
     "crates/ftui-simd",
     "crates/ftui-style",
     "crates/ftui-text",

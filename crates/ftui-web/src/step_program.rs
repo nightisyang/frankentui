@@ -494,6 +494,9 @@ impl<M: Model> StepProgram<M> {
             Cmd::SaveState | Cmd::RestoreState => {
                 // No persistence in WASM (yet).
             }
+            Cmd::SetTickStrategy(_) => {
+                // No-op in WASM (yet).
+            }
         }
     }
 }
