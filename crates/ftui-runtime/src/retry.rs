@@ -398,6 +398,7 @@ mod tests {
     #[test]
     fn task_with_timeout_produces_task() {
         #[derive(Debug)]
+        #[allow(dead_code)]
         enum Msg {
             Result(i32),
             Timeout,

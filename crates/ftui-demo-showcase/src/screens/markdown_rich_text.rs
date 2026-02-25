@@ -720,6 +720,7 @@ impl MarkdownRichText {
             WrapMode::Word => "Word",
             WrapMode::Char => "Char",
             WrapMode::WordChar => "WordChar",
+            WrapMode::Optimal => "Optimal",
         }
     }
 
