@@ -58,7 +58,15 @@ mod tests {
         s.maintenance_tick(42);
         s.shutdown();
         let stats = s.debug_stats();
-        assert!(stats.iter().any(|(k, v)| k == "strategy" && v == "ActiveOnly"));
-        assert!(stats.iter().any(|(k, v)| k == "background_ticks" && v == "0"));
+        assert!(
+            stats
+                .iter()
+                .any(|(k, v)| k == "strategy" && v == "ActiveOnly")
+        );
+        assert!(
+            stats
+                .iter()
+                .any(|(k, v)| k == "background_ticks" && v == "0")
+        );
     }
 }

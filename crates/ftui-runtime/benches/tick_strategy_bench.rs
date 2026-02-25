@@ -15,7 +15,7 @@
 //! | ActivePlusAdjacent | ~5,400      | ~64%      |
 //! | Predictive (warm)  | ~2,500-4,000| ~73-83%   |
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 
 use ftui_runtime::{
@@ -223,9 +223,7 @@ fn bench_io_reduction_report(c: &mut Criterion) {
     }
     let predictive_ticks = count_ticks(&mut predictive, &screens, FRAMES);
 
-    let reduction = |ticks: u64| -> f64 {
-        (1.0 - ticks as f64 / baseline as f64) * 100.0
-    };
+    let reduction = |ticks: u64| -> f64 { (1.0 - ticks as f64 / baseline as f64) * 100.0 };
 
     eprintln!("\n=== Tick Strategy I/O Reduction Report ===");
     eprintln!(

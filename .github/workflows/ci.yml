@@ -738,12 +738,282 @@ jobs:
             ./scripts/remote_terminal_e2e.sh
           elif (( ${#remote_scripts[@]} > 0 )); then
             for script in "${remote_scripts[@]}"; do
+              base_script="$(basename "$script")"
+              case "$base_script" in
+                test_remote_all.sh|test_remote_typography_rescale.sh|test_remote_resize_storm.sh|test_remote_unicode.sh|test_remote_scrollback.sh)
+                  echo "Skipping $script (covered by dedicated typography/rescale release gate step)."
+                  continue
+                  ;;
+              esac
               echo "Running $script"
               "$script"
             done
           else
             echo "No remote replay scripts are present yet; skipping remote gate."
           fi
+
+      - name: Typography/rescale release gate (correctness + perf + logs)
+        run: |
+          set -euo pipefail
+          export E2E_DETERMINISTIC=1
+          export E2E_TIME_STEP_MS=100
+          export E2E_SEED=0
+          export E2E_LOG_DIR=/tmp/frankenterm_release_gates
+          bash ./tests/e2e/scripts/test_remote_typography_rescale.sh
+
+      - name: Build typography/rescale go-no-go evidence bundle
+        run: |
+          set -euo pipefail
+          ARTIFACT_ROOT="/tmp/frankenterm_release_gates"
+          SUITE_ROOT="${ARTIFACT_ROOT}/remote_typography_rescale"
+          SUITE_JSONL="${SUITE_ROOT}/typography_rescale_e2e.jsonl"
+          SUITE_REPORT="${SUITE_ROOT}/typography_rescale_e2e_report.json"
+          GO_NO_GO_JSON="${SUITE_ROOT}/go_no_go_report.json"
+          GO_NO_GO_TXT="${SUITE_ROOT}/go_no_go_report.txt"
+          ARTIFACT_MAP_TXT="${SUITE_ROOT}/artifact_map.txt"
+          ARTIFACT_MAP_JSON="${SUITE_ROOT}/artifact_map.json"
+
+          python3 - "$SUITE_JSONL" "$SUITE_REPORT" "$GO_NO_GO_JSON" "$GO_NO_GO_TXT" "$ARTIFACT_MAP_TXT" "$ARTIFACT_MAP_JSON" <<'PY'
+          import json
+          import math
+          import sys
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          def load_json(path: Path):
+              try:
+                  return json.loads(path.read_text(encoding="utf-8"))
+              except Exception as exc:
+                  raise SystemExit(f"failed to parse JSON file {path}: {exc}") from exc
+
+          def load_jsonl(path: Path):
+              rows = []
+              for idx, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                  raw = line.strip()
+                  if not raw:
+                      continue
+                  try:
+                      row = json.loads(raw)
+                  except Exception as exc:
+                      raise SystemExit(f"{path}:{idx}: invalid JSONL entry: {exc}") from exc
+                  if not isinstance(row, dict):
+                      raise SystemExit(f"{path}:{idx}: expected object JSONL row")
+                  rows.append(row)
+              if not rows:
+                  raise SystemExit(f"{path}: JSONL is empty")
+              return rows
+
+          def percentile(values, pct):
+              if not values:
+                  return None
+              ordered = sorted(float(v) for v in values)
+              if len(ordered) == 1:
+                  return ordered[0]
+              rank = pct * (len(ordered) - 1)
+              lo = math.floor(rank)
+              hi = math.ceil(rank)
+              if lo == hi:
+                  return ordered[lo]
+              weight = rank - lo
+              return ordered[lo] * (1.0 - weight) + ordered[hi] * weight
+
+          suite_jsonl = Path(sys.argv[1])
+          suite_report = Path(sys.argv[2])
+          go_no_go_json = Path(sys.argv[3])
+          go_no_go_txt = Path(sys.argv[4])
+          artifact_map_txt = Path(sys.argv[5])
+          artifact_map_json = Path(sys.argv[6])
+
+          required_paths = [suite_jsonl, suite_report]
+          for path in required_paths:
+              if not path.exists():
+                  raise SystemExit(f"required artifact missing: {path}")
+
+          report = load_json(suite_report)
+          suite_events = load_jsonl(suite_jsonl)
+          suite_event_types = {event.get("type") for event in suite_events}
+
+          perf_thresholds = {
+              "p95_present_ms_max": 120.0,
+              "max_present_ms_max": 250.0,
+          }
+
+          failures = []
+          if report.get("status") != "pass":
+              failures.append(f"suite report status is not pass: {report.get('status')!r}")
+
+          required_suite_event_types = {"suite_start", "suite_case_summary", "suite_end"}
+          missing_event_types = sorted(required_suite_event_types - suite_event_types)
+          if missing_event_types:
+              failures.append(f"suite JSONL missing required event types: {missing_event_types}")
+
+          cases = report.get("cases")
+          if not isinstance(cases, list) or not cases:
+              failures.append("suite report has no case summaries")
+              cases = []
+
+          case_metrics = []
+          report_artifacts = report.get("artifacts", {})
+          artifact_paths = {
+              "suite_jsonl": str(suite_jsonl),
+              "suite_report": str(suite_report),
+          }
+          for key, value in sorted(report_artifacts.items()):
+              if isinstance(value, str) and value:
+                  artifact_paths[key] = value
+
+          for case in cases:
+              case_name = case.get("case")
+              case_jsonl_path = case.get("jsonl_path")
+              if not isinstance(case_name, str) or not case_name:
+                  failures.append(f"case entry missing case name: {case}")
+                  continue
+              if not isinstance(case_jsonl_path, str) or not case_jsonl_path:
+                  failures.append(f"{case_name}: missing jsonl_path")
+                  continue
+
+              case_path = Path(case_jsonl_path)
+              if not case_path.exists():
+                  failures.append(f"{case_name}: missing case JSONL artifact: {case_path}")
+                  continue
+
+              case_events = load_jsonl(case_path)
+              frame_events = [e for e in case_events if e.get("type") == "frame"]
+              present_values = [
+                  float(e.get("present_ms"))
+                  for e in frame_events
+                  if isinstance(e.get("present_ms"), (int, float))
+              ]
+              p95_present_ms = percentile(present_values, 0.95)
+              max_present_ms = max(present_values) if present_values else None
+
+              case_failed_asserts = int(case.get("failed_assert_count", 0))
+              case_errors = int(case.get("error_count", 0))
+              case_frames = int(case.get("frame_count", 0))
+
+              if case_failed_asserts != 0:
+                  failures.append(f"{case_name}: failed_assert_count={case_failed_asserts}")
+              if case_errors != 0:
+                  failures.append(f"{case_name}: error_count={case_errors}")
+              if case_frames <= 0:
+                  failures.append(f"{case_name}: frame_count must be > 0 (got {case_frames})")
+
+              if p95_present_ms is None:
+                  failures.append(f"{case_name}: no numeric frame.present_ms values found")
+              elif p95_present_ms > perf_thresholds["p95_present_ms_max"]:
+                  failures.append(
+                      f"{case_name}: p95_present_ms={p95_present_ms:.3f} exceeds "
+                      f"{perf_thresholds['p95_present_ms_max']:.1f}ms threshold"
+                  )
+
+              if max_present_ms is None:
+                  failures.append(f"{case_name}: no max present_ms could be computed")
+              elif max_present_ms > perf_thresholds["max_present_ms_max"]:
+                  failures.append(
+                      f"{case_name}: max_present_ms={max_present_ms:.3f} exceeds "
+                      f"{perf_thresholds['max_present_ms_max']:.1f}ms threshold"
+                  )
+
+              case_metrics.append(
+                  {
+                      "case": case_name,
+                      "frame_count": len(frame_events),
+                      "event_count": len(case_events),
+                      "p95_present_ms": None if p95_present_ms is None else round(p95_present_ms, 3),
+                      "max_present_ms": None if max_present_ms is None else round(max_present_ms, 3),
+                      "jsonl_path": str(case_path),
+                  }
+              )
+
+          summary_count = sum(1 for event in suite_events if event.get("type") == "suite_case_summary")
+          if summary_count != len(cases):
+              failures.append(
+                  f"suite JSONL case summary count mismatch: expected {len(cases)}, got {summary_count}"
+              )
+
+          go_no_go = len(failures) == 0
+          decision = "go" if go_no_go else "no-go"
+          generated_at = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+          payload = {
+              "schema_version": "1.0.0",
+              "suite": "remote_typography_rescale",
+              "decision": decision,
+              "go_no_go": go_no_go,
+              "generated_at_utc": generated_at,
+              "run_id": report.get("run_id", ""),
+              "seed": report.get("seed"),
+              "thresholds": perf_thresholds,
+              "case_metrics": case_metrics,
+              "failures": failures,
+              "repro_commands": report.get("repro_commands", {}),
+              "artifacts": artifact_paths,
+          }
+
+          go_no_go_json.parent.mkdir(parents=True, exist_ok=True)
+          go_no_go_json.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+          lines = [
+              "frankenterm typography/rescale release gate",
+              f"generated_at_utc={generated_at}",
+              f"run_id={payload['run_id']}",
+              f"seed={payload['seed']}",
+              f"decision={decision}",
+              f"go_no_go={str(go_no_go).lower()}",
+              f"p95_present_ms_max={perf_thresholds['p95_present_ms_max']}",
+              f"max_present_ms_max={perf_thresholds['max_present_ms_max']}",
+          ]
+          for metric in case_metrics:
+              case_name = metric["case"]
+              lines.append(f"case.{case_name}.p95_present_ms={metric['p95_present_ms']}")
+              lines.append(f"case.{case_name}.max_present_ms={metric['max_present_ms']}")
+              lines.append(f"case.{case_name}.event_count={metric['event_count']}")
+              lines.append(f"case.{case_name}.frame_count={metric['frame_count']}")
+
+          if failures:
+              lines.append("failures=" + " | ".join(failures))
+          go_no_go_txt.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+          artifact_map_entries = {
+              "suite_jsonl": str(suite_jsonl),
+              "suite_report": str(suite_report),
+              "go_no_go_report_json": str(go_no_go_json),
+              "go_no_go_report_txt": str(go_no_go_txt),
+          }
+          artifact_map_entries.update(artifact_paths)
+
+          with artifact_map_txt.open("w", encoding="utf-8") as fh:
+              fh.write("frankenterm typography/rescale artifact map\n")
+              fh.write(f"generated_at_utc={generated_at}\n")
+              for key, value in sorted(artifact_map_entries.items()):
+                  fh.write(f"{key}={value}\n")
+
+          artifact_map_payload = {
+              "schema_version": "1.0.0",
+              "generated_at_utc": generated_at,
+              "artifacts": {},
+          }
+          for key, value in sorted(artifact_map_entries.items()):
+              path = Path(value)
+              artifact_map_payload["artifacts"][key] = {
+                  "path": value,
+                  "exists": path.exists(),
+                  "size_bytes": path.stat().st_size if path.exists() and path.is_file() else None,
+              }
+          artifact_map_json.write_text(json.dumps(artifact_map_payload, indent=2) + "\n", encoding="utf-8")
+
+          if not go_no_go:
+              raise SystemExit("release gate decision=no-go")
+          PY
+
+          {
+            echo "## Frankenterm Typography/Rescale Release Gate"
+            echo ""
+            echo '```'
+            cat "${GO_NO_GO_TXT}"
+            echo '```'
+            echo ""
+            echo "artifact_map_json=${ARTIFACT_MAP_JSON}"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Upload golden-trace logs
         if: always()
@@ -754,6 +1024,15 @@ jobs:
             /tmp/ftui_schedule_trace_e2e/
           retention-days: 7
           if-no-files-found: ignore
+
+      - name: Upload typography/rescale release-gate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frankenterm-typography-rescale-release-gates
+          path: /tmp/frankenterm_release_gates/remote_typography_rescale/
+          retention-days: 7
+          if-no-files-found: error
 
   # ==========================================================================
   # doctor_franktentui Verification (unit + integration + e2e + coverage gate)
@@ -910,57 +1189,55 @@ jobs:
           } > "${artifact_map_txt}"
 
           python3 - "${artifact_map_txt}" "${artifact_map_json}" <<'PY'
-import json
-import sys
-from pathlib import Path
+          import json
+          import sys
+          from pathlib import Path
 
-txt_path = Path(sys.argv[1])
-json_path = Path(sys.argv[2])
+          txt_path = Path(sys.argv[1])
+          json_path = Path(sys.argv[2])
 
-raw_lines = txt_path.read_text(encoding="utf-8").splitlines()
-raw_kv: dict[str, str] = {}
-for line in raw_lines:
-    if "=" not in line:
-        continue
-    key, value = line.split("=", 1)
-    raw_kv[key.strip()] = value.strip()
+          raw_lines = txt_path.read_text(encoding="utf-8").splitlines()
+          raw_kv: dict[str, str] = {}
+          for line in raw_lines:
+              if "=" not in line:
+                  continue
+              key, value = line.split("=", 1)
+              raw_kv[key.strip()] = value.strip()
 
+          def looks_like_path(value: str) -> bool:
+              if value.startswith(("/", "./")):
+                  return True
+              return any(value.endswith(suffix) for suffix in (".log", ".txt", ".json", ".tsv", ".toml"))
 
-def looks_like_path(value: str) -> bool:
-    if value.startswith(("/", "./")):
-        return True
-    return any(value.endswith(suffix) for suffix in (".log", ".txt", ".json", ".tsv", ".toml"))
+          artifacts: dict[str, str] = {}
+          metadata: dict[str, str] = {}
+          for key, value in sorted(raw_kv.items()):
+              if key in {"git_rev", "generated_at_utc"}:
+                  metadata[key] = value
+              elif looks_like_path(value):
+                  artifacts[key] = value
+              else:
+                  metadata[key] = value
 
+          exists: dict[str, bool] = {}
+          sizes_bytes: dict[str, int | None] = {}
+          for key, value in artifacts.items():
+              path = Path(value)
+              exists[key] = path.exists()
+              if path.exists() and path.is_file():
+                  sizes_bytes[key] = int(path.stat().st_size)
+              else:
+                  sizes_bytes[key] = None
 
-artifacts: dict[str, str] = {}
-metadata: dict[str, str] = {}
-for key, value in sorted(raw_kv.items()):
-    if key in {"git_rev", "generated_at_utc"}:
-        metadata[key] = value
-    elif looks_like_path(value):
-        artifacts[key] = value
-    else:
-        metadata[key] = value
-
-exists: dict[str, bool] = {}
-sizes_bytes: dict[str, int | None] = {}
-for key, value in artifacts.items():
-    path = Path(value)
-    exists[key] = path.exists()
-    if path.exists() and path.is_file():
-        sizes_bytes[key] = int(path.stat().st_size)
-    else:
-        sizes_bytes[key] = None
-
-payload = {
-    "schema_version": "1.0.0",
-    "metadata": metadata,
-    "artifacts": artifacts,
-    "exists": exists,
-    "sizes_bytes": sizes_bytes,
-}
-json_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-PY
+          payload = {
+              "schema_version": "1.0.0",
+              "metadata": metadata,
+              "artifacts": artifacts,
+              "exists": exists,
+              "sizes_bytes": sizes_bytes,
+          }
+          json_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          PY
 
           {
             echo "## doctor_franktentui artifact map"

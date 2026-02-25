@@ -302,10 +302,7 @@ fn screen_switch_updates_predictions() {
     // Predictions from A should heavily favor B
     let predictions = strategy.predictor().predict(&"A".to_string());
     let b_pred = predictions.iter().find(|p| p.screen == "B");
-    assert!(
-        b_pred.is_some(),
-        "B should be in predictions from A"
-    );
+    assert!(b_pred.is_some(), "B should be in predictions from A");
     let b_prob = b_pred.unwrap().probability;
     assert!(
         b_prob > 0.8,
@@ -391,7 +388,11 @@ fn persistence_round_trip_preserves_predictions() {
     // Tick counts should be identical
     for screen in &["A", "B", "C", "D"] {
         let o = model_orig.tick_counts.get(*screen).copied().unwrap_or(0);
-        let r = model_restored.tick_counts.get(*screen).copied().unwrap_or(0);
+        let r = model_restored
+            .tick_counts
+            .get(*screen)
+            .copied()
+            .unwrap_or(0);
         assert_eq!(o, r, "tick count mismatch for screen {screen}: {o} vs {r}");
     }
 }
@@ -446,10 +447,10 @@ fn multi_switch_simulation_distributes_ticks() {
 
     for (screen, frames) in &navigation {
         // Notify strategy of screen transition
-        if let Some(ref prev) = prev_screen {
-            if prev != screen {
-                strategy.on_screen_transition(prev, screen);
-            }
+        if let Some(ref prev) = prev_screen
+            && prev != screen
+        {
+            strategy.on_screen_transition(prev, screen);
         }
         model.switch_to(screen);
 

@@ -1,3 +1,5 @@
+#![cfg(feature = "markdown")]
+
 use ftui_extras::markdown::{MarkdownRenderer, MarkdownTheme};
 
 #[test]
