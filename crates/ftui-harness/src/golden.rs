@@ -515,25 +515,58 @@ impl GoldenResult {
 }
 
 /// Verify checksums against expected values.
+///
+/// Emits a `golden.compare` tracing span with comparison metadata.
+/// On mismatch, emits an ERROR-level event including both expected and actual hashes.
 pub fn verify_checksums(actual: &[String], expected: &[String]) -> (GoldenOutcome, Option<usize>) {
+    let span = tracing::info_span!(
+        "golden.compare",
+        actual_count = actual.len(),
+        expected_count = expected.len(),
+        outcome = tracing::field::Empty,
+        mismatch_frame = tracing::field::Empty,
+    );
+    let _guard = span.enter();
+
     if expected.is_empty() {
         // No expected checksums - optionally enforce in CI
         if is_golden_enforced() {
+            tracing::error!(
+                actual_count = actual.len(),
+                "golden checksums enforced but no expected checksums found"
+            );
+            span.record("outcome", "fail");
             return (GoldenOutcome::Fail, None);
         }
+        span.record("outcome", "pass");
         return (GoldenOutcome::Pass, None);
     }
 
     if actual.len() != expected.len() {
+        tracing::error!(
+            actual_count = actual.len(),
+            expected_count = expected.len(),
+            "golden checksum count mismatch"
+        );
+        span.record("outcome", "fail");
         return (GoldenOutcome::Fail, None);
     }
 
     for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
         if a != e {
+            tracing::error!(
+                frame = i,
+                expected_hash = %e,
+                actual_hash = %a,
+                "golden checksum mismatch"
+            );
+            span.record("outcome", "fail");
+            span.record("mismatch_frame", i);
             return (GoldenOutcome::Fail, Some(i));
         }
     }
 
+    span.record("outcome", "pass");
     (GoldenOutcome::Pass, None)
 }
 
@@ -846,7 +879,7 @@ mod tests {
         let path = dir.join("test.checksums");
         std::fs::write(
             &path,
-            "# comment\nsha256:abc\n\nsha256:def\n# another comment\n",
+            "# comment\nblake3:abc\n\nblake3:def\n# another comment\n",
         )
         .unwrap();
         let loaded = load_golden_checksums(&path).expect("load");
@@ -885,5 +918,559 @@ mod tests {
         assert!(parsed.get("seed").is_some());
         assert!(parsed.get("rust_version").is_some());
         assert!(parsed.get("git_commit").is_some());
+    }
+
+    // ====================================================================
+    // bd-3fc.7: Additional golden frame infrastructure self-tests
+    // ====================================================================
+
+    // ── BLAKE3 hash computation correctness ─────────────────────────
+
+    #[test]
+    fn blake3_hash_prefix_is_correct() {
+        let buf = Buffer::new(1, 1);
+        let checksum = compute_buffer_checksum(&buf);
+        assert!(
+            checksum.starts_with("blake3:"),
+            "checksum must start with 'blake3:' prefix"
+        );
+        // BLAKE3 digest is exactly 64 hex characters
+        let hex_part = &checksum["blake3:".len()..];
+        assert_eq!(hex_part.len(), 64, "BLAKE3 hex digest must be 64 chars");
+        assert!(
+            hex_part.chars().all(|c| c.is_ascii_hexdigit()),
+            "digest must be valid hex"
+        );
+    }
+
+    #[test]
+    fn blake3_hash_sensitive_to_fg_color() {
+        use ftui_render::cell::PackedRgba;
+
+        let mut buf1 = Buffer::new(5, 1);
+        let mut cell1 = Cell::from_char('X');
+        cell1.fg = PackedRgba::rgb(255, 0, 0); // Red
+        buf1.set(0, 0, cell1);
+
+        let mut buf2 = Buffer::new(5, 1);
+        let mut cell2 = Cell::from_char('X');
+        cell2.fg = PackedRgba::rgb(0, 0, 255); // Blue
+        buf2.set(0, 0, cell2);
+
+        assert_ne!(
+            compute_buffer_checksum(&buf1),
+            compute_buffer_checksum(&buf2),
+            "different foreground colors must produce different hashes"
+        );
+    }
+
+    #[test]
+    fn blake3_hash_sensitive_to_bg_color() {
+        use ftui_render::cell::PackedRgba;
+
+        let mut buf1 = Buffer::new(5, 1);
+        let mut cell1 = Cell::from_char('X');
+        cell1.bg = PackedRgba::rgb(0, 255, 0); // Green
+        buf1.set(0, 0, cell1);
+
+        let mut buf2 = Buffer::new(5, 1);
+        let mut cell2 = Cell::from_char('X');
+        cell2.bg = PackedRgba::rgb(255, 255, 0); // Yellow
+        buf2.set(0, 0, cell2);
+
+        assert_ne!(
+            compute_buffer_checksum(&buf1),
+            compute_buffer_checksum(&buf2),
+            "different background colors must produce different hashes"
+        );
+    }
+
+    #[test]
+    fn blake3_hash_sensitive_to_cell_position() {
+        let mut buf1 = Buffer::new(5, 1);
+        buf1.set(0, 0, Cell::from_char('A'));
+
+        let mut buf2 = Buffer::new(5, 1);
+        buf2.set(1, 0, Cell::from_char('A'));
+
+        assert_ne!(
+            compute_buffer_checksum(&buf1),
+            compute_buffer_checksum(&buf2),
+            "same char at different positions must produce different hashes"
+        );
+    }
+
+    #[test]
+    fn blake3_text_checksum_differs_for_different_text() {
+        let c1 = compute_text_checksum("hello");
+        let c2 = compute_text_checksum("world");
+        assert_ne!(c1, c2);
+    }
+
+    #[test]
+    fn blake3_text_checksum_empty_string() {
+        let c = compute_text_checksum("");
+        assert!(c.starts_with("blake3:"));
+        assert_eq!(c.len(), "blake3:".len() + 64);
+    }
+
+    #[test]
+    fn blake3_hash_dimensions_included() {
+        // Two buffers with same content but different dimensions should differ
+        let buf1 = Buffer::new(10, 5); // 50 cells
+        let buf2 = Buffer::new(5, 10); // 50 cells
+        assert_ne!(
+            compute_buffer_checksum(&buf1),
+            compute_buffer_checksum(&buf2),
+            "different dimensions must produce different hashes even with same cell count"
+        );
+    }
+
+    // ── Golden file read/write ──────────────────────────────────────
+
+    #[test]
+    fn save_creates_parent_directories() {
+        let dir = std::env::temp_dir().join(format!(
+            "ftui_golden_mkdir_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let deeply_nested = dir.join("a").join("b").join("c").join("test.checksums");
+        let checksums = vec!["blake3:abc123".to_string()];
+        save_golden_checksums(&deeply_nested, &checksums).expect("save should create dirs");
+        assert!(deeply_nested.exists());
+        let loaded = load_golden_checksums(&deeply_nested).expect("load");
+        assert_eq!(loaded, checksums);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_golden_includes_header_comment() {
+        let dir = std::env::temp_dir().join(format!(
+            "ftui_golden_header_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let path = dir.join("test.checksums");
+        let checksums = vec!["blake3:aaa".to_string()];
+        save_golden_checksums(&path, &checksums).expect("save");
+        let raw = std::fs::read_to_string(&path).expect("read");
+        assert!(
+            raw.starts_with("# Golden checksums"),
+            "file should start with header comment"
+        );
+        assert!(raw.contains("# Generated at:"), "should have timestamp");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_and_load_empty_checksums() {
+        let dir = std::env::temp_dir().join(format!(
+            "ftui_golden_empty_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let path = dir.join("test.checksums");
+        save_golden_checksums(&path, &[]).expect("save empty");
+        let loaded = load_golden_checksums(&path).expect("load");
+        assert!(loaded.is_empty(), "empty save should load as empty");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_and_load_many_checksums() {
+        let dir = std::env::temp_dir().join(format!(
+            "ftui_golden_many_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let path = dir.join("test.checksums");
+        let checksums: Vec<String> = (0..100).map(|i| format!("blake3:{i:064x}")).collect();
+        save_golden_checksums(&path, &checksums).expect("save");
+        let loaded = load_golden_checksums(&path).expect("load");
+        assert_eq!(loaded, checksums);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Hash comparison logic ───────────────────────────────────────
+
+    #[test]
+    fn verify_checksums_both_empty_is_pass() {
+        let (outcome, idx) = verify_checksums(&[], &[]);
+        assert_eq!(outcome, GoldenOutcome::Pass);
+        assert!(idx.is_none());
+    }
+
+    #[test]
+    fn verify_checksums_first_frame_mismatch() {
+        let actual = vec!["blake3:aaa".to_string()];
+        let expected = vec!["blake3:bbb".to_string()];
+        let (outcome, idx) = verify_checksums(&actual, &expected);
+        assert_eq!(outcome, GoldenOutcome::Fail);
+        assert_eq!(idx, Some(0), "mismatch should be at frame 0");
+    }
+
+    #[test]
+    fn verify_checksums_last_frame_mismatch() {
+        let actual = vec![
+            "blake3:aaa".to_string(),
+            "blake3:bbb".to_string(),
+            "blake3:xxx".to_string(),
+        ];
+        let expected = vec![
+            "blake3:aaa".to_string(),
+            "blake3:bbb".to_string(),
+            "blake3:ccc".to_string(),
+        ];
+        let (outcome, idx) = verify_checksums(&actual, &expected);
+        assert_eq!(outcome, GoldenOutcome::Fail);
+        assert_eq!(idx, Some(2), "mismatch should be at last frame");
+    }
+
+    #[test]
+    fn verify_checksums_actual_shorter() {
+        let actual: Vec<String> = vec![];
+        let expected = vec!["blake3:abc".to_string()];
+        let (outcome, _) = verify_checksums(&actual, &expected);
+        assert_eq!(outcome, GoldenOutcome::Fail);
+    }
+
+    #[test]
+    fn verify_checksums_actual_longer() {
+        let actual = vec!["blake3:abc".to_string(), "blake3:def".to_string()];
+        let expected = vec!["blake3:abc".to_string()];
+        let (outcome, _) = verify_checksums(&actual, &expected);
+        assert_eq!(outcome, GoldenOutcome::Fail);
+    }
+
+    // ── Update mode / bless mode ────────────────────────────────────
+
+    #[test]
+    fn bless_mode_round_trip() {
+        // Test that bless mode round-trip (save then load) produces identical checksums
+        let dir = std::env::temp_dir().join(format!(
+            "ftui_golden_bless_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let path = golden_checksum_path(&dir, "bless_test");
+
+        // Simulate bless: compute checksums and save
+        let mut buf = Buffer::new(80, 24);
+        buf.set(0, 0, Cell::from_char('H'));
+        buf.set(1, 0, Cell::from_char('i'));
+        let checksum = compute_buffer_checksum(&buf);
+        save_golden_checksums(&path, std::slice::from_ref(&checksum)).expect("save");
+
+        // Verify: load and compare
+        let loaded = load_golden_checksums(&path).expect("load");
+        let (outcome, idx) = verify_checksums(&[checksum], &loaded);
+        assert_eq!(outcome, GoldenOutcome::Pass);
+        assert!(idx.is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bless_mode_overwrites_old_golden() {
+        let dir = std::env::temp_dir().join(format!(
+            "ftui_golden_overwrite_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let path = golden_checksum_path(&dir, "overwrite_test");
+
+        // First bless
+        save_golden_checksums(&path, &["blake3:old_hash".to_string()]).expect("save old");
+        let loaded_old = load_golden_checksums(&path).expect("load old");
+        assert_eq!(loaded_old, vec!["blake3:old_hash"]);
+
+        // Second bless (overwrite)
+        save_golden_checksums(&path, &["blake3:new_hash".to_string()]).expect("save new");
+        let loaded_new = load_golden_checksums(&path).expect("load new");
+        assert_eq!(loaded_new, vec!["blake3:new_hash"]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Tracing span verification (golden.compare) ─────────────────
+
+    #[test]
+    fn verify_checksums_emits_golden_compare_span() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct SpanChecker {
+            saw_golden_compare: Arc<AtomicBool>,
+        }
+
+        impl tracing::Subscriber for SpanChecker {
+            fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                if span.metadata().name() == "golden.compare" {
+                    self.saw_golden_compare.store(true, Ordering::Relaxed);
+                }
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, _: &tracing::Event<'_>) {}
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+
+        let saw_it = Arc::new(AtomicBool::new(false));
+        let subscriber = SpanChecker {
+            saw_golden_compare: Arc::clone(&saw_it),
+        };
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let actual = vec!["blake3:abc".to_string()];
+        let expected = vec!["blake3:abc".to_string()];
+        let _ = verify_checksums(&actual, &expected);
+
+        assert!(
+            saw_it.load(Ordering::Relaxed),
+            "verify_checksums() must emit a 'golden.compare' tracing span"
+        );
+    }
+
+    #[test]
+    fn verify_checksums_emits_error_on_mismatch_with_both_hashes() {
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        struct ErrorCollector {
+            errors: Arc<Mutex<Vec<String>>>,
+        }
+
+        impl tracing::Subscriber for ErrorCollector {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, event: &tracing::Event<'_>) {
+                if *event.metadata().level() == tracing::Level::ERROR {
+                    let mut collector = ErrorFieldCollector { fields: Vec::new() };
+                    event.record(&mut collector);
+                    self.errors
+                        .lock()
+                        .unwrap()
+                        .push(collector.fields.join(", "));
+                }
+            }
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+
+        struct ErrorFieldCollector {
+            fields: Vec<String>,
+        }
+
+        impl tracing::field::Visit for ErrorFieldCollector {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                self.fields.push(format!("{}={:?}", field.name(), value));
+            }
+        }
+
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = ErrorCollector {
+            errors: Arc::clone(&errors),
+        };
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let actual = vec!["blake3:actual_hash".to_string()];
+        let expected = vec!["blake3:expected_hash".to_string()];
+        let (outcome, idx) = verify_checksums(&actual, &expected);
+
+        assert_eq!(outcome, GoldenOutcome::Fail);
+        assert_eq!(idx, Some(0));
+
+        let collected = errors.lock().unwrap();
+        assert!(
+            !collected.is_empty(),
+            "should emit at least one ERROR event on mismatch"
+        );
+        let error_msg = collected.join(" ");
+        assert!(
+            error_msg.contains("expected_hash") || error_msg.contains("actual_hash"),
+            "ERROR should include hash values, got: {error_msg}"
+        );
+    }
+
+    #[test]
+    fn verify_checksums_emits_error_on_count_mismatch() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct CountMismatchChecker {
+            saw_error: Arc<AtomicBool>,
+        }
+
+        impl tracing::Subscriber for CountMismatchChecker {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, event: &tracing::Event<'_>) {
+                if *event.metadata().level() == tracing::Level::ERROR {
+                    self.saw_error.store(true, Ordering::Relaxed);
+                }
+            }
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+
+        let saw = Arc::new(AtomicBool::new(false));
+        let subscriber = CountMismatchChecker {
+            saw_error: Arc::clone(&saw),
+        };
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let actual = vec!["blake3:abc".to_string()];
+        let expected = vec!["blake3:abc".to_string(), "blake3:def".to_string()];
+        let _ = verify_checksums(&actual, &expected);
+
+        assert!(
+            saw.load(Ordering::Relaxed),
+            "count mismatch should emit ERROR event"
+        );
+    }
+
+    #[test]
+    fn verify_checksums_span_records_outcome_pass() {
+        use std::sync::Arc;
+        use std::sync::Mutex;
+
+        struct OutcomeRecorder {
+            outcome: Arc<Mutex<Option<String>>>,
+        }
+
+        struct OutcomeVisitor(Arc<Mutex<Option<String>>>);
+
+        impl tracing::field::Visit for OutcomeVisitor {
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "outcome" {
+                    *self.0.lock().unwrap() = Some(value.to_string());
+                }
+            }
+            fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+        }
+
+        impl tracing::Subscriber for OutcomeRecorder {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, values: &tracing::span::Record<'_>) {
+                let mut v = OutcomeVisitor(Arc::clone(&self.outcome));
+                values.record(&mut v);
+            }
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, _: &tracing::Event<'_>) {}
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+
+        let outcome = Arc::new(Mutex::new(None));
+        let subscriber = OutcomeRecorder {
+            outcome: Arc::clone(&outcome),
+        };
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let actual = vec!["blake3:abc".to_string()];
+        let expected = vec!["blake3:abc".to_string()];
+        let _ = verify_checksums(&actual, &expected);
+
+        let recorded = outcome.lock().unwrap();
+        assert_eq!(
+            recorded.as_deref(),
+            Some("pass"),
+            "outcome field should be 'pass'"
+        );
+    }
+
+    // ── GoldenResult format with both hashes ────────────────────────
+
+    #[test]
+    fn result_format_mismatch_includes_both_hashes() {
+        let expected_hash =
+            "blake3:aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aabb7788ccdd9900";
+        let actual_hash = "blake3:1111aaaa2222bbbb3333cccc4444dddd5555eeee6666ffff7788aabb9900ccdd";
+        let r = GoldenResult {
+            scenario: "test".into(),
+            outcome: GoldenOutcome::Fail,
+            checksums: vec![actual_hash.to_string()],
+            expected_checksums: vec![expected_hash.to_string()],
+            mismatch_index: Some(0),
+            duration_ms: 5,
+        };
+        let s = r.format();
+        assert!(
+            s.contains(expected_hash),
+            "should contain expected hash in error output"
+        );
+        assert!(
+            s.contains(actual_hash),
+            "should contain actual hash in error output"
+        );
+    }
+
+    // ── Logger frame collection ─────────────────────────────────────
+
+    #[test]
+    fn logger_collects_checksums_in_order() {
+        let mut logger = GoldenLogger::noop();
+        logger.log_frame(0, 80, 24, "blake3:first", 1);
+        logger.log_frame(1, 80, 24, "blake3:second", 2);
+        logger.log_frame(2, 80, 24, "blake3:third", 3);
+        assert_eq!(
+            logger.checksums(),
+            &["blake3:first", "blake3:second", "blake3:third"]
+        );
+    }
+
+    #[test]
+    fn logger_error_event_format() {
+        let dir = std::env::temp_dir().join(format!(
+            "ftui_golden_error_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let log_path = dir.join("test.jsonl");
+        {
+            let mut logger = GoldenLogger::new(&log_path).expect("create logger");
+            logger.log_error("something went wrong");
+        }
+        let content = std::fs::read_to_string(&log_path).expect("read log");
+        assert!(content.contains("\"event\":\"error\""));
+        assert!(content.contains("something went wrong"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

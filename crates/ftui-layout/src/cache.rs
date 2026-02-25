@@ -53,7 +53,7 @@
 use std::hash::{Hash, Hasher};
 
 use ftui_core::geometry::Rect;
-use rustc_hash::{FxHashMap, FxHasher};
+use rustc_hash::FxHashMap;
 
 use crate::{Constraint, Direction, LayoutSizeHint};
 

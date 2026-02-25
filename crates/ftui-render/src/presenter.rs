@@ -253,7 +253,7 @@ mod cost_model {
                 let changed_cells = scratch.prefix_cells[j + 1] - scratch.prefix_cells[i];
                 let total_cells =
                     (row_runs[j].x1 as usize).saturating_sub(row_runs[i].x0 as usize) + 1;
-                let gap_cells = total_cells - changed_cells;
+                let gap_cells = total_cells.saturating_sub(changed_cells);
 
                 if gap_cells > 32 {
                     break;
@@ -1206,7 +1206,7 @@ mod tests {
 
         for run in row_runs {
             let move_cost = cost_model::cheapest_move_cost(cursor_x, cursor_y, run.x0, run.y);
-            let cells = (run.x1 - run.x0 + 1) as usize;
+            let cells = (run.x1 as usize).saturating_sub(run.x0 as usize) + 1;
             sparse_cost += move_cost + cells;
             cursor_x = Some(run.x1.saturating_add(1));
             cursor_y = Some(row_y);
@@ -1214,9 +1214,12 @@ mod tests {
 
         // Estimate merged cost: one move + all cells from first to last
         let merge_move = cost_model::cheapest_move_cost(prev_x, prev_y, first_x, row_y);
-        let total_cells = (last_x - first_x + 1) as usize;
-        let changed_cells: usize = row_runs.iter().map(|r| (r.x1 - r.x0 + 1) as usize).sum();
-        let gap_cells = total_cells - changed_cells;
+        let total_cells = (last_x as usize).saturating_sub(first_x as usize) + 1;
+        let changed_cells: usize = row_runs
+            .iter()
+            .map(|r| (r.x1 as usize).saturating_sub(r.x0 as usize) + 1)
+            .sum();
+        let gap_cells = total_cells.saturating_sub(changed_cells);
         let gap_overhead = gap_cells * 2;
         let merged_cost = merge_move + changed_cells + gap_overhead;
 

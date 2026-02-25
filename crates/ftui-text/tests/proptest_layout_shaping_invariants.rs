@@ -44,15 +44,21 @@ fn arb_tier() -> impl Strategy<Value = LayoutTier> {
 }
 
 fn arb_capability() -> impl Strategy<Value = RuntimeCapability> {
-    (any::<bool>(), any::<bool>(), any::<bool>(), any::<bool>()).prop_map(
-        |(prop, sub, hyph, track)| RuntimeCapability {
+    (
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+    )
+        .prop_map(|(prop, sub, hyph, track, ligature)| RuntimeCapability {
             proportional_fonts: prop,
             subpixel_positioning: sub,
             hyphenation_available: hyph,
             tracking_support: track,
+            ligature_support: ligature,
             max_paragraph_words: 0,
-        },
-    )
+        })
 }
 
 fn arb_policy() -> impl Strategy<Value = LayoutPolicy> {

@@ -344,6 +344,7 @@ impl DiffEvidenceLedger {
         self.transition_head = 0;
         self.decision_count = 0;
         self.transition_count = 0;
+        self.current_regime = DiffRegime::StableFrame;
     }
 }
 
@@ -500,10 +501,12 @@ mod tests {
         let mut ledger = DiffEvidenceLedger::new(100);
         ledger.record(make_record(1, DiffRegime::StableFrame));
         ledger.record(make_record(2, DiffRegime::BurstyChange));
+        assert_eq!(ledger.current_regime(), DiffRegime::BurstyChange);
         ledger.clear();
         assert!(ledger.is_empty());
         assert_eq!(ledger.transition_count(), 0);
         assert!(ledger.last_decision().is_none());
+        assert_eq!(ledger.current_regime(), DiffRegime::StableFrame);
     }
 
     #[test]

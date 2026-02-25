@@ -68,8 +68,13 @@ impl GraphemeId {
     #[inline]
     pub const fn new(slot: u32, generation: u16, width: u8) -> Self {
         debug_assert!(slot <= Self::MAX_SLOT, "slot overflow");
+        debug_assert!(generation <= Self::MAX_GENERATION, "generation overflow");
         debug_assert!(width <= Self::MAX_WIDTH, "width overflow");
-        Self((slot & Self::MAX_SLOT) | ((generation as u32) << 16) | ((width as u32) << 27))
+        Self(
+            (slot & Self::MAX_SLOT)
+                | (((generation as u32) & 0x7FF) << 16)
+                | ((width as u32) << 27),
+        )
     }
 
     /// Extract the pool slot index (0-64K).

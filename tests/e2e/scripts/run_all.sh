@@ -191,6 +191,9 @@ else
     if [[ -x "$SCRIPT_DIR/test_remote_unicode.sh" ]]; then
         run_suite "remote_unicode" "$SCRIPT_DIR/test_remote_unicode.sh"
     fi
+    if [[ -x "$SCRIPT_DIR/test_remote_ligature_shaping.sh" ]]; then
+        run_suite "remote_ligature_shaping" "$SCRIPT_DIR/test_remote_ligature_shaping.sh"
+    fi
     # Drag-and-drop E2E tests (bd-1csc.6)
     if [[ -x "$SCRIPT_DIR/test_drag_drop.sh" ]]; then
         run_suite "drag_drop" "$SCRIPT_DIR/test_drag_drop.sh"

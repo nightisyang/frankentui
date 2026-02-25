@@ -197,6 +197,7 @@ impl<M: Send + 'static> SubscriptionManager<M> {
             } else {
                 crate::debug_trace!("stopping subscription: id={}", running.id);
                 tracing::debug!(sub_id = running.id, "Stopping subscription");
+                crate::effect_system::record_subscription_stop("subscription", running.id, 0);
                 running.stop();
             }
         }
@@ -212,6 +213,7 @@ impl<M: Send + 'static> SubscriptionManager<M> {
 
             crate::debug_trace!("starting subscription: id={}", id);
             tracing::debug!(sub_id = id, "Starting subscription");
+            crate::effect_system::record_subscription_start("subscription", id);
             let (signal, trigger) = StopSignal::new();
             let sender = self.sender.clone();
 

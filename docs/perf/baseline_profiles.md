@@ -58,6 +58,25 @@
 | Grid 20x20 | split | 669ns | |
 | Nested 3col x 10row | split | 337ns | Recursion overhead minimal |
 
+### 1.4.1 Pane Workspace Baseline (bd-2bav7)
+
+These SLA gates are enforced by `scripts/bench_budget.sh` using Criterion output
+from `ftui-layout/layout_bench` and `ftui-web/pane_pointer_bench`.
+
+| Benchmark key | Budget (ns) | Surface |
+|-----------|---------|---------|
+| `pane/core/solve_layout/leaf_count_8` | 200000 | Pane tree solve (small) |
+| `pane/core/solve_layout/leaf_count_32` | 700000 | Pane tree solve (medium) |
+| `pane/core/solve_layout/leaf_count_64` | 1400000 | Pane tree solve (large) |
+| `pane/core/apply_operation/split_leaf` | 450000 | Structural split operation |
+| `pane/core/apply_operation/move_subtree` | 900000 | Structural move operation |
+| `pane/core/planning/plan_reflow_move` | 450000 | Reflow move planner |
+| `pane/core/planning/plan_edge_resize` | 350000 | Edge resize planner |
+| `pane/core/timeline/apply_and_replay_32_ops` | 2500000 | Timeline replay path |
+| `pane/web_pointer/lifecycle/down_ack_move_32_up` | 1000000 | Host pointer lifecycle |
+| `pane/web_pointer/lifecycle/down_ack_move_120_up` | 3500000 | Host pointer stress lifecycle |
+| `pane/web_pointer/lifecycle/blur_after_ack` | 250000 | Host interruption path |
+
 ### 1.5 Render Pipeline (ftui-render)
 
 | Operation | Input | Latency | Throughput | Notes |
@@ -133,3 +152,22 @@ At 60fps, frame budget = 16.67ms. Key pipeline stages:
 5. **Layout solver is extremely fast** (<1µs for typical layouts). No optimization needed.
 
 6. **Diff + Present pipeline** is well-optimized at ~90µs for 200x60@50% change. No immediate action.
+
+## 5. Repro Commands (Pane SLA)
+
+Use `rch` for CPU-heavy benchmark commands:
+
+```bash
+mkdir -p target/benchmark-results
+rch exec -- cargo bench -p ftui-layout --bench layout_bench -- pane/core/ \
+  | tee target/benchmark-results/layout_bench.txt
+rch exec -- cargo bench -p ftui-web --bench pane_pointer_bench -- pane/web_pointer/ \
+  | tee target/benchmark-results/pane_pointer_bench.txt
+./scripts/bench_budget.sh --check-only
+./scripts/bench_budget.sh --json
+```
+
+Budget logs are emitted to:
+
+- `target/benchmark-results/perf_log.jsonl`
+- `target/benchmark-results/perf_confidence.jsonl`

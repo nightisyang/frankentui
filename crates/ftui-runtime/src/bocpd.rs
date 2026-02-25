@@ -174,7 +174,20 @@
 //! - Hazard function choice is geometric (constant hazard)
 
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use web_time::{Duration, Instant};
+
+// =============================================================================
+// Metrics counters
+// =============================================================================
+
+/// Total number of change-points (regime transitions) detected by BOCPD.
+static BOCPD_CHANGE_POINTS_DETECTED_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Read the global count of BOCPD change-points detected.
+pub fn bocpd_change_points_detected_total() -> u64 {
+    BOCPD_CHANGE_POINTS_DETECTED_TOTAL.load(Ordering::Relaxed)
+}
 
 // =============================================================================
 // Configuration
@@ -473,6 +486,9 @@ pub struct BocpdDetector {
     /// Last evidence for inspection.
     last_evidence: Option<BocpdEvidence>,
 
+    /// Previous regime for transition detection.
+    previous_regime: BocpdRegime,
+
     /// Pre-computed rate parameters for efficiency.
     lambda_steady: f64, // 1 / mu_steady_ms
     lambda_burst: f64, // 1 / mu_burst_ms
@@ -513,6 +529,7 @@ impl BocpdDetector {
             last_event_time: None,
             observation_count: 0,
             last_evidence: None,
+            previous_regime: BocpdRegime::Steady,
             lambda_steady,
             lambda_burst,
             hazard,
@@ -656,6 +673,7 @@ impl BocpdDetector {
     /// Process a new resize event.
     ///
     /// Call this when a resize event occurs. Returns the classified regime.
+    /// Emits tracing span `bocpd.update` and logs regime transitions at INFO.
     pub fn observe_event(&mut self, now: Instant) -> BocpdRegime {
         // Compute inter-arrival time
         let observation_ms = self
@@ -679,7 +697,66 @@ impl BocpdDetector {
         // Update last event time
         self.last_event_time = Some(now);
 
-        self.regime()
+        let current_regime = self.regime();
+
+        // Compute span fields
+        let posterior_max = self
+            .run_length_posterior
+            .iter()
+            .copied()
+            .fold(0.0_f64, f64::max);
+        let change_point_probability = self.run_length_posterior[0];
+        let coalescing_active = matches!(
+            current_regime,
+            BocpdRegime::Burst | BocpdRegime::Transitional
+        );
+
+        // TRACING: span 'bocpd.update' with required fields
+        let _span = tracing::debug_span!(
+            "bocpd.update",
+            run_length_posterior_max = %posterior_max,
+            change_point_probability = %change_point_probability,
+            coalescing_active = coalescing_active,
+            resize_count_in_window = self.observation_count,
+        )
+        .entered();
+
+        // DEBUG log for posterior update
+        tracing::debug!(
+            target: "ftui.bocpd",
+            p_burst = %self.p_burst,
+            observation_ms = %x,
+            posterior_max = %posterior_max,
+            change_point_prob = %change_point_probability,
+            observation_count = self.observation_count,
+            "posterior update"
+        );
+
+        // METRICS: histogram bocpd_run_length via tracing event
+        tracing::debug!(
+            target: "ftui.bocpd",
+            bocpd_run_length = %self.expected_run_length(),
+            "bocpd run length histogram"
+        );
+
+        // Detect regime transition
+        if current_regime != self.previous_regime {
+            // METRICS: counter bocpd_change_points_detected_total
+            BOCPD_CHANGE_POINTS_DETECTED_TOTAL.fetch_add(1, Ordering::Relaxed);
+
+            tracing::info!(
+                target: "ftui.bocpd",
+                from_regime = %self.previous_regime.as_str(),
+                to_regime = %current_regime.as_str(),
+                p_burst = %self.p_burst,
+                observation_count = self.observation_count,
+                "regime transition detected"
+            );
+
+            self.previous_regime = current_regime;
+        }
+
+        current_regime
     }
 
     /// Update the run-length posterior with a new observation.
@@ -787,6 +864,7 @@ impl BocpdDetector {
         self.last_event_time = None;
         self.observation_count = 0;
         self.last_evidence = None;
+        self.previous_regime = BocpdRegime::Steady;
     }
 
     /// Compute recommended coalesce delay based on current regime.
@@ -1767,5 +1845,76 @@ mod tests {
         det.observe_event(Instant::now());
         let ev = det.last_evidence().unwrap().clone();
         assert_eq!(ev.observation_count, 1);
+    }
+
+    // ── Observability tests (bd-37a.3) ─────────────────────────
+
+    #[test]
+    fn change_points_counter_increments_on_regime_transition() {
+        let before = bocpd_change_points_detected_total();
+        let mut det = BocpdDetector::with_defaults();
+        let start = Instant::now();
+
+        // Start steady
+        for i in 0..5 {
+            det.observe_event(start + Duration::from_millis(200 * (i + 1)));
+        }
+        let after_steady = bocpd_change_points_detected_total();
+
+        // Drive into burst with rapid events
+        let burst_start = start + Duration::from_millis(1100);
+        for i in 0..30 {
+            det.observe_event(burst_start + Duration::from_millis(5 * (i + 1)));
+        }
+        let after_burst = bocpd_change_points_detected_total();
+
+        // At least one transition should have occurred (steady→transitional or steady→burst).
+        // The counter may have been incremented by other tests running concurrently,
+        // so we check relative increments.
+        assert!(
+            after_burst > before || after_burst > after_steady,
+            "Expected change-point counter to increment: before={before}, after_steady={after_steady}, after_burst={after_burst}"
+        );
+    }
+
+    #[test]
+    fn previous_regime_tracks_last_state() {
+        let mut det = BocpdDetector::with_defaults();
+        let start = Instant::now();
+
+        // Initially steady
+        assert_eq!(det.previous_regime, BocpdRegime::Steady);
+
+        // Steady events should keep previous_regime steady
+        for i in 0..5 {
+            det.observe_event(start + Duration::from_millis(200 * (i + 1)));
+        }
+        assert_eq!(det.previous_regime, BocpdRegime::Steady);
+    }
+
+    #[test]
+    fn reset_clears_previous_regime() {
+        let mut det = BocpdDetector::with_defaults();
+        let start = Instant::now();
+
+        // Drive into burst
+        for i in 0..30 {
+            det.observe_event(start + Duration::from_millis(5 * (i + 1)));
+        }
+
+        det.reset();
+        assert_eq!(det.previous_regime, BocpdRegime::Steady);
+    }
+
+    #[test]
+    fn observe_event_returns_correct_regime() {
+        let mut det = BocpdDetector::with_defaults();
+        let start = Instant::now();
+
+        // Steady events
+        for i in 0..10 {
+            let regime = det.observe_event(start + Duration::from_millis(200 * (i + 1)));
+            assert_eq!(regime, det.regime());
+        }
     }
 }

@@ -58,8 +58,8 @@ use ftui_text::justification::GlueSpec;
 use ftui_text::layout_policy::RuntimeCapability;
 use ftui_text::script_segmentation::{RunDirection, Script};
 use ftui_text::shaped_render::ShapedLineLayout;
-use ftui_text::shaping::NoopShaper;
-use ftui_text::shaping_fallback::ShapingFallback;
+use ftui_text::shaping::{FontFeatures, NoopShaper};
+use ftui_text::shaping_fallback::{LigatureMode, ShapingFallback};
 use std::hint::black_box;
 
 // ============================================================================
@@ -422,6 +422,41 @@ fn bench_fallback_batch(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_fallback_ligature_modes(c: &mut Criterion) {
+    let mut group = c.benchmark_group("fallback/ligature_mode");
+
+    let text = generate_text("file profile office affine ", 10_000);
+    group.throughput(Throughput::Bytes(text.len() as u64));
+
+    let mut enabled_full = ShapingFallback::with_shaper(NoopShaper, RuntimeCapability::FULL);
+    enabled_full.set_ligature_mode(LigatureMode::Enabled);
+
+    let mut disabled_full = ShapingFallback::with_shaper(NoopShaper, RuntimeCapability::FULL);
+    disabled_full.set_ligature_mode(LigatureMode::Disabled);
+
+    let mut auto_requested_terminal =
+        ShapingFallback::with_shaper(NoopShaper, RuntimeCapability::TERMINAL);
+    let mut ligature_features = FontFeatures::default();
+    ligature_features.set_standard_ligatures(true);
+    auto_requested_terminal.set_features(ligature_features);
+
+    group.bench_function("enabled_full", |b| {
+        b.iter(|| enabled_full.shape_line(black_box(&text), Script::Latin, RunDirection::Ltr));
+    });
+
+    group.bench_function("disabled_full", |b| {
+        b.iter(|| disabled_full.shape_line(black_box(&text), Script::Latin, RunDirection::Ltr));
+    });
+
+    group.bench_function("auto_requested_terminal_fallback", |b| {
+        b.iter(|| {
+            auto_requested_terminal.shape_line(black_box(&text), Script::Latin, RunDirection::Ltr)
+        });
+    });
+
+    group.finish();
+}
+
 // ============================================================================
 // Criterion Configuration
 // ============================================================================
@@ -440,6 +475,7 @@ criterion_group!(
     bench_fallback_terminal,
     bench_fallback_shaped,
     bench_fallback_batch,
+    bench_fallback_ligature_modes,
 );
 
 criterion_main!(benches);

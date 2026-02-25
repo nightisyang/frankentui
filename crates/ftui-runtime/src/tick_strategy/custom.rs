@@ -95,16 +95,10 @@ mod tests {
     #[test]
     fn custom_return_value_is_respected() {
         let mut always_tick = Custom::new("AlwaysTick", |_, _, _| TickDecision::Tick);
-        assert_eq!(
-            always_tick.should_tick("x", 0, "y"),
-            TickDecision::Tick
-        );
+        assert_eq!(always_tick.should_tick("x", 0, "y"), TickDecision::Tick);
 
         let mut always_skip = Custom::new("AlwaysSkip", |_, _, _| TickDecision::Skip);
-        assert_eq!(
-            always_skip.should_tick("x", 0, "y"),
-            TickDecision::Skip
-        );
+        assert_eq!(always_skip.should_tick("x", 0, "y"), TickDecision::Skip);
     }
 
     #[test]

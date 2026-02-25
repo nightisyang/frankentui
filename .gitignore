@@ -119,3 +119,17 @@ storage.sqlite3-*
 # Claude local settings
 .claude/settings.local.json
 .env
+
+# Agent mail project identity
+.agent-mail-project-id
+
+# Remote compilation helper artifacts
+.rch-target/
+.rch-deploy-root/
+rch-bin/
+rch-install/
+
+# SQLite backup/corruption files
+*.sqlite3.bak
+*.sqlite3-wal.bak
+*.sqlite3.corrupt-*

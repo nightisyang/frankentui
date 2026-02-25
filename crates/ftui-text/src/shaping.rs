@@ -160,6 +160,50 @@ impl FontFeatures {
         self.features.iter()
     }
 
+    /// Return the value for a feature tag if present.
+    #[inline]
+    pub fn feature_value(&self, tag: [u8; 4]) -> Option<u32> {
+        self.features.iter().find(|f| f.tag == tag).map(|f| f.value)
+    }
+
+    /// Insert or update a feature value by tag.
+    pub fn set_feature_value(&mut self, tag: [u8; 4], value: u32) {
+        if let Some(existing) = self.features.iter_mut().find(|f| f.tag == tag) {
+            existing.value = value;
+        } else {
+            self.features.push(FontFeature::new(tag, value));
+        }
+        self.canonicalize();
+    }
+
+    /// Toggle standard ligature features (`liga`, `clig`).
+    ///
+    /// This explicit toggle is used by capability-gated fallback code so
+    /// ligature behavior stays deterministic across runtimes.
+    pub fn set_standard_ligatures(&mut self, enabled: bool) {
+        let value = u32::from(enabled);
+        self.set_feature_value(*b"liga", value);
+        self.set_feature_value(*b"clig", value);
+    }
+
+    /// Return explicit standard-ligature state if configured.
+    ///
+    /// - `Some(true)`: all explicitly configured standard ligatures are on.
+    /// - `Some(false)`: at least one explicit standard-ligature feature is off.
+    /// - `None`: no explicit standard-ligature feature was configured.
+    #[must_use]
+    pub fn standard_ligatures_enabled(&self) -> Option<bool> {
+        let mut saw_explicit = false;
+        let mut enabled = true;
+        for tag in [*b"liga", *b"clig"] {
+            if let Some(value) = self.feature_value(tag) {
+                saw_explicit = true;
+                enabled &= value != 0;
+            }
+        }
+        saw_explicit.then_some(enabled)
+    }
+
     /// Sort features by tag for deterministic hashing.
     pub fn canonicalize(&mut self) {
         self.features.sort_by_key(|f| f.tag);
@@ -774,6 +818,34 @@ mod tests {
     fn font_features_default_is_empty() {
         let ff = FontFeatures::default();
         assert!(ff.is_empty());
+    }
+
+    #[test]
+    fn font_features_set_feature_value_upserts() {
+        let mut ff = FontFeatures::new();
+        ff.set_feature_value(*b"liga", 1);
+        ff.set_feature_value(*b"liga", 0);
+        ff.set_feature_value(*b"kern", 1);
+
+        assert_eq!(ff.feature_value(*b"liga"), Some(0));
+        assert_eq!(ff.feature_value(*b"kern"), Some(1));
+        assert_eq!(ff.len(), 2, "upsert should not duplicate existing tags");
+    }
+
+    #[test]
+    fn font_features_standard_ligatures_toggle() {
+        let mut ff = FontFeatures::new();
+        assert_eq!(ff.standard_ligatures_enabled(), None);
+
+        ff.set_standard_ligatures(true);
+        assert_eq!(ff.feature_value(*b"liga"), Some(1));
+        assert_eq!(ff.feature_value(*b"clig"), Some(1));
+        assert_eq!(ff.standard_ligatures_enabled(), Some(true));
+
+        ff.set_standard_ligatures(false);
+        assert_eq!(ff.feature_value(*b"liga"), Some(0));
+        assert_eq!(ff.feature_value(*b"clig"), Some(0));
+        assert_eq!(ff.standard_ligatures_enabled(), Some(false));
     }
 
     // -----------------------------------------------------------------------

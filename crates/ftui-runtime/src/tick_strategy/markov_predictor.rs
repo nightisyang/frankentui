@@ -69,10 +69,7 @@ impl DecayState {
 
     /// Increment the call counter and trigger decay if the interval is reached.
     /// Returns `true` if decay was performed.
-    fn maybe_decay<S: Eq + Hash + Clone>(
-        &mut self,
-        counter: &mut TransitionCounter<S>,
-    ) -> bool {
+    fn maybe_decay<S: Eq + Hash + Clone>(&mut self, counter: &mut TransitionCounter<S>) -> bool {
         let config = match &self.config {
             Some(c) => c,
             None => return false,
@@ -619,14 +616,14 @@ mod tests {
 
         // 0 observations
         let c0 = mp.confidence(&"x");
-        assert!(c0 >= 0.0 && c0 <= 1.0, "confidence={c0}");
+        assert!((0.0..=1.0).contains(&c0), "confidence={c0}");
 
         // Partial observations
         for i in 1..=20 {
             mp.record_transition("x", "y");
             let c = mp.confidence(&"x");
             eprintln!("obs={i}, confidence={c:.4}");
-            assert!(c >= 0.0 && c <= 1.0, "confidence out of range: {c}");
+            assert!((0.0..=1.0).contains(&c), "confidence out of range: {c}");
         }
     }
 

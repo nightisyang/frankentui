@@ -1285,8 +1285,10 @@ impl<T: RenderItem> StatefulWidget for VirtualizedList<'_, T> {
         };
         state.scroll_offset = state.scroll_offset.min(max_offset);
 
-        // Update visible count
-        state.visible_count = items_per_viewport.min(total_items);
+        // Update visible count — use fully_visible_items (not items_per_viewport
+        // which includes partial items via div_ceil) so scroll calculations
+        // (page size, max_offset) use a consistent metric.
+        state.visible_count = fully_visible_items.max(1).min(total_items);
 
         // Calculate render range with overscan
         let render_start = state.scroll_offset.saturating_sub(state.overscan);

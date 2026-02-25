@@ -45,9 +45,11 @@
 pub mod asciicast;
 pub mod determinism;
 pub mod flicker_detection;
+pub mod frame_comparison;
 pub mod golden;
 pub mod hdd;
 pub mod input_storm;
+pub mod lab_integration;
 pub mod resize_storm;
 pub mod terminal_model;
 pub mod time_travel;
@@ -73,6 +75,10 @@ pub use determinism::{
 pub use ftui_core::geometry::Rect;
 pub use ftui_render::buffer;
 pub use ftui_render::cell;
+pub use lab_integration::{
+    Lab, LabConfig, LabOutput, LabSession, Recording, ReplayResult, assert_outputs_match,
+    lab_recordings_total, lab_replays_total,
+};
 pub use time_travel_inspector::TimeTravelInspector;
 
 // ============================================================================

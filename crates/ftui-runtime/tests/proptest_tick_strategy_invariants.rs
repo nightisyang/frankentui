@@ -16,16 +16,13 @@
 //! 9. Divisor bounds: min_divisor <= divisor <= max_divisor
 //! 10. Decay monotonic: smaller factor → smaller counts
 
-use ftui_runtime::{
-    MarkovPredictor, TickAllocation, TransitionCounter,
-};
+use ftui_runtime::{MarkovPredictor, TickAllocation, TransitionCounter};
 use proptest::prelude::*;
 
 // ── Strategies ────────────────────────────────────────────────────────────
 
 fn arb_screen_id() -> impl Strategy<Value = String> {
-    prop::string::string_regex("[A-Z][a-z]{2,8}")
-        .unwrap()
+    prop::string::string_regex("[A-Z][a-z]{2,8}").unwrap()
 }
 
 fn arb_transition_pair() -> impl Strategy<Value = (String, String)> {

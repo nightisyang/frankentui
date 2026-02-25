@@ -495,7 +495,7 @@ impl<M: Model> StepProgram<M> {
                 // No persistence in WASM (yet).
             }
             Cmd::SetTickStrategy(_) => {
-                // No-op in WASM (yet).
+                // No-op in WASM; runtime tick strategy comes from host configuration.
             }
         }
     }

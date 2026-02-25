@@ -28,21 +28,31 @@
 pub mod allocation_budget;
 pub mod asciicast;
 pub mod bocpd;
+pub mod cancellation;
+
 pub mod conformal_alert;
+pub mod conformal_frame_guard;
 pub mod conformal_predictor;
 pub mod cost_model;
 pub mod debug_trace;
 pub mod decision_core;
+pub mod degradation_cascade;
 pub mod diff_evidence;
+pub mod effect_system;
 pub mod eprocess_throttle;
+#[cfg(feature = "event-trace")]
+pub mod event_trace;
 pub mod evidence_bridges;
 pub mod evidence_sink;
 pub mod evidence_telemetry;
 pub mod flake_detector;
 pub mod input_fairness;
 pub mod input_macro;
+pub mod ivm;
 pub mod locale;
 pub mod log_sink;
+pub mod policy_config;
+pub mod process_subscription;
 pub mod program;
 pub mod queueing_scheduler;
 #[cfg(feature = "render-thread")]
@@ -50,6 +60,7 @@ pub mod render_thread;
 pub mod render_trace;
 pub mod resize_coalescer;
 pub mod resize_sla;
+pub mod retry;
 pub mod simulator;
 pub mod state_persistence;
 #[cfg(feature = "stdio-capture")]
@@ -71,6 +82,7 @@ pub mod telemetry;
 pub mod voi_telemetry;
 
 pub use asciicast::{AsciicastRecorder, AsciicastWriter};
+pub use cancellation::{CancellationSource, CancellationToken};
 pub use diff_evidence::{
     DiffEvidenceLedger, DiffRegime, DiffStrategyRecord, Observation, RegimeTransition,
 };
@@ -91,6 +103,7 @@ pub use locale::{
     Locale, LocaleContext, LocaleOverride, current_locale, detect_system_locale, set_locale,
 };
 pub use log_sink::LogSink;
+pub use process_subscription::{ProcessEvent, ProcessSubscription};
 #[cfg(feature = "crossterm-compat")]
 pub use program::CrosstermEventSource;
 pub use program::{
@@ -106,6 +119,7 @@ pub use program::{
 pub use render_trace::{
     RenderTraceConfig, RenderTraceContext, RenderTraceFrame, RenderTraceRecorder,
 };
+pub use retry::{BackoffStrategy, RetryPolicy, task_with_retry, task_with_timeout};
 pub use simulator::ProgramSimulator;
 pub use string_model::{StringModel, StringModelAdapter};
 pub use subscription::{Every, StopSignal, SubId, Subscription};
@@ -134,6 +148,10 @@ pub use allocation_budget::{
 pub use conformal_alert::{
     AlertConfig, AlertDecision, AlertEvidence, AlertReason, AlertStats, ConformalAlert,
 };
+pub use conformal_frame_guard::{
+    ConformalFrameGuard, ConformalFrameGuardConfig, ConformalFrameGuardTelemetry, GuardState,
+    NonconformitySummary, P99Prediction,
+};
 pub use conformal_predictor::{
     BucketKey, ConformalConfig, ConformalPrediction, ConformalPredictor, ConformalUpdate,
     DiffBucket, ModeBucket,
@@ -146,10 +164,30 @@ pub use decision_core::{
     Action as DecisionAction, Decision, DecisionCore, Outcome as DecisionOutcome, Posterior,
     State as DecisionState, argmin_expected_loss, second_best_loss,
 };
+pub use degradation_cascade::{
+    CascadeConfig, CascadeDecision, CascadeEvidence, CascadeTelemetry, DegradationCascade,
+    PreRenderResult,
+};
+pub use effect_system::{
+    effects_command_total, effects_executed_total, effects_subscription_total,
+    record_command_effect, record_subscription_start, record_subscription_stop,
+    trace_command_effect,
+};
 pub use eprocess_throttle::{
     EProcessThrottle, ThrottleConfig, ThrottleDecision, ThrottleLog, ThrottleStats,
+    eprocess_rejections_total,
+};
+#[cfg(feature = "event-trace")]
+pub use event_trace::{
+    EventReplayer, EventTraceReader, EventTraceWriter, EvidenceMismatch, EvidenceVerifier,
+    SerDecisionDomain, SerEvidenceEntry, SerEvidenceTerm, TraceFile, TraceRecord,
 };
 pub use flake_detector::{EvidenceLog, FlakeConfig, FlakeDecision, FlakeDetector, FlakeSummary};
+pub use policy_config::{
+    BocpdPolicyConfig, CascadePolicyConfig, ConformalPolicyConfig, EProcessBudgetPolicyConfig,
+    EProcessThrottlePolicyConfig, EvidencePolicyConfig, FrameGuardPolicyConfig, PidPolicyConfig,
+    PolicyConfig, PolicyConfigError, VoiPolicyConfig,
+};
 pub use reactive::{BatchScope, Binding, BindingScope, Computed, Observable, TwoWayBinding};
 pub use resize_coalescer::{
     CoalesceAction, CoalescerConfig, CoalescerStats, CycleTimePercentiles, DecisionLog,
@@ -172,7 +210,9 @@ pub use validation_pipeline::{
     ValidationPipeline, ValidatorStats,
 };
 pub use voi_sampling::{
-    VoiConfig, VoiDecision, VoiLogEntry, VoiObservation, VoiSampler, VoiSamplerSnapshot, VoiSummary,
+    DeferredRefinementConfig, DeferredRefinementPlan, DeferredRefinementScheduler,
+    RefinementCandidate, RefinementSelection, VoiConfig, VoiDecision, VoiLogEntry, VoiObservation,
+    VoiSampler, VoiSamplerSnapshot, VoiSummary, voi_samples_skipped_total, voi_samples_taken_total,
 };
 
 // State persistence

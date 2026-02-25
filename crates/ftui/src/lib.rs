@@ -58,8 +58,9 @@ pub use ftui_style::{
 #[cfg(feature = "runtime")]
 pub use ftui_runtime::{
     App, Cmd, EffectQueueConfig, InlineAutoRemeasureConfig, Locale, LocaleContext, LocaleOverride,
-    Model, Program, ProgramConfig, ResizeBehavior, RuntimeDiffConfig, ScreenMode, TaskSpec,
-    TerminalWriter, UiAnchor, current_locale, detect_system_locale, set_locale,
+    Model, PredictiveConfig, Program, ProgramConfig, ResizeBehavior, RuntimeDiffConfig, ScreenMode,
+    TaskSpec, TerminalWriter, TickDecision, TickStrategy, TickStrategyKind, UiAnchor,
+    current_locale, detect_system_locale, set_locale,
 };
 
 // --- Errors ---------------------------------------------------------------
@@ -80,7 +81,10 @@ pub mod prelude {
     };
 
     #[cfg(feature = "runtime")]
-    pub use crate::{App, Cmd, Model, ScreenMode, TerminalWriter};
+    pub use crate::{
+        App, Cmd, Model, PredictiveConfig, ScreenMode, TerminalWriter, TickDecision, TickStrategy,
+        TickStrategyKind,
+    };
 
     pub use crate::{core, layout, render, style, text, widgets};
 

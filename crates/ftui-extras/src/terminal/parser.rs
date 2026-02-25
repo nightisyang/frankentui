@@ -1201,14 +1201,18 @@ impl<'a> SgrIterator<'a> {
             5 => {
                 // 256-color mode: 38;5;N or 48;5;N
                 let color = self.next_param()?;
-                Some(SgrChange::Fg256(color as u8))
+                Some(SgrChange::Fg256(color.clamp(0, 255) as u8))
             }
             2 => {
                 // RGB mode: 38;2;R;G;B or 48;2;R;G;B
                 let r = self.next_param()?;
                 let g = self.next_param()?;
                 let b = self.next_param()?;
-                Some(SgrChange::FgRgb(r as u8, g as u8, b as u8))
+                Some(SgrChange::FgRgb(
+                    r.clamp(0, 255) as u8,
+                    g.clamp(0, 255) as u8,
+                    b.clamp(0, 255) as u8,
+                ))
             }
             _ => None,
         }
@@ -1219,13 +1223,17 @@ impl<'a> SgrIterator<'a> {
         match mode {
             5 => {
                 let color = self.next_param()?;
-                Some(SgrChange::Bg256(color as u8))
+                Some(SgrChange::Bg256(color.clamp(0, 255) as u8))
             }
             2 => {
                 let r = self.next_param()?;
                 let g = self.next_param()?;
                 let b = self.next_param()?;
-                Some(SgrChange::BgRgb(r as u8, g as u8, b as u8))
+                Some(SgrChange::BgRgb(
+                    r.clamp(0, 255) as u8,
+                    g.clamp(0, 255) as u8,
+                    b.clamp(0, 255) as u8,
+                ))
             }
             _ => None,
         }

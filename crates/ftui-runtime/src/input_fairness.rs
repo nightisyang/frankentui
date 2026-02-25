@@ -22,7 +22,7 @@
 //! - F = 1.0: Perfect fairness (equal allocation)
 //! - F = 1/n: Maximal unfairness (all time to one type)
 //!
-//! We maintain `F ≥ fairness_threshold` (default 0.5 for two event types).
+//! We maintain `F ≥ fairness_threshold` (default 0.8 for two event types).
 //!
 //! ## Starvation Detection
 //!
@@ -73,6 +73,8 @@ const DEFAULT_FAIRNESS_THRESHOLD: f64 = 0.8;
 
 /// Sliding window size for fairness calculation.
 const FAIRNESS_WINDOW_SIZE: usize = 16;
+/// Numerical tolerance for fairness-threshold comparisons.
+const FAIRNESS_THRESHOLD_EPSILON: f64 = 1e-12;
 
 /// Event type for fairness classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,9 +300,8 @@ impl InputFairnessGuard {
         if self.pending_input_arrival.is_none() {
             self.pending_input_arrival = Some(now);
         }
-        if self.recent_input_arrival.is_none() {
-            self.recent_input_arrival = Some(now);
-        }
+        // Track the most recent arrival seen since the last fairness check.
+        self.recent_input_arrival = Some(now);
     }
 
     /// Check fairness and return a decision.
@@ -318,19 +319,21 @@ impl InputFairnessGuard {
         // Calculate Jain's index for input vs resize
         let jain = self.calculate_jain_index();
 
-        // Check pending input latency (including recent input seen this cycle).
+        // Check pending input latency (including recent input seen this cycle for stats).
+        let has_pending_input = self.pending_input_arrival.is_some();
         let pending_latency = self
             .pending_input_arrival
             .or(self.recent_input_arrival)
             .map(|t| now.checked_duration_since(t).unwrap_or(Duration::ZERO));
-        if let Some(latency) = pending_latency
+        if has_pending_input
+            && let Some(latency) = pending_latency
             && latency > self.stats.max_input_latency
         {
             self.stats.max_input_latency = latency;
         }
 
         // Determine if intervention is needed
-        let reason = self.determine_intervention_reason(pending_latency, jain);
+        let reason = self.determine_intervention_reason(pending_latency, jain, has_pending_input);
         let yield_to_input = reason.requires_intervention();
 
         if yield_to_input {
@@ -353,7 +356,11 @@ impl InputFairnessGuard {
 
         let decision = FairnessDecision {
             should_process: !yield_to_input,
-            pending_input_latency: pending_latency,
+            pending_input_latency: if has_pending_input {
+                pending_latency
+            } else {
+                None
+            },
             reason,
             yield_to_input,
             jain_index: jain,
@@ -446,21 +453,28 @@ impl InputFairnessGuard {
         &self,
         pending_latency: Option<Duration>,
         jain: f64,
+        has_pending_input: bool,
     ) -> InterventionReason {
         // Priority 1: Latency threshold (most urgent)
-        if let Some(latency) = pending_latency
+        if has_pending_input
+            && let Some(latency) = pending_latency
             && latency >= self.config.input_priority_threshold
         {
             return InterventionReason::InputLatency;
         }
 
         // Priority 2: Resize dominance
-        if self.resize_dominance_count >= self.config.dominance_threshold {
+        if has_pending_input && self.resize_dominance_count >= self.config.dominance_threshold {
             return InterventionReason::ResizeDominance;
         }
 
         // Priority 3: Fairness index
-        if jain < self.config.fairness_threshold && pending_latency.is_some() {
+        //
+        // Keep this active whenever input is pending. If only one class has been
+        // processed in the recent window (for example, resize flood with
+        // input_time_us == 0), Jain's index will be at the low-bound for two
+        // classes and should still trigger intervention.
+        if has_pending_input && jain + FAIRNESS_THRESHOLD_EPSILON < self.config.fairness_threshold {
             return InterventionReason::FairnessIndex;
         }
 
@@ -529,6 +543,14 @@ mod tests {
     fn default_config_is_enabled() {
         let config = FairnessConfig::default();
         assert!(config.enabled);
+    }
+
+    #[test]
+    fn default_fairness_threshold_is_above_two_class_floor() {
+        let config = FairnessConfig::default();
+        // For two classes, Jain's index is bounded to [0.5, 1.0], so a threshold
+        // at or below 0.5 makes fairness-index intervention unreachable.
+        assert!(config.fairness_threshold > 0.5 + FAIRNESS_THRESHOLD_EPSILON);
     }
 
     #[test]
@@ -651,13 +673,36 @@ mod tests {
         let mut guard = InputFairnessGuard::with_config(config);
         let now = Instant::now();
 
-        guard.input_arrived(now);
+        // Seed both classes in the fairness window, then leave a pending input
+        // so fairness intervention applies to actual starvation risk.
         guard.event_processed(EventType::Input, Duration::from_millis(1), now);
+        guard.input_arrived(now);
         guard.event_processed(EventType::Resize, Duration::from_millis(100), now);
 
         let decision = guard.check_fairness(now + Duration::from_millis(1));
         assert!(decision.yield_to_input);
         assert_eq!(decision.reason, InterventionReason::FairnessIndex);
+    }
+
+    #[test]
+    fn fairness_index_triggers_when_input_is_starved_in_window() {
+        let config = FairnessConfig {
+            input_priority_threshold: Duration::from_secs(10),
+            dominance_threshold: 100,
+            fairness_threshold: 0.9,
+            ..Default::default()
+        };
+        let mut guard = InputFairnessGuard::with_config(config);
+        let now = Instant::now();
+
+        // Pending input exists, but only resize work has been observed so far.
+        // FairnessIndex should still intervene to prevent starvation.
+        guard.input_arrived(now);
+        guard.event_processed(EventType::Resize, Duration::from_millis(10), now);
+
+        let decision = guard.check_fairness(now);
+        assert_eq!(decision.reason, InterventionReason::FairnessIndex);
+        assert!(decision.yield_to_input);
     }
 
     #[test]
@@ -685,6 +730,46 @@ mod tests {
 
         guard.event_processed(EventType::Input, Duration::from_millis(5), now);
         assert!(!guard.has_pending_input());
+    }
+
+    #[test]
+    fn no_intervention_without_pending_input_under_resize_flood() {
+        let config = FairnessConfig {
+            input_priority_threshold: Duration::from_millis(1),
+            dominance_threshold: 1,
+            fairness_threshold: 0.99,
+            enabled: true,
+        };
+        let mut guard = InputFairnessGuard::with_config(config);
+        let now = Instant::now();
+
+        guard.event_processed(EventType::Resize, Duration::from_millis(50), now);
+        let decision = guard.check_fairness(now + Duration::from_millis(50));
+
+        assert!(!decision.yield_to_input);
+        assert_eq!(decision.reason, InterventionReason::None);
+        assert!(decision.pending_input_latency.is_none());
+    }
+
+    #[test]
+    fn processed_input_does_not_cause_spurious_followup_intervention() {
+        let config = FairnessConfig {
+            input_priority_threshold: Duration::from_millis(1),
+            dominance_threshold: 1,
+            fairness_threshold: 0.99,
+            enabled: true,
+        };
+        let mut guard = InputFairnessGuard::with_config(config);
+        let now = Instant::now();
+
+        guard.input_arrived(now);
+        guard.event_processed(EventType::Input, Duration::from_millis(1), now);
+        guard.event_processed(EventType::Resize, Duration::from_millis(50), now);
+
+        let decision = guard.check_fairness(now + Duration::from_millis(50));
+        assert!(!decision.yield_to_input);
+        assert_eq!(decision.reason, InterventionReason::None);
+        assert!(decision.pending_input_latency.is_none());
     }
 
     #[test]
@@ -924,6 +1009,9 @@ mod tests {
     fn resize_dominance_triggers_after_threshold() {
         let config = FairnessConfig {
             dominance_threshold: 3,
+            // Keep fairness-index intervention out of scope for this test so it
+            // isolates dominance-threshold behavior.
+            fairness_threshold: 0.5,
             ..FairnessConfig::default()
         };
         let mut guard = InputFairnessGuard::with_config(config);
@@ -1042,6 +1130,19 @@ mod tests {
         let stats = guard.stats();
         // Second check had 50ms latency
         assert!(stats.max_input_latency >= Duration::from_millis(30));
+    }
+
+    #[test]
+    fn max_input_latency_ignores_recent_when_no_pending_input() {
+        let mut guard = InputFairnessGuard::new();
+        let now = Instant::now();
+
+        guard.input_arrived(now);
+        guard.event_processed(EventType::Input, Duration::from_millis(1), now);
+
+        // No pending input remains, so latency stats should not grow.
+        guard.check_fairness(now + Duration::from_millis(100));
+        assert_eq!(guard.stats().max_input_latency, Duration::ZERO);
     }
 
     #[test]

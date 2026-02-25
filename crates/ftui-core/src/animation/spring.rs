@@ -261,6 +261,15 @@ impl Spring {
 
 impl Animation for Spring {
     fn tick(&mut self, dt: Duration) {
+        #[cfg(feature = "tracing")]
+        let _span = tracing::debug_span!(
+            "animation.tick",
+            animation_type = "spring",
+            dt_us = dt.as_micros() as u64,
+            at_rest = self.at_rest,
+        )
+        .entered();
+
         self.advance(dt);
     }
 
@@ -935,6 +944,329 @@ mod tests {
         assert!(
             (s.damping() - expected_damping).abs() < f64::EPSILON,
             "critical preset should have c = 2*sqrt(k)"
+        );
+    }
+
+    // ── Time-step independence (bd-1lg.12) ──────────────────────────
+
+    #[test]
+    fn timestep_independence_coarse_vs_fine() {
+        // Same total duration (1s) with different step sizes should converge
+        // to the same final position within tolerance.
+        let total_ms = 1000u64;
+
+        let run_with_step = |step_ms: u64| -> f64 {
+            let mut spring = Spring::new(0.0, 1.0)
+                .with_stiffness(170.0)
+                .with_damping(26.0);
+            let steps = total_ms / step_ms;
+            let dt = Duration::from_millis(step_ms);
+            for _ in 0..steps {
+                spring.tick(dt);
+            }
+            spring.position()
+        };
+
+        let pos_1ms = run_with_step(1);
+        let pos_4ms = run_with_step(4); // matches MAX_STEP_SECS
+        let pos_16ms = run_with_step(16); // 60fps
+        let pos_33ms = run_with_step(33); // 30fps
+
+        // All should be within 0.01 of each other (the subdivision ensures this).
+        let tolerance = 0.01;
+        assert!(
+            (pos_1ms - pos_4ms).abs() < tolerance,
+            "1ms vs 4ms: {pos_1ms} vs {pos_4ms}"
+        );
+        assert!(
+            (pos_1ms - pos_16ms).abs() < tolerance,
+            "1ms vs 16ms: {pos_1ms} vs {pos_16ms}"
+        );
+        assert!(
+            (pos_1ms - pos_33ms).abs() < tolerance,
+            "1ms vs 33ms: {pos_1ms} vs {pos_33ms}"
+        );
+    }
+
+    #[test]
+    fn timestep_independence_single_vs_many() {
+        // One big 500ms tick vs 500 × 1ms ticks.
+        let mut single = Spring::new(0.0, 1.0)
+            .with_stiffness(170.0)
+            .with_damping(26.0);
+        single.tick(Duration::from_millis(500));
+
+        let mut many = Spring::new(0.0, 1.0)
+            .with_stiffness(170.0)
+            .with_damping(26.0);
+        for _ in 0..500 {
+            many.tick(Duration::from_millis(1));
+        }
+
+        assert!(
+            (single.position() - many.position()).abs() < 0.02,
+            "single 500ms ({}) vs 500×1ms ({})",
+            single.position(),
+            many.position()
+        );
+    }
+
+    // ── Damping mode comparison (bd-1lg.12) ─────────────────────────
+
+    #[test]
+    fn critically_damped_settles_fastest() {
+        let k: f64 = 170.0;
+        let c_critical = 2.0 * k.sqrt();
+
+        let mut underdamped = Spring::new(0.0, 1.0)
+            .with_stiffness(k)
+            .with_damping(c_critical * 0.3); // well under critical
+
+        let mut critical = Spring::new(0.0, 1.0)
+            .with_stiffness(k)
+            .with_damping(c_critical);
+
+        let mut overdamped = Spring::new(0.0, 1.0)
+            .with_stiffness(k)
+            .with_damping(c_critical * 3.0); // well over critical
+
+        let threshold = 0.01;
+        let settle_frame = |spring: &mut Spring| -> usize {
+            for frame in 0..1000 {
+                spring.tick(MS_16);
+                if (spring.position() - 1.0).abs() < threshold
+                    && spring.velocity().abs() < threshold
+                {
+                    return frame;
+                }
+            }
+            1000
+        };
+
+        let ud_frames = settle_frame(&mut underdamped);
+        let cd_frames = settle_frame(&mut critical);
+        let od_frames = settle_frame(&mut overdamped);
+
+        assert!(
+            cd_frames <= ud_frames,
+            "critical ({cd_frames}) should settle no later than underdamped ({ud_frames})"
+        );
+        assert!(
+            cd_frames <= od_frames,
+            "critical ({cd_frames}) should settle no later than overdamped ({od_frames})"
+        );
+    }
+
+    #[test]
+    fn overdamped_no_oscillation() {
+        let k: f64 = 170.0;
+        let c_critical = 2.0 * k.sqrt();
+        let mut spring = Spring::new(0.0, 1.0)
+            .with_stiffness(k)
+            .with_damping(c_critical * 3.0);
+
+        // Overdamped spring should approach target monotonically (no overshoot).
+        let mut prev_pos = 0.0;
+        for _ in 0..500 {
+            spring.tick(MS_16);
+            let pos = spring.position();
+            assert!(
+                pos >= prev_pos - f64::EPSILON,
+                "overdamped spring should not oscillate: prev={prev_pos}, cur={pos}"
+            );
+            prev_pos = pos;
+        }
+    }
+
+    #[test]
+    fn underdamped_oscillates_then_settles() {
+        let k: f64 = 170.0;
+        let c_critical = 2.0 * k.sqrt();
+        let mut spring = Spring::new(0.0, 1.0)
+            .with_stiffness(k)
+            .with_damping(c_critical * 0.2);
+
+        // Must overshoot target at least once.
+        let mut overshot = false;
+        for _ in 0..200 {
+            spring.tick(MS_16);
+            if spring.position() > 1.0 {
+                overshot = true;
+                break;
+            }
+        }
+        assert!(overshot, "underdamped spring should overshoot target");
+
+        // But must eventually settle.
+        for _ in 0..2000 {
+            spring.tick(MS_16);
+        }
+        assert!(
+            spring.is_complete(),
+            "underdamped spring should eventually settle (pos: {}, vel: {})",
+            spring.position(),
+            spring.velocity()
+        );
+    }
+
+    // ── Zero-displacement handling (bd-1lg.12) ──────────────────────
+
+    #[test]
+    fn zero_displacement_spring_completes_immediately() {
+        let mut spring = Spring::new(1.0, 1.0);
+        spring.tick(MS_16);
+        assert!(
+            spring.is_complete(),
+            "spring with initial == target should settle after one tick"
+        );
+        assert!((spring.position() - 1.0).abs() < f64::EPSILON);
+    }
+}
+
+// ── Tracing span assertion (bd-1lg.12) ──────────────────────────────
+//
+// Feature-gated to `tracing` because the span only exists when the
+// feature is enabled. This is a unit test (not integration) to avoid
+// the global callsite interest cache race condition with parallel tests.
+
+#[cfg(all(test, feature = "tracing"))]
+mod tracing_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::registry::LookupSpan;
+
+    #[derive(Debug, Clone)]
+    struct CapturedSpan {
+        name: String,
+        fields: HashMap<String, String>,
+    }
+
+    struct SpanCapture {
+        spans: Arc<Mutex<Vec<CapturedSpan>>>,
+    }
+
+    impl SpanCapture {
+        fn new() -> (Self, Arc<Mutex<Vec<CapturedSpan>>>) {
+            let spans = Arc::new(Mutex::new(Vec::new()));
+            (
+                Self {
+                    spans: spans.clone(),
+                },
+                spans,
+            )
+        }
+    }
+
+    struct FieldVisitor(Vec<(String, String)>);
+
+    impl tracing::field::Visit for FieldVisitor {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+    }
+
+    impl<S> tracing_subscriber::Layer<S> for SpanCapture
+    where
+        S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _id: &tracing::span::Id,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut visitor = FieldVisitor(Vec::new());
+            attrs.record(&mut visitor);
+            let mut fields: HashMap<String, String> = visitor.0.into_iter().collect();
+            for field in attrs.metadata().fields() {
+                fields.entry(field.name().to_string()).or_default();
+            }
+            self.spans.lock().unwrap().push(CapturedSpan {
+                name: attrs.metadata().name().to_string(),
+                fields,
+            });
+        }
+    }
+
+    #[test]
+    fn tick_emits_animation_tick_span() {
+        let (layer, spans) = SpanCapture::new();
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            let mut spring = Spring::new(0.0, 1.0)
+                .with_stiffness(170.0)
+                .with_damping(26.0);
+            spring.tick(Duration::from_millis(16));
+        });
+
+        let captured = spans.lock().unwrap();
+        let tick_spans: Vec<_> = captured
+            .iter()
+            .filter(|s| s.name == "animation.tick")
+            .collect();
+
+        assert!(
+            !tick_spans.is_empty(),
+            "Spring::tick() should emit an animation.tick span"
+        );
+        assert_eq!(
+            tick_spans[0]
+                .fields
+                .get("animation_type")
+                .map(String::as_str),
+            Some("spring"),
+            "animation.tick span must have animation_type=spring"
+        );
+        assert!(
+            tick_spans[0].fields.contains_key("dt_us"),
+            "animation.tick span must have dt_us field"
+        );
+        assert!(
+            tick_spans[0].fields.contains_key("at_rest"),
+            "animation.tick span must have at_rest field"
+        );
+    }
+
+    #[test]
+    fn tick_at_rest_records_at_rest_true() {
+        let (layer, spans) = SpanCapture::new();
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            let mut spring = Spring::new(1.0, 1.0);
+            // First tick settles the spring.
+            spring.tick(Duration::from_millis(16));
+            assert!(spring.is_complete());
+            // Second tick should have at_rest=true.
+            spring.tick(Duration::from_millis(16));
+        });
+
+        let captured = spans.lock().unwrap();
+        let tick_spans: Vec<_> = captured
+            .iter()
+            .filter(|s| s.name == "animation.tick")
+            .collect();
+
+        // The second span should have at_rest=true.
+        assert!(
+            tick_spans.len() >= 2,
+            "expected at least 2 animation.tick spans"
+        );
+        assert_eq!(
+            tick_spans[1].fields.get("at_rest").map(String::as_str),
+            Some("true"),
+            "second tick should have at_rest=true"
         );
     }
 }

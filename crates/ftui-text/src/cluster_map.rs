@@ -927,4 +927,56 @@ mod tests {
         );
         assert!(map.is_empty());
     }
+
+    #[test]
+    fn from_shaped_run_ligature_cluster_boundaries() {
+        use crate::shaping::{ShapedGlyph, ShapedRun};
+
+        let text = "file";
+        let run = ShapedRun {
+            glyphs: vec![
+                ShapedGlyph {
+                    glyph_id: 1,
+                    cluster: 0, // "fi" cluster
+                    x_advance: 2,
+                    y_advance: 0,
+                    x_offset: 0,
+                    y_offset: 0,
+                },
+                ShapedGlyph {
+                    glyph_id: 2,
+                    cluster: 2,
+                    x_advance: 1,
+                    y_advance: 0,
+                    x_offset: 0,
+                    y_offset: 0,
+                },
+                ShapedGlyph {
+                    glyph_id: 3,
+                    cluster: 3,
+                    x_advance: 1,
+                    y_advance: 0,
+                    x_offset: 0,
+                    y_offset: 0,
+                },
+            ],
+            total_advance: 4,
+        };
+
+        let map = ClusterMap::from_shaped_run(text, &run);
+        assert_eq!(map.cluster_count(), 3);
+        assert_eq!(map.total_cells(), 4);
+
+        // Mid-byte in "fi" snaps to ligature cluster start.
+        assert_eq!(map.byte_to_cell(0), 0);
+        assert_eq!(map.byte_to_cell(1), 0);
+        assert_eq!(map.byte_to_cell(2), 2);
+
+        // Continuation cell snaps back to cluster start for interaction mapping.
+        assert_eq!(map.cell_to_byte(1), 0);
+        assert_eq!(map.cell_to_byte(2), 2);
+
+        // Copy extraction over the ligature cluster preserves canonical text.
+        assert_eq!(map.extract_text_for_cells(text, 0, 2), "fi");
+    }
 }

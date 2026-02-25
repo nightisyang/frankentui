@@ -136,12 +136,10 @@ fn burst_regime_transition() {
     );
 }
 
-/// Cooldown: burst mode persists for cooldown_frames after rate drops.
+/// Cooldown hysteresis: burst mode does not exit immediately after rate drop.
 ///
-/// The cooldown decrement in `tick_at` (lines 692-700) is only reached when
-/// the tick does NOT trigger an apply (neither hard deadline nor delay check).
-/// This test carefully orchestrates timing so that ticks land BEFORE the
-/// burst_delay_ms expires, allowing the cooldown code to run.
+/// This verifies the current `tick_at` contract where cooldown is decremented on
+/// each tick before apply checks are evaluated.
 #[test]
 fn burst_cooldown_hysteresis() {
     let cfg = CoalescerConfig {
@@ -157,52 +155,48 @@ fn burst_cooldown_hysteresis() {
         bocpd_config: None,
     };
     let base = Instant::now();
-    let mut coalescer = ResizeCoalescer::new(cfg, (80, 24)).with_last_render(base);
+    let mut coalescer = ResizeCoalescer::new(cfg.clone(), (80, 24)).with_last_render(base);
 
-    // Phase 1: Enter burst with rapid events (30ms apart → ~33 events/sec)
+    // Phase 1: Enter burst with rapid events (30ms apart → ~33 events/sec).
+    let mut t = base;
     for i in 0..8u64 {
-        let t = base + Duration::from_millis(30 * i);
+        t = base + Duration::from_millis(30 * i);
         coalescer.handle_resize_at(80 + (i as u16), 24, t);
     }
     assert_eq!(coalescer.regime(), Regime::Burst);
 
-    // Phase 2: Apply pending resize to update last_render.
-    // Tick 70ms after last event (> burst_delay_ms=50) to trigger apply.
-    let t_apply = base + Duration::from_millis(280);
-    let action = coalescer.tick_at(t_apply);
-    assert!(
-        matches!(action, CoalesceAction::ApplyResize { .. }),
-        "Should apply pending after burst delay"
+    // Phase 2: Force a low-rate observation (>1s gap clears stale rate window)
+    // and verify we stay in burst until cooldown drains.
+    t += Duration::from_millis(1100);
+    coalescer.handle_resize_at(120, 35, t);
+    assert_eq!(
+        coalescer.regime(),
+        Regime::Burst,
+        "Cooldown should prevent immediate burst exit"
     );
 
-    // Phase 3: Push slow events (1s apart) to drain the rate window of rapid
-    // events. Each tick at +60ms triggers apply (60 > burst_delay_ms=50),
-    // keeping last_render fresh but NOT reaching cooldown code.
-    let mut t = t_apply;
-    for i in 0..5u64 {
-        t += Duration::from_secs(1);
-        coalescer.handle_resize_at(100 + (i as u16), 30, t);
-        coalescer.tick_at(t + Duration::from_millis(60)); // triggers apply
-    }
-    // Rate window now contains only slow events → rate ≈ 1.3 < burst_exit_rate
-    // Still in Burst because cooldown hasn't been decremented via tick_at.
-    assert_eq!(coalescer.regime(), Regime::Burst);
-
-    // Phase 4: Send one event, then tick 3 times WITHIN burst_delay_ms so the
-    // delay check does NOT trigger apply. Each tick reaches the cooldown
-    // decrement code: cooldown 3→2→1→0, then regime transitions to Steady.
-    t += Duration::from_secs(1);
-    coalescer.handle_resize_at(120, 35, t);
-
-    for tick_idx in 1..=3u32 {
-        let t_tick = t + Duration::from_millis(tick_idx as u64 * 5); // 5ms, 10ms, 15ms
-        coalescer.tick_at(t_tick);
+    // Tick within burst delay to avoid apply; regime should remain burst until
+    // the final cooldown decrement reaches zero.
+    for tick_idx in 1..cfg.cooldown_frames {
+        let t_tick = t + Duration::from_millis(tick_idx as u64 * 5);
+        let action = coalescer.tick_at(t_tick);
+        assert!(
+            !matches!(action, CoalesceAction::ApplyResize { .. }),
+            "Expected no apply while draining cooldown"
+        );
+        assert_eq!(
+            coalescer.regime(),
+            Regime::Burst,
+            "Should remain burst before final cooldown tick"
+        );
     }
 
+    let final_tick = t + Duration::from_millis(cfg.cooldown_frames as u64 * 5);
+    coalescer.tick_at(final_tick);
     assert_eq!(
         coalescer.regime(),
         Regime::Steady,
-        "Should return to Steady after cooldown frames drain"
+        "Should return to steady after cooldown frames drain"
     );
 }
 

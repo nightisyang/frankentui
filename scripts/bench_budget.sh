@@ -23,6 +23,12 @@ PERF_LOG="${RESULTS_DIR}/perf_log.jsonl"
 CONFIDENCE_LOG="${RESULTS_DIR}/perf_confidence.jsonl"
 RUN_ID="$(date +%Y%m%dT%H%M%S)-$$"
 
+if command -v rch >/dev/null 2>&1; then
+    CARGO_BENCH_RUNNER=(rch exec -- cargo)
+else
+    CARGO_BENCH_RUNNER=(cargo)
+fi
+
 # Performance budgets (name:max_ns:description)
 # These are based on AGENTS.md requirements and documented in bd-3cwi
 declare -A BUDGETS=(
@@ -143,6 +149,24 @@ declare -A BUDGETS=(
     ["web/glyph_atlas_cache/miss_insert_single"]=5000
     ["web/glyph_atlas_cache/hit_hot_path"]=250
     ["web/glyph_atlas_cache/eviction_cycle_3keys_budget2"]=1500
+
+    # ---------------------------------------------------------------------
+    # Pane workspace baseline budgets (bd-2bav7)
+    # ---------------------------------------------------------------------
+    # Core pane engine (ftui-layout/layout_bench)
+    ["pane/core/solve_layout/leaf_count_8"]=200000
+    ["pane/core/solve_layout/leaf_count_32"]=700000
+    ["pane/core/solve_layout/leaf_count_64"]=1400000
+    ["pane/core/apply_operation/split_leaf"]=450000
+    ["pane/core/apply_operation/move_subtree"]=900000
+    ["pane/core/planning/plan_reflow_move"]=450000
+    ["pane/core/planning/plan_edge_resize"]=350000
+    ["pane/core/timeline/apply_and_replay_32_ops"]=2500000
+
+    # Host adapter lifecycle (ftui-web/pane_pointer_bench)
+    ["pane/web_pointer/lifecycle/down_ack_move_32_up"]=1000000
+    ["pane/web_pointer/lifecycle/down_ack_move_120_up"]=3500000
+    ["pane/web_pointer/lifecycle/blur_after_ack"]=250000
 )
 
 # PANIC threshold multiplier (2x budget = hard failure)
@@ -286,6 +310,8 @@ run_benchmarks() {
     : > "${RESULTS_DIR}/diff_bench.txt"
     : > "${RESULTS_DIR}/presenter_bench.txt"
     : > "${RESULTS_DIR}/widget_bench.txt"
+    : > "${RESULTS_DIR}/layout_bench.txt"
+    : > "${RESULTS_DIR}/pane_pointer_bench.txt"
     : > "${RESULTS_DIR}/telemetry_bench.txt"
     : > "${RESULTS_DIR}/parser_patch_bench.txt"
     : > "${RESULTS_DIR}/renderer_bench.txt"
@@ -303,6 +329,7 @@ run_benchmarks() {
         benches+=(
             "ftui-widgets:widget_bench"
             "ftui-layout:layout_bench"
+            "ftui-web:pane_pointer_bench"
             "ftui-text:width_bench"
             "ftui-runtime:telemetry_bench:telemetry"
         )
@@ -345,7 +372,7 @@ run_benchmarks() {
             fi
 
             if [[ -n "${features:-}" ]]; then
-                if ! cargo bench -p "$pkg" --bench "$bench" --features "$features" "${run_args[@]}" \
+                if ! "${CARGO_BENCH_RUNNER[@]}" bench -p "$pkg" --bench "$bench" --features "$features" "${run_args[@]}" \
                     2>"$stderr_file" | tee "${tee_args[@]}" "${RESULTS_DIR}/${bench}.txt"; then
                     log "${RED}Benchmark failed:${NC} $pkg/$bench"
                     log "  stderr: $stderr_file"
@@ -353,7 +380,7 @@ run_benchmarks() {
                     return 1
                 fi
             else
-                if ! cargo bench -p "$pkg" --bench "$bench" "${run_args[@]}" \
+                if ! "${CARGO_BENCH_RUNNER[@]}" bench -p "$pkg" --bench "$bench" "${run_args[@]}" \
                     2>"$stderr_file" | tee "${tee_args[@]}" "${RESULTS_DIR}/${bench}.txt"; then
                     log "${RED}Benchmark failed:${NC} $pkg/$bench"
                     log "  stderr: $stderr_file"
@@ -370,8 +397,8 @@ run_benchmarks() {
 snapshot_results() {
     local suffix="$1"
     for name in \
-        cell_bench buffer_bench diff_bench presenter_bench widget_bench telemetry_bench \
-        parser_patch_bench renderer_bench
+        cell_bench buffer_bench diff_bench presenter_bench widget_bench layout_bench \
+        pane_pointer_bench telemetry_bench parser_patch_bench renderer_bench
     do
         local src="${RESULTS_DIR}/${name}.txt"
         if [[ -f "$src" ]]; then
@@ -564,6 +591,8 @@ check_budgets() {
             diff/*) result_file="${RESULTS_DIR}/diff_bench.txt" ;;
             present/*|pipeline/*) result_file="${RESULTS_DIR}/presenter_bench.txt" ;;
             widget/*) result_file="${RESULTS_DIR}/widget_bench.txt" ;;
+            pane/core/*) result_file="${RESULTS_DIR}/layout_bench.txt" ;;
+            pane/web_pointer/*) result_file="${RESULTS_DIR}/pane_pointer_bench.txt" ;;
             telemetry/*) result_file="${RESULTS_DIR}/telemetry_bench.txt" ;;
             parser_throughput/*|parser_throughput_large/*|patch_diff_apply/*|parser_action_mix/*|full_pipeline/*|resize_storm/*|scrollback_memory/*) result_file="${RESULTS_DIR}/parser_patch_bench.txt" ;;
             web/*) result_file="${RESULTS_DIR}/renderer_bench.txt" ;;

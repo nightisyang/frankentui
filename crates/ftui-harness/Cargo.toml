@@ -15,7 +15,7 @@ pty-capture = ["dep:portable-pty", "ftui-extras/pty-capture"]
 telemetry = ["ftui-runtime/telemetry"]
 
 [dependencies]
-ftui-render = { path = "../ftui-render", version = "0.2.1" }
+ftui-render = { path = "../ftui-render", version = "0.2.1", features = ["tracing"] }
 ftui-core = { path = "../ftui-core", version = "0.2.1", features = ["crossterm"] }
 ftui-runtime = { path = "../ftui-runtime", version = "0.2.1", features = ["crossterm-compat"] }
 ftui-widgets = { path = "../ftui-widgets", version = "0.2.1" }
@@ -32,3 +32,4 @@ tracing = "0.1.41"
 proptest = "1.7.0"
 ftui-pty = { path = "../ftui-pty", version = "0.2.1" }
 portable-pty = "0.9.0"
+tracing-subscriber = { version = "0.3.20", features = ["registry"] }

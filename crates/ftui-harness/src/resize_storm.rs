@@ -470,7 +470,7 @@ impl ResizeStorm {
 
         for i in 0..count {
             let pattern = i % 8;
-            let (width, height, delay) = match pattern {
+            let (raw_width, raw_height, delay) = match pattern {
                 0 => (self.config.min_width, self.config.min_height, 0), // Minimum, instant
                 1 => (self.config.max_width, self.config.max_height, 0), // Maximum, instant
                 2 => (1, 1, 1),                                          // Extreme minimum
@@ -496,6 +496,7 @@ impl ResizeStorm {
                 _ => unreachable!(),
             };
 
+            let (width, height) = self.clamp_to_bounds(raw_width, raw_height);
             events.push(ResizeEvent::new(width, height, delay, i));
         }
         events
@@ -532,6 +533,13 @@ impl ResizeStorm {
         }
 
         events
+    }
+
+    fn clamp_to_bounds(&self, width: u16, height: u16) -> (u16, u16) {
+        (
+            width.clamp(self.config.min_width, self.config.max_width),
+            height.clamp(self.config.min_height, self.config.max_height),
+        )
     }
 
     /// Compute a deterministic checksum of the event sequence.
@@ -1460,13 +1468,13 @@ mod tests {
         assert_eq!(storm.events()[1].height, 100);
         assert_eq!(storm.events()[1].delay_ms, 0);
 
-        // Pattern 2: extreme minimum 1x1
-        assert_eq!(storm.events()[2].width, 1);
-        assert_eq!(storm.events()[2].height, 1);
+        // Pattern 2: extreme minimum 1x1 (clamped to configured mins)
+        assert_eq!(storm.events()[2].width, 20);
+        assert_eq!(storm.events()[2].height, 5);
 
-        // Pattern 3: large 500x200
-        assert_eq!(storm.events()[3].width, 500);
-        assert_eq!(storm.events()[3].height, 200);
+        // Pattern 3: large 500x200 (clamped to configured maxes)
+        assert_eq!(storm.events()[3].width, 300);
+        assert_eq!(storm.events()[3].height, 100);
 
         // Pattern 4: normal 80x24 with long delay
         assert_eq!(storm.events()[4].width, 80);

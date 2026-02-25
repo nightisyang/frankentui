@@ -155,7 +155,7 @@ pub use shaping::{
     FontFeature, FontFeatures, FontId, NoopShaper, ShapedGlyph, ShapedRun, ShapingCache,
     ShapingCacheStats, ShapingKey, TextShaper,
 };
-pub use shaping_fallback::{FallbackEvent, FallbackStats, ShapingFallback};
+pub use shaping_fallback::{FallbackEvent, FallbackStats, LigatureMode, ShapingFallback};
 pub use text::{Line, Span, Text};
 pub use tier_budget::{
     FrameBudget, MemoryBudget, QueueBudget, SafetyInvariant, TierBudget, TierFeatures, TierLadder,

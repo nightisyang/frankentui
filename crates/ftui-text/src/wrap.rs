@@ -35,6 +35,12 @@ pub enum WrapMode {
     Char,
     /// Word wrap with character fallback for long words.
     WordChar,
+    /// Knuth-Plass optimal line breaking (minimizes total badness).
+    ///
+    /// Produces globally optimal break points at the cost of examining
+    /// the full paragraph. Falls back to word-wrap for single-word lines.
+    /// See [`wrap_optimal`] for the underlying algorithm.
+    Optimal,
 }
 
 /// Options for text wrapping.
@@ -115,6 +121,7 @@ pub fn wrap_with_options(text: &str, options: &WrapOptions) -> Vec<String> {
         WrapMode::Char => wrap_chars(text, options),
         WrapMode::Word => wrap_words(text, options, false),
         WrapMode::WordChar => wrap_words(text, options, true),
+        WrapMode::Optimal => wrap_text_optimal(text, options.width),
     }
 }
 

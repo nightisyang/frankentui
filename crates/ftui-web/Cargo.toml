@@ -28,6 +28,11 @@ tracing = { version = "0.1.41", optional = true }
 
 [dev-dependencies]
 # Used only for small deterministic unit tests.
+criterion = { version = "0.8.2", features = ["html_reports"] }
 pretty_assertions = "1.4.1"
 tracing-subscriber = { version = "0.3.20", features = ["registry"] }
 wasm-bindgen-test = "0.3.58"
+
+[[bench]]
+name = "pane_pointer_bench"
+harness = false

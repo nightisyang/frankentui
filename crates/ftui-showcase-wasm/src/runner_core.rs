@@ -11,11 +11,11 @@ use ftui_demo_showcase::app::AppModel;
 use ftui_demo_showcase::pane_interaction::{
     ActivePaneGesture, PaneAutoPointerDownContext, PaneDragSemanticsContext,
     PaneDragSemanticsInput, PaneGestureArmState, PaneGestureMode, PanePreviewState,
-    PaneTimelineApplyState, PaneTimelineStatus,
+    PaneSplitterPrimitive, PaneTimelineApplyState, PaneTimelineStatus,
     apply_drag_semantics as apply_drag_semantics_shared,
     apply_operations_with_timeline as apply_operations_with_timeline_shared,
-    arm_active_gesture as arm_active_gesture_shared, default_pane_layout_tree,
-    pointer_down_context_at as shared_pointer_down_context_at,
+    arm_active_gesture as arm_active_gesture_shared, collect_splitter_primitives,
+    default_pane_layout_tree, pointer_down_context_at as shared_pointer_down_context_at,
     rollback_timeline_to_cursor as rollback_timeline_to_cursor_shared,
     update_selection_for_pointer_down,
 };
@@ -61,6 +61,8 @@ pub struct RunnerCore {
     selection: PaneSelectionState,
     /// Active drag gesture context.
     active_gesture: Option<ActivePaneGesture>,
+    /// Last pointer location used for hover splitter affordances.
+    hover_pointer: Option<PanePointerPosition>,
     /// Timeline cursor at gesture start, used to rollback canceled drag mutations.
     gesture_timeline_cursor_start: Option<usize>,
     /// Last applied live-reflow operation signature for dedupe.
@@ -174,6 +176,7 @@ impl RunnerCore {
             layout_tree,
             selection: PaneSelectionState::default(),
             active_gesture: None,
+            hover_pointer: None,
             gesture_timeline_cursor_start: None,
             live_reflow_signature: None,
             preview_state: PanePreviewState::default(),
@@ -391,6 +394,22 @@ impl RunnerCore {
     #[must_use]
     pub fn pane_layout_hash(&self) -> u64 {
         self.layout_tree.state_hash()
+    }
+
+    /// Shared splitter/handle primitives for host-specific rendering adapters.
+    #[must_use]
+    pub fn pane_splitter_primitives(&self) -> Vec<PaneSplitterPrimitive> {
+        let viewport = self.viewport_rect();
+        let Ok(layout) = self.layout_tree.solve_layout(viewport) else {
+            return Vec::new();
+        };
+        collect_splitter_primitives(
+            &self.layout_tree,
+            &layout,
+            viewport,
+            self.hover_pointer,
+            self.active_gesture,
+        )
     }
 
     /// Primary pane id used as default focus target for adaptive modes.
@@ -838,6 +857,7 @@ impl RunnerCore {
     fn clear_transient_pane_interaction_state(&mut self) {
         self.preview_state = PanePreviewState::default();
         self.active_gesture = None;
+        self.hover_pointer = None;
         self.gesture_timeline_cursor_start = None;
         self.live_reflow_signature = None;
     }
@@ -898,6 +918,7 @@ impl RunnerCore {
 
     fn record_pane_dispatch(&mut self, dispatch: PanePointerDispatch) -> PaneDispatchSummary {
         self.apply_pane_dispatch_semantics(&dispatch);
+        self.update_hover_pointer_from_log(&dispatch.log);
         let summary = PaneDispatchSummary {
             phase: dispatch.log.phase,
             sequence: dispatch.log.sequence,
@@ -938,8 +959,33 @@ impl RunnerCore {
             capture_command: log.capture_command,
             outcome: PaneDispatchOutcome::Ignored(PanePointerIgnoredReason::MachineRejectedEvent),
         };
+        self.update_hover_pointer_from_log(&log);
         self.pane_logs.push(format_pane_log_entry(log));
         summary
+    }
+
+    fn update_hover_pointer_from_log(&mut self, log: &PanePointerLogEntry) {
+        match log.phase {
+            PanePointerLifecyclePhase::PointerCancel
+            | PanePointerLifecyclePhase::PointerLeave
+            | PanePointerLifecyclePhase::Blur
+            | PanePointerLifecyclePhase::VisibilityHidden
+            | PanePointerLifecyclePhase::LostPointerCapture => {
+                self.hover_pointer = None;
+            }
+            PanePointerLifecyclePhase::CaptureAcquired => {}
+            PanePointerLifecyclePhase::PointerDown
+            | PanePointerLifecyclePhase::PointerMove
+            | PanePointerLifecyclePhase::PointerUp => {
+                if let Some(pointer) = log.position {
+                    if pointer_hits_rect(pointer, self.viewport_rect()) {
+                        self.hover_pointer = Some(pointer);
+                    } else if self.active_gesture.is_none() {
+                        self.hover_pointer = None;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1013,6 +1059,17 @@ fn format_pane_log_entry(log: PanePointerLogEntry) -> String {
     format!(
         "pane_pointer phase={phase} seq={sequence} pointer={pointer_id} split={split_id} axis={axis} x={x} y={y} command={command} outcome={outcome}"
     )
+}
+
+#[must_use]
+fn pointer_hits_rect(pointer: PanePointerPosition, rect: Rect) -> bool {
+    let Ok(x) = u16::try_from(pointer.x) else {
+        return false;
+    };
+    let Ok(y) = u16::try_from(pointer.y) else {
+        return false;
+    };
+    rect.contains(x, y)
 }
 
 #[must_use]
@@ -1319,5 +1376,139 @@ mod tests {
         );
         assert!(runner.selection.anchor.is_none());
         assert!(runner.selection.selected.is_empty());
+    }
+
+    #[test]
+    fn pane_splitter_primitives_default_to_idle() {
+        let mut runner = RunnerCore::new(100, 32);
+        runner.init();
+
+        let splitters = runner.pane_splitter_primitives();
+        assert!(!splitters.is_empty(), "expected splitter primitives");
+        assert!(splitters.iter().all(|splitter| matches!(
+            splitter.state,
+            ftui_demo_showcase::pane_interaction::PaneSplitterVisualState::Idle
+        )));
+    }
+
+    #[test]
+    fn pane_splitter_primitives_reflect_hover_and_active_resize() {
+        let mut runner = RunnerCore::new(100, 32);
+        runner.init();
+
+        let splitters = runner.pane_splitter_primitives();
+        let (x, y, split_id) = splitters
+            .iter()
+            .find_map(|splitter| {
+                let x = splitter
+                    .rail_rect
+                    .x
+                    .saturating_add(splitter.rail_rect.width / 2);
+                let y = splitter
+                    .rail_rect
+                    .y
+                    .saturating_add(splitter.rail_rect.height / 2);
+                let pointer = PanePointerPosition::new(i32::from(x), i32::from(y));
+                runner
+                    .pointer_down_context_at(pointer)
+                    .filter(|context| matches!(context.mode, PaneGestureMode::Resize(_)))
+                    .map(|_| (x, y, splitter.split_id))
+            })
+            .expect("expected splitter center to resolve a resize context");
+
+        let move_summary = runner.pane_pointer_move_at(
+            42,
+            i32::from(x),
+            i32::from(y),
+            PaneModifierSnapshot::default(),
+        );
+        assert!(
+            !move_summary.accepted(),
+            "hover move should not arm capture"
+        );
+        let hovered = runner.pane_splitter_primitives();
+        let hovered_target = hovered
+            .iter()
+            .find(|splitter| splitter.split_id == split_id)
+            .expect("hovered splitter");
+        assert!(matches!(
+            hovered_target.state,
+            ftui_demo_showcase::pane_interaction::PaneSplitterVisualState::Hover
+        ));
+
+        let down_summary = runner.pane_pointer_down_at(
+            77,
+            PanePointerButton::Primary,
+            i32::from(x),
+            i32::from(y),
+            PaneModifierSnapshot::default(),
+        );
+        assert!(
+            down_summary.accepted(),
+            "pointer down should arm drag/resize"
+        );
+        let active = runner.pane_splitter_primitives();
+        let active_target = active
+            .iter()
+            .find(|splitter| splitter.split_id == split_id)
+            .expect("active splitter");
+        assert!(matches!(
+            active_target.state,
+            ftui_demo_showcase::pane_interaction::PaneSplitterVisualState::Active
+        ));
+    }
+
+    #[test]
+    fn pane_splitter_hover_clears_after_pointer_up_outside_viewport() {
+        let mut runner = RunnerCore::new(100, 32);
+        runner.init();
+
+        let splitters = runner.pane_splitter_primitives();
+        let (x, y, split_id) = splitters
+            .iter()
+            .find_map(|splitter| {
+                let x = splitter
+                    .rail_rect
+                    .x
+                    .saturating_add(splitter.rail_rect.width / 2);
+                let y = splitter
+                    .rail_rect
+                    .y
+                    .saturating_add(splitter.rail_rect.height / 2);
+                let pointer = PanePointerPosition::new(i32::from(x), i32::from(y));
+                runner
+                    .pointer_down_context_at(pointer)
+                    .filter(|context| matches!(context.mode, PaneGestureMode::Resize(_)))
+                    .map(|_| (x, y, splitter.split_id))
+            })
+            .expect("expected splitter center to resolve a resize context");
+
+        let down_summary = runner.pane_pointer_down_at(
+            91,
+            PanePointerButton::Primary,
+            i32::from(x),
+            i32::from(y),
+            PaneModifierSnapshot::default(),
+        );
+        assert!(down_summary.accepted(), "pointer down should be accepted");
+
+        let up_summary = runner.pane_pointer_up_at(
+            91,
+            PanePointerButton::Primary,
+            -4,
+            -4,
+            PaneModifierSnapshot::default(),
+        );
+        assert!(up_summary.accepted(), "pointer up should be accepted");
+
+        let updated = runner.pane_splitter_primitives();
+        let target = updated
+            .iter()
+            .find(|splitter| splitter.split_id == split_id)
+            .expect("splitter should still exist");
+        assert!(matches!(
+            target.state,
+            ftui_demo_showcase::pane_interaction::PaneSplitterVisualState::Idle
+        ));
     }
 }

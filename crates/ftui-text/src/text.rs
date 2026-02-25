@@ -355,7 +355,7 @@ impl<'a> Line<'a> {
         match mode {
             WrapMode::None => vec![self.clone()],
             WrapMode::Char => wrap_line_chars(self, width),
-            WrapMode::Word => wrap_line_words(self, width, false),
+            WrapMode::Word | WrapMode::Optimal => wrap_line_words(self, width, false),
             WrapMode::WordChar => wrap_line_words(self, width, true),
         }
     }

@@ -440,8 +440,8 @@ fn reflow_property_checksum_format_valid() {
         assert!(checksum.starts_with("blake3:"), "Missing prefix");
         assert_eq!(
             checksum.len(),
-            7 + 16,
-            "Wrong length: expected 23, got {}",
+            7 + 64,
+            "Wrong length: expected 71, got {}",
             checksum.len()
         );
 

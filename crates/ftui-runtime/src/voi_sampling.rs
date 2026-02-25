@@ -116,7 +116,8 @@
 //! }
 //! ```
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use web_time::{Duration, Instant};
 
 const EPS: f64 = 1e-12;
@@ -126,6 +127,25 @@ const LAMBDA_EPS: f64 = 1e-9;
 const E_MIN: f64 = 1e-12;
 const E_MAX: f64 = 1e12;
 const VAR_MAX: f64 = 0.25; // Max Beta variance as α,β → 0
+
+// ---------------------------------------------------------------------------
+// Monotonic counters (exported for observability dashboards / tests)
+// ---------------------------------------------------------------------------
+
+static VOI_SAMPLES_TAKEN_TOTAL: AtomicU64 = AtomicU64::new(0);
+static VOI_SAMPLES_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Total VOI samples taken (monotonic counter for metrics export).
+#[must_use]
+pub fn voi_samples_taken_total() -> u64 {
+    VOI_SAMPLES_TAKEN_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Total VOI samples skipped (monotonic counter for metrics export).
+#[must_use]
+pub fn voi_samples_skipped_total() -> u64 {
+    VOI_SAMPLES_SKIPPED_TOTAL.load(Ordering::Relaxed)
+}
 
 /// Configuration for the VOI sampling policy.
 #[derive(Debug, Clone)]
@@ -513,6 +533,43 @@ impl VoiSampler {
         self.last_decision = Some(decision.clone());
         self.last_decision_forced = forced;
 
+        // --- Tracing observability (bd-37a.4) ---
+        let _span = tracing::debug_span!(
+            "voi.evaluate",
+            decision_context = %reason,
+            voi_estimate = %voi_gain,
+            sample_cost = %cost,
+            sample_decision = should_sample,
+        )
+        .entered();
+
+        tracing::debug!(
+            target: "ftui.voi",
+            voi_gain = %voi_gain,
+            score = %score,
+            cost = %cost,
+            log_bayes_factor = %log_bayes_factor,
+            posterior_mean = %decision.posterior_mean,
+            posterior_variance = %variance,
+            boundary_score = %boundary_score,
+            e_value = %self.e_value,
+            reason = %reason,
+            event_idx = self.event_idx,
+            "voi calculation"
+        );
+
+        tracing::debug!(
+            target: "ftui.voi",
+            voi_estimate_value = %voi_gain,
+            "voi estimate histogram"
+        );
+
+        if should_sample {
+            VOI_SAMPLES_TAKEN_TOTAL.fetch_add(1, Ordering::Relaxed);
+        } else {
+            VOI_SAMPLES_SKIPPED_TOTAL.fetch_add(1, Ordering::Relaxed);
+        }
+
         if self.config.enable_logging {
             self.push_log(VoiLogEntry::Decision(decision.clone()));
         }
@@ -537,17 +594,36 @@ impl VoiSampler {
 
         self.update_eprocess(violated);
 
+        let obs_posterior_mean = beta_mean(self.alpha, self.beta);
+        let obs_posterior_variance = beta_variance(self.alpha, self.beta);
+        let obs_voi_estimate =
+            (obs_posterior_variance - expected_variance_after(self.alpha, self.beta)).max(0.0);
+
         let observation = VoiObservation {
             event_idx: self.event_idx,
             sample_idx: self.sample_idx,
             violated,
-            posterior_mean: beta_mean(self.alpha, self.beta),
-            posterior_variance: beta_variance(self.alpha, self.beta),
+            posterior_mean: obs_posterior_mean,
+            posterior_variance: obs_posterior_variance,
             alpha: self.alpha,
             beta: self.beta,
             e_value: self.e_value,
             e_threshold: self.e_threshold,
         };
+
+        // --- TRACE: individual utility estimate after observation ---
+        tracing::trace!(
+            target: "ftui.voi",
+            violated = violated,
+            alpha = %self.alpha,
+            beta = %self.beta,
+            posterior_mean = %obs_posterior_mean,
+            posterior_variance = %obs_posterior_variance,
+            e_value = %self.e_value,
+            voi_estimate_value = %obs_voi_estimate,
+            sample_idx = self.sample_idx,
+            "utility estimate after observation"
+        );
 
         self.last_observation = Some(observation.clone());
         if self.config.enable_logging {
@@ -690,6 +766,216 @@ fn log10_ratio(score: f64, cost: f64) -> f64 {
 }
 
 // =============================================================================
+// Deferred refinement scheduler (bd-2vr05.15.4.4)
+// =============================================================================
+
+/// Configuration for VOI-guided deferred refinement scheduling.
+///
+/// This scheduler only allocates work from spare frame budget and uses a
+/// deterministic VOI score with fairness boosts to avoid starvation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeferredRefinementConfig {
+    /// Minimum spare budget to keep reserved for non-optional work.
+    pub min_spare_budget_us: u64,
+    /// Hard cap on optional refinements scheduled per frame.
+    pub max_refinements_per_frame: usize,
+    /// Minimum effective VOI required to schedule a refinement.
+    pub voi_gain_cutoff: f64,
+    /// Fairness boost added per skipped frame for a region.
+    pub fairness_boost_per_skip: f64,
+    /// Maximum fairness boost for a region.
+    pub fairness_boost_cap: f64,
+}
+
+impl Default for DeferredRefinementConfig {
+    fn default() -> Self {
+        Self {
+            min_spare_budget_us: 500,
+            max_refinements_per_frame: 2,
+            voi_gain_cutoff: 0.01,
+            fairness_boost_per_skip: 0.02,
+            fairness_boost_cap: 1.0,
+        }
+    }
+}
+
+/// Candidate optional refinement unit for a region/paragraph bucket.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RefinementCandidate {
+    /// Deterministic region identifier.
+    pub region_id: u64,
+    /// Estimated runtime cost for this refinement.
+    pub estimated_cost_us: u64,
+    /// Predicted value-of-information gain (higher is better).
+    pub voi_gain: f64,
+}
+
+/// Selected refinement with explainable scoring terms.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RefinementSelection {
+    pub region_id: u64,
+    pub estimated_cost_us: u64,
+    pub voi_gain: f64,
+    pub fairness_boost: f64,
+    pub effective_voi: f64,
+    pub score: f64,
+}
+
+/// Frame-level refinement plan.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeferredRefinementPlan {
+    pub frame_budget_us: u64,
+    pub mandatory_work_us: u64,
+    pub reserved_spare_us: u64,
+    pub optional_budget_us: u64,
+    pub spent_optional_us: u64,
+    pub selected: Vec<RefinementSelection>,
+}
+
+impl DeferredRefinementPlan {
+    /// Hard budget predicate for CI assertions.
+    #[must_use]
+    pub fn hard_budget_respected(&self) -> bool {
+        self.mandatory_work_us
+            .saturating_add(self.reserved_spare_us)
+            .saturating_add(self.spent_optional_us)
+            <= self.frame_budget_us
+    }
+}
+
+/// Deterministic VOI-guided scheduler for optional deferred refinements.
+#[derive(Debug, Clone)]
+pub struct DeferredRefinementScheduler {
+    config: DeferredRefinementConfig,
+    skipped_frames: BTreeMap<u64, u32>,
+}
+
+impl DeferredRefinementScheduler {
+    /// Create a scheduler from explicit config.
+    #[must_use]
+    pub fn new(config: DeferredRefinementConfig) -> Self {
+        Self {
+            config,
+            skipped_frames: BTreeMap::new(),
+        }
+    }
+
+    /// Access scheduler config.
+    #[must_use]
+    pub fn config(&self) -> &DeferredRefinementConfig {
+        &self.config
+    }
+
+    /// Number of consecutive frames this region has been skipped.
+    #[must_use]
+    pub fn skipped_frames_for(&self, region_id: u64) -> u32 {
+        self.skipped_frames.get(&region_id).copied().unwrap_or(0)
+    }
+
+    /// Compute a deterministic frame plan under a hard budget cap.
+    ///
+    /// - `frame_budget_us`: total frame budget.
+    /// - `mandatory_work_us`: non-optional cost already committed.
+    /// - `candidates`: optional refinements for this frame.
+    pub fn plan_frame(
+        &mut self,
+        frame_budget_us: u64,
+        mandatory_work_us: u64,
+        candidates: &[RefinementCandidate],
+    ) -> DeferredRefinementPlan {
+        let reserved_spare_us = self.config.min_spare_budget_us;
+        let available_after_mandatory = frame_budget_us.saturating_sub(mandatory_work_us);
+        let optional_budget_us = available_after_mandatory.saturating_sub(reserved_spare_us);
+
+        let mut scored = Vec::with_capacity(candidates.len());
+        for candidate in candidates.iter().copied() {
+            let skip_count = self.skipped_frames_for(candidate.region_id);
+            let fairness_boost = (skip_count as f64 * self.config.fairness_boost_per_skip)
+                .min(self.config.fairness_boost_cap);
+            let voi_gain = if candidate.voi_gain.is_finite() {
+                candidate.voi_gain.max(0.0)
+            } else {
+                0.0
+            };
+            let effective_voi = voi_gain + fairness_boost;
+            let normalized_cost = candidate.estimated_cost_us.max(1) as f64;
+            let score = effective_voi / normalized_cost;
+            scored.push((
+                candidate,
+                fairness_boost,
+                effective_voi,
+                score,
+                candidate.region_id,
+            ));
+        }
+
+        // Deterministic ordering:
+        // 1) score DESC, 2) effective_voi DESC, 3) region_id ASC.
+        scored.sort_by(|a, b| {
+            b.3.total_cmp(&a.3)
+                .then_with(|| b.2.total_cmp(&a.2))
+                .then_with(|| a.4.cmp(&b.4))
+        });
+
+        let mut remaining_optional_us = optional_budget_us;
+        let mut selected = Vec::with_capacity(self.config.max_refinements_per_frame);
+        let mut selected_ids = BTreeMap::<u64, ()>::new();
+
+        for (candidate, fairness_boost, effective_voi, score, _) in scored {
+            if selected.len() >= self.config.max_refinements_per_frame {
+                break;
+            }
+            if effective_voi < self.config.voi_gain_cutoff {
+                continue;
+            }
+            if candidate.estimated_cost_us > remaining_optional_us {
+                continue;
+            }
+            selected.push(RefinementSelection {
+                region_id: candidate.region_id,
+                estimated_cost_us: candidate.estimated_cost_us,
+                voi_gain: if candidate.voi_gain.is_finite() {
+                    candidate.voi_gain.max(0.0)
+                } else {
+                    0.0
+                },
+                fairness_boost,
+                effective_voi,
+                score,
+            });
+            selected_ids.insert(candidate.region_id, ());
+            remaining_optional_us =
+                remaining_optional_us.saturating_sub(candidate.estimated_cost_us);
+        }
+
+        // Update fairness accounting for all regions visible this frame.
+        for candidate in candidates {
+            if selected_ids.contains_key(&candidate.region_id) {
+                self.skipped_frames.insert(candidate.region_id, 0);
+            } else {
+                let next = self
+                    .skipped_frames_for(candidate.region_id)
+                    .saturating_add(1);
+                self.skipped_frames.insert(candidate.region_id, next);
+            }
+        }
+
+        let spent_optional_us = optional_budget_us.saturating_sub(remaining_optional_us);
+        let plan = DeferredRefinementPlan {
+            frame_budget_us,
+            mandatory_work_us,
+            reserved_spare_us,
+            optional_budget_us,
+            spent_optional_us,
+            selected,
+        };
+
+        debug_assert!(plan.hard_budget_respected());
+        plan
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -697,6 +983,10 @@ fn log10_ratio(score: f64, cost: f64) -> f64 {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::registry::LookupSpan;
 
     const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x100000001b3;
@@ -1411,6 +1701,571 @@ mod tests {
         assert!(
             line_count >= 2,
             "should have at least 2 log lines, got {line_count}"
+        );
+    }
+
+    // =========================================================================
+    // Tracing capture infrastructure
+    // =========================================================================
+
+    #[derive(Debug, Clone)]
+    #[allow(dead_code)]
+    struct CapturedSpan {
+        name: String,
+        target: String,
+        level: tracing::Level,
+        fields: HashMap<String, String>,
+        parent_name: Option<String>,
+    }
+
+    #[derive(Debug, Clone)]
+    #[allow(dead_code)]
+    struct CapturedEvent {
+        level: tracing::Level,
+        target: String,
+        message: String,
+        fields: HashMap<String, String>,
+        parent_span_name: Option<String>,
+    }
+
+    struct SpanCapture {
+        spans: Arc<Mutex<Vec<CapturedSpan>>>,
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+        span_index: Arc<Mutex<HashMap<u64, usize>>>,
+    }
+
+    impl SpanCapture {
+        fn new() -> (Self, CaptureHandle) {
+            let spans = Arc::new(Mutex::new(Vec::new()));
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let span_index = Arc::new(Mutex::new(HashMap::new()));
+
+            let handle = CaptureHandle {
+                spans: spans.clone(),
+                events: events.clone(),
+            };
+
+            (
+                Self {
+                    spans,
+                    events,
+                    span_index,
+                },
+                handle,
+            )
+        }
+    }
+
+    struct CaptureHandle {
+        spans: Arc<Mutex<Vec<CapturedSpan>>>,
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+    }
+
+    impl CaptureHandle {
+        fn spans(&self) -> Vec<CapturedSpan> {
+            self.spans.lock().unwrap().clone()
+        }
+
+        fn events(&self) -> Vec<CapturedEvent> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    struct FieldVisitor(Vec<(String, String)>);
+
+    impl tracing::field::Visit for FieldVisitor {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+
+        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+    }
+
+    impl<S> tracing_subscriber::Layer<S> for SpanCapture
+    where
+        S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            id: &tracing::span::Id,
+            ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut visitor = FieldVisitor(Vec::new());
+            attrs.record(&mut visitor);
+
+            let parent_name = ctx
+                .current_span()
+                .id()
+                .and_then(|pid| ctx.span(pid))
+                .map(|span_ref| span_ref.name().to_string());
+
+            let mut fields: HashMap<String, String> = visitor.0.into_iter().collect();
+            for field in attrs.metadata().fields() {
+                fields.entry(field.name().to_string()).or_default();
+            }
+
+            let mut spans = self.spans.lock().unwrap();
+            let idx = spans.len();
+            spans.push(CapturedSpan {
+                name: attrs.metadata().name().to_string(),
+                target: attrs.metadata().target().to_string(),
+                level: *attrs.metadata().level(),
+                fields,
+                parent_name,
+            });
+
+            self.span_index.lock().unwrap().insert(id.into_u64(), idx);
+        }
+
+        fn on_record(
+            &self,
+            id: &tracing::span::Id,
+            values: &tracing::span::Record<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut visitor = FieldVisitor(Vec::new());
+            values.record(&mut visitor);
+
+            let index = self.span_index.lock().unwrap();
+            if let Some(&idx) = index.get(&id.into_u64()) {
+                let mut spans = self.spans.lock().unwrap();
+                if let Some(span) = spans.get_mut(idx) {
+                    for (k, v) in visitor.0 {
+                        span.fields.insert(k, v);
+                    }
+                }
+            }
+        }
+
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut visitor = FieldVisitor(Vec::new());
+            event.record(&mut visitor);
+
+            let fields: HashMap<String, String> = visitor.0.clone().into_iter().collect();
+            let message = visitor
+                .0
+                .iter()
+                .find(|(k, _)| k == "message")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+
+            let parent_span_name = ctx
+                .current_span()
+                .id()
+                .and_then(|id| ctx.span(id))
+                .map(|span_ref| span_ref.name().to_string());
+
+            self.events.lock().unwrap().push(CapturedEvent {
+                level: *event.metadata().level(),
+                target: event.metadata().target().to_string(),
+                message,
+                fields,
+                parent_span_name,
+            });
+        }
+    }
+
+    fn with_captured_tracing<F>(f: F) -> CaptureHandle
+    where
+        F: FnOnce(),
+    {
+        let (layer, handle) = SpanCapture::new();
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, f);
+        handle
+    }
+
+    // =========================================================================
+    // Tracing span field assertions (bd-37a.4)
+    // =========================================================================
+
+    #[test]
+    fn span_voi_evaluate_has_required_fields() {
+        let handle = with_captured_tracing(|| {
+            let mut sampler = VoiSampler::new(VoiConfig::default());
+            sampler.decide(Instant::now());
+        });
+
+        let spans = handle.spans();
+        let voi_spans: Vec<_> = spans.iter().filter(|s| s.name == "voi.evaluate").collect();
+        assert!(
+            !voi_spans.is_empty(),
+            "expected at least one voi.evaluate span, got none"
+        );
+
+        let span = &voi_spans[0];
+        assert!(
+            span.fields.contains_key("decision_context"),
+            "missing decision_context field"
+        );
+        assert!(
+            span.fields.contains_key("voi_estimate"),
+            "missing voi_estimate field"
+        );
+        assert!(
+            span.fields.contains_key("sample_cost"),
+            "missing sample_cost field"
+        );
+        assert!(
+            span.fields.contains_key("sample_decision"),
+            "missing sample_decision field"
+        );
+    }
+
+    #[test]
+    fn span_voi_evaluate_decision_context_values() {
+        let handle = with_captured_tracing(|| {
+            // Force a high-cost scenario so first decision is not forced
+            let config = VoiConfig {
+                max_interval_events: 0,
+                max_interval_ms: 0,
+                sample_cost: 1000.0,
+                ..Default::default()
+            };
+            let mut sampler = VoiSampler::new(config);
+            sampler.decide(Instant::now());
+        });
+
+        let spans = handle.spans();
+        let voi_spans: Vec<_> = spans.iter().filter(|s| s.name == "voi.evaluate").collect();
+        assert!(!voi_spans.is_empty());
+
+        let ctx = &voi_spans[0].fields["decision_context"];
+        assert!(
+            ctx == "voi_lt_cost" || ctx == "voi_ge_cost",
+            "unexpected context: {ctx}"
+        );
+    }
+
+    #[test]
+    fn span_voi_evaluate_forced_interval_context() {
+        let handle = with_captured_tracing(|| {
+            let config = VoiConfig {
+                max_interval_events: 1,
+                ..Default::default()
+            };
+            let mut sampler = VoiSampler::new(config);
+            sampler.decide(Instant::now());
+        });
+
+        let spans = handle.spans();
+        let voi_spans: Vec<_> = spans.iter().filter(|s| s.name == "voi.evaluate").collect();
+        assert!(!voi_spans.is_empty());
+        assert_eq!(voi_spans[0].fields["decision_context"], "forced_interval");
+    }
+
+    // =========================================================================
+    // DEBUG log assertions
+    // =========================================================================
+
+    #[test]
+    fn debug_log_voi_calculation() {
+        let handle = with_captured_tracing(|| {
+            let mut sampler = VoiSampler::new(VoiConfig::default());
+            sampler.decide(Instant::now());
+        });
+
+        let events = handle.events();
+        let debug_events: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.level == tracing::Level::DEBUG
+                    && e.target == "ftui.voi"
+                    && e.fields.contains_key("voi_gain")
+            })
+            .collect();
+
+        assert!(
+            !debug_events.is_empty(),
+            "expected at least one DEBUG voi calculation event"
+        );
+
+        let evt = &debug_events[0];
+        assert!(evt.fields.contains_key("score"), "missing score field");
+        assert!(evt.fields.contains_key("cost"), "missing cost field");
+        assert!(
+            evt.fields.contains_key("posterior_mean"),
+            "missing posterior_mean"
+        );
+        assert!(
+            evt.fields.contains_key("boundary_score"),
+            "missing boundary_score"
+        );
+    }
+
+    #[test]
+    fn debug_log_voi_estimate_histogram() {
+        let handle = with_captured_tracing(|| {
+            let mut sampler = VoiSampler::new(VoiConfig::default());
+            sampler.decide(Instant::now());
+        });
+
+        let events = handle.events();
+        let hist_events: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.level == tracing::Level::DEBUG
+                    && e.target == "ftui.voi"
+                    && e.fields.contains_key("voi_estimate_value")
+            })
+            .collect();
+
+        assert!(
+            !hist_events.is_empty(),
+            "expected voi_estimate_value histogram event"
+        );
+    }
+
+    // =========================================================================
+    // TRACE log assertions (utility estimates)
+    // =========================================================================
+
+    #[test]
+    fn trace_log_utility_estimate_after_observation() {
+        let handle = with_captured_tracing(|| {
+            let mut sampler = VoiSampler::new(VoiConfig::default());
+            let now = Instant::now();
+            sampler.decide(now);
+            sampler.observe_at(false, now);
+        });
+
+        let events = handle.events();
+        let trace_events: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.level == tracing::Level::TRACE
+                    && e.target == "ftui.voi"
+                    && e.fields.contains_key("voi_estimate_value")
+            })
+            .collect();
+
+        assert!(
+            !trace_events.is_empty(),
+            "expected TRACE utility estimate event after observe"
+        );
+
+        let evt = &trace_events[0];
+        assert!(evt.fields.contains_key("alpha"), "missing alpha");
+        assert!(evt.fields.contains_key("beta"), "missing beta");
+        assert!(
+            evt.fields.contains_key("posterior_mean"),
+            "missing posterior_mean"
+        );
+        assert!(evt.fields.contains_key("e_value"), "missing e_value");
+    }
+
+    // =========================================================================
+    // Counter verification
+    // =========================================================================
+
+    #[test]
+    fn counters_increment_on_sample_decision() {
+        let handle = with_captured_tracing(|| {
+            let mut sampler = VoiSampler::new(VoiConfig::default());
+            let mut now = Instant::now();
+            for _ in 0..5 {
+                let d = sampler.decide(now);
+                if d.should_sample {
+                    sampler.observe_at(false, now);
+                }
+                now += Duration::from_millis(100);
+            }
+        });
+
+        // Verify the tracing events were emitted (indirect counter check).
+        // We can't reliably check global atomic counters in parallel tests,
+        // so we verify the DEBUG events contain voi_gain (one per decide call).
+        let events = handle.events();
+        let calc_events: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.level == tracing::Level::DEBUG
+                    && e.target == "ftui.voi"
+                    && e.fields.contains_key("voi_gain")
+            })
+            .collect();
+
+        assert_eq!(
+            calc_events.len(),
+            5,
+            "expected 5 voi calculation events for 5 decide() calls"
+        );
+    }
+
+    #[test]
+    fn counter_accessors_are_callable() {
+        // Verify the counter accessor functions exist and return non-panicking values.
+        let taken = voi_samples_taken_total();
+        let skipped = voi_samples_skipped_total();
+        // Verify the sum doesn't overflow (sanity check).
+        let _ = taken.checked_add(skipped).expect("counter overflow");
+    }
+
+    #[test]
+    fn counters_increase_monotonically() {
+        let before_taken = voi_samples_taken_total();
+        let before_skipped = voi_samples_skipped_total();
+
+        let mut sampler = VoiSampler::new(VoiConfig::default());
+        let mut now = Instant::now();
+        for _ in 0..10 {
+            let d = sampler.decide(now);
+            if d.should_sample {
+                sampler.observe_at(false, now);
+            }
+            now += Duration::from_millis(100);
+        }
+
+        let after_taken = voi_samples_taken_total();
+        let after_skipped = voi_samples_skipped_total();
+
+        // After 10 decisions, at least some should have been taken or skipped.
+        assert!(
+            (after_taken + after_skipped) >= (before_taken + before_skipped) + 10,
+            "expected at least 10 counter increments total, \
+             taken: {before_taken}→{after_taken}, skipped: {before_skipped}→{after_skipped}"
+        );
+    }
+
+    // =========================================================================
+    // Deferred refinement scheduler tests (bd-2vr05.15.4.4)
+    // =========================================================================
+
+    #[test]
+    fn deferred_scheduler_respects_hard_budget() {
+        let mut scheduler = DeferredRefinementScheduler::new(DeferredRefinementConfig {
+            min_spare_budget_us: 200,
+            max_refinements_per_frame: 3,
+            voi_gain_cutoff: 0.01,
+            fairness_boost_per_skip: 0.02,
+            fairness_boost_cap: 0.5,
+        });
+
+        let candidates = [
+            RefinementCandidate {
+                region_id: 1,
+                estimated_cost_us: 600,
+                voi_gain: 0.25,
+            },
+            RefinementCandidate {
+                region_id: 2,
+                estimated_cost_us: 500,
+                voi_gain: 0.21,
+            },
+            RefinementCandidate {
+                region_id: 3,
+                estimated_cost_us: 300,
+                voi_gain: 0.08,
+            },
+        ];
+
+        let plan = scheduler.plan_frame(3_000, 1_900, &candidates);
+        assert!(plan.hard_budget_respected());
+        assert!(plan.spent_optional_us <= plan.optional_budget_us);
+        assert!(
+            plan.mandatory_work_us
+                .saturating_add(plan.reserved_spare_us)
+                .saturating_add(plan.spent_optional_us)
+                <= 3_000
+        );
+    }
+
+    #[test]
+    fn deferred_scheduler_is_deterministic_for_identical_inputs() {
+        let config = DeferredRefinementConfig {
+            min_spare_budget_us: 100,
+            max_refinements_per_frame: 2,
+            voi_gain_cutoff: 0.01,
+            fairness_boost_per_skip: 0.03,
+            fairness_boost_cap: 0.6,
+        };
+        let mut a = DeferredRefinementScheduler::new(config.clone());
+        let mut b = DeferredRefinementScheduler::new(config);
+
+        let candidates = [
+            RefinementCandidate {
+                region_id: 11,
+                estimated_cost_us: 450,
+                voi_gain: 0.13,
+            },
+            RefinementCandidate {
+                region_id: 22,
+                estimated_cost_us: 500,
+                voi_gain: 0.11,
+            },
+            RefinementCandidate {
+                region_id: 33,
+                estimated_cost_us: 350,
+                voi_gain: 0.07,
+            },
+        ];
+
+        for _ in 0..25 {
+            let pa = a.plan_frame(2_800, 1_600, &candidates);
+            let pb = b.plan_frame(2_800, 1_600, &candidates);
+            assert_eq!(pa, pb);
+        }
+    }
+
+    #[test]
+    fn deferred_scheduler_fairness_avoids_starvation() {
+        let mut scheduler = DeferredRefinementScheduler::new(DeferredRefinementConfig {
+            min_spare_budget_us: 400,
+            max_refinements_per_frame: 1,
+            voi_gain_cutoff: 0.01,
+            fairness_boost_per_skip: 0.05,
+            fairness_boost_cap: 2.0,
+        });
+
+        let candidates = [
+            RefinementCandidate {
+                region_id: 100,
+                estimated_cost_us: 700,
+                voi_gain: 0.20,
+            },
+            RefinementCandidate {
+                region_id: 200,
+                estimated_cost_us: 700,
+                voi_gain: 0.02,
+            },
+        ];
+
+        let mut low_region_selected = 0u32;
+        for _ in 0..30 {
+            let plan = scheduler.plan_frame(4_000, 2_700, &candidates);
+            assert!(plan.hard_budget_respected());
+            if plan.selected.iter().any(|s| s.region_id == 200) {
+                low_region_selected = low_region_selected.saturating_add(1);
+            }
+        }
+
+        assert!(
+            low_region_selected > 0,
+            "fairness boosting should eventually schedule the lower-VOI region"
         );
     }
 }

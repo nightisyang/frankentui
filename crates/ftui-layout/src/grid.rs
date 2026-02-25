@@ -54,6 +54,8 @@ pub struct Grid {
     col_gap: u16,
     /// Named areas mapping to (row, col, rowspan, colspan).
     named_areas: HashMap<String, GridArea>,
+    /// Overflow behavior for content exceeding the grid bounds.
+    overflow: crate::OverflowBehavior,
 }
 
 /// Definition of a named grid area.
@@ -171,6 +173,19 @@ impl Grid {
     pub fn area(mut self, name: impl Into<String>, area: GridArea) -> Self {
         self.named_areas.insert(name.into(), area);
         self
+    }
+
+    /// Set the overflow behavior for this grid.
+    #[must_use]
+    pub fn overflow(mut self, overflow: crate::OverflowBehavior) -> Self {
+        self.overflow = overflow;
+        self
+    }
+
+    /// Get the current overflow behavior.
+    #[must_use]
+    pub fn overflow_behavior(&self) -> crate::OverflowBehavior {
+        self.overflow
     }
 
     /// Get the number of rows.
