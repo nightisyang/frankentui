@@ -227,6 +227,41 @@ pub enum Alignment {
     SpaceBetween,
 }
 
+/// How a layout container handles content that exceeds available space.
+///
+/// This enum models the CSS `overflow` property for terminal layouts.
+/// The actual clipping or scrolling is performed by the render layer;
+/// this value acts as a declarative hint attached to [`Flex`] or [`Grid`]
+/// so that widgets and the renderer know how to treat overflow regions.
+///
+/// # Migration rationale
+///
+/// Web components routinely set `overflow: hidden`, `overflow: scroll`, etc.
+/// Without an explicit model the migration code emitter cannot faithfully
+/// translate these semantics. This enum bridges that gap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum OverflowBehavior {
+    /// Content that exceeds the container is clipped at the boundary.
+    /// This is the safe default for terminals where drawing outside
+    /// an allocated region corrupts neighbouring widgets.
+    #[default]
+    Clip,
+    /// Content is allowed to overflow visually (useful for popovers,
+    /// tooltips, and hit-test regions that extend beyond their container).
+    Visible,
+    /// Content is clipped but a scrollbar region is reserved.
+    /// The `max_content` field, when set, tells the scrollbar how
+    /// large the virtual content area is.
+    Scroll {
+        /// Size of the virtual content area in the overflow direction.
+        /// `None` means "determine from content measurement".
+        max_content: Option<u16>,
+    },
+    /// Items that don't fit are wrapped to the next row/column.
+    /// Only meaningful for [`Flex`] containers.
+    Wrap,
+}
+
 /// Responsive breakpoint tiers for terminal widths.
 ///
 /// Ordered from smallest to largest. Each variant represents a width
@@ -449,6 +484,7 @@ pub struct Flex {
     gap: u16,
     alignment: Alignment,
     flow_direction: direction::FlowDirection,
+    overflow: OverflowBehavior,
 }
 
 impl Flex {
@@ -514,6 +550,19 @@ impl Flex {
     pub fn flow_direction(mut self, flow: direction::FlowDirection) -> Self {
         self.flow_direction = flow;
         self
+    }
+
+    /// Set the overflow behavior for this container.
+    #[must_use]
+    pub fn overflow(mut self, overflow: OverflowBehavior) -> Self {
+        self.overflow = overflow;
+        self
+    }
+
+    /// Get the current overflow behavior.
+    #[must_use]
+    pub fn overflow_behavior(&self) -> OverflowBehavior {
+        self.overflow
     }
 
     /// Number of constraints (and thus output rects from [`split`](Self::split)).
