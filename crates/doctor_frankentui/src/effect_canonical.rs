@@ -304,9 +304,7 @@ pub fn compute_execution_order(model: &CanonicalEffectModel) -> Vec<IrNodeId> {
                     *deg -= 1;
                     if *deg == 0 {
                         // Insert in sorted position for determinism.
-                        let pos = queue
-                            .binary_search(neighbor)
-                            .unwrap_or_else(|pos| pos);
+                        let pos = queue.binary_search(neighbor).unwrap_or_else(|pos| pos);
                         queue.insert(pos, neighbor.clone());
                     }
                 }
@@ -319,7 +317,10 @@ pub fn compute_execution_order(model: &CanonicalEffectModel) -> Vec<IrNodeId> {
 
 // ── Internal Classification ──────────────────────────────────────────────
 
-fn canonicalize_single(decl: &EffectDecl, diagnostics: &mut Vec<CanonDiagnostic>) -> CanonicalEffect {
+fn canonicalize_single(
+    decl: &EffectDecl,
+    diagnostics: &mut Vec<CanonDiagnostic>,
+) -> CanonicalEffect {
     let execution_model = classify_execution_model(decl);
     let trigger = classify_trigger(decl);
     let message_protocol = classify_message_protocol(decl, &execution_model);
@@ -411,7 +412,9 @@ fn classify_message_protocol(decl: &EffectDecl, model: &ExecutionModel) -> Messa
         },
         ExecutionModel::Subscription => match decl.kind {
             EffectKind::Timer => MessageProtocol::Tick,
-            EffectKind::Subscription => MessageProtocol::EventStream("SubscriptionEvent".to_string()),
+            EffectKind::Subscription => {
+                MessageProtocol::EventStream("SubscriptionEvent".to_string())
+            }
             EffectKind::Process => MessageProtocol::EventStream("ProcessEvent".to_string()),
             _ => MessageProtocol::EventStream("EffectEvent".to_string()),
         },
@@ -552,7 +555,10 @@ fn infer_ordering_constraints(
                             after: id.clone(),
                             reason: format!(
                                 "Effect '{}' writes state that '{}' reads",
-                                effects.get(*writer_id).map(|e| e.name.as_str()).unwrap_or("?"),
+                                effects
+                                    .get(*writer_id)
+                                    .map(|e| e.name.as_str())
+                                    .unwrap_or("?"),
                                 effect.name,
                             ),
                         });
@@ -747,7 +753,10 @@ mod tests {
         let model = canonicalize_effects(&reg);
 
         let effect = &model.effects[&IrNodeId("ir-watcher".into())];
-        assert!(matches!(effect.trigger, TriggerCondition::OnDependencyChange(_)));
+        assert!(matches!(
+            effect.trigger,
+            TriggerCondition::OnDependencyChange(_)
+        ));
         if let TriggerCondition::OnDependencyChange(deps) = &effect.trigger {
             assert!(deps.contains(&IrNodeId("ir-dep-a".into())));
         }
@@ -765,8 +774,14 @@ mod tests {
         let model = canonicalize_effects(&reg);
 
         assert_eq!(model.ordering_constraints.len(), 1);
-        assert_eq!(model.ordering_constraints[0].before, IrNodeId("ir-writer".into()));
-        assert_eq!(model.ordering_constraints[0].after, IrNodeId("ir-reader".into()));
+        assert_eq!(
+            model.ordering_constraints[0].before,
+            IrNodeId("ir-writer".into())
+        );
+        assert_eq!(
+            model.ordering_constraints[0].after,
+            IrNodeId("ir-reader".into())
+        );
     }
 
     #[test]
@@ -865,9 +880,14 @@ mod tests {
         let model = canonicalize_effects(&reg);
 
         let timer_conf = model.effects[&IrNodeId("ir-timer".into())].confidence.score;
-        let unknown_conf = model.effects[&IrNodeId("ir-unknown".into())].confidence.score;
+        let unknown_conf = model.effects[&IrNodeId("ir-unknown".into())]
+            .confidence
+            .score;
 
-        assert!(timer_conf > unknown_conf, "Timer ({timer_conf}) should have higher confidence than Other ({unknown_conf})");
+        assert!(
+            timer_conf > unknown_conf,
+            "Timer ({timer_conf}) should have higher confidence than Other ({unknown_conf})"
+        );
     }
 
     #[test]
