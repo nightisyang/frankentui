@@ -18,9 +18,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::migration_ir::{
-    AccessibilityMap, EffectKind, EffectRegistry, EventCatalog, EventKind,
-    IrNodeId, LayoutIntent, LayoutKind, MigrationIr, StateGraph, StateScope, StyleIntent,
-    ViewNode, ViewNodeKind, ViewTree,
+    AccessibilityMap, EffectKind, EffectRegistry, EventCatalog, EventKind, IrNodeId, LayoutIntent,
+    LayoutKind, MigrationIr, StateGraph, StateScope, StyleIntent, ViewNode, ViewNodeKind, ViewTree,
 };
 
 // ── Confidence ──────────────────────────────────────────────────────────
@@ -541,24 +540,18 @@ fn infer_layout_constraints(tree: &ViewTree, style: &StyleIntent) -> LayoutConst
     }
 }
 
-fn classify_layout_region(
-    node: &ViewNode,
-    layout_intent: Option<&LayoutIntent>,
-) -> LayoutRegion {
+fn classify_layout_region(node: &ViewNode, layout_intent: Option<&LayoutIntent>) -> LayoutRegion {
     // If we have an explicit layout intent from style analysis, use it.
     if let Some(intent) = layout_intent {
         let (kind, constraint_kind, direction) = match intent.kind {
             LayoutKind::Flex => {
-                let dir = intent
-                    .direction
-                    .as_deref()
-                    .map(|d| {
-                        if d.contains("row") {
-                            LayoutDirection::Horizontal
-                        } else {
-                            LayoutDirection::Vertical
-                        }
-                    });
+                let dir = intent.direction.as_deref().map(|d| {
+                    if d.contains("row") {
+                        LayoutDirection::Horizontal
+                    } else {
+                        LayoutDirection::Vertical
+                    }
+                });
                 (
                     LayoutRegionKind::LinearContainer,
                     InferredConstraintKind::Flex,
@@ -650,10 +643,7 @@ fn infer_layout_from_structure(node: &ViewNode) -> LayoutRegion {
             )),
             evidence: vec![Evidence {
                 source: EvidenceSource::ViewNode(node.id.clone()),
-                observation: format!(
-                    "Container '{}' with {child_count} children",
-                    node.name
-                ),
+                observation: format!("Container '{}' with {child_count} children", node.name),
             }],
         };
 
@@ -790,10 +780,7 @@ fn detect_layout_pattern(tree: &ViewTree, style: &StyleIntent) -> LayoutPattern 
         let nl = n.name.to_lowercase();
         nl.contains("modal") || nl.contains("dialog") || nl.contains("overlay")
     });
-    let has_portal = tree
-        .nodes
-        .values()
-        .any(|n| n.kind == ViewNodeKind::Portal);
+    let has_portal = tree.nodes.values().any(|n| n.kind == ViewNodeKind::Portal);
 
     if has_sidebar && has_main {
         LayoutPattern::SidebarMain
@@ -900,10 +887,7 @@ fn infer_focus_traversal(
         let primary_reason = reasons[0].clone();
         let confidence = compute_focus_confidence(&reasons);
 
-        let role = a11y
-            .entries
-            .get(node_id)
-            .and_then(|e| e.role.clone());
+        let role = a11y.entries.get(node_id).and_then(|e| e.role.clone());
         let shortcut = a11y
             .entries
             .get(node_id)
@@ -911,10 +895,7 @@ fn infer_focus_traversal(
 
         all_evidence.push(Evidence {
             source: EvidenceSource::ViewNode(node_id.clone()),
-            observation: format!(
-                "'{}' is focusable: {:?}",
-                node.name, reasons
-            ),
+            observation: format!("'{}' is focusable: {:?}", node.name, reasons),
         });
 
         nodes.insert(
@@ -943,8 +924,8 @@ fn infer_focus_traversal(
     let confidence = if node_count == 0 {
         Confidence::low("No focusable nodes detected")
     } else {
-        let avg_conf: f64 = nodes.values().map(|n| n.confidence.score).sum::<f64>()
-            / node_count as f64;
+        let avg_conf: f64 =
+            nodes.values().map(|n| n.confidence.score).sum::<f64>() / node_count as f64;
         Confidence::new(
             avg_conf,
             format!("{node_count} focusable nodes, average confidence {avg_conf:.2}"),
@@ -1007,9 +988,7 @@ fn compute_tab_order(
 
     // Sort implicit by tree traversal order (DFS pre-order).
     let tree_order = compute_tree_order(tree);
-    implicit.sort_by_key(|id| {
-        tree_order.get(id).copied().unwrap_or(usize::MAX)
-    });
+    implicit.sort_by_key(|id| tree_order.get(id).copied().unwrap_or(usize::MAX));
 
     let mut result: Vec<IrNodeId> = explicit.into_iter().map(|(_, id)| id).collect();
     result.extend(implicit);
@@ -1093,12 +1072,9 @@ fn detect_focus_groups(
         });
 
         // Check if members share state writes (form-like).
-        let shared_state = members.iter().any(|m| {
-            state
-                .variables
-                .values()
-                .any(|sv| sv.writers.contains(m))
-        });
+        let shared_state = members
+            .iter()
+            .any(|m| state.variables.values().any(|sv| sv.writers.contains(m)));
 
         let confidence = if shared_state {
             Confidence::high(format!(
@@ -1194,9 +1170,7 @@ fn infer_interaction_clusters(
     let event_to_states: BTreeMap<&IrNodeId, BTreeSet<&IrNodeId>> = {
         let mut map: BTreeMap<&IrNodeId, BTreeSet<&IrNodeId>> = BTreeMap::new();
         for t in &events.transitions {
-            map.entry(&t.event_id)
-                .or_default()
-                .insert(&t.target_state);
+            map.entry(&t.event_id).or_default().insert(&t.target_state);
         }
         map
     };
@@ -1305,11 +1279,8 @@ fn infer_interaction_clusters(
             ),
         }];
 
-        let confidence = compute_cluster_confidence(
-            &pattern,
-            cluster_events.len(),
-            cluster_states.len(),
-        );
+        let confidence =
+            compute_cluster_confidence(&pattern, cluster_events.len(), cluster_states.len());
 
         all_evidence.extend(evidence_items.iter().cloned());
 
@@ -1454,11 +1425,8 @@ fn detect_cross_cluster_flows(clusters: &[InteractionCluster]) -> Vec<CrossClust
                 continue;
             }
 
-            let shared: BTreeSet<IrNodeId> = a
-                .state_vars
-                .intersection(&b.state_vars)
-                .cloned()
-                .collect();
+            let shared: BTreeSet<IrNodeId> =
+                a.state_vars.intersection(&b.state_vars).cloned().collect();
 
             if !shared.is_empty() {
                 flows.push(CrossClusterFlow {
@@ -2263,10 +2231,7 @@ mod tests {
             region.constraint.direction,
             Some(LayoutDirection::Horizontal)
         );
-        assert_eq!(
-            region.constraint.alignment,
-            Some(LayoutAlignment::Center)
-        );
+        assert_eq!(region.constraint.alignment, Some(LayoutAlignment::Center));
         assert_eq!(region.constraint.sizing, Some(InferredSizing::Fill));
         assert!(
             region.confidence.score >= 0.8,
@@ -2384,16 +2349,8 @@ mod tests {
         let result = infer_intents(&ir);
 
         // btn_b should come before btn_a in tab order due to explicit ordering.
-        let b_pos = result
-            .focus
-            .tab_order
-            .iter()
-            .position(|id| *id == btn_b);
-        let a_pos = result
-            .focus
-            .tab_order
-            .iter()
-            .position(|id| *id == btn_a);
+        let b_pos = result.focus.tab_order.iter().position(|id| *id == btn_b);
+        let a_pos = result.focus.tab_order.iter().position(|id| *id == btn_a);
 
         assert!(b_pos.is_some(), "btn_b should be in tab order");
         assert!(a_pos.is_some(), "btn_a should be in tab order");
