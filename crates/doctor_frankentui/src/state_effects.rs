@@ -393,7 +393,7 @@ fn extract_use_memo(hook: &HookCall, is_callback: bool) -> DerivedComputation {
 
 fn extract_use_effect(hook: &HookCall) -> EffectBinding {
     let deps = extract_dependency_array(&hook.args_snippet);
-    let has_cleanup = hook.args_snippet.contains("return ");
+    let has_cleanup = has_cleanup_return(&hook.args_snippet);
     let kind = classify_effect(&hook.args_snippet);
     let (required_caps, optional_caps, assumptions) =
         classify_effect_capabilities(&kind, &hook.args_snippet);
@@ -414,6 +414,153 @@ fn extract_use_effect(hook: &HookCall) -> EffectBinding {
         writes,
         line: hook.line,
     }
+}
+
+fn has_cleanup_return(snippet: &str) -> bool {
+    let mut search_start = 0usize;
+    while search_start < snippet.len() {
+        let Some(relative) = snippet[search_start..].find("return") else {
+            return false;
+        };
+        let pos = search_start + relative;
+
+        let prev_ok = pos == 0
+            || snippet[..pos]
+                .chars()
+                .next_back()
+                .is_none_or(|ch| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'));
+
+        let after = &snippet[pos + "return".len()..];
+        if prev_ok && is_cleanup_return_expression(after) {
+            return true;
+        }
+
+        search_start = pos + "return".len();
+    }
+    false
+}
+
+fn is_cleanup_return_expression(after_return: &str) -> bool {
+    let expr = after_return.trim_start();
+    if expr.is_empty() || expr.starts_with(';') || expr.starts_with('{') {
+        return false;
+    }
+
+    if expr.starts_with("function") || expr.starts_with("async function") {
+        return true;
+    }
+
+    if is_arrow_function_expression(expr) {
+        return true;
+    }
+
+    if let Some((head, rest)) = split_identifier_chain(expr) {
+        if is_non_cleanup_literal(head) {
+            return false;
+        }
+        let tail = rest.trim_start();
+        return tail.is_empty() || matches!(tail.chars().next(), Some(';' | ',' | ')' | ']'));
+    }
+
+    false
+}
+
+fn is_arrow_function_expression(expr: &str) -> bool {
+    if let Some(rest) = expr.strip_prefix("async") {
+        return is_arrow_function_expression(rest.trim_start());
+    }
+
+    if let Some((_, rest)) = split_identifier(expr) {
+        return rest.trim_start().starts_with("=>");
+    }
+
+    let Some(after_open) = expr.strip_prefix('(') else {
+        return false;
+    };
+
+    let mut depth = 1usize;
+    let mut in_string: Option<char> = None;
+    let mut escaped = false;
+
+    for (idx, ch) in after_open.char_indices() {
+        if let Some(quote) = in_string {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == quote {
+                in_string = None;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' | '\'' | '`' => in_string = Some(ch),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    let tail = after_open[idx + 1..].trim_start();
+                    return tail.starts_with("=>");
+                }
+            }
+            _ => {}
+        }
+    }
+
+    false
+}
+
+fn split_identifier(input: &str) -> Option<(&str, &str)> {
+    let mut chars = input.char_indices();
+    let (_, first) = chars.next()?;
+    if !is_identifier_start(first) {
+        return None;
+    }
+
+    let mut end = first.len_utf8();
+    for (idx, ch) in chars {
+        if is_identifier_part(ch) {
+            end = idx + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    Some((&input[..end], &input[end..]))
+}
+
+fn split_identifier_chain(input: &str) -> Option<(&str, &str)> {
+    let (head, mut rest) = split_identifier(input)?;
+    let mut consumed = head.len();
+
+    while let Some(after_dot) = rest.strip_prefix('.')
+        && let Some((_, chain_rest)) = split_identifier(after_dot)
+    {
+        consumed = input.len() - chain_rest.len();
+        rest = &input[consumed..];
+    }
+
+    Some((head, &input[consumed..]))
+}
+
+fn is_identifier_start(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ch == '_' || ch == '$'
+}
+
+fn is_identifier_part(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'
+}
+
+fn is_non_cleanup_literal(identifier: &str) -> bool {
+    matches!(
+        identifier,
+        "null" | "undefined" | "true" | "false" | "NaN" | "Infinity" | "this"
+    )
 }
 
 fn extract_use_context(hook: &HookCall) -> ContextConsumer {
@@ -1240,8 +1387,32 @@ function App() {
         // (tsx_parser can't capture nested-paren args for useEffect).
         let snippet =
             "() => { const id = setInterval(tick, 1000); return () => clearInterval(id); }";
-        assert!(snippet.contains("return "));
+        assert!(has_cleanup_return(snippet));
         assert_eq!(classify_effect(snippet), EffectClassification::Timer);
+    }
+
+    #[test]
+    fn effect_cleanup_detection_handles_compact_arrow_cleanup() {
+        let snippet = "() => { return()=>unsubscribe(); }";
+        assert!(has_cleanup_return(snippet));
+    }
+
+    #[test]
+    fn effect_cleanup_detection_ignores_return_prefixed_identifiers() {
+        let snippet = "() => { const returnValue = 1; returnValue.toString(); }";
+        assert!(!has_cleanup_return(snippet));
+    }
+
+    #[test]
+    fn effect_cleanup_detection_ignores_plain_return_expression() {
+        let snippet = "() => { const n = 1; return n + 1; }";
+        assert!(!has_cleanup_return(snippet));
+    }
+
+    #[test]
+    fn effect_cleanup_detection_accepts_returned_cleanup_reference() {
+        let snippet = "() => { const unsubscribe = listen(); return unsubscribe; }";
+        assert!(has_cleanup_return(snippet));
     }
 
     #[test]
