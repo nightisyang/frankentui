@@ -25,7 +25,8 @@ use crate::mapping_atlas::{
     MappingCategory, MappingEntry, RemediationStrategy, build_atlas, lookup,
 };
 use crate::migration_ir::{
-    EffectKind, EventKind, IrNodeId, LayoutKind, MigrationIr, StateScope, ViewNodeKind,
+    EffectKind, EventKind, IrNodeId, LayoutKind, MigrationIr, StateScope, TokenCategory,
+    ViewNodeKind,
 };
 use crate::semantic_contract::{
     BayesianPosterior, ConfidenceModel, ExpectedLossResult, MigrationDecision,
@@ -355,6 +356,26 @@ fn enumerate_segments(ir: &MigrationIr) -> Vec<IrSegment> {
         });
     }
 
+    // Style tokens.
+    for (name, token) in &ir.style_intent.tokens {
+        segments.push(IrSegment {
+            id: IrNodeId(format!("ir-style-{name}")),
+            name: token.name.clone(),
+            category: SegmentCategory::Style,
+            mapping_signature: token_category_signature(&token.category),
+        });
+    }
+
+    // Theme declarations.
+    for (i, theme) in ir.style_intent.themes.iter().enumerate() {
+        segments.push(IrSegment {
+            id: IrNodeId(format!("ir-theme-{i}")),
+            name: theme.name.clone(),
+            category: SegmentCategory::Style,
+            mapping_signature: "ThemeDecl".to_string(),
+        });
+    }
+
     // Capabilities.
     for cap in &ir.capabilities.required {
         let sig = format!("Capability::{cap:?}");
@@ -433,6 +454,19 @@ fn layout_kind_label(kind: &LayoutKind) -> &'static str {
         LayoutKind::Absolute => "absolute",
         LayoutKind::Stack => "stack",
         LayoutKind::Flow => "flow",
+    }
+}
+
+fn token_category_signature(category: &TokenCategory) -> String {
+    match category {
+        TokenCategory::Color => "StyleToken::Color".to_string(),
+        TokenCategory::Spacing => "StyleToken::Spacing".to_string(),
+        TokenCategory::Typography => "StyleToken::Typography".to_string(),
+        TokenCategory::Border => "StyleToken::Border".to_string(),
+        TokenCategory::Shadow => "StyleToken::Shadow".to_string(),
+        TokenCategory::Animation => "StyleToken::Animation".to_string(),
+        TokenCategory::Breakpoint => "StyleToken::Breakpoint".to_string(),
+        TokenCategory::ZIndex => "StyleToken::ZIndex".to_string(),
     }
 }
 
@@ -1190,5 +1224,164 @@ mod tests {
             conf_exact > conf_unsupported,
             "Exact {conf_exact:.2} should score higher than Unsupported {conf_unsupported:.2}"
         );
+    }
+
+    // ── Style/Theme Integration Tests (v2) ──
+
+    fn ir_with_style_tokens() -> MigrationIr {
+        use crate::migration_ir::{StyleToken, ThemeDecl, TokenCategory};
+        let mut builder = IrBuilder::new(
+            "test-planner-styles".to_string(),
+            "planner-style-tests".to_string(),
+        );
+        let node_id = IrNodeId("ir-node-styled".to_string());
+        builder.add_root(node_id.clone());
+        builder.add_view_node(ViewNode {
+            id: node_id,
+            kind: ViewNodeKind::Component,
+            name: "StyledApp".to_string(),
+            children: Vec::new(),
+            props: Vec::new(),
+            slots: Vec::new(),
+            conditions: Vec::new(),
+            provenance: test_provenance(),
+        });
+        builder.add_style_token(StyleToken {
+            name: "primary-color".to_string(),
+            category: TokenCategory::Color,
+            value: "#ff0000".to_string(),
+            provenance: Some(test_provenance()),
+        });
+        builder.add_style_token(StyleToken {
+            name: "body-font".to_string(),
+            category: TokenCategory::Typography,
+            value: "bold 16px sans-serif".to_string(),
+            provenance: Some(test_provenance()),
+        });
+        builder.add_style_token(StyleToken {
+            name: "shadow-main".to_string(),
+            category: TokenCategory::Shadow,
+            value: "0 2px 4px rgba(0,0,0,0.2)".to_string(),
+            provenance: Some(test_provenance()),
+        });
+        builder.add_theme(ThemeDecl {
+            name: "dark-mode".to_string(),
+            tokens: {
+                let mut t = BTreeMap::new();
+                t.insert("bg".to_string(), "#000".to_string());
+                t
+            },
+            is_default: false,
+        });
+        builder.build()
+    }
+
+    #[test]
+    fn plan_enumerates_style_tokens() {
+        let ir = ir_with_style_tokens();
+        let model = test_model();
+        let plan = plan_translation_simple(&ir, &model);
+
+        let style_decisions: Vec<_> = plan
+            .decisions
+            .iter()
+            .filter(|d| d.segment.category == SegmentCategory::Style)
+            .collect();
+
+        // 3 tokens + 1 theme = 4 style segments
+        assert_eq!(
+            style_decisions.len(),
+            4,
+            "Expected 4 style segments, got {}",
+            style_decisions.len()
+        );
+    }
+
+    #[test]
+    fn style_token_signatures_match_atlas() {
+        let ir = ir_with_style_tokens();
+        let model = test_model();
+        let plan = plan_translation_simple(&ir, &model);
+
+        let sigs: Vec<_> = plan
+            .decisions
+            .iter()
+            .filter(|d| d.segment.category == SegmentCategory::Style)
+            .map(|d| d.segment.mapping_signature.as_str())
+            .collect();
+
+        assert!(sigs.contains(&"StyleToken::Color"), "Missing Color token");
+        assert!(
+            sigs.contains(&"StyleToken::Typography"),
+            "Missing Typography token"
+        );
+        assert!(sigs.contains(&"StyleToken::Shadow"), "Missing Shadow token");
+        assert!(sigs.contains(&"ThemeDecl"), "Missing ThemeDecl");
+    }
+
+    #[test]
+    fn theme_segment_has_style_category() {
+        let ir = ir_with_style_tokens();
+        let model = test_model();
+        let plan = plan_translation_simple(&ir, &model);
+
+        let theme = plan
+            .decisions
+            .iter()
+            .find(|d| d.segment.mapping_signature == "ThemeDecl")
+            .expect("Should have a ThemeDecl decision");
+
+        assert_eq!(theme.segment.category, SegmentCategory::Style);
+    }
+
+    #[test]
+    fn shadow_token_gets_approximate_strategy() {
+        let ir = ir_with_style_tokens();
+        let model = test_model();
+        let plan = plan_translation_simple(&ir, &model);
+
+        let shadow = plan
+            .decisions
+            .iter()
+            .find(|d| d.segment.mapping_signature == "StyleToken::Shadow")
+            .expect("Should have Shadow decision");
+
+        assert_eq!(
+            shadow.chosen.handling_class,
+            TransformationHandlingClass::Approximate
+        );
+    }
+
+    #[test]
+    fn token_category_signature_covers_all_categories() {
+        let categories = [
+            (TokenCategory::Color, "StyleToken::Color"),
+            (TokenCategory::Spacing, "StyleToken::Spacing"),
+            (TokenCategory::Typography, "StyleToken::Typography"),
+            (TokenCategory::Border, "StyleToken::Border"),
+            (TokenCategory::Shadow, "StyleToken::Shadow"),
+            (TokenCategory::Animation, "StyleToken::Animation"),
+            (TokenCategory::Breakpoint, "StyleToken::Breakpoint"),
+            (TokenCategory::ZIndex, "StyleToken::ZIndex"),
+        ];
+        for (cat, expected) in categories {
+            assert_eq!(token_category_signature(&cat), expected);
+        }
+    }
+
+    #[test]
+    fn plan_with_styles_includes_all_segment_types() {
+        let ir = ir_with_style_tokens();
+        let model = test_model();
+        let plan = plan_translation_simple(&ir, &model);
+
+        let cats: BTreeSet<_> = plan
+            .decisions
+            .iter()
+            .map(|d| format!("{:?}", d.segment.category))
+            .collect();
+
+        assert!(cats.contains("View"), "Missing View segments");
+        assert!(cats.contains("Style"), "Missing Style segments");
     }
 }

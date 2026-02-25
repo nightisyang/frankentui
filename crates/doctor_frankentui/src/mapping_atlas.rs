@@ -23,7 +23,10 @@ use crate::semantic_contract::{TransformationHandlingClass, TransformationRiskLe
 // ── Atlas Version ───────────────────────────────────────────────────────
 
 /// Current atlas schema version.
-pub const ATLAS_VERSION: &str = "mapping-atlas-v1";
+pub const ATLAS_VERSION: &str = "mapping-atlas-v2";
+
+/// Previous atlas versions compatible with this one.
+pub const ATLAS_COMPAT: &[&str] = &["mapping-atlas-v1"];
 
 // ── Core Types ──────────────────────────────────────────────────────────
 
@@ -233,6 +236,57 @@ pub struct AtlasStats {
     pub automatable: usize,
     /// Ratio of (exact + approximate) / total.
     pub coverage_ratio: f64,
+}
+
+/// Check if an atlas version is compatible with this one.
+pub fn is_compatible(version: &str) -> bool {
+    version == ATLAS_VERSION || ATLAS_COMPAT.contains(&version)
+}
+
+/// Result of re-evaluating a gap against a newer atlas.
+#[derive(Debug, Clone)]
+pub struct GapReevaluation {
+    /// Gap signatures that are now resolved (mapping exists and is not Unsupported).
+    pub resolved: Vec<String>,
+    /// Gap signatures that remain unresolved.
+    pub remaining: Vec<String>,
+    /// Gap signatures that improved (e.g. ExtendFtui → Approximate).
+    pub improved: Vec<String>,
+}
+
+/// Re-evaluate a set of gap signatures against the current atlas.
+///
+/// Takes signatures from previously emitted gap tickets and checks whether
+/// the current atlas now has better mappings for them.
+pub fn reevaluate_gaps(atlas: &MappingAtlas, gap_signatures: &[String]) -> GapReevaluation {
+    let mut resolved = Vec::new();
+    let mut remaining = Vec::new();
+    let mut improved = Vec::new();
+
+    for sig in gap_signatures {
+        match lookup(atlas, sig) {
+            Some(entry) => match entry.policy {
+                TransformationHandlingClass::Exact | TransformationHandlingClass::Approximate => {
+                    resolved.push(sig.clone());
+                }
+                TransformationHandlingClass::ExtendFtui => {
+                    improved.push(sig.clone());
+                }
+                TransformationHandlingClass::Unsupported => {
+                    remaining.push(sig.clone());
+                }
+            },
+            None => {
+                remaining.push(sig.clone());
+            }
+        }
+    }
+
+    GapReevaluation {
+        resolved,
+        remaining,
+        improved,
+    }
 }
 
 /// Iterate over all entries in all categories.
@@ -1236,6 +1290,259 @@ fn build_style_mappings() -> BTreeMap<String, MappingEntry> {
         },
     );
 
+    // ── Token categories not yet covered ──
+
+    m.insert(
+        "StyleToken::Shadow".into(),
+        MappingEntry {
+            source_signature: "StyleToken::Shadow".into(),
+            policy: TransformationHandlingClass::Approximate,
+            risk: TransformationRiskLevel::Medium,
+            target: FtuiTarget {
+                construct: "Dim/reverse attribute or border emphasis".into(),
+                crate_name: "ftui-style".into(),
+                description: "Box/text shadows → approximated via Dim attribute or border emphasis"
+                    .into(),
+            },
+            preconditions: vec![],
+            failure_modes: vec![FailureMode {
+                scenario: "Complex multi-layer shadows with offsets".into(),
+                detection: "Shadow token has offset-x/offset-y values".into(),
+                impact: "Shadow depth lost; only presence/absence preserved".into(),
+            }],
+            remediation: RemediationStrategy {
+                approach: "Map shadow presence to Dim/Reverse modifier or thicker border".into(),
+                automatable: true,
+                effort: EffortLevel::Low,
+            },
+            category: MappingCategory::Style,
+        },
+    );
+
+    m.insert(
+        "StyleToken::Animation".into(),
+        MappingEntry {
+            source_signature: "StyleToken::Animation".into(),
+            policy: TransformationHandlingClass::ExtendFtui,
+            risk: TransformationRiskLevel::High,
+            target: FtuiTarget {
+                construct: "Subscription-driven style updates".into(),
+                crate_name: "ftui-runtime".into(),
+                description:
+                    "CSS animations → timer-based Subscription that updates Model style state"
+                        .into(),
+            },
+            preconditions: vec![Precondition {
+                condition: "Animation is tick-driven (not continuous GPU)".into(),
+                on_violation: "Drop animation; emit static final-state style".into(),
+            }],
+            failure_modes: vec![FailureMode {
+                scenario: "60fps keyframe animation exceeds terminal refresh rate".into(),
+                detection: "Animation duration < 100ms per frame".into(),
+                impact: "Animation may appear choppy or be dropped entirely".into(),
+            }],
+            remediation: RemediationStrategy {
+                approach: "Convert keyframes to discrete style states driven by tick Subscription"
+                    .into(),
+                automatable: false,
+                effort: EffortLevel::High,
+            },
+            category: MappingCategory::Style,
+        },
+    );
+
+    m.insert(
+        "StyleToken::Breakpoint".into(),
+        MappingEntry {
+            source_signature: "StyleToken::Breakpoint".into(),
+            policy: TransformationHandlingClass::Approximate,
+            risk: TransformationRiskLevel::Medium,
+            target: FtuiTarget {
+                construct: "Terminal size query in view()".into(),
+                crate_name: "ftui-runtime".into(),
+                description:
+                    "CSS media breakpoints → terminal width/height checks in view function".into(),
+            },
+            preconditions: vec![],
+            failure_modes: vec![FailureMode {
+                scenario: "Breakpoint uses non-size media features (e.g., color-scheme)".into(),
+                detection: "Breakpoint condition references non-dimensional query".into(),
+                impact: "Non-size breakpoints ignored; layout fixed to default".into(),
+            }],
+            remediation: RemediationStrategy {
+                approach: "Map width/height breakpoints to terminal cols/rows thresholds".into(),
+                automatable: true,
+                effort: EffortLevel::Low,
+            },
+            category: MappingCategory::Style,
+        },
+    );
+
+    m.insert(
+        "StyleToken::ZIndex".into(),
+        MappingEntry {
+            source_signature: "StyleToken::ZIndex".into(),
+            policy: TransformationHandlingClass::Approximate,
+            risk: TransformationRiskLevel::Medium,
+            target: FtuiTarget {
+                construct: "Overlay render order in view()".into(),
+                crate_name: "ftui-render".into(),
+                description: "z-index → overlay rendering order (later renders on top)".into(),
+            },
+            preconditions: vec![],
+            failure_modes: vec![FailureMode {
+                scenario: "Complex stacking contexts with negative z-index".into(),
+                detection: "z-index value is negative or involves nested stacking contexts".into(),
+                impact: "Layer order may not match browser rendering exactly".into(),
+            }],
+            remediation: RemediationStrategy {
+                approach: "Normalize z-index values to sequential overlay ordering".into(),
+                automatable: true,
+                effort: EffortLevel::Medium,
+            },
+            category: MappingCategory::Style,
+        },
+    );
+
+    // ── CSS-like parity properties (added v2) ──
+
+    m.insert(
+        "StyleProp::TextTransform".into(),
+        MappingEntry {
+            source_signature: "StyleProp::TextTransform".into(),
+            policy: TransformationHandlingClass::Exact,
+            risk: TransformationRiskLevel::Low,
+            target: FtuiTarget {
+                construct: "TextTransform enum".into(),
+                crate_name: "ftui-style".into(),
+                description: "text-transform → TextTransform (Uppercase/Lowercase/Capitalize)"
+                    .into(),
+            },
+            preconditions: vec![],
+            failure_modes: vec![],
+            remediation: RemediationStrategy {
+                approach: "Direct 1:1 mapping to TextTransform enum variants".into(),
+                automatable: true,
+                effort: EffortLevel::Trivial,
+            },
+            category: MappingCategory::Style,
+        },
+    );
+
+    m.insert(
+        "StyleProp::TextOverflow".into(),
+        MappingEntry {
+            source_signature: "StyleProp::TextOverflow".into(),
+            policy: TransformationHandlingClass::Exact,
+            risk: TransformationRiskLevel::Low,
+            target: FtuiTarget {
+                construct: "TextOverflow enum".into(),
+                crate_name: "ftui-style".into(),
+                description: "text-overflow → TextOverflow (Clip/Ellipsis/Indicator)".into(),
+            },
+            preconditions: vec![],
+            failure_modes: vec![],
+            remediation: RemediationStrategy {
+                approach: "Direct 1:1 mapping to TextOverflow enum variants".into(),
+                automatable: true,
+                effort: EffortLevel::Trivial,
+            },
+            category: MappingCategory::Style,
+        },
+    );
+
+    m.insert(
+        "StyleProp::Overflow".into(),
+        MappingEntry {
+            source_signature: "StyleProp::Overflow".into(),
+            policy: TransformationHandlingClass::Exact,
+            risk: TransformationRiskLevel::Low,
+            target: FtuiTarget {
+                construct: "Overflow enum".into(),
+                crate_name: "ftui-style".into(),
+                description: "overflow → Overflow (Visible/Hidden/Scroll/Auto)".into(),
+            },
+            preconditions: vec![Precondition {
+                condition: "Scroll overflow requires scrollable container support".into(),
+                on_violation: "Fall back to Hidden overflow".into(),
+            }],
+            failure_modes: vec![],
+            remediation: RemediationStrategy {
+                approach: "Direct mapping; Scroll variant uses scrollable widget wrapper".into(),
+                automatable: true,
+                effort: EffortLevel::Low,
+            },
+            category: MappingCategory::Style,
+        },
+    );
+
+    m.insert(
+        "StyleProp::WhiteSpace".into(),
+        MappingEntry {
+            source_signature: "StyleProp::WhiteSpace".into(),
+            policy: TransformationHandlingClass::Exact,
+            risk: TransformationRiskLevel::Low,
+            target: FtuiTarget {
+                construct: "WhiteSpaceMode enum".into(),
+                crate_name: "ftui-style".into(),
+                description: "white-space → WhiteSpaceMode (Normal/Pre/PreWrap/PreLine/NoWrap)"
+                    .into(),
+            },
+            preconditions: vec![],
+            failure_modes: vec![],
+            remediation: RemediationStrategy {
+                approach: "Direct 1:1 mapping to WhiteSpaceMode enum variants".into(),
+                automatable: true,
+                effort: EffortLevel::Trivial,
+            },
+            category: MappingCategory::Style,
+        },
+    );
+
+    m.insert(
+        "StyleProp::TextAlign".into(),
+        MappingEntry {
+            source_signature: "StyleProp::TextAlign".into(),
+            policy: TransformationHandlingClass::Exact,
+            risk: TransformationRiskLevel::Low,
+            target: FtuiTarget {
+                construct: "TextAlign enum".into(),
+                crate_name: "ftui-style".into(),
+                description: "text-align → TextAlign (Left/Right/Center/Justify)".into(),
+            },
+            preconditions: vec![],
+            failure_modes: vec![],
+            remediation: RemediationStrategy {
+                approach: "Direct 1:1 mapping to TextAlign enum variants".into(),
+                automatable: true,
+                effort: EffortLevel::Trivial,
+            },
+            category: MappingCategory::Style,
+        },
+    );
+
+    m.insert(
+        "StyleProp::LineClamp".into(),
+        MappingEntry {
+            source_signature: "StyleProp::LineClamp".into(),
+            policy: TransformationHandlingClass::Exact,
+            risk: TransformationRiskLevel::Low,
+            target: FtuiTarget {
+                construct: "LineClamp struct".into(),
+                crate_name: "ftui-style".into(),
+                description: "-webkit-line-clamp → LineClamp with max_lines".into(),
+            },
+            preconditions: vec![],
+            failure_modes: vec![],
+            remediation: RemediationStrategy {
+                approach: "Direct mapping: clamp value → LineClamp::new(n)".into(),
+                automatable: true,
+                effort: EffortLevel::Trivial,
+            },
+            category: MappingCategory::Style,
+        },
+    );
+
     m
 }
 
@@ -1739,5 +2046,120 @@ mod tests {
     fn version_is_set() {
         let atlas = build_atlas();
         assert!(atlas.version.starts_with("mapping-atlas-v"));
+    }
+
+    #[test]
+    fn version_is_v2() {
+        assert_eq!(ATLAS_VERSION, "mapping-atlas-v2");
+    }
+
+    #[test]
+    fn v1_is_compatible() {
+        assert!(is_compatible("mapping-atlas-v1"));
+        assert!(is_compatible("mapping-atlas-v2"));
+        assert!(!is_compatible("mapping-atlas-v99"));
+    }
+
+    #[test]
+    fn parity_style_props_exist() {
+        let atlas = build_atlas();
+        let props = [
+            "StyleProp::TextTransform",
+            "StyleProp::TextOverflow",
+            "StyleProp::Overflow",
+            "StyleProp::WhiteSpace",
+            "StyleProp::TextAlign",
+            "StyleProp::LineClamp",
+        ];
+        for sig in props {
+            assert!(
+                lookup(&atlas, sig).is_some(),
+                "Missing parity style mapping for {sig}"
+            );
+        }
+    }
+
+    #[test]
+    fn parity_style_props_are_exact() {
+        let atlas = build_atlas();
+        for sig in [
+            "StyleProp::TextTransform",
+            "StyleProp::TextOverflow",
+            "StyleProp::WhiteSpace",
+            "StyleProp::TextAlign",
+            "StyleProp::LineClamp",
+        ] {
+            let entry = lookup(&atlas, sig).unwrap();
+            assert_eq!(
+                entry.policy,
+                TransformationHandlingClass::Exact,
+                "{sig} should be Exact"
+            );
+            assert!(entry.remediation.automatable, "{sig} should be automatable");
+        }
+    }
+
+    #[test]
+    fn all_token_categories_covered() {
+        let atlas = build_atlas();
+        let sigs = [
+            "StyleToken::Color",
+            "StyleToken::Typography",
+            "StyleToken::Spacing",
+            "StyleToken::Border",
+            "StyleToken::Shadow",
+            "StyleToken::Animation",
+            "StyleToken::Breakpoint",
+            "StyleToken::ZIndex",
+        ];
+        for sig in sigs {
+            assert!(
+                lookup(&atlas, sig).is_some(),
+                "Missing token category mapping for {sig}"
+            );
+        }
+    }
+
+    #[test]
+    fn animation_requires_extension() {
+        let atlas = build_atlas();
+        let entry = lookup(&atlas, "StyleToken::Animation").unwrap();
+        assert_eq!(entry.policy, TransformationHandlingClass::ExtendFtui);
+        assert!(!entry.remediation.automatable);
+    }
+
+    #[test]
+    fn reevaluate_resolves_new_mappings() {
+        let atlas = build_atlas();
+        let gaps = vec![
+            "StyleProp::TextTransform".to_string(), // now Exact → resolved
+            "StyleToken::Animation".to_string(),    // ExtendFtui → improved
+            "NonExistent::Thing".to_string(),       // not in atlas → remaining
+        ];
+        let result = reevaluate_gaps(&atlas, &gaps);
+        assert_eq!(result.resolved, vec!["StyleProp::TextTransform"]);
+        assert_eq!(result.improved, vec!["StyleToken::Animation"]);
+        assert_eq!(result.remaining, vec!["NonExistent::Thing"]);
+    }
+
+    #[test]
+    fn reevaluate_empty_gaps_is_empty() {
+        let atlas = build_atlas();
+        let result = reevaluate_gaps(&atlas, &[]);
+        assert!(result.resolved.is_empty());
+        assert!(result.remaining.is_empty());
+        assert!(result.improved.is_empty());
+    }
+
+    #[test]
+    fn atlas_total_entries_increased_in_v2() {
+        let atlas = build_atlas();
+        let stats = atlas_stats(&atlas);
+        // v1 had 46 entries; v2 adds 10 (4 token cats + 6 style props)
+        assert!(
+            stats.total >= 56,
+            "Expected at least 56 entries in v2, got {}",
+            stats.total
+        );
     }
 }

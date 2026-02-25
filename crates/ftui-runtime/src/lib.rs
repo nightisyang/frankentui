@@ -51,6 +51,7 @@ pub mod input_macro;
 pub mod ivm;
 pub mod locale;
 pub mod log_sink;
+pub mod policy_config;
 pub mod process_subscription;
 pub mod program;
 pub mod queueing_scheduler;
@@ -182,6 +183,11 @@ pub use event_trace::{
     SerDecisionDomain, SerEvidenceEntry, SerEvidenceTerm, TraceFile, TraceRecord,
 };
 pub use flake_detector::{EvidenceLog, FlakeConfig, FlakeDecision, FlakeDetector, FlakeSummary};
+pub use policy_config::{
+    BocpdPolicyConfig, CascadePolicyConfig, ConformalPolicyConfig, EProcessBudgetPolicyConfig,
+    EProcessThrottlePolicyConfig, EvidencePolicyConfig, FrameGuardPolicyConfig, PidPolicyConfig,
+    PolicyConfig, PolicyConfigError, VoiPolicyConfig,
+};
 pub use reactive::{BatchScope, Binding, BindingScope, Computed, Observable, TwoWayBinding};
 pub use resize_coalescer::{
     CoalesceAction, CoalescerConfig, CoalescerStats, CycleTimePercentiles, DecisionLog,

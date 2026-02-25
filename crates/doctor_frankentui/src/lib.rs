@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod abstract_interpretation;
 pub mod adversarial_fixtures;
 pub mod backend_capability;
 pub mod capability_gap;
