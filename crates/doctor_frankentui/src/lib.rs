@@ -6,6 +6,7 @@ pub mod cli;
 pub mod composition_semantics;
 pub mod corpus;
 pub mod doctor;
+pub mod effect_canonical;
 pub mod error;
 pub mod fixture_taxonomy;
 pub mod harness;
