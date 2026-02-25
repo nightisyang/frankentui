@@ -641,22 +641,21 @@ impl Lab {
         )
         .entered();
 
-        let replay_run =
-            Self::run_scenario(recording.config.clone(), model, |session| {
-                session.log_info(
-                    "lab.replay.start",
-                    &[
-                        ("scenario_name", JsonValue::str(&recording.scenario_name)),
-                        ("seed", JsonValue::u64(recording.seed)),
-                        ("recording_run_id", JsonValue::str(&recording.run_id)),
-                        (
-                            "expected_frames",
-                            JsonValue::u64(recording.frame_records.len() as u64),
-                        ),
-                    ],
-                );
-                run(session);
-            });
+        let replay_run = Self::run_scenario(recording.config.clone(), model, |session| {
+            session.log_info(
+                "lab.replay.start",
+                &[
+                    ("scenario_name", JsonValue::str(&recording.scenario_name)),
+                    ("seed", JsonValue::u64(recording.seed)),
+                    ("recording_run_id", JsonValue::str(&recording.run_id)),
+                    (
+                        "expected_frames",
+                        JsonValue::u64(recording.frame_records.len() as u64),
+                    ),
+                ],
+            );
+            run(session);
+        });
 
         LAB_REPLAYS_TOTAL.fetch_add(1, Ordering::Relaxed);
 

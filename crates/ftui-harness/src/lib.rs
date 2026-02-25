@@ -71,13 +71,13 @@ pub use determinism::{
     DeterminismFixture, JsonValue, LabScenario, LabScenarioContext, LabScenarioResult,
     LabScenarioRun, TestJsonlLogger, lab_scenarios_run_total,
 };
+pub use ftui_core::geometry::Rect;
+pub use ftui_render::buffer;
+pub use ftui_render::cell;
 pub use lab_integration::{
     Lab, LabConfig, LabOutput, LabSession, Recording, ReplayResult, assert_outputs_match,
     lab_recordings_total, lab_replays_total,
 };
-pub use ftui_core::geometry::Rect;
-pub use ftui_render::buffer;
-pub use ftui_render::cell;
 pub use time_travel_inspector::TimeTravelInspector;
 
 // ============================================================================

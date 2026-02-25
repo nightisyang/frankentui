@@ -15,7 +15,7 @@ pty-capture = ["dep:portable-pty", "ftui-extras/pty-capture"]
 telemetry = ["ftui-runtime/telemetry"]
 
 [dependencies]
-ftui-render = { path = "../ftui-render", version = "0.2.1" }
+ftui-render = { path = "../ftui-render", version = "0.2.1", features = ["tracing"] }
 ftui-core = { path = "../ftui-core", version = "0.2.1", features = ["crossterm"] }
 ftui-runtime = { path = "../ftui-runtime", version = "0.2.1", features = ["crossterm-compat"] }
 ftui-widgets = { path = "../ftui-widgets", version = "0.2.1" }
