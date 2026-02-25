@@ -58,6 +58,7 @@
 //! ```
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use web_time::{Duration, Instant};
 
 /// Minimum wealth floor to prevent permanent zero-lock after adverse bets.
@@ -68,6 +69,18 @@ const MU_0_MIN: f64 = 1e-6;
 
 /// Maximum mu_0 to prevent degenerate all-match scenarios.
 const MU_0_MAX: f64 = 1.0 - 1e-6;
+
+// ---------------------------------------------------------------------------
+// Monotonic counters (exported for observability dashboards / tests)
+// ---------------------------------------------------------------------------
+
+static EPROCESS_REJECTIONS_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Total e-process rejections (monotonic counter for metrics export).
+#[must_use]
+pub fn eprocess_rejections_total() -> u64 {
+    EPROCESS_REJECTIONS_TOTAL.load(Ordering::Relaxed)
+}
 
 /// Configuration for the e-process throttle.
 #[derive(Debug, Clone)]
@@ -353,6 +366,52 @@ impl EProcessThrottle {
             "observe"
         };
 
+        // --- Tracing observability (bd-37a.5) ---
+        let rejected = eprocess_triggered;
+        let _span = tracing::debug_span!(
+            "eprocess.update",
+            test_id = "throttle",
+            wealth_current = %self.wealth,
+            wealth_threshold = %self.threshold,
+            observation_count = self.observation_count,
+            rejected = rejected,
+        )
+        .entered();
+
+        tracing::debug!(
+            target: "ftui.eprocess",
+            wealth_before = %wealth_before,
+            wealth_after = %self.wealth,
+            lambda = %self.lambda,
+            empirical_rate = %empirical_rate,
+            matched = matched,
+            eprocess_wealth = %self.wealth,
+            observation_count = self.observation_count,
+            action = %action,
+            "wealth update"
+        );
+
+        if rejected {
+            EPROCESS_REJECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
+            tracing::info!(
+                target: "ftui.eprocess",
+                wealth = %self.wealth,
+                threshold = %self.threshold,
+                observation_count = self.observation_count,
+                observations_since_recompute = self.observations_since_recompute,
+                "e-process rejection: significant finding"
+            );
+        }
+
+        if forced_by_deadline && should_recompute {
+            tracing::info!(
+                target: "ftui.eprocess",
+                deadline_ms = self.config.hard_deadline_ms,
+                observation_count = self.observation_count,
+                "hard deadline forced recompute"
+            );
+        }
+
         self.log_decision(
             now,
             matched,
@@ -511,6 +570,10 @@ impl EProcessThrottle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::registry::LookupSpan;
 
     fn test_config() -> ThrottleConfig {
         ThrottleConfig {
@@ -1200,6 +1263,396 @@ mod tests {
         assert!(
             stats.total_recomputes >= 2,
             "Should have multiple recomputes"
+        );
+    }
+
+    // =========================================================================
+    // Tracing capture infrastructure (bd-37a.5)
+    // =========================================================================
+
+    #[derive(Debug, Clone)]
+    #[allow(dead_code)]
+    struct CapturedSpan {
+        name: String,
+        target: String,
+        level: tracing::Level,
+        fields: HashMap<String, String>,
+    }
+
+    #[derive(Debug, Clone)]
+    #[allow(dead_code)]
+    struct CapturedEvent {
+        level: tracing::Level,
+        target: String,
+        message: String,
+        fields: HashMap<String, String>,
+    }
+
+    struct SpanCapture {
+        spans: Arc<Mutex<Vec<CapturedSpan>>>,
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+    }
+
+    impl SpanCapture {
+        fn new() -> (Self, CaptureHandle) {
+            let spans = Arc::new(Mutex::new(Vec::new()));
+            let events = Arc::new(Mutex::new(Vec::new()));
+
+            let handle = CaptureHandle {
+                spans: spans.clone(),
+                events: events.clone(),
+            };
+
+            (Self { spans, events }, handle)
+        }
+    }
+
+    struct CaptureHandle {
+        spans: Arc<Mutex<Vec<CapturedSpan>>>,
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+    }
+
+    impl CaptureHandle {
+        fn spans(&self) -> Vec<CapturedSpan> {
+            self.spans.lock().unwrap().clone()
+        }
+
+        fn events(&self) -> Vec<CapturedEvent> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    struct FieldVisitor(Vec<(String, String)>);
+
+    impl tracing::field::Visit for FieldVisitor {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+
+        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+    }
+
+    impl<S> tracing_subscriber::Layer<S> for SpanCapture
+    where
+        S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _id: &tracing::span::Id,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut visitor = FieldVisitor(Vec::new());
+            attrs.record(&mut visitor);
+
+            let mut fields: HashMap<String, String> = visitor.0.into_iter().collect();
+            for field in attrs.metadata().fields() {
+                fields.entry(field.name().to_string()).or_default();
+            }
+
+            self.spans.lock().unwrap().push(CapturedSpan {
+                name: attrs.metadata().name().to_string(),
+                target: attrs.metadata().target().to_string(),
+                level: *attrs.metadata().level(),
+                fields,
+            });
+        }
+
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut visitor = FieldVisitor(Vec::new());
+            event.record(&mut visitor);
+
+            let fields: HashMap<String, String> = visitor.0.clone().into_iter().collect();
+            let message = visitor
+                .0
+                .iter()
+                .find(|(k, _)| k == "message")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+
+            self.events.lock().unwrap().push(CapturedEvent {
+                level: *event.metadata().level(),
+                target: event.metadata().target().to_string(),
+                message,
+                fields,
+            });
+        }
+    }
+
+    fn with_captured_tracing<F>(f: F) -> CaptureHandle
+    where
+        F: FnOnce(),
+    {
+        let (layer, handle) = SpanCapture::new();
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, f);
+        handle
+    }
+
+    // =========================================================================
+    // Tracing span field assertions
+    // =========================================================================
+
+    #[test]
+    fn span_eprocess_update_has_required_fields() {
+        let handle = with_captured_tracing(|| {
+            let base = Instant::now();
+            let mut t = EProcessThrottle::new_at(test_config(), base);
+            t.observe_at(true, base + Duration::from_millis(1));
+        });
+
+        let spans = handle.spans();
+        let ep_spans: Vec<_> = spans
+            .iter()
+            .filter(|s| s.name == "eprocess.update")
+            .collect();
+        assert!(
+            !ep_spans.is_empty(),
+            "expected at least one eprocess.update span"
+        );
+
+        let span = &ep_spans[0];
+        assert!(span.fields.contains_key("test_id"), "missing test_id field");
+        assert!(
+            span.fields.contains_key("wealth_current"),
+            "missing wealth_current"
+        );
+        assert!(
+            span.fields.contains_key("wealth_threshold"),
+            "missing wealth_threshold"
+        );
+        assert!(
+            span.fields.contains_key("observation_count"),
+            "missing observation_count"
+        );
+        assert!(
+            span.fields.contains_key("rejected"),
+            "missing rejected field"
+        );
+    }
+
+    #[test]
+    fn span_rejected_field_true_on_eprocess_trigger() {
+        let handle = with_captured_tracing(|| {
+            let base = Instant::now();
+            let mut cfg = test_config();
+            cfg.min_observations_between = 1;
+            let mut t = EProcessThrottle::new_at(cfg, base);
+
+            for i in 1..=100 {
+                let d = t.observe_at(true, base + Duration::from_millis(i));
+                if d.should_recompute && !d.forced_by_deadline {
+                    break;
+                }
+            }
+        });
+
+        let spans = handle.spans();
+        let ep_spans: Vec<_> = spans
+            .iter()
+            .filter(|s| s.name == "eprocess.update")
+            .collect();
+
+        // At least one span should have rejected=true
+        let rejected_spans: Vec<_> = ep_spans
+            .iter()
+            .filter(|s| s.fields.get("rejected").is_some_and(|v| v == "true"))
+            .collect();
+        assert!(
+            !rejected_spans.is_empty(),
+            "expected at least one span with rejected=true"
+        );
+    }
+
+    // =========================================================================
+    // DEBUG log assertions
+    // =========================================================================
+
+    #[test]
+    fn debug_log_wealth_update() {
+        let handle = with_captured_tracing(|| {
+            let base = Instant::now();
+            let mut t = EProcessThrottle::new_at(test_config(), base);
+            t.observe_at(true, base + Duration::from_millis(1));
+        });
+
+        let events = handle.events();
+        let debug_events: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.level == tracing::Level::DEBUG
+                    && e.target == "ftui.eprocess"
+                    && e.fields.contains_key("wealth_before")
+            })
+            .collect();
+
+        assert!(
+            !debug_events.is_empty(),
+            "expected at least one DEBUG wealth update event"
+        );
+
+        let evt = &debug_events[0];
+        assert!(
+            evt.fields.contains_key("wealth_after"),
+            "missing wealth_after"
+        );
+        assert!(evt.fields.contains_key("lambda"), "missing lambda");
+        assert!(
+            evt.fields.contains_key("eprocess_wealth"),
+            "missing eprocess_wealth gauge"
+        );
+    }
+
+    // =========================================================================
+    // INFO log on rejection
+    // =========================================================================
+
+    #[test]
+    fn info_log_on_eprocess_rejection() {
+        let handle = with_captured_tracing(|| {
+            let base = Instant::now();
+            let mut cfg = test_config();
+            cfg.min_observations_between = 1;
+            let mut t = EProcessThrottle::new_at(cfg, base);
+
+            for i in 1..=100 {
+                let d = t.observe_at(true, base + Duration::from_millis(i));
+                if d.should_recompute && !d.forced_by_deadline {
+                    break;
+                }
+            }
+        });
+
+        let events = handle.events();
+        let info_events: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.level == tracing::Level::INFO
+                    && e.target == "ftui.eprocess"
+                    && e.fields.contains_key("wealth")
+                    && e.fields.contains_key("threshold")
+            })
+            .collect();
+
+        assert!(
+            !info_events.is_empty(),
+            "expected INFO log on e-process rejection"
+        );
+    }
+
+    #[test]
+    fn info_log_on_deadline_forced_recompute() {
+        let handle = with_captured_tracing(|| {
+            let base = Instant::now();
+            let mut cfg = test_config();
+            cfg.hard_deadline_ms = 100;
+            cfg.min_observations_between = 1;
+            let mut t = EProcessThrottle::new_at(cfg, base);
+
+            // Only non-matches, exceed deadline
+            t.observe_at(false, base + Duration::from_millis(150));
+        });
+
+        let events = handle.events();
+        let deadline_events: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.level == tracing::Level::INFO
+                    && e.target == "ftui.eprocess"
+                    && e.fields.contains_key("deadline_ms")
+            })
+            .collect();
+
+        assert!(
+            !deadline_events.is_empty(),
+            "expected INFO log on deadline forced recompute"
+        );
+    }
+
+    // =========================================================================
+    // Counter verification
+    // =========================================================================
+
+    #[test]
+    fn counter_accessor_is_callable() {
+        let total = eprocess_rejections_total();
+        let _ = total.checked_add(0).expect("counter overflow");
+    }
+
+    #[test]
+    fn counter_increments_on_rejection() {
+        let before = eprocess_rejections_total();
+
+        let base = Instant::now();
+        let mut cfg = test_config();
+        cfg.min_observations_between = 1;
+        let mut t = EProcessThrottle::new_at(cfg, base);
+
+        for i in 1..=100 {
+            let d = t.observe_at(true, base + Duration::from_millis(i));
+            if d.should_recompute && !d.forced_by_deadline {
+                break;
+            }
+        }
+
+        let after = eprocess_rejections_total();
+        assert!(
+            after > before,
+            "counter should increment on rejection: before={before}, after={after}"
+        );
+    }
+
+    #[test]
+    fn debug_events_per_observation() {
+        let handle = with_captured_tracing(|| {
+            let base = Instant::now();
+            let mut cfg = test_config();
+            cfg.hard_deadline_ms = u64::MAX;
+            cfg.min_observations_between = u64::MAX;
+            let mut t = EProcessThrottle::new_at(cfg, base);
+
+            for i in 1..=5 {
+                t.observe_at(i % 2 == 0, base + Duration::from_millis(i));
+            }
+        });
+
+        let events = handle.events();
+        let debug_events: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.level == tracing::Level::DEBUG
+                    && e.target == "ftui.eprocess"
+                    && e.fields.contains_key("wealth_before")
+            })
+            .collect();
+
+        assert_eq!(
+            debug_events.len(),
+            5,
+            "expected one DEBUG wealth event per observation"
         );
     }
 }
