@@ -49,6 +49,7 @@ criterion = { version = "0.8.2", features = ["html_reports"] }
 # For spike PTY tests
 portable-pty = "0.9.0"
 proptest = "1.7.0"
+tracing-subscriber = { version = "0.3.20", features = ["registry"] }
 
 [[bench]]
 name = "read_optimized_bench"

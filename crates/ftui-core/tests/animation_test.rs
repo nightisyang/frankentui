@@ -701,6 +701,113 @@ mod choreo_presets {
     }
 }
 
+// ===========================================================================
+// Property-based spring convergence tests (bd-1lg.12)
+// ===========================================================================
+
+proptest! {
+    #[test]
+    fn spring_always_converges(
+        stiffness in 10.0f64..500.0,
+        damping in 1.0f64..100.0,
+    ) {
+        let mut spring = Spring::new(0.0, 1.0)
+            .with_stiffness(stiffness)
+            .with_damping(damping);
+
+        // Tick for up to 30 simulated seconds at 16ms steps (1875 frames).
+        // Low-stiffness, low-damping springs (e.g. k=10, c=1) oscillate slowly
+        // and need ~15s+ to decay below the rest threshold.
+        for _ in 0..1875 {
+            spring.tick(Duration::from_millis(16));
+            if spring.is_complete() {
+                break;
+            }
+        }
+
+        prop_assert!(
+            spring.is_complete(),
+            "spring(k={stiffness}, c={damping}) did not converge after 30s \
+             (pos={}, vel={})",
+            spring.position(),
+            spring.velocity()
+        );
+    }
+
+    #[test]
+    fn spring_value_always_bounded(
+        stiffness in 10.0f64..500.0,
+        damping in 1.0f64..100.0,
+    ) {
+        let mut spring = Spring::new(0.0, 1.0)
+            .with_stiffness(stiffness)
+            .with_damping(damping);
+
+        for _ in 0..300 {
+            spring.tick(Duration::from_millis(16));
+            let v = spring.value();
+            prop_assert!(
+                (0.0..=1.0).contains(&v),
+                "Animation::value() out of [0,1]: {v} (k={stiffness}, c={damping})"
+            );
+        }
+    }
+
+    #[test]
+    fn spring_reset_restores_initial(
+        initial in -100.0f64..100.0,
+        target in -100.0f64..100.0,
+    ) {
+        let mut spring = Spring::new(initial, target);
+        // Advance partway.
+        for _ in 0..50 {
+            spring.tick(Duration::from_millis(16));
+        }
+        spring.reset();
+        prop_assert!(
+            (spring.position() - initial).abs() < f64::EPSILON,
+            "reset should restore initial position"
+        );
+        prop_assert!(
+            spring.velocity().abs() < f64::EPSILON,
+            "reset should zero velocity"
+        );
+        prop_assert!(!spring.is_complete(), "reset spring should not be at rest");
+    }
+
+    #[test]
+    fn spring_timestep_independence_property(
+        stiffness in 50.0f64..300.0,
+        damping in 5.0f64..60.0,
+    ) {
+        // Compare 1ms steps vs 16ms steps over 500ms.
+        let total_ms = 500u64;
+
+        let mut fine = Spring::new(0.0, 1.0)
+            .with_stiffness(stiffness)
+            .with_damping(damping);
+        for _ in 0..total_ms {
+            fine.tick(Duration::from_millis(1));
+        }
+
+        let mut coarse = Spring::new(0.0, 1.0)
+            .with_stiffness(stiffness)
+            .with_damping(damping);
+        for _ in 0..(total_ms / 16) {
+            coarse.tick(Duration::from_millis(16));
+        }
+        // Tick remaining 500 % 16 = 8ms.
+        coarse.tick(Duration::from_millis(total_ms % 16));
+
+        prop_assert!(
+            (fine.position() - coarse.position()).abs() < 0.05,
+            "time-step independence violated: fine={} coarse={} (k={stiffness}, c={damping})",
+            fine.position(),
+            coarse.position()
+        );
+    }
+}
+
 proptest! {
     #[test]
     fn easing_outputs_bounded(t in -10.0f32..10.0f32) {
