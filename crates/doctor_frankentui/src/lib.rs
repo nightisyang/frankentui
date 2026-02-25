@@ -9,6 +9,7 @@ pub mod keyseq;
 pub mod profile;
 pub mod report;
 pub mod runmeta;
+pub mod sandbox;
 pub mod seed;
 pub mod semantic_contract;
 pub mod suite;
