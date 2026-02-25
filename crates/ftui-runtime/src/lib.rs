@@ -28,7 +28,10 @@
 pub mod allocation_budget;
 pub mod asciicast;
 pub mod bocpd;
+pub mod cancellation;
+
 pub mod conformal_alert;
+pub mod conformal_frame_guard;
 pub mod conformal_predictor;
 pub mod cost_model;
 pub mod debug_trace;
@@ -47,6 +50,7 @@ pub mod input_macro;
 pub mod ivm;
 pub mod locale;
 pub mod log_sink;
+pub mod process_subscription;
 pub mod program;
 pub mod queueing_scheduler;
 #[cfg(feature = "render-thread")]
@@ -54,6 +58,7 @@ pub mod render_thread;
 pub mod render_trace;
 pub mod resize_coalescer;
 pub mod resize_sla;
+pub mod retry;
 pub mod simulator;
 pub mod state_persistence;
 #[cfg(feature = "stdio-capture")]
@@ -75,6 +80,7 @@ pub mod telemetry;
 pub mod voi_telemetry;
 
 pub use asciicast::{AsciicastRecorder, AsciicastWriter};
+pub use cancellation::{CancellationSource, CancellationToken};
 pub use diff_evidence::{
     DiffEvidenceLedger, DiffRegime, DiffStrategyRecord, Observation, RegimeTransition,
 };
@@ -95,6 +101,7 @@ pub use locale::{
     Locale, LocaleContext, LocaleOverride, current_locale, detect_system_locale, set_locale,
 };
 pub use log_sink::LogSink;
+pub use process_subscription::{ProcessEvent, ProcessSubscription};
 #[cfg(feature = "crossterm-compat")]
 pub use program::CrosstermEventSource;
 pub use program::{
@@ -110,6 +117,7 @@ pub use program::{
 pub use render_trace::{
     RenderTraceConfig, RenderTraceContext, RenderTraceFrame, RenderTraceRecorder,
 };
+pub use retry::{BackoffStrategy, RetryPolicy, task_with_retry, task_with_timeout};
 pub use simulator::ProgramSimulator;
 pub use string_model::{StringModel, StringModelAdapter};
 pub use subscription::{Every, StopSignal, SubId, Subscription};
@@ -137,6 +145,10 @@ pub use allocation_budget::{
 };
 pub use conformal_alert::{
     AlertConfig, AlertDecision, AlertEvidence, AlertReason, AlertStats, ConformalAlert,
+};
+pub use conformal_frame_guard::{
+    ConformalFrameGuard, ConformalFrameGuardConfig, ConformalFrameGuardTelemetry, GuardState,
+    NonconformitySummary, P99Prediction,
 };
 pub use conformal_predictor::{
     BucketKey, ConformalConfig, ConformalPrediction, ConformalPredictor, ConformalUpdate,

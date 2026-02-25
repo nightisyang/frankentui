@@ -155,6 +155,32 @@ pub trait Model: Sized {
     ) -> Option<&mut dyn crate::tick_strategy::ScreenTickDispatch> {
         None
     }
+
+    /// Called before the runtime exits, whether via [`Cmd::Quit`] or signal.
+    ///
+    /// Return cleanup commands (e.g., saving state, closing connections).
+    /// The runtime executes these before teardown.
+    ///
+    /// # Migration rationale
+    ///
+    /// Source frameworks use `componentWillUnmount`, `useEffect` cleanup, or
+    /// `beforeDestroy` hooks. This provides an equivalent lifecycle point.
+    fn on_shutdown(&mut self) -> Cmd<Self::Message> {
+        Cmd::none()
+    }
+
+    /// Called when an unrecoverable error occurs during the runtime loop.
+    ///
+    /// Return commands for error recovery or graceful degradation. The
+    /// `error` string contains the error description.
+    ///
+    /// # Migration rationale
+    ///
+    /// Source frameworks use `componentDidCatch`, error boundaries, or
+    /// `onError` hooks. This provides an equivalent error recovery point.
+    fn on_error(&mut self, _error: &str) -> Cmd<Self::Message> {
+        Cmd::none()
+    }
 }
 
 /// Default weight assigned to background tasks.
