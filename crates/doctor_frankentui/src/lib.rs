@@ -4,6 +4,7 @@ pub mod capture;
 pub mod cli;
 pub mod doctor;
 pub mod error;
+pub mod harness;
 pub mod import;
 pub mod keyseq;
 pub mod profile;
