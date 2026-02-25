@@ -15,7 +15,7 @@
 //!   cargo test -p ftui-runtime --test e2e_observability_pipeline
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
@@ -177,14 +177,27 @@ fn with_pipeline_capture<F>(f: F) -> (Vec<CapturedSpan>, Vec<CapturedEvent>)
 where
     F: FnOnce(),
 {
+    ensure_global_trace_level();
     let (layer, spans, events) = PipelineCapture::new();
     let subscriber = tracing_subscriber::registry()
         .with(tracing_subscriber::filter::LevelFilter::TRACE)
         .with(layer);
-    tracing::subscriber::with_default(subscriber, f);
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        f();
+    });
     let s = spans.lock().unwrap().clone();
     let e = events.lock().unwrap().clone();
     (s, e)
+}
+
+fn ensure_global_trace_level() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_subscriber::filter::LevelFilter::TRACE);
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    });
 }
 
 // ============================================================================

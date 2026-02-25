@@ -14,7 +14,7 @@
 //!   cargo test -p ftui-runtime --test voi_eprocess_unit_tests
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 
 use ftui_runtime::eprocess_throttle::{EProcessThrottle, ThrottleConfig};
 use ftui_runtime::voi_sampling::{VoiConfig, VoiSampler};
@@ -164,12 +164,25 @@ fn with_captured_tracing<F>(f: F) -> CaptureHandle
 where
     F: FnOnce(),
 {
+    ensure_global_trace_level();
     let (layer, handle) = SpanCapture::new();
     let subscriber = tracing_subscriber::registry()
         .with(tracing_subscriber::filter::LevelFilter::TRACE)
         .with(layer);
-    tracing::subscriber::with_default(subscriber, f);
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        f();
+    });
     handle
+}
+
+fn ensure_global_trace_level() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_subscriber::filter::LevelFilter::TRACE);
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    });
 }
 
 // ============================================================================

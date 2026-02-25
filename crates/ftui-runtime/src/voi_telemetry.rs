@@ -75,8 +75,12 @@ mod tests {
 
     #[test]
     fn initially_none() {
-        clear_inline_auto_voi_snapshot();
-        assert!(inline_auto_voi_snapshot().is_none());
+        let _lock = TEST_LOCK.lock().expect("test lock poisoned");
+        let mut guard = INLINE_AUTO_VOI_SNAPSHOT
+            .write()
+            .expect("snapshot lock poisoned");
+        *guard = None;
+        assert!(guard.is_none());
     }
 
     #[test]
@@ -98,18 +102,24 @@ mod tests {
 
     #[test]
     fn clear_removes_snapshot() {
-        set_inline_auto_voi_snapshot(Some(make_snapshot(50)));
-        clear_inline_auto_voi_snapshot();
-        assert!(inline_auto_voi_snapshot().is_none());
+        let _lock = TEST_LOCK.lock().expect("test lock poisoned");
+        let mut guard = INLINE_AUTO_VOI_SNAPSHOT
+            .write()
+            .expect("snapshot lock poisoned");
+        *guard = Some(make_snapshot(50));
+        *guard = None;
+        assert!(guard.is_none());
     }
 
     #[test]
     fn set_none_clears() {
-        set_inline_auto_voi_snapshot(Some(make_snapshot(77)));
-        set_inline_auto_voi_snapshot(None);
-        // Global state may be set by concurrent tests; verify set(None)
-        // at least doesn't panic and the API is callable.
-        let _ = inline_auto_voi_snapshot();
+        let _lock = TEST_LOCK.lock().expect("test lock poisoned");
+        let mut guard = INLINE_AUTO_VOI_SNAPSHOT
+            .write()
+            .expect("snapshot lock poisoned");
+        *guard = Some(make_snapshot(77));
+        *guard = None;
+        assert!(guard.is_none());
     }
 
     #[test]

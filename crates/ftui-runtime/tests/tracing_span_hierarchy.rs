@@ -9,7 +9,7 @@
 //!   cargo test -p ftui-runtime --test tracing_span_hierarchy
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
@@ -210,12 +210,25 @@ fn with_captured_spans<F>(f: F) -> CaptureHandle
 where
     F: FnOnce(),
 {
+    ensure_global_trace_level();
     let (layer, handle) = SpanCapture::new();
     let subscriber = tracing_subscriber::registry()
         .with(tracing_subscriber::filter::LevelFilter::TRACE)
         .with(layer);
-    tracing::subscriber::with_default(subscriber, f);
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        f();
+    });
     handle
+}
+
+fn ensure_global_trace_level() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_subscriber::filter::LevelFilter::TRACE);
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    });
 }
 
 // ============================================================================

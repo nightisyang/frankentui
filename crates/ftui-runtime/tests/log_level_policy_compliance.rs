@@ -13,7 +13,7 @@
 //!   cargo test -p ftui-runtime --test log_level_policy_compliance
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::LookupSpan;
@@ -188,12 +188,25 @@ fn with_captured_events<F>(f: F) -> EventCaptureHandle
 where
     F: FnOnce(),
 {
+    ensure_global_trace_level();
     let (layer, handle) = EventCapture::new();
     let subscriber = tracing_subscriber::registry()
         .with(tracing_subscriber::filter::LevelFilter::TRACE)
         .with(layer);
-    tracing::subscriber::with_default(subscriber, f);
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        f();
+    });
     handle
+}
+
+fn ensure_global_trace_level() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_subscriber::filter::LevelFilter::TRACE);
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    });
 }
 
 // ============================================================================
