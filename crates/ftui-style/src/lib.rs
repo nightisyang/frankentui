@@ -22,6 +22,8 @@
 
 /// Color types, profiles, and downgrade utilities.
 pub mod color;
+/// Interactive style variants for stateful widgets.
+pub mod interactive;
 /// Style types with CSS-like cascading semantics.
 pub mod style;
 /// StyleSheet registry for named styles.
@@ -56,7 +58,10 @@ pub use color::{
     relative_luminance,
     relative_luminance_packed,
 };
-pub use style::{Style, StyleFlags};
+pub use interactive::{InteractionState, InteractiveStyle};
+pub use style::{
+    LineClamp, Overflow, Style, StyleFlags, TextAlign, TextOverflow, TextTransform, WhiteSpaceMode,
+};
 pub use stylesheet::{StyleId, StyleSheet};
 pub use table_theme::{
     BlendMode, Gradient, StyleMask, TableEffect, TableEffectResolver, TableEffectRule,

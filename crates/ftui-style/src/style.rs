@@ -5,6 +5,194 @@
 use ftui_render::cell::PackedRgba;
 use tracing::{instrument, trace};
 
+/// CSS-like text-transform property.
+///
+/// Terminal backends apply this at render time by transforming the
+/// text content before measuring cell widths. Transformations are
+/// locale-independent (ASCII-only) for deterministic output.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
+pub enum TextTransform {
+    /// No transformation (identity).
+    #[default]
+    None,
+    /// Convert all characters to uppercase.
+    Uppercase,
+    /// Convert all characters to lowercase.
+    Lowercase,
+    /// Capitalize the first character of each word.
+    Capitalize,
+}
+
+impl TextTransform {
+    /// Apply the text transform to a string.
+    ///
+    /// Uses ASCII-only transforms for determinism across locales.
+    #[must_use]
+    pub fn apply(self, text: &str) -> String {
+        match self {
+            Self::None => text.to_string(),
+            Self::Uppercase => text.to_ascii_uppercase(),
+            Self::Lowercase => text.to_ascii_lowercase(),
+            Self::Capitalize => capitalize_words(text),
+        }
+    }
+}
+
+/// Capitalize the first ASCII letter of each whitespace-delimited word.
+fn capitalize_words(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut at_word_start = true;
+    for ch in text.chars() {
+        if ch.is_ascii_whitespace() {
+            result.push(ch);
+            at_word_start = true;
+        } else if at_word_start {
+            result.push(ch.to_ascii_uppercase());
+            at_word_start = false;
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+/// CSS-like text-overflow property for truncation behavior.
+///
+/// Controls what happens when text content overflows its container.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
+pub enum TextOverflow {
+    /// Clip overflowing text at the container edge.
+    #[default]
+    Clip,
+    /// Replace overflowing text with an ellipsis ("…").
+    Ellipsis,
+    /// Replace overflowing text with a custom single-char indicator.
+    Indicator(char),
+}
+
+/// CSS-like overflow property for layout containers.
+///
+/// Controls the behavior when content exceeds the allocated area.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
+pub enum Overflow {
+    /// Content is not clipped; may render outside the container.
+    Visible,
+    /// Content is clipped at the container boundary.
+    #[default]
+    Hidden,
+    /// Content is scrollable (requires scroll state).
+    Scroll,
+    /// Browser-like auto: scroll only when needed.
+    Auto,
+}
+
+/// CSS-like white-space property controlling wrapping and whitespace handling.
+///
+/// Maps CSS white-space modes to terminal text behavior.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
+pub enum WhiteSpaceMode {
+    /// Collapse whitespace runs, wrap at container width (CSS `normal`).
+    #[default]
+    Normal,
+    /// Preserve all whitespace and newlines, no wrapping (CSS `pre`).
+    Pre,
+    /// Preserve whitespace and newlines, wrap at container width (CSS `pre-wrap`).
+    PreWrap,
+    /// Collapse whitespace runs, preserve newlines, wrap (CSS `pre-line`).
+    PreLine,
+    /// Collapse whitespace, suppress wrapping (CSS `nowrap`).
+    NoWrap,
+}
+
+impl WhiteSpaceMode {
+    /// Whether this mode collapses consecutive whitespace to a single space.
+    #[inline]
+    #[must_use]
+    pub const fn collapses_whitespace(self) -> bool {
+        matches!(self, Self::Normal | Self::PreLine | Self::NoWrap)
+    }
+
+    /// Whether this mode allows line wrapping at container width.
+    #[inline]
+    #[must_use]
+    pub const fn allows_wrap(self) -> bool {
+        matches!(self, Self::Normal | Self::PreWrap | Self::PreLine)
+    }
+
+    /// Whether this mode preserves explicit newlines in the source.
+    #[inline]
+    #[must_use]
+    pub const fn preserves_newlines(self) -> bool {
+        matches!(self, Self::Pre | Self::PreWrap | Self::PreLine)
+    }
+}
+
+/// CSS-like text-align property.
+///
+/// Controls horizontal alignment of text within its container.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "kebab-case"))]
+pub enum TextAlign {
+    /// Left-aligned (default for LTR text).
+    #[default]
+    Left,
+    /// Right-aligned.
+    Right,
+    /// Centered.
+    Center,
+    /// Justified (stretch to fill width).
+    Justify,
+}
+
+/// Line clamp configuration.
+///
+/// Limits the number of visible lines, truncating with an ellipsis
+/// on the last visible line when content exceeds the limit.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct LineClamp {
+    /// Maximum number of visible lines. `0` means unlimited.
+    pub max_lines: u16,
+}
+
+impl LineClamp {
+    /// Create an unlimited (no clamping) configuration.
+    pub const UNLIMITED: Self = Self { max_lines: 0 };
+
+    /// Create a line clamp with a specific maximum.
+    #[must_use]
+    pub const fn new(max_lines: u16) -> Self {
+        Self { max_lines }
+    }
+
+    /// Whether clamping is active.
+    #[inline]
+    #[must_use]
+    pub const fn is_active(self) -> bool {
+        self.max_lines > 0
+    }
+
+    /// Apply clamping to a line count: returns the number of lines to render
+    /// and whether truncation occurred.
+    #[must_use]
+    pub const fn clamp(self, line_count: usize) -> (usize, bool) {
+        if self.max_lines == 0 || line_count <= self.max_lines as usize {
+            (line_count, false)
+        } else {
+            (self.max_lines as usize, true)
+        }
+    }
+}
+
 /// Text attribute flags (16 bits for extended attribute support).
 ///
 /// These flags represent visual attributes that can be applied to text.
@@ -945,5 +1133,149 @@ mod performance_tests {
             "Merge too slow: {:?} for 1M iterations",
             elapsed
         );
+    }
+}
+
+#[cfg(test)]
+mod parity_tests {
+    use super::*;
+
+    // ── TextTransform ─────────────────────────────────────────────
+
+    #[test]
+    fn text_transform_none_is_identity() {
+        assert_eq!(TextTransform::None.apply("Hello World"), "Hello World");
+    }
+
+    #[test]
+    fn text_transform_uppercase() {
+        assert_eq!(TextTransform::Uppercase.apply("hello world"), "HELLO WORLD");
+    }
+
+    #[test]
+    fn text_transform_lowercase() {
+        assert_eq!(TextTransform::Lowercase.apply("HELLO WORLD"), "hello world");
+    }
+
+    #[test]
+    fn text_transform_capitalize() {
+        assert_eq!(
+            TextTransform::Capitalize.apply("hello world"),
+            "Hello World"
+        );
+        assert_eq!(
+            TextTransform::Capitalize.apply("  two  spaces"),
+            "  Two  Spaces"
+        );
+    }
+
+    #[test]
+    fn text_transform_empty_string() {
+        assert_eq!(TextTransform::Uppercase.apply(""), "");
+        assert_eq!(TextTransform::Capitalize.apply(""), "");
+    }
+
+    #[test]
+    fn text_transform_default_is_none() {
+        assert_eq!(TextTransform::default(), TextTransform::None);
+    }
+
+    // ── TextOverflow ──────────────────────────────────────────────
+
+    #[test]
+    fn text_overflow_default_is_clip() {
+        assert_eq!(TextOverflow::default(), TextOverflow::Clip);
+    }
+
+    #[test]
+    fn text_overflow_indicator_stores_char() {
+        let overflow = TextOverflow::Indicator('>');
+        assert_eq!(overflow, TextOverflow::Indicator('>'));
+    }
+
+    // ── Overflow ──────────────────────────────────────────────────
+
+    #[test]
+    fn overflow_default_is_hidden() {
+        assert_eq!(Overflow::default(), Overflow::Hidden);
+    }
+
+    // ── WhiteSpaceMode ───────────────────────────────────────────
+
+    #[test]
+    fn whitespace_normal_collapses_and_wraps() {
+        let mode = WhiteSpaceMode::Normal;
+        assert!(mode.collapses_whitespace());
+        assert!(mode.allows_wrap());
+        assert!(!mode.preserves_newlines());
+    }
+
+    #[test]
+    fn whitespace_pre_preserves_all() {
+        let mode = WhiteSpaceMode::Pre;
+        assert!(!mode.collapses_whitespace());
+        assert!(!mode.allows_wrap());
+        assert!(mode.preserves_newlines());
+    }
+
+    #[test]
+    fn whitespace_pre_wrap_preserves_and_wraps() {
+        let mode = WhiteSpaceMode::PreWrap;
+        assert!(!mode.collapses_whitespace());
+        assert!(mode.allows_wrap());
+        assert!(mode.preserves_newlines());
+    }
+
+    #[test]
+    fn whitespace_pre_line_collapses_preserves_newlines_and_wraps() {
+        let mode = WhiteSpaceMode::PreLine;
+        assert!(mode.collapses_whitespace());
+        assert!(mode.allows_wrap());
+        assert!(mode.preserves_newlines());
+    }
+
+    #[test]
+    fn whitespace_nowrap_collapses_no_wrap() {
+        let mode = WhiteSpaceMode::NoWrap;
+        assert!(mode.collapses_whitespace());
+        assert!(!mode.allows_wrap());
+        assert!(!mode.preserves_newlines());
+    }
+
+    #[test]
+    fn whitespace_default_is_normal() {
+        assert_eq!(WhiteSpaceMode::default(), WhiteSpaceMode::Normal);
+    }
+
+    // ── TextAlign ────────────────────────────────────────────────
+
+    #[test]
+    fn text_align_default_is_left() {
+        assert_eq!(TextAlign::default(), TextAlign::Left);
+    }
+
+    // ── LineClamp ────────────────────────────────────────────────
+
+    #[test]
+    fn line_clamp_unlimited() {
+        let clamp = LineClamp::UNLIMITED;
+        assert!(!clamp.is_active());
+        assert_eq!(clamp.clamp(100), (100, false));
+    }
+
+    #[test]
+    fn line_clamp_active() {
+        let clamp = LineClamp::new(3);
+        assert!(clamp.is_active());
+        assert_eq!(clamp.clamp(5), (3, true));
+        assert_eq!(clamp.clamp(3), (3, false));
+        assert_eq!(clamp.clamp(1), (1, false));
+    }
+
+    #[test]
+    fn line_clamp_default_is_unlimited() {
+        let clamp = LineClamp::default();
+        assert!(!clamp.is_active());
+        assert_eq!(clamp.max_lines, 0);
     }
 }
