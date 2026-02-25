@@ -117,6 +117,7 @@
 //! ```
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
 use web_time::{Duration, Instant};
 
 const EPS: f64 = 1e-12;
@@ -126,6 +127,25 @@ const LAMBDA_EPS: f64 = 1e-9;
 const E_MIN: f64 = 1e-12;
 const E_MAX: f64 = 1e12;
 const VAR_MAX: f64 = 0.25; // Max Beta variance as α,β → 0
+
+// ---------------------------------------------------------------------------
+// Monotonic counters (exported for observability dashboards / tests)
+// ---------------------------------------------------------------------------
+
+static VOI_SAMPLES_TAKEN_TOTAL: AtomicU64 = AtomicU64::new(0);
+static VOI_SAMPLES_SKIPPED_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// Total VOI samples taken (monotonic counter for metrics export).
+#[must_use]
+pub fn voi_samples_taken_total() -> u64 {
+    VOI_SAMPLES_TAKEN_TOTAL.load(Ordering::Relaxed)
+}
+
+/// Total VOI samples skipped (monotonic counter for metrics export).
+#[must_use]
+pub fn voi_samples_skipped_total() -> u64 {
+    VOI_SAMPLES_SKIPPED_TOTAL.load(Ordering::Relaxed)
+}
 
 /// Configuration for the VOI sampling policy.
 #[derive(Debug, Clone)]
@@ -513,6 +533,43 @@ impl VoiSampler {
         self.last_decision = Some(decision.clone());
         self.last_decision_forced = forced;
 
+        // --- Tracing observability (bd-37a.4) ---
+        let _span = tracing::debug_span!(
+            "voi.evaluate",
+            decision_context = %reason,
+            voi_estimate = %voi_gain,
+            sample_cost = %cost,
+            sample_decision = should_sample,
+        )
+        .entered();
+
+        tracing::debug!(
+            target: "ftui.voi",
+            voi_gain = %voi_gain,
+            score = %score,
+            cost = %cost,
+            log_bayes_factor = %log_bayes_factor,
+            posterior_mean = %decision.posterior_mean,
+            posterior_variance = %variance,
+            boundary_score = %boundary_score,
+            e_value = %self.e_value,
+            reason = %reason,
+            event_idx = self.event_idx,
+            "voi calculation"
+        );
+
+        tracing::debug!(
+            target: "ftui.voi",
+            voi_estimate_value = %voi_gain,
+            "voi estimate histogram"
+        );
+
+        if should_sample {
+            VOI_SAMPLES_TAKEN_TOTAL.fetch_add(1, Ordering::Relaxed);
+        } else {
+            VOI_SAMPLES_SKIPPED_TOTAL.fetch_add(1, Ordering::Relaxed);
+        }
+
         if self.config.enable_logging {
             self.push_log(VoiLogEntry::Decision(decision.clone()));
         }
@@ -537,17 +594,36 @@ impl VoiSampler {
 
         self.update_eprocess(violated);
 
+        let obs_posterior_mean = beta_mean(self.alpha, self.beta);
+        let obs_posterior_variance = beta_variance(self.alpha, self.beta);
+        let obs_voi_estimate =
+            (obs_posterior_variance - expected_variance_after(self.alpha, self.beta)).max(0.0);
+
         let observation = VoiObservation {
             event_idx: self.event_idx,
             sample_idx: self.sample_idx,
             violated,
-            posterior_mean: beta_mean(self.alpha, self.beta),
-            posterior_variance: beta_variance(self.alpha, self.beta),
+            posterior_mean: obs_posterior_mean,
+            posterior_variance: obs_posterior_variance,
             alpha: self.alpha,
             beta: self.beta,
             e_value: self.e_value,
             e_threshold: self.e_threshold,
         };
+
+        // --- TRACE: individual utility estimate after observation ---
+        tracing::trace!(
+            target: "ftui.voi",
+            violated = violated,
+            alpha = %self.alpha,
+            beta = %self.beta,
+            posterior_mean = %obs_posterior_mean,
+            posterior_variance = %obs_posterior_variance,
+            e_value = %self.e_value,
+            voi_estimate_value = %obs_voi_estimate,
+            sample_idx = self.sample_idx,
+            "utility estimate after observation"
+        );
 
         self.last_observation = Some(observation.clone());
         if self.config.enable_logging {
@@ -697,6 +773,10 @@ fn log10_ratio(score: f64, cost: f64) -> f64 {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::registry::LookupSpan;
 
     const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x100000001b3;
@@ -1411,6 +1491,453 @@ mod tests {
         assert!(
             line_count >= 2,
             "should have at least 2 log lines, got {line_count}"
+        );
+    }
+
+    // =========================================================================
+    // Tracing capture infrastructure
+    // =========================================================================
+
+    #[derive(Debug, Clone)]
+    #[allow(dead_code)]
+    struct CapturedSpan {
+        name: String,
+        target: String,
+        level: tracing::Level,
+        fields: HashMap<String, String>,
+        parent_name: Option<String>,
+    }
+
+    #[derive(Debug, Clone)]
+    #[allow(dead_code)]
+    struct CapturedEvent {
+        level: tracing::Level,
+        target: String,
+        message: String,
+        fields: HashMap<String, String>,
+        parent_span_name: Option<String>,
+    }
+
+    struct SpanCapture {
+        spans: Arc<Mutex<Vec<CapturedSpan>>>,
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+        span_index: Arc<Mutex<HashMap<u64, usize>>>,
+    }
+
+    impl SpanCapture {
+        fn new() -> (Self, CaptureHandle) {
+            let spans = Arc::new(Mutex::new(Vec::new()));
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let span_index = Arc::new(Mutex::new(HashMap::new()));
+
+            let handle = CaptureHandle {
+                spans: spans.clone(),
+                events: events.clone(),
+            };
+
+            (
+                Self {
+                    spans,
+                    events,
+                    span_index,
+                },
+                handle,
+            )
+        }
+    }
+
+    struct CaptureHandle {
+        spans: Arc<Mutex<Vec<CapturedSpan>>>,
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+    }
+
+    impl CaptureHandle {
+        fn spans(&self) -> Vec<CapturedSpan> {
+            self.spans.lock().unwrap().clone()
+        }
+
+        fn events(&self) -> Vec<CapturedEvent> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    struct FieldVisitor(Vec<(String, String)>);
+
+    impl tracing::field::Visit for FieldVisitor {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+
+        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+    }
+
+    impl<S> tracing_subscriber::Layer<S> for SpanCapture
+    where
+        S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            id: &tracing::span::Id,
+            ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut visitor = FieldVisitor(Vec::new());
+            attrs.record(&mut visitor);
+
+            let parent_name = ctx
+                .current_span()
+                .id()
+                .and_then(|pid| ctx.span(pid))
+                .map(|span_ref| span_ref.name().to_string());
+
+            let mut fields: HashMap<String, String> = visitor.0.into_iter().collect();
+            for field in attrs.metadata().fields() {
+                fields.entry(field.name().to_string()).or_default();
+            }
+
+            let mut spans = self.spans.lock().unwrap();
+            let idx = spans.len();
+            spans.push(CapturedSpan {
+                name: attrs.metadata().name().to_string(),
+                target: attrs.metadata().target().to_string(),
+                level: *attrs.metadata().level(),
+                fields,
+                parent_name,
+            });
+
+            self.span_index.lock().unwrap().insert(id.into_u64(), idx);
+        }
+
+        fn on_record(
+            &self,
+            id: &tracing::span::Id,
+            values: &tracing::span::Record<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut visitor = FieldVisitor(Vec::new());
+            values.record(&mut visitor);
+
+            let index = self.span_index.lock().unwrap();
+            if let Some(&idx) = index.get(&id.into_u64()) {
+                let mut spans = self.spans.lock().unwrap();
+                if let Some(span) = spans.get_mut(idx) {
+                    for (k, v) in visitor.0 {
+                        span.fields.insert(k, v);
+                    }
+                }
+            }
+        }
+
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut visitor = FieldVisitor(Vec::new());
+            event.record(&mut visitor);
+
+            let fields: HashMap<String, String> = visitor.0.clone().into_iter().collect();
+            let message = visitor
+                .0
+                .iter()
+                .find(|(k, _)| k == "message")
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default();
+
+            let parent_span_name = ctx
+                .current_span()
+                .id()
+                .and_then(|id| ctx.span(id))
+                .map(|span_ref| span_ref.name().to_string());
+
+            self.events.lock().unwrap().push(CapturedEvent {
+                level: *event.metadata().level(),
+                target: event.metadata().target().to_string(),
+                message,
+                fields,
+                parent_span_name,
+            });
+        }
+    }
+
+    fn with_captured_tracing<F>(f: F) -> CaptureHandle
+    where
+        F: FnOnce(),
+    {
+        let (layer, handle) = SpanCapture::new();
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, f);
+        handle
+    }
+
+    // =========================================================================
+    // Tracing span field assertions (bd-37a.4)
+    // =========================================================================
+
+    #[test]
+    fn span_voi_evaluate_has_required_fields() {
+        let handle = with_captured_tracing(|| {
+            let mut sampler = VoiSampler::new(VoiConfig::default());
+            sampler.decide(Instant::now());
+        });
+
+        let spans = handle.spans();
+        let voi_spans: Vec<_> = spans.iter().filter(|s| s.name == "voi.evaluate").collect();
+        assert!(
+            !voi_spans.is_empty(),
+            "expected at least one voi.evaluate span, got none"
+        );
+
+        let span = &voi_spans[0];
+        assert!(
+            span.fields.contains_key("decision_context"),
+            "missing decision_context field"
+        );
+        assert!(
+            span.fields.contains_key("voi_estimate"),
+            "missing voi_estimate field"
+        );
+        assert!(
+            span.fields.contains_key("sample_cost"),
+            "missing sample_cost field"
+        );
+        assert!(
+            span.fields.contains_key("sample_decision"),
+            "missing sample_decision field"
+        );
+    }
+
+    #[test]
+    fn span_voi_evaluate_decision_context_values() {
+        let handle = with_captured_tracing(|| {
+            // Force a high-cost scenario so first decision is not forced
+            let config = VoiConfig {
+                max_interval_events: 0,
+                max_interval_ms: 0,
+                sample_cost: 1000.0,
+                ..Default::default()
+            };
+            let mut sampler = VoiSampler::new(config);
+            sampler.decide(Instant::now());
+        });
+
+        let spans = handle.spans();
+        let voi_spans: Vec<_> = spans.iter().filter(|s| s.name == "voi.evaluate").collect();
+        assert!(!voi_spans.is_empty());
+
+        let ctx = &voi_spans[0].fields["decision_context"];
+        assert!(
+            ctx == "voi_lt_cost" || ctx == "voi_ge_cost",
+            "unexpected context: {ctx}"
+        );
+    }
+
+    #[test]
+    fn span_voi_evaluate_forced_interval_context() {
+        let handle = with_captured_tracing(|| {
+            let config = VoiConfig {
+                max_interval_events: 1,
+                ..Default::default()
+            };
+            let mut sampler = VoiSampler::new(config);
+            sampler.decide(Instant::now());
+        });
+
+        let spans = handle.spans();
+        let voi_spans: Vec<_> = spans.iter().filter(|s| s.name == "voi.evaluate").collect();
+        assert!(!voi_spans.is_empty());
+        assert_eq!(voi_spans[0].fields["decision_context"], "forced_interval");
+    }
+
+    // =========================================================================
+    // DEBUG log assertions
+    // =========================================================================
+
+    #[test]
+    fn debug_log_voi_calculation() {
+        let handle = with_captured_tracing(|| {
+            let mut sampler = VoiSampler::new(VoiConfig::default());
+            sampler.decide(Instant::now());
+        });
+
+        let events = handle.events();
+        let debug_events: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.level == tracing::Level::DEBUG
+                    && e.target == "ftui.voi"
+                    && e.fields.contains_key("voi_gain")
+            })
+            .collect();
+
+        assert!(
+            !debug_events.is_empty(),
+            "expected at least one DEBUG voi calculation event"
+        );
+
+        let evt = &debug_events[0];
+        assert!(evt.fields.contains_key("score"), "missing score field");
+        assert!(evt.fields.contains_key("cost"), "missing cost field");
+        assert!(
+            evt.fields.contains_key("posterior_mean"),
+            "missing posterior_mean"
+        );
+        assert!(
+            evt.fields.contains_key("boundary_score"),
+            "missing boundary_score"
+        );
+    }
+
+    #[test]
+    fn debug_log_voi_estimate_histogram() {
+        let handle = with_captured_tracing(|| {
+            let mut sampler = VoiSampler::new(VoiConfig::default());
+            sampler.decide(Instant::now());
+        });
+
+        let events = handle.events();
+        let hist_events: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.level == tracing::Level::DEBUG
+                    && e.target == "ftui.voi"
+                    && e.fields.contains_key("voi_estimate_value")
+            })
+            .collect();
+
+        assert!(
+            !hist_events.is_empty(),
+            "expected voi_estimate_value histogram event"
+        );
+    }
+
+    // =========================================================================
+    // TRACE log assertions (utility estimates)
+    // =========================================================================
+
+    #[test]
+    fn trace_log_utility_estimate_after_observation() {
+        let handle = with_captured_tracing(|| {
+            let mut sampler = VoiSampler::new(VoiConfig::default());
+            let now = Instant::now();
+            sampler.decide(now);
+            sampler.observe_at(false, now);
+        });
+
+        let events = handle.events();
+        let trace_events: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.level == tracing::Level::TRACE
+                    && e.target == "ftui.voi"
+                    && e.fields.contains_key("voi_estimate_value")
+            })
+            .collect();
+
+        assert!(
+            !trace_events.is_empty(),
+            "expected TRACE utility estimate event after observe"
+        );
+
+        let evt = &trace_events[0];
+        assert!(evt.fields.contains_key("alpha"), "missing alpha");
+        assert!(evt.fields.contains_key("beta"), "missing beta");
+        assert!(
+            evt.fields.contains_key("posterior_mean"),
+            "missing posterior_mean"
+        );
+        assert!(evt.fields.contains_key("e_value"), "missing e_value");
+    }
+
+    // =========================================================================
+    // Counter verification
+    // =========================================================================
+
+    #[test]
+    fn counters_increment_on_sample_decision() {
+        let handle = with_captured_tracing(|| {
+            let mut sampler = VoiSampler::new(VoiConfig::default());
+            let mut now = Instant::now();
+            for _ in 0..5 {
+                let d = sampler.decide(now);
+                if d.should_sample {
+                    sampler.observe_at(false, now);
+                }
+                now += Duration::from_millis(100);
+            }
+        });
+
+        // Verify the tracing events were emitted (indirect counter check).
+        // We can't reliably check global atomic counters in parallel tests,
+        // so we verify the DEBUG events contain voi_gain (one per decide call).
+        let events = handle.events();
+        let calc_events: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.level == tracing::Level::DEBUG
+                    && e.target == "ftui.voi"
+                    && e.fields.contains_key("voi_gain")
+            })
+            .collect();
+
+        assert_eq!(
+            calc_events.len(),
+            5,
+            "expected 5 voi calculation events for 5 decide() calls"
+        );
+    }
+
+    #[test]
+    fn counter_accessors_are_callable() {
+        // Verify the counter accessor functions exist and return non-panicking values.
+        let taken = voi_samples_taken_total();
+        let skipped = voi_samples_skipped_total();
+        // Verify the sum doesn't overflow (sanity check).
+        let _ = taken.checked_add(skipped).expect("counter overflow");
+    }
+
+    #[test]
+    fn counters_increase_monotonically() {
+        let before_taken = voi_samples_taken_total();
+        let before_skipped = voi_samples_skipped_total();
+
+        let mut sampler = VoiSampler::new(VoiConfig::default());
+        let mut now = Instant::now();
+        for _ in 0..10 {
+            let d = sampler.decide(now);
+            if d.should_sample {
+                sampler.observe_at(false, now);
+            }
+            now += Duration::from_millis(100);
+        }
+
+        let after_taken = voi_samples_taken_total();
+        let after_skipped = voi_samples_skipped_total();
+
+        // After 10 decisions, at least some should have been taken or skipped.
+        assert!(
+            (after_taken + after_skipped) >= (before_taken + before_skipped) + 10,
+            "expected at least 10 counter increments total, \
+             taken: {before_taken}→{after_taken}, skipped: {before_skipped}→{after_skipped}"
         );
     }
 }

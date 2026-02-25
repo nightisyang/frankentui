@@ -173,7 +173,8 @@ pub use validation_pipeline::{
     ValidationPipeline, ValidatorStats,
 };
 pub use voi_sampling::{
-    VoiConfig, VoiDecision, VoiLogEntry, VoiObservation, VoiSampler, VoiSamplerSnapshot, VoiSummary,
+    VoiConfig, VoiDecision, VoiLogEntry, VoiObservation, VoiSampler, VoiSamplerSnapshot,
+    VoiSummary, voi_samples_skipped_total, voi_samples_taken_total,
 };
 
 // State persistence
