@@ -628,7 +628,7 @@ pub fn schema_changelog(from: u32, to: u32) -> Vec<SchemaChange> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::migration_ir::{IrBuilder, MigrationIr};
+    use crate::migration_ir::IrBuilder;
 
     // ── Version parsing ────────────────────────────────────────────────
 
