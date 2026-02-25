@@ -28,6 +28,7 @@ pub mod sandbox;
 pub mod seed;
 pub mod semantic_contract;
 pub mod state_effects;
+pub mod state_event_translator;
 pub mod style_semantics;
 pub mod suite;
 pub mod tape;
