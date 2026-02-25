@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use crate::capture::{CaptureArgs, print_profiles, run_capture};
 use crate::doctor::{DoctorArgs, run_doctor};
 use crate::error::Result;
+use crate::import::{ImportArgs, run_import};
 use crate::report::{ReportArgs, run_report};
 use crate::seed::{SeedDemoArgs, run_seed_demo};
 use crate::suite::{SuiteArgs, run_suite};
@@ -37,6 +38,9 @@ pub enum Commands {
     /// Validate environment and wiring.
     Doctor(DoctorArgs),
 
+    /// Materialize deterministic source snapshots for OpenTUI import.
+    Import(ImportArgs),
+
     /// Print built-in profile names.
     #[command(name = "list-profiles")]
     ListProfiles,
@@ -54,6 +58,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::Suite(args) => run_suite(args),
         Commands::Report(args) => run_report(args),
         Commands::Doctor(args) => run_doctor(args),
+        Commands::Import(args) => run_import(args),
         Commands::ListProfiles => {
             print_profiles();
             Ok(())
@@ -67,6 +72,7 @@ mod tests {
 
     use crate::capture::CaptureArgs;
     use crate::error::DoctorError;
+    use crate::import::ImportArgs;
     use crate::report::ReportArgs;
     use crate::seed::SeedDemoArgs;
     use crate::suite::SuiteArgs;
@@ -209,5 +215,28 @@ mod tests {
         assert!(
             matches!(error, DoctorError::InvalidArgument { message } if message.contains("No profiles available"))
         );
+    }
+
+    #[test]
+    fn import_command_dispatches_missing_source_error() {
+        let temp = tempdir().expect("tempdir");
+        let missing = temp.path().join("missing-open-tui-project");
+        let run_root = temp.path().join("import_runs");
+
+        let error = run(Cli {
+            command: Commands::Import(ImportArgs {
+                source: missing.display().to_string(),
+                pinned_commit: None,
+                run_root,
+                run_name: Some("missing_source".to_string()),
+                allow_non_opentui: false,
+            }),
+        })
+        .expect_err("missing source should fail");
+
+        assert!(matches!(
+            error,
+            DoctorError::Exit { message, .. } if message.contains("class=missing_files")
+        ));
     }
 }
