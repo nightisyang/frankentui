@@ -1165,3 +1165,292 @@ fn e2e_determinism_across_runs_triple() {
     assert_eq!(cs1, cs2, "Run 1 vs 2 mismatch");
     assert_eq!(cs2, cs3, "Run 2 vs 3 mismatch");
 }
+
+// ===========================================================================
+// Enhanced tracing span verification (with tracing feature enabled)
+// ===========================================================================
+
+/// Full span capture infrastructure for comprehensive tracing assertions.
+mod span_capture {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::registry::LookupSpan;
+
+    #[derive(Debug, Clone)]
+    pub struct CapturedSpan {
+        pub name: String,
+        pub fields: HashMap<String, String>,
+    }
+
+    #[derive(Debug, Clone)]
+    #[allow(dead_code)]
+    pub struct CapturedEvent {
+        pub level: tracing::Level,
+        pub fields: HashMap<String, String>,
+    }
+
+    pub struct SpanCapture {
+        spans: Arc<Mutex<Vec<CapturedSpan>>>,
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+    }
+
+    pub struct CaptureHandle {
+        spans: Arc<Mutex<Vec<CapturedSpan>>>,
+        events: Arc<Mutex<Vec<CapturedEvent>>>,
+    }
+
+    impl CaptureHandle {
+        pub fn spans(&self) -> Vec<CapturedSpan> {
+            self.spans.lock().unwrap().clone()
+        }
+
+        pub fn events(&self) -> Vec<CapturedEvent> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+
+    struct FieldVisitor(Vec<(String, String)>);
+
+    impl tracing::field::Visit for FieldVisitor {
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+        fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+        fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+        fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+            self.0.push((field.name().to_string(), value.to_string()));
+        }
+    }
+
+    impl<S> tracing_subscriber::Layer<S> for SpanCapture
+    where
+        S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _id: &tracing::span::Id,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut visitor = FieldVisitor(Vec::new());
+            attrs.record(&mut visitor);
+            let mut fields: HashMap<String, String> = visitor.0.into_iter().collect();
+            for field in attrs.metadata().fields() {
+                fields.entry(field.name().to_string()).or_default();
+            }
+            self.spans.lock().unwrap().push(CapturedSpan {
+                name: attrs.metadata().name().to_string(),
+                fields,
+            });
+        }
+
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut visitor = FieldVisitor(Vec::new());
+            event.record(&mut visitor);
+            let fields: HashMap<String, String> = visitor.0.into_iter().collect();
+            self.events.lock().unwrap().push(CapturedEvent {
+                level: *event.metadata().level(),
+                fields,
+            });
+        }
+    }
+
+    pub fn with_captured_tracing<F, R>(f: F) -> (R, CaptureHandle)
+    where
+        F: FnOnce() -> R,
+    {
+        let spans = Arc::new(Mutex::new(Vec::new()));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let handle = CaptureHandle {
+            spans: spans.clone(),
+            events: events.clone(),
+        };
+        let layer = SpanCapture { spans, events };
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let result = tracing::subscriber::with_default(subscriber, f);
+        (result, handle)
+    }
+}
+
+#[test]
+fn e2e_tracing_present_span_with_structured_fields() {
+    use span_capture::with_captured_tracing;
+
+    let caps = TerminalCapabilities::from_profile(TerminalProfile::Modern);
+    let (_, handle) = with_captured_tracing(|| {
+        full_pipeline_checksum(&caps, 80, 24, &render_paragraph);
+    });
+
+    let spans = handle.spans();
+
+    // Assert "present" span exists with width/height/changes fields
+    let present_spans: Vec<_> = spans.iter().filter(|s| s.name == "present").collect();
+    assert!(
+        !present_spans.is_empty(),
+        "expected 'present' span (tracing feature enabled)"
+    );
+
+    let ps = &present_spans[0];
+    assert!(
+        ps.fields.contains_key("width"),
+        "present span missing 'width' field"
+    );
+    assert!(
+        ps.fields.contains_key("height"),
+        "present span missing 'height' field"
+    );
+    assert!(
+        ps.fields.contains_key("changes"),
+        "present span missing 'changes' field"
+    );
+    assert_eq!(ps.fields.get("width").unwrap(), "80");
+    assert_eq!(ps.fields.get("height").unwrap(), "24");
+}
+
+#[test]
+fn e2e_tracing_sync_bracket_span_in_pipeline() {
+    use span_capture::with_captured_tracing;
+
+    let caps = TerminalCapabilities::from_profile(TerminalProfile::Modern);
+    let (_, handle) = with_captured_tracing(|| {
+        full_pipeline_checksum(&caps, 80, 24, &render_paragraph);
+    });
+
+    let spans = handle.spans();
+
+    // Assert "render.sync_bracket" span exists
+    let sync_spans: Vec<_> = spans
+        .iter()
+        .filter(|s| s.name == "render.sync_bracket")
+        .collect();
+    assert!(
+        !sync_spans.is_empty(),
+        "expected 'render.sync_bracket' span"
+    );
+
+    let ss = &sync_spans[0];
+    assert!(
+        ss.fields.contains_key("bracket_supported"),
+        "sync bracket span missing 'bracket_supported'"
+    );
+    assert!(
+        ss.fields.contains_key("fallback_used"),
+        "sync bracket span missing 'fallback_used'"
+    );
+}
+
+#[test]
+fn e2e_tracing_diff_compute_span_emitted() {
+    use span_capture::with_captured_tracing;
+
+    let caps = TerminalCapabilities::from_profile(TerminalProfile::Modern);
+    let (_, handle) = with_captured_tracing(|| {
+        full_pipeline_checksum(&caps, 80, 24, &render_composite_dashboard);
+    });
+
+    let spans = handle.spans();
+
+    // Assert "diff_compute" span exists with width/height
+    let diff_spans: Vec<_> = spans.iter().filter(|s| s.name == "diff_compute").collect();
+    assert!(!diff_spans.is_empty(), "expected 'diff_compute' span");
+
+    let ds = &diff_spans[0];
+    assert!(
+        ds.fields.contains_key("width"),
+        "diff_compute span missing 'width'"
+    );
+    assert!(
+        ds.fields.contains_key("height"),
+        "diff_compute span missing 'height'"
+    );
+}
+
+#[test]
+fn e2e_tracing_span_hierarchy_all_present() {
+    use span_capture::with_captured_tracing;
+
+    let caps = TerminalCapabilities::from_profile(TerminalProfile::Modern);
+    let (_, handle) = with_captured_tracing(|| {
+        full_pipeline_checksum(&caps, 80, 24, &render_composite_dashboard);
+    });
+
+    let spans = handle.spans();
+    let span_names: Vec<&str> = spans.iter().map(|s| s.name.as_str()).collect();
+
+    // Verify all expected pipeline spans are present
+    assert!(
+        span_names.contains(&"present"),
+        "missing 'present' span, got: {span_names:?}"
+    );
+    assert!(
+        span_names.contains(&"render.sync_bracket"),
+        "missing 'render.sync_bracket' span, got: {span_names:?}"
+    );
+    assert!(
+        span_names.contains(&"diff_compute"),
+        "missing 'diff_compute' span, got: {span_names:?}"
+    );
+    assert!(
+        span_names.contains(&"emit_diff"),
+        "missing 'emit_diff' span, got: {span_names:?}"
+    );
+}
+
+#[test]
+fn e2e_tracing_no_errors_in_pipeline() {
+    use span_capture::with_captured_tracing;
+
+    // Run full pipeline across all profiles — no ERROR events expected
+    for (name, caps) in &profiles() {
+        let (_, handle) = with_captured_tracing(|| {
+            full_pipeline_checksum(caps, 80, 24, &render_composite_dashboard);
+        });
+
+        let events = handle.events();
+        let errors: Vec<_> = events
+            .iter()
+            .filter(|e| e.level == tracing::Level::ERROR)
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "profile '{name}' produced ERROR events during normal render"
+        );
+    }
+}
+
+#[test]
+fn e2e_tracing_fallback_warn_for_mux_profiles() {
+    use span_capture::with_captured_tracing;
+
+    // Screen and tmux profiles have sync_output disabled → WARN expected
+    for profile in [TerminalProfile::Screen, TerminalProfile::Tmux] {
+        let caps = TerminalCapabilities::from_profile(profile);
+        let (_, handle) = with_captured_tracing(|| {
+            full_pipeline_checksum(&caps, 80, 24, &render_paragraph);
+        });
+
+        let events = handle.events();
+        let warns: Vec<_> = events
+            .iter()
+            .filter(|e| e.level == tracing::Level::WARN)
+            .collect();
+        assert!(
+            !warns.is_empty(),
+            "multiplexer profile {:?} should emit WARN for sync fallback",
+            profile
+        );
+    }
+}
