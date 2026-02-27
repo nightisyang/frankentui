@@ -367,7 +367,7 @@ impl TerrainModel {
         self.height_scale
     }
     pub fn set_height_scale(&mut self, v: f64) {
-        self.height_scale = v.clamp(0.5, 5.0);
+        self.height_scale = v.clamp(0.05, 5.0);
     }
 
     pub fn density(&self) -> f64 {
@@ -656,7 +656,7 @@ impl Model for TerrainModel {
                     self.height_scale = (self.height_scale + 0.5).min(5.0);
                 }
                 KeyCode::Char('l') => {
-                    self.height_scale = (self.height_scale - 0.5).max(0.5);
+                    self.height_scale = (self.height_scale - 0.5).max(0.05);
                 }
                 KeyCode::Char('r') => {
                     self.auto_rotate = !self.auto_rotate;
@@ -890,7 +890,7 @@ mod tests {
     fn height_scale_clamps() {
         let mut m = make_model();
         m.set_height_scale(0.0);
-        assert_eq!(m.height_scale(), 0.5);
+        assert_eq!(m.height_scale(), 0.05);
         m.set_height_scale(10.0);
         assert_eq!(m.height_scale(), 5.0);
     }
