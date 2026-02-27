@@ -71,6 +71,12 @@ impl TerrainRunner {
             cols: usize,
             min_elev: f64,
             max_elev: f64,
+            #[serde(default = "default_cell_size")]
+            cell_size: f64,
+        }
+
+        fn default_cell_size() -> f64 {
+            30.0
         }
 
         match serde_json::from_str::<Vec<DatasetJson>>(json) {
@@ -84,6 +90,7 @@ impl TerrainRunner {
                         cols: d.cols,
                         min_elev: d.min_elev,
                         max_elev: d.max_elev,
+                        cell_size: if d.cell_size > 0.0 { d.cell_size } else { 30.0 },
                     })
                     .collect();
                 self.inner.model_mut().set_datasets(ds);
@@ -143,8 +150,16 @@ impl TerrainRunner {
         let obj = Object::new();
         set_js(&obj, "running", JsValue::from(result.running));
         set_js(&obj, "rendered", JsValue::from(result.rendered));
-        set_js(&obj, "events_processed", JsValue::from(result.events_processed));
-        set_js(&obj, "frame_idx", JsValue::from(self.inner.frame_idx() as u32));
+        set_js(
+            &obj,
+            "events_processed",
+            JsValue::from(result.events_processed),
+        );
+        set_js(
+            &obj,
+            "frame_idx",
+            JsValue::from(self.inner.frame_idx() as u32),
+        );
         obj.into()
     }
 
@@ -180,26 +195,160 @@ impl TerrainRunner {
     /// canvas_w/canvas_h are the pixel dimensions of the target canvas.
     #[wasm_bindgen(js_name = projectPoints)]
     pub fn project_points(&mut self, canvas_w: f64, canvas_h: f64) -> Float32Array {
-        let buf = self.inner.model_mut().project_to_buffer(canvas_w, canvas_h);
+        let buf = self.inner.model().project_to_buffer(canvas_w, canvas_h);
         Float32Array::from(&buf[..])
+    }
+
+    /// Project packed `[row, col, ...]` pairs to `[x, y, ...]` in one call.
+    #[wasm_bindgen(js_name = projectPointsBatch)]
+    pub fn project_points_batch(
+        &mut self,
+        row_col_pairs: &Float32Array,
+        canvas_w: f64,
+        canvas_h: f64,
+    ) -> Float32Array {
+        let coords = row_col_pairs.to_vec();
+        let out = self
+            .inner
+            .model()
+            .project_row_col_pairs_to_buffer(&coords, canvas_w, canvas_h);
+        Float32Array::from(&out[..])
     }
 
     /// Get current state info string for display.
     #[wasm_bindgen(js_name = stateInfo)]
     pub fn state_info(&mut self) -> String {
-        self.inner.model_mut().state_info()
+        self.inner.model().state_info()
     }
 
-    /// Get current zoom level.
+    /// Set the full camera/view state in one call.
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = setView)]
+    pub fn set_view(
+        &mut self,
+        azimuth: f64,
+        elevation: f64,
+        zoom: f64,
+        height_scale: f64,
+        density: f64,
+        active: usize,
+        color_mode: u8,
+        auto_rotate: bool,
+    ) {
+        self.inner.model_mut().set_view_state(
+            azimuth,
+            elevation,
+            zoom,
+            height_scale,
+            density,
+            active,
+            color_mode,
+            auto_rotate,
+        );
+    }
+
+    // --- Direct getters/setters for JS-driven gesture control ---
+
     #[wasm_bindgen(js_name = getZoom)]
     pub fn get_zoom(&self) -> f64 {
         self.inner.model().zoom()
     }
-
-    /// Set zoom level directly (clamped to 0.1..8.0).
     #[wasm_bindgen(js_name = setZoom)]
-    pub fn set_zoom(&mut self, zoom: f64) {
-        self.inner.model_mut().set_zoom(zoom);
+    pub fn set_zoom(&mut self, v: f64) {
+        self.inner.model_mut().set_zoom(v);
+    }
+
+    #[wasm_bindgen(js_name = getAzimuth)]
+    pub fn get_azimuth(&self) -> f64 {
+        self.inner.model().azimuth()
+    }
+    #[wasm_bindgen(js_name = setAzimuth)]
+    pub fn set_azimuth(&mut self, v: f64) {
+        self.inner.model_mut().set_azimuth(v);
+    }
+
+    #[wasm_bindgen(js_name = getElevation)]
+    pub fn get_elevation(&self) -> f64 {
+        self.inner.model().elevation()
+    }
+    #[wasm_bindgen(js_name = setElevation)]
+    pub fn set_elevation(&mut self, v: f64) {
+        self.inner.model_mut().set_elevation(v);
+    }
+
+    #[wasm_bindgen(js_name = getHeightScale)]
+    pub fn get_height_scale(&self) -> f64 {
+        self.inner.model().height_scale()
+    }
+    #[wasm_bindgen(js_name = setHeightScale)]
+    pub fn set_height_scale(&mut self, v: f64) {
+        self.inner.model_mut().set_height_scale(v);
+    }
+
+    #[wasm_bindgen(js_name = getDensity)]
+    pub fn get_density(&self) -> f64 {
+        self.inner.model().density()
+    }
+    #[wasm_bindgen(js_name = setDensity)]
+    pub fn set_density(&mut self, v: f64) {
+        self.inner.model_mut().set_density(v);
+    }
+
+    #[wasm_bindgen(js_name = getAutoRotate)]
+    pub fn get_auto_rotate(&self) -> bool {
+        self.inner.model().auto_rotate()
+    }
+    #[wasm_bindgen(js_name = setAutoRotate)]
+    pub fn set_auto_rotate(&mut self, v: bool) {
+        self.inner.model_mut().set_auto_rotate(v);
+    }
+
+    #[wasm_bindgen(js_name = getActive)]
+    pub fn get_active(&self) -> usize {
+        self.inner.model().active()
+    }
+    #[wasm_bindgen(js_name = setActive)]
+    pub fn set_active(&mut self, v: usize) {
+        self.inner.model_mut().set_active(v);
+    }
+
+    #[wasm_bindgen(js_name = getDatasetCount)]
+    pub fn get_dataset_count(&self) -> usize {
+        self.inner.model().dataset_count()
+    }
+
+    #[wasm_bindgen(js_name = getColorMode)]
+    pub fn get_color_mode(&self) -> u8 {
+        self.inner.model().color_mode()
+    }
+    #[wasm_bindgen(js_name = setColorMode)]
+    pub fn set_color_mode(&mut self, v: u8) {
+        self.inner.model_mut().set_color_mode(v);
+    }
+
+    #[wasm_bindgen(js_name = getContourInterval)]
+    pub fn get_contour_interval(&self) -> f64 {
+        self.inner.model().contour_interval()
+    }
+
+    /// Project a single fractional grid point to canvas screen coordinates.
+    /// Returns Float32Array [x, y] or empty array if no dataset loaded.
+    #[wasm_bindgen(js_name = projectPoint)]
+    pub fn project_point(
+        &mut self,
+        row: f64,
+        col: f64,
+        canvas_w: f64,
+        canvas_h: f64,
+    ) -> Float32Array {
+        match self
+            .inner
+            .model()
+            .project_single_point(row, col, canvas_w, canvas_h)
+        {
+            Some((sx, sy)) => Float32Array::from(&[sx as f32, sy as f32][..]),
+            None => Float32Array::new_with_length(0),
+        }
     }
 
     /// Release resources.

@@ -1,20 +1,31 @@
 //! Terrain visualization Model using curvature-adaptive braille rendering.
 
+use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
+use ftui_core::geometry::Rect;
 use ftui_extras::canvas::{CanvasRef, Mode, Painter};
 use ftui_render::cell::PackedRgba;
 use ftui_render::frame::Frame;
 use ftui_runtime::program::{Cmd, Model};
-use ftui_core::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
 use ftui_widgets::Widget;
-use ftui_core::geometry::Rect;
 use web_time::Duration;
+
+/// Color mode for terrain rendering.
+#[derive(Clone, Copy, Default, PartialEq)]
+pub enum ColorMode {
+    #[default]
+    Terrain,
+    Slope,
+    Grayscale,
+    Contour,
+}
 
 /// A 3D projected point ready for braille rasterization.
 struct ProjectedPoint {
-    sx: f64,   // screen x in sub-pixel coords
-    sy: f64,   // screen y in sub-pixel coords
+    sx: f64, // screen x in sub-pixel coords
+    sy: f64, // screen y in sub-pixel coords
     depth: f64,
-    elev: f64, // original elevation for color mapping
+    elev: f64,  // original elevation for color mapping
+    slope: f64, // local slope 0..1 (computed when needed)
 }
 
 /// Terrain elevation dataset.
@@ -25,6 +36,7 @@ pub struct TerrainDataset {
     pub cols: usize,
     pub min_elev: f64,
     pub max_elev: f64,
+    pub cell_size: f64, // horizontal cell spacing in meters (same unit as elevation)
 }
 
 impl Default for TerrainDataset {
@@ -36,6 +48,7 @@ impl Default for TerrainDataset {
             cols: 0,
             min_elev: 0.0,
             max_elev: 1.0,
+            cell_size: 30.0,
         }
     }
 }
@@ -59,6 +72,7 @@ pub struct TerrainModel {
     height_scale: f64,
     density: f64, // multiplier for dot density (1.0 = default)
     auto_rotate: bool,
+    color_mode: ColorMode,
     // Drag state
     dragging: bool,
     drag_start_x: u16,
@@ -78,6 +92,7 @@ impl Default for TerrainModel {
             height_scale: 2.0,
             density: 1.0,
             auto_rotate: true,
+            color_mode: ColorMode::default(),
             dragging: false,
             drag_start_x: 0,
             drag_start_y: 0,
@@ -125,6 +140,105 @@ impl TerrainModel {
                 (19.0 + s * 236.0) as u8,
             )
         }
+    }
+
+    /// Slope → RGB color gradient: green (flat) → yellow (moderate) → red (steep).
+    fn slope_to_color(t: f64) -> PackedRgba {
+        let t = t.clamp(0.0, 1.0);
+        if t < 0.5 {
+            let s = t / 0.5;
+            PackedRgba::rgb(
+                (34.0 + s * 221.0) as u8, // 34 → 255
+                (139.0 + s * 76.0) as u8, // 139 → 215
+                (34.0 - s * 34.0) as u8,  // 34 → 0
+            )
+        } else {
+            let s = (t - 0.5) / 0.5;
+            PackedRgba::rgb(
+                255,                       // stay 255
+                (215.0 - s * 185.0) as u8, // 215 → 30
+                0,
+            )
+        }
+    }
+
+    /// Grayscale color: black (low) → white (high).
+    fn grayscale_color(t: f64) -> PackedRgba {
+        let v = (t.clamp(0.0, 1.0) * 255.0) as u8;
+        PackedRgba::rgb(v, v, v)
+    }
+
+    /// Contour background: dim terrain tint so JS-drawn contour lines pop.
+    fn contour_color(elev: f64, min_elev: f64, max_elev: f64) -> PackedRgba {
+        let range = (max_elev - min_elev).max(1.0);
+        let t = ((elev - min_elev) / range).clamp(0.0, 1.0);
+        // Very dim terrain gradient for depth context
+        let v = (20.0 + t * 30.0) as u8; // 20..50 range
+        PackedRgba::rgb(v, (v as f64 * 1.1) as u8, (v as f64 * 1.2) as u8)
+    }
+
+    /// Compute local slope from neighbors, returning 0..1 normalized.
+    /// `cell_size` is the horizontal spacing between grid cells in meters
+    /// (same unit as elevation values), so the gradient is dimensionless.
+    fn local_slope(
+        grid: &[Vec<f64>],
+        fr: f64,
+        fc: f64,
+        rows: usize,
+        cols: usize,
+        cell_size: f64,
+    ) -> f64 {
+        let r = (fr.round() as usize).min(rows.saturating_sub(1));
+        let c = (fc.round() as usize).min(cols.saturating_sub(1));
+        if r == 0 || r >= rows - 1 || c == 0 || c >= cols - 1 {
+            return 0.0;
+        }
+        // Gradient in meters/meter (dimensionless) by dividing by cell spacing
+        let dz_dx = (grid[r][c + 1] - grid[r][c - 1]) / (2.0 * cell_size);
+        let dz_dy = (grid[r + 1][c] - grid[r - 1][c]) / (2.0 * cell_size);
+        let slope_rad = (dz_dx * dz_dx + dz_dy * dz_dy).sqrt().atan();
+        // Normalize: 0 = flat, 1 = 45° or steeper
+        (slope_rad / std::f64::consts::FRAC_PI_4).min(1.0)
+    }
+
+    pub fn color_mode(&self) -> u8 {
+        match self.color_mode {
+            ColorMode::Terrain => 0,
+            ColorMode::Slope => 1,
+            ColorMode::Grayscale => 2,
+            ColorMode::Contour => 3,
+        }
+    }
+
+    pub fn set_color_mode(&mut self, v: u8) {
+        self.color_mode = match v {
+            1 => ColorMode::Slope,
+            2 => ColorMode::Grayscale,
+            3 => ColorMode::Contour,
+            _ => ColorMode::Terrain,
+        };
+    }
+
+    /// Apply the full camera/view state in one call.
+    pub fn set_view_state(
+        &mut self,
+        azimuth: f64,
+        elevation: f64,
+        zoom: f64,
+        height_scale: f64,
+        density: f64,
+        active: usize,
+        color_mode: u8,
+        auto_rotate: bool,
+    ) {
+        self.set_azimuth(azimuth);
+        self.set_elevation(elevation);
+        self.set_zoom(zoom);
+        self.set_height_scale(height_scale);
+        self.set_density(density);
+        self.set_active(active);
+        self.set_color_mode(color_mode);
+        self.set_auto_rotate(auto_rotate);
     }
 
     /// Compute curvature at a grid point (angle change between neighbors).
@@ -181,7 +295,12 @@ impl TerrainModel {
         let mut buf = Vec::with_capacity(points.len() * 5);
         for pt in &points {
             let t = ((pt.elev - ds.min_elev) / elev_range).clamp(0.0, 1.0);
-            let color = Self::elev_to_color(t);
+            let color = match self.color_mode {
+                ColorMode::Terrain => Self::elev_to_color(t),
+                ColorMode::Slope => Self::slope_to_color(pt.slope),
+                ColorMode::Grayscale => Self::grayscale_color(t),
+                ColorMode::Contour => Self::contour_color(pt.elev, ds.min_elev, ds.max_elev),
+            };
             let packed = color.0;
             let r = ((packed >> 24) & 0xFF) as f32;
             let g = ((packed >> 16) & 0xFF) as f32;
@@ -201,41 +320,198 @@ impl TerrainModel {
             return String::from("No data");
         }
         let ds = &self.datasets[self.active.min(self.datasets.len() - 1)];
+        let mode_str = match self.color_mode {
+            ColorMode::Terrain => "terrain",
+            ColorMode::Slope => "slope",
+            ColorMode::Grayscale => "gray",
+            ColorMode::Contour => "contour",
+        };
         format!(
-            "{} | {:.0}-{:.0}m | az:{:.0} el:{:.0} | z:{:.2}x | h:{:.1}x | d:{:.0}%",
-            ds.name, ds.min_elev, ds.max_elev, self.azimuth, self.elevation,
-            self.zoom, self.height_scale, self.density * 100.0
+            "{} | {:.0}-{:.0}m | az:{:.0} el:{:.0} | z:{:.2}x | h:{:.1}x | d:{:.0}% | {}",
+            ds.name,
+            ds.min_elev,
+            ds.max_elev,
+            self.azimuth,
+            self.elevation,
+            self.zoom,
+            self.height_scale,
+            self.density * 100.0,
+            mode_str
         )
     }
 
     // --- Direct getters/setters for JS-driven gesture control ---
 
-    pub fn zoom(&self) -> f64 { self.zoom }
-    pub fn set_zoom(&mut self, v: f64) { self.zoom = v.clamp(0.1, 15.0); }
+    pub fn zoom(&self) -> f64 {
+        self.zoom
+    }
+    pub fn set_zoom(&mut self, v: f64) {
+        self.zoom = v.clamp(0.1, 20.0);
+    }
 
-    pub fn azimuth(&self) -> f64 { self.azimuth }
-    pub fn set_azimuth(&mut self, v: f64) { self.azimuth = v.rem_euclid(360.0); }
+    pub fn azimuth(&self) -> f64 {
+        self.azimuth
+    }
+    pub fn set_azimuth(&mut self, v: f64) {
+        self.azimuth = v.rem_euclid(360.0);
+    }
 
-    pub fn elevation(&self) -> f64 { self.elevation }
-    pub fn set_elevation(&mut self, v: f64) { self.elevation = v.clamp(5.0, 85.0); }
+    pub fn elevation(&self) -> f64 {
+        self.elevation
+    }
+    pub fn set_elevation(&mut self, v: f64) {
+        self.elevation = v.clamp(5.0, 85.0);
+    }
 
-    pub fn height_scale(&self) -> f64 { self.height_scale }
-    pub fn set_height_scale(&mut self, v: f64) { self.height_scale = v.clamp(0.5, 5.0); }
+    pub fn height_scale(&self) -> f64 {
+        self.height_scale
+    }
+    pub fn set_height_scale(&mut self, v: f64) {
+        self.height_scale = v.clamp(0.5, 5.0);
+    }
 
-    pub fn density(&self) -> f64 { self.density }
-    pub fn set_density(&mut self, v: f64) { self.density = v.clamp(0.25, 4.0); }
+    pub fn density(&self) -> f64 {
+        self.density
+    }
+    pub fn set_density(&mut self, v: f64) {
+        self.density = v.clamp(0.25, 4.0);
+    }
 
-    pub fn auto_rotate(&self) -> bool { self.auto_rotate }
-    pub fn set_auto_rotate(&mut self, v: bool) { self.auto_rotate = v; }
+    pub fn auto_rotate(&self) -> bool {
+        self.auto_rotate
+    }
+    pub fn set_auto_rotate(&mut self, v: bool) {
+        self.auto_rotate = v;
+    }
 
-    pub fn active(&self) -> usize { self.active }
+    pub fn active(&self) -> usize {
+        self.active
+    }
     pub fn set_active(&mut self, v: usize) {
         if !self.datasets.is_empty() {
             self.active = v.min(self.datasets.len() - 1);
         }
     }
 
-    pub fn dataset_count(&self) -> usize { self.datasets.len() }
+    pub fn dataset_count(&self) -> usize {
+        self.datasets.len()
+    }
+
+    /// Get the contour interval for the active dataset (same logic as contour_color).
+    /// Returns 0.0 if no dataset loaded.
+    pub fn contour_interval(&self) -> f64 {
+        if self.datasets.is_empty() {
+            return 0.0;
+        }
+        let ds = &self.datasets[self.active.min(self.datasets.len() - 1)];
+        let range = (ds.max_elev - ds.min_elev).max(1.0);
+        let nice = [500.0, 200.0, 100.0, 50.0, 20.0, 10.0, 5.0, 2.0];
+        let ideal = range / 10.0;
+        nice.iter().find(|&&n| n <= ideal).copied().unwrap_or(2.0)
+    }
+
+    /// Project a single fractional grid point (row, col) to canvas screen coordinates.
+    /// Uses the same camera pipeline as `project_to_buffer`.
+    /// Returns `Some((sx, sy))` or `None` if no dataset is loaded.
+    pub fn project_single_point(
+        &self,
+        row: f64,
+        col: f64,
+        canvas_w: f64,
+        canvas_h: f64,
+    ) -> Option<(f64, f64)> {
+        if self.datasets.is_empty() {
+            return None;
+        }
+        let ds = &self.datasets[self.active.min(self.datasets.len() - 1)];
+        if ds.grid.is_empty() {
+            return None;
+        }
+
+        let half_cols = ds.cols as f64 / 2.0;
+        let half_rows = ds.rows as f64 / 2.0;
+
+        // Bilinear elevation at fractional position
+        let elev = Self::bilinear_sample(&ds.grid, row, col, ds.rows, ds.cols);
+
+        // 3D projection — same math as project_adaptive
+        let x = col - half_cols;
+        let y = row - half_rows;
+        let z = (elev - ds.min_elev) * self.height_scale * 0.015;
+
+        let az = self.azimuth.to_radians();
+        let el = self.elevation.to_radians();
+        let cos_az = az.cos();
+        let sin_az = az.sin();
+        let cos_el = el.cos();
+        let sin_el = el.sin();
+
+        let rx = x * cos_az - y * sin_az;
+        let ry = x * sin_az + y * cos_az;
+        let screen_y = ry * sin_el - z * cos_el;
+
+        let cx = canvas_w / 2.0;
+        let cy = canvas_h / 2.0;
+        let sx = rx * self.zoom + cx;
+        let sy = screen_y * self.zoom + cy;
+
+        Some((sx, sy))
+    }
+
+    /// Project a packed `[row, col, row, col, ...]` payload into `[x, y, x, y, ...]`.
+    ///
+    /// Returns an empty Vec when no dataset is loaded.
+    pub fn project_row_col_pairs_to_buffer(
+        &self,
+        row_col_pairs: &[f32],
+        canvas_w: f64,
+        canvas_h: f64,
+    ) -> Vec<f32> {
+        if self.datasets.is_empty() || row_col_pairs.len() < 2 {
+            return vec![];
+        }
+        let ds = &self.datasets[self.active.min(self.datasets.len() - 1)];
+        if ds.grid.is_empty() {
+            return vec![];
+        }
+
+        let half_cols = ds.cols as f64 / 2.0;
+        let half_rows = ds.rows as f64 / 2.0;
+
+        let az = self.azimuth.to_radians();
+        let el = self.elevation.to_radians();
+        let cos_az = az.cos();
+        let sin_az = az.sin();
+        let cos_el = el.cos();
+        let sin_el = el.sin();
+
+        let cx = canvas_w / 2.0;
+        let cy = canvas_h / 2.0;
+
+        let mut out = Vec::with_capacity(row_col_pairs.len());
+        let mut i = 0usize;
+        while i + 1 < row_col_pairs.len() {
+            let row = row_col_pairs[i] as f64;
+            let col = row_col_pairs[i + 1] as f64;
+
+            let elev = Self::bilinear_sample(&ds.grid, row, col, ds.rows, ds.cols);
+            let x = col - half_cols;
+            let y = row - half_rows;
+            let z = (elev - ds.min_elev) * self.height_scale * 0.015;
+
+            let rx = x * cos_az - y * sin_az;
+            let ry = x * sin_az + y * cos_az;
+            let screen_y = ry * sin_el - z * cos_el;
+
+            let sx = rx * self.zoom + cx;
+            let sy = screen_y * self.zoom + cy;
+
+            out.push(sx as f32);
+            out.push(sy as f32);
+            i += 2;
+        }
+        out
+    }
 
     /// Project terrain with bilinear sub-grid sampling and curvature-adaptive stepping.
     fn project_adaptive(
@@ -253,7 +529,9 @@ impl TerrainModel {
         let cx = canvas_w / 2.0;
         let cy = canvas_h / 2.0;
 
-        let base_step = (ds.rows.max(ds.cols) as f64 / (60.0 * self.density)).round().max(1.0);
+        let base_step = (ds.rows.max(ds.cols) as f64 / (60.0 * self.density))
+            .round()
+            .max(1.0);
         let elev_range = (ds.max_elev - ds.min_elev).max(1.0);
 
         // Alternating refinement: rows refine first, then cols
@@ -314,7 +592,18 @@ impl TerrainModel {
                 let sy = screen_y * self.zoom + cy;
 
                 if sx >= 0.0 && sx < canvas_w && sy >= 0.0 && sy < canvas_h {
-                    points.push(ProjectedPoint { sx, sy, depth, elev });
+                    let slope = if self.color_mode == ColorMode::Slope {
+                        Self::local_slope(&ds.grid, fr, fc, ds.rows, ds.cols, ds.cell_size)
+                    } else {
+                        0.0
+                    };
+                    points.push(ProjectedPoint {
+                        sx,
+                        sy,
+                        depth,
+                        elev,
+                        slope,
+                    });
                 }
 
                 fc += local_col_step;
@@ -323,7 +612,11 @@ impl TerrainModel {
         }
 
         // Painter's algorithm: sort by depth (far first)
-        points.sort_by(|a, b| a.depth.partial_cmp(&b.depth).unwrap_or(std::cmp::Ordering::Equal));
+        points.sort_by(|a, b| {
+            a.depth
+                .partial_cmp(&b.depth)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         points
     }
 }
@@ -343,76 +636,76 @@ impl Model for TerrainModel {
                     self.azimuth = (self.azimuth + 0.5) % 360.0;
                 }
             }
-            Msg::Event(Event::Key(KeyEvent { code, kind: KeyEventKind::Press, .. })) => {
-                match code {
-                    KeyCode::Char('q') | KeyCode::Escape => return Cmd::Quit,
-                    KeyCode::Left => self.azimuth = (self.azimuth - 5.0).rem_euclid(360.0),
-                    KeyCode::Right => self.azimuth = (self.azimuth + 5.0) % 360.0,
-                    KeyCode::Up => self.elevation = (self.elevation + 3.0).min(85.0),
-                    KeyCode::Down => self.elevation = (self.elevation - 3.0).max(5.0),
-                    KeyCode::Char('+') | KeyCode::Char('=') => {
-                        self.zoom = (self.zoom * 1.2).min(15.0);
-                    }
-                    KeyCode::Char('-') => {
-                        self.zoom = (self.zoom / 1.2).max(0.1);
-                    }
-                    KeyCode::Char('h') => {
-                        self.height_scale = (self.height_scale + 0.5).min(5.0);
-                    }
-                    KeyCode::Char('l') => {
-                        self.height_scale = (self.height_scale - 0.5).max(0.5);
-                    }
-                    KeyCode::Char('r') => {
-                        self.auto_rotate = !self.auto_rotate;
-                    }
-                    KeyCode::Char('d') => {
-                        self.density = (self.density + 0.25).min(4.0);
-                    }
-                    KeyCode::Char('f') => {
-                        self.density = (self.density - 0.25).max(0.25);
-                    }
-                    KeyCode::Char('1') => self.active = 0,
-                    KeyCode::Char('2') => {
-                        if self.datasets.len() > 1 {
-                            self.active = 1;
-                        }
-                    }
-                    KeyCode::Tab => {
-                        if !self.datasets.is_empty() {
-                            self.active = (self.active + 1) % self.datasets.len();
-                        }
-                    }
-                    _ => {}
+            Msg::Event(Event::Key(KeyEvent {
+                code,
+                kind: KeyEventKind::Press,
+                ..
+            })) => match code {
+                KeyCode::Char('q') | KeyCode::Escape => return Cmd::Quit,
+                KeyCode::Left => self.azimuth = (self.azimuth - 5.0).rem_euclid(360.0),
+                KeyCode::Right => self.azimuth = (self.azimuth + 5.0) % 360.0,
+                KeyCode::Up => self.elevation = (self.elevation + 3.0).min(85.0),
+                KeyCode::Down => self.elevation = (self.elevation - 3.0).max(5.0),
+                KeyCode::Char('+') | KeyCode::Char('=') => {
+                    self.zoom = (self.zoom * 1.2).min(20.0);
                 }
-            }
-            Msg::Event(Event::Mouse(MouseEvent { kind, x, y, .. })) => {
-                match kind {
-                    MouseEventKind::Down(_) => {
-                        self.auto_rotate = false;
-                        self.dragging = true;
-                        self.drag_start_x = x;
-                        self.drag_start_y = y;
-                        self.drag_start_az = self.azimuth;
-                        self.drag_start_el = self.elevation;
-                    }
-                    MouseEventKind::Drag(_) if self.dragging => {
-                        let dx = x as f64 - self.drag_start_x as f64;
-                        let dy = y as f64 - self.drag_start_y as f64;
-                        self.azimuth = (self.drag_start_az + dx * 1.5).rem_euclid(360.0);
-                        self.elevation = (self.drag_start_el + dy * 1.0).clamp(5.0, 85.0);
-                    }
-                    MouseEventKind::Up(_) => {
-                        self.dragging = false;
-                    }
-                    MouseEventKind::ScrollUp => {
-                        self.zoom = (self.zoom * 1.1).min(15.0);
-                    }
-                    MouseEventKind::ScrollDown => {
-                        self.zoom = (self.zoom / 1.1).max(0.1);
-                    }
-                    _ => {}
+                KeyCode::Char('-') => {
+                    self.zoom = (self.zoom / 1.2).max(0.1);
                 }
-            }
+                KeyCode::Char('h') => {
+                    self.height_scale = (self.height_scale + 0.5).min(5.0);
+                }
+                KeyCode::Char('l') => {
+                    self.height_scale = (self.height_scale - 0.5).max(0.5);
+                }
+                KeyCode::Char('r') => {
+                    self.auto_rotate = !self.auto_rotate;
+                }
+                KeyCode::Char('d') => {
+                    self.density = (self.density + 0.25).min(4.0);
+                }
+                KeyCode::Char('f') => {
+                    self.density = (self.density - 0.25).max(0.25);
+                }
+                KeyCode::Char('1') => self.active = 0,
+                KeyCode::Char('2') => {
+                    if self.datasets.len() > 1 {
+                        self.active = 1;
+                    }
+                }
+                KeyCode::Tab => {
+                    if !self.datasets.is_empty() {
+                        self.active = (self.active + 1) % self.datasets.len();
+                    }
+                }
+                _ => {}
+            },
+            Msg::Event(Event::Mouse(MouseEvent { kind, x, y, .. })) => match kind {
+                MouseEventKind::Down(_) => {
+                    self.auto_rotate = false;
+                    self.dragging = true;
+                    self.drag_start_x = x;
+                    self.drag_start_y = y;
+                    self.drag_start_az = self.azimuth;
+                    self.drag_start_el = self.elevation;
+                }
+                MouseEventKind::Drag(_) if self.dragging => {
+                    let dx = x as f64 - self.drag_start_x as f64;
+                    let dy = y as f64 - self.drag_start_y as f64;
+                    self.azimuth = (self.drag_start_az + dx * 1.5).rem_euclid(360.0);
+                    self.elevation = (self.drag_start_el + dy * 1.0).clamp(5.0, 85.0);
+                }
+                MouseEventKind::Up(_) => {
+                    self.dragging = false;
+                }
+                MouseEventKind::ScrollUp => {
+                    self.zoom = (self.zoom * 1.1).min(20.0);
+                }
+                MouseEventKind::ScrollDown => {
+                    self.zoom = (self.zoom / 1.1).max(0.1);
+                }
+                _ => {}
+            },
             _ => {}
         }
         Cmd::None
@@ -448,8 +741,13 @@ impl Model for TerrainModel {
 
         // Rasterize points
         for pt in &points {
-            let t = (pt.elev - ds.min_elev) / elev_range;
-            let color = Self::elev_to_color(t.clamp(0.0, 1.0));
+            let t = ((pt.elev - ds.min_elev) / elev_range).clamp(0.0, 1.0);
+            let color = match self.color_mode {
+                ColorMode::Terrain => Self::elev_to_color(t),
+                ColorMode::Slope => Self::slope_to_color(pt.slope),
+                ColorMode::Grayscale => Self::grayscale_color(t),
+                ColorMode::Contour => Self::contour_color(pt.elev, ds.min_elev, ds.max_elev),
+            };
             painter.point_colored(pt.sx.round() as i32, pt.sy.round() as i32, color);
         }
 
@@ -460,11 +758,18 @@ impl Model for TerrainModel {
         // Header
         let header = format!(
             " {} · {:.0}-{:.0}m · az:{:.0}° el:{:.0}° · d:{:.0}% · {} pts",
-            ds.name, ds.min_elev, ds.max_elev, self.azimuth, self.elevation,
-            self.density * 100.0, points.len()
+            ds.name,
+            ds.min_elev,
+            ds.max_elev,
+            self.azimuth,
+            self.elevation,
+            self.density * 100.0,
+            points.len()
         );
         for (i, ch) in header.chars().enumerate() {
-            if i >= w as usize { break; }
+            if i >= w as usize {
+                break;
+            }
             let cell = ftui_render::cell::Cell::from_char(ch)
                 .with_fg(PackedRgba::rgb(150, 150, 150))
                 .with_bg(PackedRgba::rgb(20, 20, 20));
@@ -472,8 +777,7 @@ impl Model for TerrainModel {
         }
         // Fill rest of header row
         for i in header.len()..(w as usize) {
-            let cell = ftui_render::cell::Cell::from_char(' ')
-                .with_bg(PackedRgba::rgb(20, 20, 20));
+            let cell = ftui_render::cell::Cell::from_char(' ').with_bg(PackedRgba::rgb(20, 20, 20));
             frame.buffer.set_raw(i as u16, 0, cell);
         }
 
@@ -485,15 +789,16 @@ impl Model for TerrainModel {
         );
         let footer_y = h - 1;
         for (i, ch) in footer.chars().enumerate() {
-            if i >= w as usize { break; }
+            if i >= w as usize {
+                break;
+            }
             let cell = ftui_render::cell::Cell::from_char(ch)
                 .with_fg(PackedRgba::rgb(100, 100, 100))
                 .with_bg(PackedRgba::rgb(15, 15, 15));
             frame.buffer.set_raw(i as u16, footer_y, cell);
         }
         for i in footer.len()..(w as usize) {
-            let cell = ftui_render::cell::Cell::from_char(' ')
-                .with_bg(PackedRgba::rgb(15, 15, 15));
+            let cell = ftui_render::cell::Cell::from_char(' ').with_bg(PackedRgba::rgb(15, 15, 15));
             frame.buffer.set_raw(i as u16, footer_y, cell);
         }
     }
@@ -519,6 +824,7 @@ mod tests {
             cols,
             min_elev: 0.0,
             max_elev: (rows - 1) as f64 * 10.0,
+            cell_size: 30.0,
         }
     }
 
@@ -535,7 +841,7 @@ mod tests {
     fn zoom_clamps_high() {
         let mut m = make_model();
         m.set_zoom(100.0);
-        assert_eq!(m.zoom(), 15.0);
+        assert_eq!(m.zoom(), 20.0);
     }
 
     #[test]
@@ -626,10 +932,7 @@ mod tests {
 
     #[test]
     fn bilinear_at_grid_point() {
-        let grid = vec![
-            vec![0.0, 10.0],
-            vec![20.0, 30.0],
-        ];
+        let grid = vec![vec![0.0, 10.0], vec![20.0, 30.0]];
         let v = TerrainModel::bilinear_sample(&grid, 0.0, 0.0, 2, 2);
         assert!((v - 0.0).abs() < 1e-10);
 
@@ -645,10 +948,7 @@ mod tests {
 
     #[test]
     fn bilinear_midpoint() {
-        let grid = vec![
-            vec![0.0, 10.0],
-            vec![20.0, 30.0],
-        ];
+        let grid = vec![vec![0.0, 10.0], vec![20.0, 30.0]];
         // Center of 4 cells: average = (0+10+20+30)/4 = 15
         let v = TerrainModel::bilinear_sample(&grid, 0.5, 0.5, 2, 2);
         assert!((v - 15.0).abs() < 1e-10);
@@ -656,20 +956,14 @@ mod tests {
 
     #[test]
     fn bilinear_horizontal_lerp() {
-        let grid = vec![
-            vec![0.0, 100.0],
-            vec![0.0, 100.0],
-        ];
+        let grid = vec![vec![0.0, 100.0], vec![0.0, 100.0]];
         let v = TerrainModel::bilinear_sample(&grid, 0.0, 0.25, 2, 2);
         assert!((v - 25.0).abs() < 1e-10);
     }
 
     #[test]
     fn bilinear_clamps_at_boundary() {
-        let grid = vec![
-            vec![5.0, 10.0],
-            vec![15.0, 20.0],
-        ];
+        let grid = vec![vec![5.0, 10.0], vec![15.0, 20.0]];
         // Beyond grid edge — should clamp, not panic
         let v = TerrainModel::bilinear_sample(&grid, 1.5, 1.5, 2, 2);
         assert!(v.is_finite());
@@ -735,7 +1029,10 @@ mod tests {
         m.set_density(2.0);
         let high = m.project_to_buffer(400.0, 300.0).len();
 
-        assert!(high > low, "higher density should produce more points: low={low} high={high}");
+        assert!(
+            high > low,
+            "higher density should produce more points: low={low} high={high}"
+        );
     }
 
     #[test]
@@ -753,6 +1050,33 @@ mod tests {
         // though some points may fall outside canvas at different zoom.
         // Just verify both produce points.
         assert!(a > 0 && b > 0);
+    }
+
+    #[test]
+    fn set_view_state_applies_and_clamps() {
+        let mut m = make_model();
+        m.set_datasets(vec![make_dataset(10, 10), make_dataset(10, 10)]);
+        m.set_view_state(-10.0, 100.0, 30.0, 8.0, 0.0, 9, 9, true);
+
+        assert!((m.azimuth() - 350.0).abs() < 1e-9);
+        assert_eq!(m.elevation(), 85.0);
+        assert_eq!(m.zoom(), 20.0);
+        assert_eq!(m.height_scale(), 5.0);
+        assert_eq!(m.density(), 0.25);
+        assert_eq!(m.active(), 1);
+        assert_eq!(m.color_mode(), 0);
+        assert!(m.auto_rotate());
+    }
+
+    #[test]
+    fn project_row_col_pairs_to_buffer_returns_xy_pairs() {
+        let mut m = make_model();
+        m.set_datasets(vec![make_dataset(10, 10)]);
+        let coords = vec![0.0_f32, 0.0_f32, 5.0_f32, 5.0_f32, 9.0_f32, 9.0_f32];
+        let out = m.project_row_col_pairs_to_buffer(&coords, 400.0, 300.0);
+
+        assert_eq!(out.len(), coords.len());
+        assert!(out.iter().all(|v| v.is_finite()));
     }
 
     // --- Refinement threshold tests ---
@@ -781,14 +1105,146 @@ mod tests {
         // Flat grid: all same elevation
         let grid = vec![vec![100.0; 5]; 5];
         let curv = TerrainModel::curvature_at(&grid, 2, 2, 5, 5);
-        assert!(curv.abs() < 1e-6, "flat surface should have ~zero curvature: {curv}");
+        assert!(
+            curv.abs() < 1e-6,
+            "flat surface should have ~zero curvature: {curv}"
+        );
     }
 
     #[test]
     fn curvature_edge_returns_zero() {
         let grid = vec![vec![0.0; 5]; 5];
         let curv = TerrainModel::curvature_at(&grid, 0, 0, 5, 5);
-        assert_eq!(curv, 0.0, "edge points should return 0.0 (no curvature data)");
+        assert_eq!(
+            curv, 0.0,
+            "edge points should return 0.0 (no curvature data)"
+        );
+    }
+
+    // --- Color mode tests ---
+
+    #[test]
+    fn color_mode_default_is_terrain() {
+        let m = make_model();
+        assert_eq!(m.color_mode(), 0);
+    }
+
+    #[test]
+    fn color_mode_roundtrip() {
+        let mut m = make_model();
+        m.set_color_mode(1);
+        assert_eq!(m.color_mode(), 1);
+        m.set_color_mode(2);
+        assert_eq!(m.color_mode(), 2);
+        m.set_color_mode(0);
+        assert_eq!(m.color_mode(), 0);
+    }
+
+    #[test]
+    fn color_mode_invalid_defaults_to_terrain() {
+        let mut m = make_model();
+        m.set_color_mode(99);
+        assert_eq!(m.color_mode(), 0);
+    }
+
+    #[test]
+    fn slope_color_gradient() {
+        // Flat (0.0) should be greenish
+        let flat = TerrainModel::slope_to_color(0.0);
+        let flat_packed = flat.0;
+        let flat_r = ((flat_packed >> 24) & 0xFF) as u8;
+        let flat_g = ((flat_packed >> 16) & 0xFF) as u8;
+        assert!(flat_g > flat_r, "flat should be more green than red");
+
+        // Steep (1.0) should be reddish
+        let steep = TerrainModel::slope_to_color(1.0);
+        let steep_packed = steep.0;
+        let steep_r = ((steep_packed >> 24) & 0xFF) as u8;
+        let steep_g = ((steep_packed >> 16) & 0xFF) as u8;
+        assert!(steep_r > steep_g, "steep should be more red than green");
+    }
+
+    #[test]
+    fn grayscale_color_range() {
+        let black = TerrainModel::grayscale_color(0.0);
+        let black_packed = black.0;
+        assert_eq!((black_packed >> 24) & 0xFF, 0);
+
+        let white = TerrainModel::grayscale_color(1.0);
+        let white_packed = white.0;
+        assert_eq!((white_packed >> 24) & 0xFF, 255);
+
+        let mid = TerrainModel::grayscale_color(0.5);
+        let mid_packed = mid.0;
+        let v = ((mid_packed >> 24) & 0xFF) as u8;
+        assert!(v > 100 && v < 155, "mid gray should be ~127: {v}");
+    }
+
+    #[test]
+    fn slope_color_clamps() {
+        // Out-of-range values should not panic
+        let _ = TerrainModel::slope_to_color(-1.0);
+        let _ = TerrainModel::slope_to_color(2.0);
+    }
+
+    #[test]
+    fn grayscale_clamps() {
+        let _ = TerrainModel::grayscale_color(-0.5);
+        let _ = TerrainModel::grayscale_color(1.5);
+    }
+
+    // --- Local slope tests ---
+
+    #[test]
+    fn local_slope_flat_is_zero() {
+        let grid = vec![vec![100.0; 5]; 5];
+        let s = TerrainModel::local_slope(&grid, 2.0, 2.0, 5, 5, 30.0);
+        assert!(s.abs() < 1e-6, "flat surface slope should be ~0: {s}");
+    }
+
+    #[test]
+    fn local_slope_edge_is_zero() {
+        let grid = vec![vec![0.0; 5]; 5];
+        let s = TerrainModel::local_slope(&grid, 0.0, 0.0, 5, 5, 30.0);
+        assert_eq!(s, 0.0);
+    }
+
+    #[test]
+    fn local_slope_steep_is_positive() {
+        // Each row increases by 100m — steep slope
+        let grid: Vec<Vec<f64>> = (0..5).map(|r| vec![r as f64 * 100.0; 5]).collect();
+        let s = TerrainModel::local_slope(&grid, 2.0, 2.0, 5, 5, 30.0);
+        assert!(s > 0.0, "steep terrain should have positive slope: {s}");
+    }
+
+    #[test]
+    fn project_with_slope_mode_produces_points() {
+        let mut m = make_model();
+        m.set_datasets(vec![make_dataset(20, 20)]);
+        m.set_color_mode(1); // slope
+        let buf = m.project_to_buffer(400.0, 300.0);
+        assert!(buf.len() >= 5);
+        assert_eq!(buf.len() % 5, 0);
+    }
+
+    #[test]
+    fn project_with_grayscale_mode_produces_points() {
+        let mut m = make_model();
+        m.set_datasets(vec![make_dataset(20, 20)]);
+        m.set_color_mode(2); // grayscale
+        let buf = m.project_to_buffer(400.0, 300.0);
+        assert!(buf.len() >= 5);
+        assert_eq!(buf.len() % 5, 0);
+        // In grayscale, r == g == b for every point
+        for i in (0..buf.len()).step_by(5) {
+            let r = buf[i + 2];
+            let g = buf[i + 3];
+            let b = buf[i + 4];
+            assert!(
+                (r - g).abs() < 1e-3 && (g - b).abs() < 1e-3,
+                "grayscale r={r} g={g} b={b} should be equal"
+            );
+        }
     }
 
     #[test]
@@ -800,6 +1256,9 @@ mod tests {
             grid[2][c] = 100.0;
         }
         let curv = TerrainModel::curvature_at(&grid, 1, 2, 5, 5);
-        assert!(curv > 0.0, "ridge slope should have nonzero curvature: {curv}");
+        assert!(
+            curv > 0.0,
+            "ridge slope should have nonzero curvature: {curv}"
+        );
     }
 }
